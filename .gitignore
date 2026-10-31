@@ -1,0 +1,15 @@
+build/
+
+.cache/
+compile_commands.json
+*.user
+.vs/
+
+third_party/DiligentCore/
+out/
+bin/
+Project/
+Projeto Final/
+editor_settings.json
+editor_layout.ini
+editor_theme.json

@@ -1,0 +1,15 @@
+PROJETO FINAL - ToolEngine Editor
+==================================
+Esta pasta e gerada pela compilacao. Tudo que o editor precisa para rodar esta aqui:
+
+  ToolEditor.exe   o editor (De dois cliques)
+  assets/          shaders, idiomas, temas e arquivos de exemplo (mantenha ao lado do .exe)
+  Project/         criada ao abrir o editor: suas cenas (Scenes/) e arquivos (Assets/)
+  editor_settings.json, editor_layout.ini   suas configuracoes e layout de janelas (criados ao fechar)
+
+Pode copiar esta pasta inteira para outro lugar ou computador (Windows 64 bits) e continuar usando.
+Para apagar tudo e recomecar, apague Project/ e os dois arquivos de configuracao.
+Problemas com Vulkan/OpenGL? Em Settings > Graphics escolha CPU e veja o Console (erros TOOL-E...).
+
+FINAL PROJECT - everything the editor needs to run is in this folder: ToolEditor.exe + assets/.
+Project/ (your scenes and files) and the settings files are created next to the exe. You can copy the whole folder.

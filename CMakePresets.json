@@ -1,0 +1,208 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "TOOL_WITH_SDL3": "OFF",
+        "TOOL_WITH_MINIAUDIO": "OFF",
+        "TOOL_WITH_EDITOR": "OFF",
+        "TOOL_WITH_DILIGENT": "OFF",
+        "TOOL_BUILD_TESTS": "ON",
+        "TOOL_BUILD_SANDBOX": "ON"
+      },
+      "displayName": "(base: so o nucleo + testes, sem baixar nada)"
+    },
+    {
+      "name": "editor",
+      "displayName": "Editor (CPU, no GPU)",
+      "binaryDir": "${sourceDir}/build/editor",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "TOOL_DEBUG_LEVEL": "1"
+      }
+    },
+    {
+      "name": "editor-gpu",
+      "displayName": "Editor + GPU (Vulkan/OpenGL, optional)",
+      "inherits": "editor",
+      "binaryDir": "${sourceDir}/build/editor-gpu",
+      "cacheVariables": {
+        "TOOL_WITH_DILIGENT": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "displayName": "Desenvolvimento (DebugTool completo)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TOOL_DEBUG_LEVEL": "2"
+      }
+    },
+    {
+      "name": "test",
+      "inherits": "base",
+      "displayName": "Teste (avisos como erros)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "TOOL_DEBUG_LEVEL": "1",
+        "TOOL_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Release (DebugTool minimo)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "TOOL_DEBUG_LEVEL": "0",
+        "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON"
+      }
+    },
+    {
+      "name": "asan",
+      "inherits": "base",
+      "displayName": "Sanitizadores (ASan + UBSan, Clang ou GCC)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TOOL_DEBUG_LEVEL": "2",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer"
+      }
+    },
+    {
+      "name": "full",
+      "displayName": "Dev + SDL3 + miniaudio",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/full",
+      "cacheVariables": {
+        "TOOL_WITH_SDL3": "ON",
+        "TOOL_WITH_MINIAUDIO": "ON",
+        "TOOL_WITH_EDITOR": "ON"
+      }
+    },
+    {
+      "name": "ci-full",
+      "displayName": "CI headless: tudo ligado, SDL sem X11",
+      "inherits": "full",
+      "binaryDir": "${sourceDir}/build/ci-full",
+      "cacheVariables": {
+        "TOOL_SDL_CONSOLE_BUILD": "ON"
+      }
+    },
+    {
+      "name": "beta",
+      "displayName": "Beta: editor + SDL3 + audio + Diligent (Vulkan/GL/D3D12)",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/beta",
+      "cacheVariables": {
+        "TOOL_WITH_SDL3": "ON",
+        "TOOL_WITH_MINIAUDIO": "ON",
+        "TOOL_WITH_EDITOR": "ON",
+        "TOOL_WITH_DILIGENT": "ON",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "TOOL_WITH_D3D12": "OFF"
+      }
+    },
+    {
+      "name": "editor-gpu-dx12",
+      "displayName": "Editor + GPU (Vulkan/OpenGL/Direct3D 12) - Windows only",
+      "inherits": "editor-gpu",
+      "binaryDir": "${sourceDir}/build/editor-gpu-dx12",
+      "cacheVariables": {
+        "TOOL_WITH_D3D12": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "test",
+      "configurePreset": "test"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "full",
+      "configurePreset": "full"
+    },
+    {
+      "name": "ci-full",
+      "configurePreset": "ci-full"
+    },
+    {
+      "name": "beta",
+      "configurePreset": "beta"
+    },
+    {
+      "name": "editor",
+      "configurePreset": "editor",
+      "configuration": "Release",
+      "targets": [
+        "tool_editor"
+      ]
+    },
+    {
+      "name": "editor-gpu",
+      "configurePreset": "editor-gpu",
+      "configuration": "Release",
+      "targets": [
+        "tool_editor"
+      ]
+    },
+    {
+      "name": "editor-gpu-dx12",
+      "configurePreset": "editor-gpu-dx12",
+      "configuration": "Release",
+      "targets": [
+        "tool_editor"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test",
+      "configurePreset": "test",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "editor",
+      "configurePreset": "editor",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

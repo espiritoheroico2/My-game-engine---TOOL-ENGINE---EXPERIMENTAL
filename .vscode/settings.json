@@ -1,0 +1,11 @@
+{
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": true,
+  "cmake.ctest.testExplorerIntegrationEnabled": true,
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "clangd.arguments": [ "--background-index", "--clang-tidy", "--header-insertion=never" ],
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "xaver.clang-format",
+  "files.associations": { "*.hpp": "cpp", "*.inl": "cpp" },
+  "files.exclude": { "build": true }
+}

@@ -1,0 +1,105 @@
+{
+ "asset": {
+  "version": "2.0"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "Piramide"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Mesh",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 0
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "Mat",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.9,
+     0.6,
+     0.15,
+     1.0
+    ],
+    "metallicFactor": 0.1,
+    "roughnessFactor": 0.6
+   }
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 468,
+   "uri": "data:application/octet-stream;base64,mpkZvwAAAACamRm/AAAAAAAAgD8AAAAAmpkZPwAAAACamRm/mpkZPwAAAACamRm/AAAAAAAAgD8AAAAAmpkZPwAAAACamRk/mpkZPwAAAACamRk/AAAAAAAAgD8AAAAAmpkZvwAAAACamRk/mpkZvwAAAACamRk/AAAAAAAAgD8AAAAAmpkZvwAAAACamRm/mpkZvwAAAACamRm/mpkZPwAAAACamRm/mpkZPwAAAACamRk/mpkZvwAAAACamRm/mpkZPwAAAACamRk/mpkZvwAAAACamRk/AAAAAP61Az+ohFu/AAAAAP61Az+ohFu/AAAAAP61Az+ohFu/qIRbP/61Az8AAACAqIRbP/61Az8AAACAqIRbP/61Az8AAACAAAAAAP61Az+ohFs/AAAAAP61Az+ohFs/AAAAAP61Az+ohFs/qIRbv/61Az8AAAAAqIRbv/61Az8AAAAAqIRbv/61Az8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAABAAIAAwAEAAUABgAHAAgACQAKAAsADAANAA4ADwAQABEA"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 216,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 216,
+   "byteLength": 216,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 432,
+   "byteLength": 36,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 18,
+   "type": "VEC3",
+   "min": [
+    -0.6,
+    0,
+    -0.6
+   ],
+   "max": [
+    0.6,
+    1,
+    0.6
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 18,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5123,
+   "count": 18,
+   "type": "SCALAR"
+  }
+ ]
+}

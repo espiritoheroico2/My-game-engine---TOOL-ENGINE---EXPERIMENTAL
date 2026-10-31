@@ -1,0 +1,112 @@
+==============================================================================
+ ToolEngine - COMO COMPILAR E ABRIR O EDITOR  (v0.2.3-beta)
+ (English version: HOW_TO_BUILD.txt)
+==============================================================================
+
+O QUE VOCE RECEBE
+  Um programa: Projeto Final\ToolEditor.exe  (o editor: interface ImGui, viewport 3D,
+  hierarquia, inspetor, Controlador Narrativo, Configuracoes com temas/idiomas).
+  Por padrao renderiza na CPU (SoftRenderer), entao roda em qualquer PC.
+  O idioma padrao e o INGLES; Portugues (pt-BR) e Espanhol ficam em
+  Settings > Language.
+
+  NADA e baixado durante a compilacao: SDL3, ImGui, imnodes e miniaudio ja
+  estao em third_party/. NAO precisa de Git, Ninja, Python nem internet.
+
+------------------------------------------------------------------------------
+ 1. O QUE INSTALAR (Windows 10/11, uma vez)
+------------------------------------------------------------------------------
+  a) Visual Studio (a Community e gratis), pode ser a versao MAIS NOVA.
+     No instalador marque a carga de trabalho:
+         "Desenvolvimento para desktop com C++"
+     (ja inclui compilador MSVC, Windows SDK e CMake).
+  b) CMake 3.25 ou mais novo. O CMake do proprio Visual Studio basta; o script
+     o encontra. Se instalou o CMake separado, marque "Add CMake to PATH".
+
+  So isso. NAO precisa de Ninja: o CMake usa o gerador do Visual Studio
+  instalado no seu PC (ele escolhe o mais novo sozinho).
+
+  IMPORTANTE: nunca abra arquivos .sln/.vcxproj de dentro de third_party/.
+  Use o build_editor.bat, ou Arquivo > Abrir > Pasta (raiz do projeto).
+
+------------------------------------------------------------------------------
+ 2. JEITO MAIS FACIL: O SCRIPT
+------------------------------------------------------------------------------
+  1. Extraia o projeto numa pasta, de preferencia sem acentos/espacos e curta:
+     ex.:  C:\dev\ToolEngine
+  2. De dois cliques em  build_editor.bat
+  3. Espere (1a vez: uns 2 a 6 minutos). Ao terminar o editor abre sozinho.
+  4. O programa fica em  Projeto Final\ToolEditor.exe  - abra quando quiser.
+     Ele acha a pasta do projeto (assets/) sozinho, de qualquer lugar.
+
+  Toda execucao grava build_log.txt na pasta do projeto. Se algo falhar, a
+  janela fica aberta mostrando o log: envie o build_log.txt ao desenvolvedor.
+
+------------------------------------------------------------------------------
+ 3. JEITO MANUAL (terminal)
+------------------------------------------------------------------------------
+  Abra o "Prompt de Comando de Ferramentas Nativas x64 do VS" (ou qualquer
+  terminal onde o cmake funcione), va a pasta do projeto e rode:
+
+      cmake --preset editor
+      cmake --build --preset editor
+      Projeto Final\ToolEditor.exe
+
+------------------------------------------------------------------------------
+ 4. PELO VISUAL STUDIO (IDE)
+------------------------------------------------------------------------------
+  1. Arquivo > Abrir > Pasta...  e escolha a pasta do projeto (com CMakeLists.txt).
+  2. No seletor de configuracao escolha  "Editor (CPU, no GPU)".
+  3. Compilar > Compilar Tudo e aperte F5. O tool_editor ja e o projeto de
+     inicializacao e a pasta de trabalho e a raiz do projeto.
+
+------------------------------------------------------------------------------
+ 5. OPCIONAL: RENDER POR GPU (Vulkan / OpenGL via DiligentCore)
+------------------------------------------------------------------------------
+  Nao e necessario para testar o editor. Os fontes do DiligentCore (~200 MB)
+  NAO vao no pacote. Para ativar:
+    1. Instale o Git e rode, na pasta do projeto:
+         git clone --depth 1 --branch v2.5.6 --recurse-submodules ^
+             https://github.com/DiligentGraphics/DiligentCore third_party/DiligentCore
+    1b. Instale o Python 3 (https://www.python.org/downloads/, marque "Add python.exe to PATH").
+    O DiligentCore precisa dele; sem ele o CMake diz "Could NOT find Python3".
+    2. Rode:  build_editor.bat gpu        (preset "editor-gpu-dx12": Vulkan + OpenGL + Direct3D 12, ~10-15 min)
+                  build_editor.bat gpu nodx12 (preset "editor-gpu": sem Direct3D 12)
+    3. No editor: Settings > Graphics > escolha Vulkan ou OpenGL.
+  Se o backend de GPU nao iniciar, o editor volta para a CPU sozinho.
+  Direct3D 12 existe no codigo mas esta DESLIGADO e nao foi testado
+  (-DTOOL_WITH_D3D12=ON).
+
+------------------------------------------------------------------------------
+ 6. PROBLEMAS COMUNS
+------------------------------------------------------------------------------
+  "CMake not found"
+      Instale a carga de C++ acima, ou o CMake de cmake.org com PATH marcado.
+  "No CMAKE_CXX_COMPILER could be found" / "Generator ... could not find any
+   instance of Visual Studio"
+      Falta a carga de C++. Abra o "Visual Studio Installer" > Modificar >
+      marque "Desenvolvimento para desktop com C++".
+  Erro de versao do preset ("CMake 3.25 required")
+      Atualize o CMake. Confira com:  cmake --version
+  Configuracao antiga/quebrada
+      Apague a pasta  build\  e rode o script de novo.
+  Antivirus bloqueia o Projeto Final\ToolEditor.exe
+      Libere: e um programa sem assinatura que voce acabou de compilar.
+  Janela abre mas o 3D esta preto/lento
+      Normal na CPU com janela grande; reduza a janela. Use a GPU (secao 5).
+  Qualquer outra coisa
+      Envie o build_log.txt (e a versao do seu Visual Studio).
+
+------------------------------------------------------------------------------
+ 7. PASTAS (o que ficou, o que saiu)
+------------------------------------------------------------------------------
+  apps/editor    o editor (e o unico alvo compilado)
+  engine/        modulos da engine (bibliotecas estaticas ligadas ao editor)
+  assets/        shaders, pacotes de idioma (assets/lang), temas (assets/themes)
+  third_party/   SDL3, ImGui, imnodes, miniaudio embutidos (sem download)
+  cmake/, CMakeLists.txt, CMakePresets.json   sistema de build
+  tests/, fuzz/, tools/, docs/                extras de desenvolvimento (o
+                                              preset editor nao compila)
+  O demo sandbox e os testes ficam DESLIGADOS por padrao; os presets
+  "dev"/"test" os ligam para desenvolvimento (veja docs/BUILD.md).
+==============================================================================

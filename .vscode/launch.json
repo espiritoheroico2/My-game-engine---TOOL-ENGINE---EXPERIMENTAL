@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    { "name": "Depurar alvo selecionado (CMake Tools)", "type": "cppdbg", "request": "launch",
+      "program": "${command:cmake.launchTargetPath}", "args": [], "cwd": "${workspaceFolder}",
+      "MIMode": "gdb", "setupCommands": [ { "text": "-enable-pretty-printing" } ],
+      "windows": { "type": "cppvsdbg" } },
+    { "name": "Depurar testes (dev)", "type": "cppdbg", "request": "launch",
+      "program": "${workspaceFolder}/build/dev/bin/tool_tests", "cwd": "${workspaceFolder}",
+      "MIMode": "gdb", "windows": { "type": "cppvsdbg", "program": "${workspaceFolder}/build/dev/bin/tool_tests.exe" } }
+  ]
+}

@@ -1,0 +1,112 @@
+==============================================================================
+ ToolEngine - HOW TO BUILD AND RUN THE EDITOR  (v0.2.3-beta)
+ (Versao em portugues: COMO_COMPILAR.txt)
+==============================================================================
+
+WHAT YOU GET
+  One program: Projeto Final\ToolEditor.exe  (the editor: ImGui interface, 3D viewport,
+  hierarchy, inspector, Narrative Controller, Settings with themes/languages).
+  By default it renders on the CPU (SoftRenderer), so it runs on any PC.
+  The default language is English; Portuguese (pt-BR) and Spanish are in
+  Settings > Language.
+
+  NOTHING is downloaded while building: SDL3, ImGui, imnodes and miniaudio are
+  already inside third_party/. You do NOT need Git, Ninja, Python or internet.
+
+------------------------------------------------------------------------------
+ 1. WHAT TO INSTALL (Windows 10/11, once)
+------------------------------------------------------------------------------
+  a) Visual Studio (Community is free), the NEWEST version is fine.
+     In the installer tick the workload:
+         "Desktop development with C++"
+     (it already includes the MSVC compiler, the Windows SDK and CMake).
+  b) CMake 3.25 or newer.  Visual Studio's own CMake is enough; the script
+     finds it. If you installed CMake separately, tick "Add CMake to PATH".
+
+  That is all. Ninja is NOT needed: CMake uses the Visual Studio generator
+  that is installed on your PC (it picks the newest one by itself).
+
+  IMPORTANT: never open a .sln/.vcxproj file from third_party/. Use
+  build_editor.bat, or File > Open > Folder (project root).
+
+------------------------------------------------------------------------------
+ 2. EASIEST WAY: THE SCRIPT
+------------------------------------------------------------------------------
+  1. Unzip the project to a folder WITHOUT special characters if possible,
+     e.g.  C:\dev\ToolEngine   (avoid very long paths).
+  2. Double-click  build_editor.bat
+  3. Wait (first build: roughly 2-6 minutes). When it finishes the editor opens.
+  4. The program is at   Projeto Final\ToolEditor.exe   - double-click it any time.
+     It finds the project folder (assets/) by itself, from any location.
+
+  Every run writes build_log.txt in the project folder. If something fails,
+  the window stays open and shows the log: send build_log.txt to the developer.
+
+------------------------------------------------------------------------------
+ 3. MANUAL WAY (terminal)
+------------------------------------------------------------------------------
+  Open "x64 Native Tools Command Prompt for VS" (or any terminal where
+  cmake works), go to the project folder and run:
+
+      cmake --preset editor
+      cmake --build --preset editor
+      Projeto Final\ToolEditor.exe
+
+------------------------------------------------------------------------------
+ 4. WITH VISUAL STUDIO (IDE)
+------------------------------------------------------------------------------
+  1. File > Open > Folder...  and choose the project folder (has CMakeLists.txt).
+  2. In the configuration drop-down choose  "Editor (CPU, no GPU)".
+  3. Build > Build All, then press F5. tool_editor is already the startup
+     project and the working directory is the project root.
+
+------------------------------------------------------------------------------
+ 5. OPTIONAL: GPU RENDERING (Vulkan / OpenGL via DiligentCore)
+------------------------------------------------------------------------------
+  Not needed to test the editor. The DiligentCore sources (~200 MB) are NOT
+  included in the package. To enable them:
+    1. Install Git and run, in the project folder:
+         git clone --depth 1 --branch v2.5.6 --recurse-submodules ^
+             https://github.com/DiligentGraphics/DiligentCore third_party/DiligentCore
+    1b. Install Python 3 (https://www.python.org/downloads/, tick "Add python.exe to PATH").
+    DiligentCore needs it to configure; without it CMake says "Could NOT find Python3".
+    2. Run:  build_editor.bat gpu        (preset "editor-gpu-dx12": Vulkan + OpenGL + Direct3D 12, ~10-15 min)
+                 build_editor.bat gpu nodx12 (preset "editor-gpu": without Direct3D 12)
+    3. In the editor: Settings > Graphics > pick Vulkan or OpenGL.
+  If the GPU backend cannot start, the editor falls back to the CPU renderer.
+  Direct3D 12 exists in the code but is OFF and untested (-DTOOL_WITH_D3D12=ON).
+
+------------------------------------------------------------------------------
+ 6. TROUBLESHOOTING
+------------------------------------------------------------------------------
+  "CMake not found"
+      Install the C++ workload above, or CMake from cmake.org with PATH ticked.
+  "No CMAKE_CXX_COMPILER could be found" / "Generator ... could not find
+   any instance of Visual Studio"
+      The C++ workload is missing. Open "Visual Studio Installer" > Modify >
+      tick "Desktop development with C++".
+  "CMake 3.25 required" (preset version error)
+      Update CMake (cmake.org). Check with:  cmake --version
+  Old/failed configure leaves a broken state
+      Delete the folder  build\  and run the script again.
+  Antivirus blocks Projeto Final\ToolEditor.exe
+      Allow it: it is an unsigned program you just compiled.
+  The window opens but the 3D view is black / slow
+      Normal for CPU rendering on big windows; shrink the window. Use the GPU
+      option (section 5) later.
+  Anything else
+      Send build_log.txt (and your Visual Studio version) to the developer.
+
+------------------------------------------------------------------------------
+ 7. FOLDERS (what was kept, what was removed)
+------------------------------------------------------------------------------
+  apps/editor    the editor (this is what is built)
+  engine/        engine modules (static libraries linked into the editor)
+  assets/        shaders, language packs (assets/lang), themes (assets/themes)
+  third_party/   vendored SDL3, ImGui, imnodes, miniaudio (no download)
+  cmake/, CMakeLists.txt, CMakePresets.json   build system
+  tests/, fuzz/, tools/, docs/                development extras (not built by
+                                              the editor preset)
+  The sandbox demo and unit tests are OFF by default; presets "dev"/"test"
+  turn them on for development (see docs/BUILD.md).
+==============================================================================
