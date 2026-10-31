@@ -1,4 +1,4 @@
-# ToolEngine (nome de trabalho)
+# ToolEngine (Game engine leve sem nome definido)
 
 Engine 3D leve, multi-API, em C++20. Estrutura pensada para o **Visual Studio Code**.
 
