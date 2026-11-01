@@ -80,7 +80,7 @@ Tags agrupam objetos (por exemplo "enemy"). Renomear uma tag no Inspector muda e
 # Scripts (ToolObject)
 Todo objeto novo ja tem um arquivo: Assets/Scripts/<Nome>.tool.js com start(), update(dt), OnDelete(), DeleteAndReuse(), onCollisionEnter(other) e onTriggerEnter(other).
 - "Edit script" edita dentro do Inspector. "Edit external" abre no seu editor de codigo (Settings > Project escolhe qual).
-- O runtime de scripts ainda nao executa: use os Tools (Jump, Move, Follow, Spin, OnCollision) hoje; as mesmas chamadas existirao nos scripts (veja o topico Script API).)H"},
+- Os scripts rodam durante o Play (runtime QuickJS). Sem codigo, use os Tools (Jump, Move, Follow, Spin, OnCollision). Veja o topico Script API.)H"},
 
   // ------------------------------------------------------------------------------------------------ PHYSICS
   {"physics", "Physics", "Physics (Newtoon)", "Fisica (Newtoon)",
@@ -384,7 +384,7 @@ class GravityButton extends ToolObject {
 }
 ```)H"},
 
-  {"api", "Examples", "Script API (planned runtime)", "Script API (runtime planejado)",
+  {"api", "Examples", "Script API", "Script API",
 R"H(Scripts run inside a sandbox: they can touch the scene and the Input Map, never your files or the network. Every script class extends ToolObject.
 # Lifecycle
 start(), update(dt), onCollisionEnter(other), onTriggerEnter(other), OnDelete(), DeleteAndReuse()
@@ -457,6 +457,180 @@ R"H(- Ctrl+S save scene   - Ctrl+Z undo   - Ctrl+Y / Ctrl+Shift+Z redo   - Delet
 R"H(- Ctrl+S salvar cena   - Ctrl+Z desfazer   - Ctrl+Y / Ctrl+Shift+Z refazer   - Delete remove o selecionado (Hierarchy)
 - W / E / R gizmo mover / girar / escalar   - Alt navegacao livre (Esc sai)   - Ctrl ao arrastar = encaixe
 - Clique duplo na Hierarchy = focar   - F1 = esta janela de Help)H"},
+  // ------------------------------------------------------------------------------------------------ SCRIPTS (novo)
+  {"script_examples", "Scripts", "ToolObject script: examples", "Script ToolObject: exemplos",
+R"H(# Status
+Scripts are OPTIONAL: an object has no script until you press "Add Script" in the Inspector.
+The examples below run on Play (QuickJS runtime). The code is saved with the object. Each script has its own context and can only ask the engine for changes through: send, setActive, instantiate, destroy, addComponent, removeComponent, setPosition("Name", x, y, z). To move another object, use setPosition; writing another object's transform directly is not supported. An error stops only that object's script and appears in the Console and in the Inspector (Script status). Reload scripts restarts them during Play.
+
+# 1. Control an object (move and spin)
+```
+export function update(obj, dt) {
+  obj.transform.pos[1] += Math.sin(time.now) * dt;   // sobe e desce
+  obj.transform.rot[1] += 45 * dt;                   // gira 45 graus/s no eixo Y
+}
+```
+
+# 2. Send an event to another object
+Send by object name, by tag, or to itself:
+```
+export function onCollisionEnter(obj, other) {
+  send("Door", "open");        // pelo nome do objeto
+  send("tag:enemy", "alert");  // pela tag (todos os objetos com essa tag)
+  send(obj, "hit");            // para si mesmo
+}
+```
+
+# 3. Receive an event
+```
+export function OnEventTrigger(obj, name) {
+  if (name === "cena3") {
+    obj.transform.pos = [4, 4, 5];
+    debug.console("posicao corrigida");
+  }
+}
+```
+The same event names can start a Narrative graph (trigger block "trigger" with that event).
+
+# 4. Instantiate and destroy
+```
+export function start(obj) {
+  const b = instantiate("Bullet");   // cria uma copia do objeto chamado Bullet
+  destroy(b, 2.0);                   // apaga depois de 2 segundos
+}
+```
+
+# 5. Add or remove components
+```
+export function start(obj) {
+  addComponent(obj, "Light");
+  removeComponent(obj, "Particles");
+}
+```
+
+# 6. Disable and enable objects
+```
+setActive("Enemy 3", false);   // desativa (some e nao atualiza)
+setActive(obj, true);          // ativa de novo
+```
+
+# In the Narrative Controller (works today)
+- Block **send** (action `send`, argument `target|event`): sends an event to an object by name, `tag:<tag>` or `*` (all).
+- Blocks **spawn** / **destroy** / **ui_show** / **ui_hide** / **particles_on** / **particles_off** take an object name as argument.
+)H",
+R"H(# Situacao
+Scripts sao OPCIONAIS: um objeto so tem script depois que voce clica em "Add Script" no Inspector.
+Os exemplos abaixo rodam durante o Play (runtime QuickJS). O codigo fica salvo com o objeto. Cada script tem o seu proprio contexto e so pode pedir mudancas ao motor por: send, setActive, instantiate, destroy, addComponent, removeComponent, setPosition("Nome", x, y, z). Para mover outro objeto, use setPosition; escrever direto no transform de outro objeto ainda nao e suportado. Um erro para so o script daquele objeto e aparece no Console e no Inspector (Script status). Reload scripts reinicia os scripts durante o Play.
+
+# 1. Controlar um objeto (mover e girar)
+```
+export function update(obj, dt) {
+  obj.transform.pos[1] += Math.sin(time.now) * dt;   // sobe e desce
+  obj.transform.rot[1] += 45 * dt;                   // gira 45 graus/s no eixo Y
+}
+```
+
+# 2. Enviar evento para outro objeto
+Envie pelo nome do objeto, pela tag, ou para si mesmo:
+```
+export function onCollisionEnter(obj, other) {
+  send("Door", "open");        // pelo nome do objeto
+  send("tag:enemy", "alert");  // pela tag (todos os objetos com essa tag)
+  send(obj, "hit");            // para si mesmo
+}
+```
+
+# 3. Receber um evento
+```
+export function OnEventTrigger(obj, name) {
+  if (name === "cena3") {
+    obj.transform.pos = [4, 4, 5];
+    debug.console("posicao corrigida");
+  }
+}
+```
+Os mesmos nomes de evento podem iniciar um grafo do Narrative (bloco "trigger" com esse evento).
+
+# 4. Criar e destruir objetos
+```
+export function start(obj) {
+  const b = instantiate("Bullet");   // cria uma copia do objeto chamado Bullet
+  destroy(b, 2.0);                   // apaga depois de 2 segundos
+}
+```
+
+# 5. Adicionar e remover componentes
+```
+export function start(obj) {
+  addComponent(obj, "Light");
+  removeComponent(obj, "Particles");
+}
+```
+
+# 6. Desativar e ativar objetos
+```
+setActive("Enemy 3", false);   // desativa (some e nao atualiza)
+setActive(obj, true);          // ativa de novo
+```
+
+# No Controlador Narrativo (funciona hoje)
+- Bloco **send** (acao `send`, argumento `alvo|evento`): envia um evento para um objeto pelo nome, `tag:<tag>` ou `*` (todos).
+- Blocos **spawn** / **destroy** / **ui_show** / **ui_hide** / **particles_on** / **particles_off** recebem o nome do objeto como argumento.
+- Acao **setActive** (argumento `nome|1` ou `nome|0`): ativa ou desativa um objeto.
+)H"},
+  {"jslib", "Scripts", "JS script library (include)", "Biblioteca JS (include)",
+R"H(# What it is
+The **Script library** tool (Inspector > Tools > Add Tool > Script library) attaches an extra `.js` file to an object.
+The functions exported by that file become available to the object's code, as if they were written in it.
+
+# When to use
+- Formulas shared by many objects (damage, score, experience curve).
+- A state machine or helper used by enemies and by the player.
+- Reusing one file in several objects without copying the code.
+
+# How it works
+1. Add Tool > Script library: the engine creates `Assets/Scripts/Libs/LibN.js` with an example function.
+2. Edit it with "Edit external" or "Edit script".
+3. Export the functions you want to share:
+```
+// Assets/Scripts/Libs/Combat.js
+export function damage(base, armor) {
+  return Math.max(1, base - armor);
+}
+```
+4. In the object's script: `import { damage } from "Libs/Combat.js";` (the runtime loads the library before the object's code).
+
+# Notes
+- A library runs in the same sandbox as the object's script: no file or network access outside the project.
+- Keep libraries small and free of per-frame heavy loops. Heavy loops belong in a native Tool.
+- Status: libraries are saved and listed today; they run once the script runtime (QuickJS) is enabled.
+)H",
+R"H(# O que e
+A ferramenta **Script library** (Inspector > Tools > Add Tool > Script library) anexa um arquivo `.js` extra a um objeto.
+As funcoes exportadas por esse arquivo ficam disponiveis no codigo do objeto, como se tivessem sido escritas nele.
+
+# Quando usar
+- Formulas compartilhadas por varios objetos (dano, pontuacao, curva de experiencia).
+- Uma maquina de estados ou um auxiliar usado por inimigos e pelo jogador.
+- Reaproveitar um arquivo em varios objetos sem copiar codigo.
+
+# Como funciona
+1. Add Tool > Script library: a engine cria `Assets/Scripts/Libs/LibN.js` com uma funcao de exemplo.
+2. Edite com "Edit external" ou "Edit script".
+3. Exporte as funcoes que quer compartilhar:
+```
+// Assets/Scripts/Libs/Combat.js
+export function damage(base, armor) {
+  return Math.max(1, base - armor);
+}
+```
+4. No script do objeto: `import { damage } from "Libs/Combat.js";` (o runtime carrega a biblioteca antes do codigo do objeto).
+
+# Observacoes
+- A biblioteca roda no mesmo sandbox do script do objeto: sem acesso a arquivos ou rede fora do projeto.
+- Mantenha bibliotecas pequenas e sem laços pesados por quadro. Laços pesados pertencem a uma Tool nativa.
+- Situacao: as bibliotecas sao salvas e listadas hoje; rodam quando o runtime de scripts (QuickJS) estiver ativo.
+)H"},
   };
   return t;
 }

@@ -5,7 +5,7 @@ rem   gpu nodx12   = Vulkan + OpenGL only (preset editor-gpu, faster build)
 rem No Git, Ninja or internet needed. Uses the newest Visual Studio found by CMake.
 setlocal
 cd /d "%~dp0"
-set PRESET= editor-gpu-dx12
+set PRESET=editor-gpu-dx12
 set RUN=1
 for %%A in (%*) do (
   if /i "%%A"=="gpu" set PRESET=editor-gpu-dx12

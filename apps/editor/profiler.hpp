@@ -20,9 +20,9 @@
 
 namespace editor {
 
-enum class Zone : int { Events, Update, Hierarchy, SceneRender, GameRender, PostFx, Ui, Present, Count };
+enum class Zone : int { Events, Update, Hierarchy, SceneRender, GameRender, PostFx, Sky, Ui, Present, Count };
 inline const char* zoneName(Zone z) {
-  static const char* n[] = {"Events + input", "Update (audio, pool)", "Panels (hierarchy, inspector...)", "Scene view render", "Game view render", "Post-processing", "UI draw (ImGui)", "Present + frame limiter"};
+  static const char* n[] = {"Events + input", "Update (audio, pool)", "Panels (hierarchy, inspector...)", "Scene view render", "Game view render", "Post-processing (FXAA, sharpen)", "Skybox (images)", "UI draw (ImGui)", "Present + frame limiter"};
   return n[static_cast<int>(z)];
 }
 
@@ -47,6 +47,7 @@ struct FrameCounters {            // zerados a cada quadro
   unsigned long long tris = 0;    // triangulos enviados ao renderizador
   unsigned long long shadowTris = 0;
   unsigned draws = 0;             // objetos desenhados
+  unsigned culled = 0;            // objetos pulados pelo frustum culling
   unsigned shadowCasters = 0, shadowReused = 0; // shadowReused: quantas vistas reaproveitaram o shadow map (sleeper)
 };
 

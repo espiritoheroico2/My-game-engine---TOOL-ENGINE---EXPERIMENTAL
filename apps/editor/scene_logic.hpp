@@ -88,6 +88,7 @@ inline void Editor::tickNarrative(float dt, const std::vector<std::string>& even
   rt.beginTick();
   for (const std::string& ev : events) rt.fire(ev);
   rt.fire("Update"); rt.update(static_cast<double>(dt));
+  { std::vector<std::string> pend; pend.swap(narrPending); for (const std::string& ev : pend) rt.fire(ev); }   // eventos das acoes send/spawn, fora do update
   if (const std::string slot = rt.takePendingLoad(); !slot.empty() && safeName(slot)) {
     const fs::path p = project.root / "Saves" / (slot + ".save.json");
     if (rt.loadFromFile(p.string())) tool::logInfo("Narrative: loaded " + slot); else tool::logWarn("Narrative: no valid save in slot '" + slot + "'");
@@ -99,19 +100,45 @@ inline void Editor::tickNarrative(float dt, const std::vector<std::string>& even
 inline void Editor::narrativeAction(const std::string& name, const std::string& arg) {
   auto& w = scene.world();
   if (name == "log") tool::logInfo("[narrative] " + arg);
-  else if (name == "spawn") { const tool::Entity t = findByName(arg); if (w.alive(t)) { const tool::Entity c = duplicate(t); onCreated(c, arg); } }
+  else if (name == "spawn") spawnCopy(arg);
   else if (name == "destroy") { const tool::Entity t = findByName(arg); if (w.alive(t)) destroy(t); }
+  else if (name == "send") { const size_t bar = arg.find('|'); sendEvent(arg.substr(0, bar), bar == std::string::npos ? std::string() : arg.substr(bar + 1)); }
+  else if (name == "setActive") { const size_t bar = arg.find('|'); const std::string v = bar == std::string::npos ? "" : arg.substr(bar + 1); setActiveByName(arg.substr(0, bar), v == "1" || v == "true"); }
   else if (name == "ui_show" || name == "ui_hide") { const tool::Entity t = findByName(arg); if (auto* u = w.alive(t) ? w.get<UiCanvas>(t) : nullptr) u->visible = name == "ui_show"; }
   else if (name == "particles_on" || name == "particles_off") { const tool::Entity t = findByName(arg); if (auto* p = w.alive(t) ? w.get<ParticleComp>(t) : nullptr) p->emitting = name == "particles_on"; }
   else tool::logWarn("[narrative] unknown action '" + name + "'");
 }
 
 // Um objeto foi criado durante o Play: dispara "Create:<nome>" (e "Create:<modelo>" se veio de um spawn) e "Create".
+// Entra na fila: o disparo acontece depois do quadro (nao reentra no runtime que pode estar executando).
 inline void Editor::onCreated(tool::Entity e, const std::string& templateName) {
   if (!narrRun || !scene.world().alive(e)) return;
-  if (const auto* n = scene.world().get<Name>(e)) narrRun->rt->fire(std::string("Create:") + n->text);
-  if (!templateName.empty()) narrRun->rt->fire("Create:" + templateName);
-  narrRun->rt->fire("Create");
+  if (const auto* n = scene.world().get<Name>(e)) narrPending.push_back(std::string("Create:") + n->text);
+  if (!templateName.empty()) narrPending.push_back("Create:" + templateName);
+  narrPending.push_back("Create");
+}
+
+// "send": evento para um objeto pelo nome, por "tag:<tag>" ou "*" (todos). Entrega na fila do objeto (scripts leem)
+// e tambem dispara gatilhos do Narrative com o mesmo nome.
+inline void Editor::sendEvent(const std::string& to, const std::string& ev) {
+  if (ev.empty() || ev.size() > 64) return;
+  auto& w = scene.world(); std::vector<tool::Entity> dest;
+  if (to == "*") w.eachEntity([&](tool::Entity e) { dest.push_back(e); });
+  else if (to.rfind("tag:", 0) == 0) {
+    const tool::TagId id = scene.tags().find(to.substr(4));
+    if (id != tool::kInvalidIndex) w.eachEntity([&](tool::Entity e) { if (w.tagMask(e).test(id)) dest.push_back(e); });
+  } else { const tool::Entity e = findByName(to); if (w.alive(e)) dest.push_back(e); }
+  for (tool::Entity e : dest) { auto& q = objectInbox[e.index]; if (q.size() < 64) q.push_back(ev); }
+  for (auto& up : scriptHost.instances()) for (tool::Entity d : dest) if (d.index == up->entity && d.generation == up->gen) { scriptCall(*up, 1, 0.f, ev); break; }   // OnEventTrigger dos scripts
+  narrPending.push_back(ev);
+  tool::logInfo("[send] " + ev + " -> " + std::to_string(dest.size()) + " object(s)");
+}
+
+// Inspector "Active" e acao "setActive": objeto desativado nao desenha, nao simula, nao tem luz nem sombra.
+inline void Editor::setActiveByName(const std::string& n, bool on) {
+  auto& w = scene.world(); const tool::Entity e = findByName(n); if (!w.alive(e)) return;
+  if (on) { if (w.has<Inactive>(e)) w.remove<Inactive>(e); }
+  else if (!w.has<Inactive>(e)) w.add<Inactive>(e, Inactive{});
 }
 
 } // namespace editor

@@ -37,6 +37,7 @@ layout(binding = 2, std140) uniform ObjectBuffer
     float roughness;
     float receiveShadow;
     float _pad1;
+    vec4 texInfo;
 } _32;
 
 layout(binding = 0, std140) uniform FrameBuffer

@@ -33,6 +33,7 @@ layout(binding = 1, std140) uniform LightBuffer
 } _361;
 
 layout(binding = 0) uniform sampler2D ShadowMap;
+layout(binding = 1) uniform sampler2D AlbedoMap;
 
 layout(binding = 0, std140) uniform FrameBuffer
 {
@@ -49,6 +50,7 @@ layout(binding = 2, std140) uniform ObjectBuffer
     float roughness;
     float receiveShadow;
     float _pad1;
+    vec4 texInfo;
 } _461;
 
 layout(location = 0) in vec3 i_worldPos;
@@ -223,6 +225,11 @@ vec4 _PSMain(VSOut i)
     vec3 param_1 = normalize(i.normal);
     vec3 param_2 = _458.cameraPos;
     vec3 param_3 = _461.baseColor.xyz;
+    if (_461.texInfo.z > 0.5)
+    {
+        ivec2 tp = ivec2(clamp(int(fract(i.uv.x) * _461.texInfo.x), 0, int(_461.texInfo.x) - 1), clamp(int(fract(i.uv.y) * _461.texInfo.y), 0, int(_461.texInfo.y) - 1));
+        param_3 *= texelFetch(AlbedoMap, tp, 0).xyz;
+    }
     float param_4 = _461.metallic;
     float param_5 = max(_461.roughness, 0.039999999105930328369140625);
     vec3 color = ShadeAll(param, param_1, param_2, param_3, param_4, param_5, _461.receiveShadow);

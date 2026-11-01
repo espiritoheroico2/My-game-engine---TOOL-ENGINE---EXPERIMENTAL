@@ -3,6 +3,7 @@
 // Usa o mesmo modelo de luz de lighting.hpp (atenuacao fisica, spot, direcional).
 #pragma once
 #include "tool/render/lighting.hpp"
+#include "tool/render/texture.hpp"
 #include "tool/render/shadow.hpp"
 
 #include <algorithm>
@@ -27,6 +28,7 @@ struct Mesh {
     m.pos = {{-half, 0, -half}, {half, 0, -half}, {half, 0, half}, {-half, 0, half}};
     m.normal = {{0, 1, 0}, {0, 1, 0}, {0, 1, 0}, {0, 1, 0}};
     m.idx = {0, 2, 1, 0, 3, 2};
+    m.uv = {0, 0, 1, 0, 1, 1, 0, 1};
     return m;
   }
   static Mesh cube(f32 h = 0.5f) {
@@ -36,7 +38,7 @@ struct Mesh {
                            {{-1, 0, 0}, {0, 0, 1}, {0, 1, 0}}, {{0, 1, 0}, {1, 0, 0}, {0, 0, -1}}, {{0, -1, 0}, {1, 0, 0}, {0, 0, 1}}};
     for (const Face& f : faces) {
       const u32 b = static_cast<u32>(m.pos.size());
-      for (auto [su, sv] : {std::pair{-1.f, -1.f}, {1.f, -1.f}, {1.f, 1.f}, {-1.f, 1.f}}) { m.pos.push_back((f.n + f.u * su + f.v * sv) * h); m.normal.push_back(f.n); }
+      for (auto [su, sv] : {std::pair{-1.f, -1.f}, {1.f, -1.f}, {1.f, 1.f}, {-1.f, 1.f}}) { m.pos.push_back((f.n + f.u * su + f.v * sv) * h); m.normal.push_back(f.n); m.uv.push_back((su + 1.f) * 0.5f); m.uv.push_back((sv + 1.f) * 0.5f); }
       for (u32 i : {0u, 1u, 2u, 0u, 2u, 3u}) m.idx.push_back(b + i);
     }
     return m;
@@ -47,7 +49,7 @@ struct Mesh {
       for (int x = 0; x <= seg; ++x) {
         const f32 th = 3.14159265f * static_cast<f32>(y) / static_cast<f32>(rings), ph = 2.f * 3.14159265f * static_cast<f32>(x) / static_cast<f32>(seg);
         const Vec3 n{std::sin(th) * std::cos(ph), std::cos(th), std::sin(th) * std::sin(ph)};
-        m.pos.push_back(n * r); m.normal.push_back(n);
+        m.pos.push_back(n * r); m.normal.push_back(n); m.uv.push_back(static_cast<f32>(x) / static_cast<f32>(seg)); m.uv.push_back(static_cast<f32>(y) / static_cast<f32>(rings));
       }
     for (int y = 0; y < rings; ++y)
       for (int x = 0; x < seg; ++x) {
@@ -59,11 +61,20 @@ struct Mesh {
 };
 
 // castShadow / receiveShadow: por objeto, independentes (ver shadow.hpp).
-struct Material { Vec3 albedo{0.8f, 0.8f, 0.8f}; f32 roughness = 0.5f; f32 metallic = 0.f; bool castShadow = true, receiveShadow = true; };
+struct Material { Vec3 albedo{0.8f, 0.8f, 0.8f}; f32 roughness = 0.5f; f32 metallic = 0.f; bool castShadow = true, receiveShadow = true; const Texture* albedoMap = nullptr; };
 
 struct Camera {
   Vec3 eye{0, 2, 6}, target{0, 0.5f, 0}, up{0, 1, 0};
   f32 fovY = 0.9f, nearZ = 0.1f, farZ = 100.f;
+  bool ortho = false;            // 2D: projecao ortografica; orthoHeight e a altura visivel em unidades do mundo
+  f32 orthoHeight = 10.f;
+  // Matriz de projecao da camera para uma imagem w x h (perspectiva ou ortografica).
+  Mat4 projection(f32 w, f32 h) const {
+    const f32 aspect = w / h;
+    if (!ortho) return Mat4::perspective(fovY, aspect, nearZ, farZ);
+    const f32 hh = orthoHeight * 0.5f, hw = hh * aspect;
+    return Mat4::ortho(-hw, hw, -hh, hh, nearZ, farZ);
+  }
 };
 
 class SoftRenderer {
@@ -79,12 +90,14 @@ public:
   u64 trianglesDrawn() const { return tris_; }
   u64 pixelsShaded() const { flush(); return shaded_; }
 
-  void begin(const Camera& cam, const Vec3& clearColor = {0.08f, 0.09f, 0.11f}) {
+  // clearAlpha 0 marca o fundo como "sem geometria" (o editor preenche o ceu depois, pelo canal alfa).
+  void begin(const Camera& cam, const Vec3& clearColor = {0.08f, 0.09f, 0.11f}, f32 clearAlpha = 1.f) {
     cam_ = cam;
     view_ = Mat4::lookAt(cam.eye, cam.target, cam.up);
-    viewProj_ = Mat4::perspective(cam.fovY, static_cast<f32>(w_) / static_cast<f32>(h_), cam.nearZ, cam.farZ) * view_;
+    viewProj_ = cam.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * view_;
     std::fill(depth_.begin(), depth_.end(), 1.f);
     put(0, clearColor);
+    color_[3] = clearAlpha < 0.5f ? 0 : 255;
     for (size_t i = 1; i < static_cast<size_t>(w_) * h_; ++i) std::memcpy(&color_[i * 4], &color_[0], 4); // cor de fundo: calcula 1 vez e copia
     pending_.clear(); mats_.clear();
     shadowOn_ = false; shadowSkip_ = false; shadowTris_.clear(); // sombras: o chamador liga de novo com setShadow() a cada quadro
@@ -112,13 +125,14 @@ public:
   // acontece em flush(), dividido em faixas de linhas processadas por varias threads. Cada faixa percorre os
   // triangulos na ordem em que foram enviados, entao o resultado e identico ao de uma unica thread.
   void draw(const Mesh& m, const Mat4& world, const Material& mat) {
-    struct V { f32 x, y, z, w; Vec3 wp, n; };
+    struct V { f32 x, y, z, w; Vec3 wp, n; f32 u, v; };
     std::vector<V> v(m.pos.size());
     for (size_t i = 0; i < m.pos.size(); ++i) {
       const Vec3 wp = world.transformPoint(m.pos[i]);
       const Vec4 c = viewProj_.mul({wp.x, wp.y, wp.z, 1});
       const Vec4 nw = world.mul({m.normal[i].x, m.normal[i].y, m.normal[i].z, 0});
-      v[i] = {c.x, c.y, c.z, c.w, wp, normalize({nw.x, nw.y, nw.z})};
+      const bool hasUv = m.uv.size() == m.pos.size() * 2;
+      v[i] = {c.x, c.y, c.z, c.w, wp, normalize({nw.x, nw.y, nw.z}), hasUv ? m.uv[2 * i] : 0.f, hasUv ? m.uv[2 * i + 1] : 0.f};
     }
     const u32 matIdx = static_cast<u32>(mats_.size());
     mats_.push_back(mat);
@@ -142,7 +156,7 @@ public:
     }
     for (size_t t = 0; t + 2 < m.idx.size(); t += 3) {
       const V& a = v[m.idx[t]]; const V& b = v[m.idx[t + 1]]; const V& c = v[m.idx[t + 2]];
-      if (a.w <= cam_.nearZ || b.w <= cam_.nearZ || c.w <= cam_.nearZ) continue; // sem recorte no plano near (alpha)
+      if (!cam_.ortho && (a.w <= cam_.nearZ || b.w <= cam_.nearZ || c.w <= cam_.nearZ)) continue; // sem recorte no plano near (alpha)
       auto sx = [&](const V& p) { return (p.x / p.w * 0.5f + 0.5f) * static_cast<f32>(w_); };
       auto sy = [&](const V& p) { return (1.f - (p.y / p.w * 0.5f + 0.5f)) * static_cast<f32>(h_); };
       Tri r;
@@ -154,7 +168,7 @@ public:
       if (r.x0 > r.x1 || r.y0 > r.y1) continue; // fora da tela
       ++tris_;
       const V* vs[3] = {&a, &b, &c};
-      for (int k = 0; k < 3; ++k) { r.iw[k] = 1.f / vs[k]->w; r.zw[k] = vs[k]->z / vs[k]->w; r.wp[k] = vs[k]->wp; r.n[k] = vs[k]->n; }
+      for (int k = 0; k < 3; ++k) { r.iw[k] = 1.f / vs[k]->w; r.zw[k] = vs[k]->z / vs[k]->w; r.wp[k] = vs[k]->wp; r.n[k] = vs[k]->n; r.uv[k][0] = vs[k]->u; r.uv[k][1] = vs[k]->v; }
       r.mat = matIdx;
       pending_.push_back(r);
     }
@@ -245,7 +259,7 @@ public:
   }
 
 private:
-  struct Tri { f32 x[3], y[3], zw[3], iw[3]; f32 area; Vec3 wp[3], n[3]; int x0, x1, y0, y1; u32 mat; };
+  struct Tri { f32 x[3], y[3], zw[3], iw[3]; f32 area; Vec3 wp[3], n[3]; f32 uv[3][2]; int x0, x1, y0, y1; u32 mat; };
   struct ShadowTri { f32 x[3], y[3], z[3]; f32 area; int x0, x1, y0, y1; };
 
   void rasterize(const Tri& t, int ya, int yb, u64& count) const {
@@ -264,7 +278,12 @@ private:
         const f32 p0 = w0 * t.iw[0], p1 = w1 * t.iw[1], p2 = w2 * t.iw[2], inv = 1.f / (p0 + p1 + p2);
         const Vec3 wp = (t.wp[0] * p0 + t.wp[1] * p1 + t.wp[2] * p2) * inv;
         const Vec3 n = normalize((t.n[0] * p0 + t.n[1] * p1 + t.n[2] * p2) * inv);
-        put(di, shade(wp, n, mat));
+        if (mat.albedoMap && mat.albedoMap->valid()) { // textura: multiplica a cor do material pelo texel (mais proximo)
+          const f32 uu = (t.uv[0][0] * p0 + t.uv[1][0] * p1 + t.uv[2][0] * p2) * inv, vv = (t.uv[0][1] * p0 + t.uv[1][1] * p1 + t.uv[2][1] * p2) * inv;
+          u8 tx[4]; mat.albedoMap->texel(uu, vv, tx);
+          Material mm = mat; mm.albedo = {mat.albedo.x * tx[0] / 255.f, mat.albedo.y * tx[1] / 255.f, mat.albedo.z * tx[2] / 255.f};
+          put(di, shade(wp, n, mm));
+        } else put(di, shade(wp, n, mat));
         ++count;
       }
   }

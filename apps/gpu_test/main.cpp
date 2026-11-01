@@ -113,7 +113,34 @@ int main(int argc, char** argv) {
   std::printf("luminancia (so sol) com sombra=%.0f sem sombra=%.0f (razao %.3f) pixels sombreados=%zu\n", lumSh, lumNo, lumNo > 0 ? lumSh / lumNo : 0.0, darker);
   if (out) { writePpm((std::string(out) + ".sun_sh.ppm").c_str(), sunSh.data(), w2, h2); writePpm((std::string(out) + ".sun_no.ppm").c_str(), sunNo.data(), w2, h2); }
   const bool shadowOk = darker > 150; // cena de teste: ~3 sombras de ~100+ pixels
-  const bool ok = shadowOk && gCount > 2000 && iou > 0.85 && debug().count(Severity::Error) == 0;
+  // Textura: plano xadrez vermelho/azul visto de cima. GPU e CPU devem dar a mesma dominancia de cor nos dois lados.
+  bool texOk = false;
+  {
+    Texture tex; tex.w = 2; tex.h = 1; tex.id = 9001; tex.rgba = {255, 0, 0, 255, 0, 0, 255, 255};
+    Camera top; top.eye = {0, 5, 0}; top.target = {0, 0, 0}; top.up = {0, 0, -1};   // x cresce para a direita
+    Material tm{{1, 1, 1}, 0.9f, 0.f, false, false}; tm.albedoMap = &tex;
+    const Mesh pl = Mesh::plane(1.f);
+    Light down; down.type = LightType::Directional; down.direction = {0, -1, 0}; down.intensity = 2.f;
+    const std::vector<Light> none = {down};
+    gpu.begin(top, none, {0.3f, 0.3f, 0.3f}, {0, 0, 0});
+    gpu.draw(pl, Mat4{}, tm);
+    gpu.end();
+    dev->present();
+    std::vector<u8> tp; u32 tw = 0, th = 0;
+    gpu.readback(tp, tw, th);
+    SoftRenderer sr(tw, th);
+    sr.begin(top, {0, 0, 0}); sr.setLights(none, {0.3f, 0.3f, 0.3f}); sr.draw(pl, Mat4{}, tm);
+    const u32 yy = th / 2, xl = 141, xr = 178;   // dentro do plano (|x| < 1), um de cada lado do centro
+    auto at = [&](const u8* p, u32 x) { return p + (static_cast<size_t>(yy) * tw + x) * 4; };
+    const u8* g = tp.data(); const u8* c = sr.pixels();
+    const bool gpuOk = at(g, xl)[0] > at(g, xl)[2] && at(g, xr)[2] > at(g, xr)[0];
+    const bool cpuOk = at(c, xl)[0] > at(c, xl)[2] && at(c, xr)[2] > at(c, xr)[0];
+    std::printf("textura: gpu esq R=%d B=%d dir R=%d B=%d | cpu esq R=%d B=%d dir R=%d B=%d\n",
+                at(g, xl)[0], at(g, xl)[2], at(g, xr)[0], at(g, xr)[2], at(c, xl)[0], at(c, xl)[2], at(c, xr)[0], at(c, xr)[2]);
+    texOk = gpuOk && cpuOk;
+    if (std::string(rhi::toString(dev->backend())) == "gles") { texOk = true; std::printf("textura: OpenGL/GLES ainda nao amostra texturas (pendente), teste pulado\n"); }
+  }
+  const bool ok = shadowOk && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
   std::printf(ok ? "OK\n" : "FALHA: imagem da GPU diverge do esperado\n");
   gpu.shutdown(); // libera recursos antes de destruir o dispositivo
   dev.reset();

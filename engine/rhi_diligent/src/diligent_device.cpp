@@ -85,7 +85,7 @@ public:
     return h;
   }
 
-  TextureId createTexture(const TextureDesc& d, const void*) override {
+  TextureId createTexture(const TextureDesc& d, const void* data) override {
     if (d.width == 0 || d.height == 0) { debug().report("TOOL-E131", Severity::Error, "textura com dimensao 0"); return kNullHandle; }
     dl::TextureDesc td;
     td.Name = "tool texture";
@@ -93,12 +93,21 @@ public:
     td.Width = d.width; td.Height = d.height; td.MipLevels = d.mips;
     td.Format = toDl(d.format);
     const bool isDepth = d.format == Format::D32F || d.format == Format::D24S8;
+    if (td.Format == dl::TEX_FORMAT_UNKNOWN && !isDepth) { // formato que o Diligent nao conhece: cai para RGBA8 com aviso
+      debug().report("TOOL-W200", Severity::Warning, "formato de textura desconhecido; usando RGBA8_UNORM");
+      td.Format = dl::TEX_FORMAT_RGBA8_UNORM;
+    }
     td.BindFlags = isDepth ? dl::BIND_DEPTH_STENCIL : (d.renderTarget ? (dl::BIND_RENDER_TARGET | dl::BIND_SHADER_RESOURCE) : dl::BIND_SHADER_RESOURCE);
     td.Usage = dl::USAGE_DEFAULT;
     if (d.renderTarget || isDepth) { td.ClearValue.Format = td.Format; if (isDepth) { td.ClearValue.DepthStencil.Depth = 1.f; } }
     dl::RefCntAutoPtr<dl::ITexture> t;
     device->CreateTexture(td, nullptr, &t);
     if (!t) { debug().report("TOOL-E151", Severity::Error, "falha ao criar textura na GPU"); return kNullHandle; }
+    if (data && !isDepth && d.format == Format::RGBA8) { // dados iniciais: copia o nivel 0 (linhas de 4 bytes por pixel)
+      dl::Box box; box.MinX = 0; box.MaxX = d.width; box.MinY = 0; box.MaxY = d.height; box.MinZ = 0; box.MaxZ = 1;
+      dl::TextureSubResData sub; sub.pData = data; sub.Stride = d.width * 4; sub.DepthStride = 0;
+      ctx->UpdateTexture(t, 0, 0, box, sub, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    }
     Handle h = ids_.create();
     put(h.index, Kind::Texture, t, 0);
     return h;
@@ -400,9 +409,10 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
   case Backend::Vulkan: {
     auto* f = dl::GetEngineFactoryVk();
     dl::EngineVkCreateInfo ci;
-    ci.DynamicHeapSize = 64u << 20; // folga extra para os buffers uniformes por objeto (o padrao e 8 MB)
+    ci.DynamicHeapSize = info.dynamicHeapMB << 20; // o padrao do Diligent e 8 MB; "Space in dynamic heap is exhausted" acontecia aqui
     ci.DynamicHeapPageSize = 1u << 20;
-    ci.EnableValidation = info.validation && false; // camadas de validacao nao vem instaladas por padrao
+    ci.EnableValidation = info.validation;          // se as camadas nao estiverem instaladas, o Diligent avisa e segue sem elas
+    if (!info.validation) debug().report("TOOL-W201", Severity::Warning, "Vulkan sem validacao: erros do driver podem passar sem aviso (ligue em Configuracoes > Graficos)");
     dl::IDeviceContext* ctxs[1] = {};
     f->CreateDeviceAndContextsVk(ci, &dev->device, ctxs);
     if (!dev->device || !ctxs[0]) return fail("Vulkan: falha ao criar o dispositivo (driver/GPU Vulkan ausente?)");
@@ -418,6 +428,9 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
     dl::EngineGLCreateInfo ci;
     ci.Window = win;
     ci.ZeroToOneNDZ = true; // projecoes com z de clip em 0..1, iguais ao D3D/Vulkan
+    // O Diligent nao expoe tamanho de dynamic heap no OpenGL (dynamicHeapMB vale so para Vulkan).
+    ci.EnableValidation = info.validation; // depuracao do OpenGL (glDebugMessageCallback) quando solicitado
+    if (!info.validation) debug().report("TOOL-W202", Severity::Warning, "OpenGL sem validacao: erros do driver podem passar sem aviso");
     dl::IDeviceContext* ctx = nullptr;
     f->CreateDeviceAndSwapChainGL(ci, &dev->device, &ctx, scd, &dev->swapchain);
     if (!dev->device || !ctx) return fail("OpenGL: falha ao criar o contexto (driver sem GL 4.3+?)");
@@ -429,7 +442,8 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
   case Backend::D3D12: {
     auto* f = dl::GetEngineFactoryD3D12();
     dl::EngineD3D12CreateInfo ci;
-    ci.EnableValidation = info.validation;
+    ci.EnableValidation = info.validation;   // o Diligent nao expoe tamanho total do heap dinamico no D3D12 (so o de pagina)
+    if (!info.validation) debug().report("TOOL-W203", Severity::Warning, "D3D12 sem validacao: erros do driver podem passar sem aviso");
     dl::IDeviceContext* ctxs[1] = {};
     f->CreateDeviceAndContextsD3D12(ci, &dev->device, ctxs);
     if (!dev->device || !ctxs[0]) return fail("D3D12: falha ao criar o dispositivo");

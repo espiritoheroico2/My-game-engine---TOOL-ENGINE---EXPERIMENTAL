@@ -273,6 +273,29 @@ Point light shadows	Sombras de point light	Sombras de point light
 Compress as NTC	Comprimir como NTC	Comprimir como NTC
 Ray tracing (DXR)	Ray tracing (DXR)	Ray tracing (DXR)
 Planned: see docs/TEXTURES.md, docs/RENDER_PERF.md, docs/DX12_DXR.md	Planejado: veja docs/TEXTURES.md, docs/RENDER_PERF.md, docs/DX12_DXR.md	Planificado: vea docs/TEXTURES.md, docs/RENDER_PERF.md, docs/DX12_DXR.md
+Add Script	Adicionar Script	Añadir Script
+- Remove Resource	- Remover recurso	- Quitar recurso
+Add a component to this object: physics, tools, mesh, light, camera, audio, particles, UI, script	Adiciona um componente a este objeto: física, tools, malha, luz, câmera, áudio, partículas, UI, script	Añade un componente a este objeto: física, tools, malla, luz, cámara, audio, partículas, UI, script
+Remove a component from this object (the script file stays in Assets/Scripts)	Remove um componente deste objeto (o arquivo do script continua em Assets/Scripts)	Quita un componente de este objeto (el archivo del script se mantiene en Assets/Scripts)
+Creates a script file for this object (optional).	Cria um arquivo de script para este objeto (opcional).	Crea un archivo de script para este objeto (opcional).
+Create an object, camera, light or sound	Cria um objeto, câmera, luz ou som	Crea un objeto, cámara, luz o sonido
+Copy the selected object	Copia o objeto selecionado	Copia el objeto seleccionado
+Delete the selected object and its children (Delete key)	Apaga o objeto selecionado e os filhos (tecla Delete)	Borra el objeto seleccionado y sus hijos (tecla Supr)
+Tools (all)	Tools (todas)	Tools (todas)
+Mesh	Malha	Malla
+Point/Spot light	Luz pontual/spot	Luz puntual/spot
+Objects have no script until you add one.	Objetos não têm script até você adicionar um.	Los objetos no tienen script hasta que añadas uno.
+Help: JS library	Ajuda: biblioteca JS	Ayuda: biblioteca JS
+Help: script examples	Ajuda: exemplos de script	Ayuda: ejemplos de script
+Active	Ativo	Activo
+Inactive objects are not drawn, simulated or lit, and their Tools do not run.	Objetos inativos não são desenhados, simulados nem iluminados, e suas Tools não rodam.	Los objetos inactivos no se dibujan, simulan ni iluminan, y sus Tools no se ejecutan.
+Frustum culling (skip objects outside the camera view)	Frustum culling (pula objetos fora da visão da câmera)	Frustum culling (omite objetos fuera de la vista de la cámara)
+Objects outside the camera view are not drawn. Objects that cast shadows are always drawn.	Objetos fora da visão da câmera não são desenhados. Objetos que projetam sombra são sempre desenhados.	Los objetos fuera de la vista de la cámara no se dibujan. Los que proyectan sombra siempre se dibujan.
+Script status	Status do script	Estado del script
+Reload scripts	Recarregar scripts	Recargar scripts
+Restarts the scripts of this scene (state is reset).	Reinicia os scripts desta cena (o estado é zerado).	Reinicia los scripts de esta escena (el estado se reinicia).
+Scripts run while the game is playing (Play).	Os scripts rodam enquanto o jogo está em Play.	Los scripts se ejecutan mientras el juego está en Play.
+This build has no script runtime (QuickJS is off).	Esta build não tem runtime de scripts (QuickJS desligado).	Esta compilación no tiene runtime de scripts (QuickJS desactivado).
 Pause graph	Pausar gráfico	Pausar gráfico
 Time per zone (average ms)	Tempo por zona (média em ms)	Tiempo por zona (media en ms)
 Events + input	Eventos + entrada	Eventos + entrada

@@ -9,6 +9,8 @@
 // Entrada nao confiavel: nomes vindos do usuario passam por safeName()/resolve() (sem "..", sem caminho absoluto).
 #pragma once
 #include "components.hpp"
+#include "image_io.hpp"
+#include "skybox.hpp"
 #include "tool/assets/import.hpp"
 #include "tool/audio/decode.hpp"
 #include "tool/render/postfx.hpp"
@@ -147,8 +149,22 @@ public:
   void invalidate(const std::string& rel) {
     if (auto it = meshes_.find(rel); it != meshes_.end()) { if (onMeshForget) onMeshForget(it->second.get()); meshes_.erase(it); }
     sounds_.erase(rel); failed_.erase(rel); tint_.erase(rel);
+    textures_.erase(rel); failedTex_.erase(rel);
   }
-  void clear() { for (auto& [k, m] : meshes_) if (onMeshForget) onMeshForget(m.get()); meshes_.clear(); sounds_.clear(); failed_.clear(); tint_.clear(); }
+  void clear() { for (auto& [k, m] : meshes_) if (onMeshForget) onMeshForget(m.get()); meshes_.clear(); sounds_.clear(); failed_.clear(); tint_.clear(); textures_.clear(); failedTex_.clear(); }
+
+  // Textura de albedo (PNG, JPG, BMP, TGA) do projeto. Falha fica em cache para nao repetir a cada quadro.
+  const tool::Texture* texture(const std::string& rel) {
+    if (auto it = textures_.find(rel); it != textures_.end()) return it->second.get();
+    if (failedTex_.count(rel) || rel.empty()) return nullptr;
+    const fs::path path = proj_->resolve(rel);
+    auto t = std::make_unique<tool::Texture>();
+    std::string err;
+    if (path.empty() || !loadImageFile(path.string(), *t, &err)) { failedTex_.insert(rel); tool::logError("could not load texture '" + rel + "': " + (path.empty() ? "invalid path" : err)); return nullptr; }
+    const tool::Texture* out = t.get();
+    textures_[rel] = std::move(t);
+    return out;
+  }
   size_t meshCount() const { return meshes_.size(); }
   size_t soundCount() const { return sounds_.size(); }
 
@@ -159,6 +175,8 @@ private:
   std::map<std::string, tool::Vec3> tint_;
   std::map<std::string, tool::SoundPtr> sounds_;
   std::set<std::string> failed_;
+  std::map<std::string, std::unique_ptr<tool::Texture>> textures_;
+  std::set<std::string> failedTex_;
 };
 
 // --- Arquivo de cena -------------------------------------------------------------------------------------------
@@ -166,6 +184,7 @@ private:
 // Configuracao de iluminacao/render DA CENA (Settings > Lighting): sombras em tempo real e pos-processamento GLOBAL.
 struct RenderSettings {
   tool::ShadowSettings shadow;
+  bool frustumCull = true;         // pula objetos fora da visao da camera (sombras continuam corretas)
   tool::PostFx post;               // vale para todas as cameras; cada camera pode somar/substituir com o seu (postfx.hpp)
 };
 
@@ -182,6 +201,8 @@ struct PhysicsSettings {
 struct SceneFile {
   std::string name = "Main";
   bool splitVertical = true;
+  bool splitFill = false;          // split screen: a camera preenche cada metade (corta a vista) em vez de encaixar com barras
+  SkyboxSettings sky;              // skybox de 6 imagens (skybox.hpp)
   std::vector<std::string> assets; // assets "alocados" nesta cena (carregados ao abrir)
   RenderSettings render;
   PhysicsSettings physics;
@@ -207,7 +228,7 @@ inline tool::Json saveRenderSettings(const RenderSettings& r) {
   s.set("enabled", r.shadow.enabled); s.set("resolution", r.shadow.resolution); s.set("distance", static_cast<double>(r.shadow.distance));
   s.set("bias", static_cast<double>(r.shadow.bias)); s.set("normalBias", static_cast<double>(r.shadow.normalBias)); s.set("pcf", r.shadow.pcf);
   s.set("strength", static_cast<double>(r.shadow.strength));
-  o.set("shadow", s); o.set("post", ser::postFx(r.post));
+  o.set("shadow", s); o.set("post", ser::postFx(r.post)); o.set("frustumCull", r.frustumCull);
   return o;
 }
 // Todo valor lido do arquivo e limitado a uma faixa segura (um .scene.json editado a mao nao pode travar o render).
@@ -219,6 +240,7 @@ inline RenderSettings loadRenderSettings(const tool::Json& o) {
   r.shadow.normalBias = ser::clampNum(s, "normalBias", 1.5f, 0.f, 8.f); r.shadow.pcf = std::clamp(static_cast<int>(ser::num(s, "pcf", 1.f)), 0, 2);
   r.shadow.strength = ser::clampNum(s, "strength", 0.85f, 0.f, 1.f);
   if (o.has("post")) r.post = ser::readPostFx(o["post"]);
+  r.frustumCull = ser::flag(o, "frustumCull", true);
   return r;
 }
 
@@ -233,9 +255,25 @@ inline bool readTextFile(const fs::path& p, std::string& out, size_t maxBytes = 
   std::stringstream ss; ss << f.rdbuf(); out = ss.str(); return true;
 }
 
+inline tool::Json saveSkybox(const SkyboxSettings& s) {
+  tool::Json o = tool::Json::object();
+  o.set("enabled", s.enabled);
+  for (int i = 0; i < 6; ++i) o.set("image" + std::to_string(i), std::string(s.face[i]));
+  for (int i = 0; i < 3; ++i) o.set("solid" + std::to_string(i), static_cast<double>(s.solid[i]));
+  return o;
+}
+inline SkyboxSettings loadSkybox(const tool::Json& o) {
+  SkyboxSettings s;
+  s.enabled = ser::flag(o, "enabled", false);
+  for (int i = 0; i < 6; ++i) { const std::string k = "image" + std::to_string(i); ser::copyStr(s.face[i], sizeof s.face[i], o[k.c_str()].asString()); } // cenas antigas (faces procedurais) ficam sem imagem
+  for (int i = 0; i < 3; ++i) { const std::string k = "solid" + std::to_string(i); s.solid[i] = std::clamp(ser::num(o, k.c_str(), s.solid[i]), 0.f, 1.f); }
+  return s;
+}
+
 inline bool saveSceneFile(const Project& proj, tool::Scene& sc, const SceneFile& info) {
   tool::Json j = tool::Json::object(), as = tool::Json::array();
-  j.set("version", 1); j.set("name", info.name); j.set("splitVertical", info.splitVertical);
+  j.set("version", 1); j.set("name", info.name); j.set("splitVertical", info.splitVertical); j.set("splitFill", info.splitFill);
+  j.set("skybox", saveSkybox(info.sky));
   for (auto& a : info.assets) as.push(a);
   j.set("assets", as); j.set("render", saveRenderSettings(info.render)); j.set("physics", savePhysicsSettings(info.physics));
   j.set("narrative", info.narrative); j.set("script", info.script);
@@ -260,6 +298,8 @@ inline bool loadSceneFile(const Project& proj, tool::Scene& sc, const std::strin
   info = SceneFile{};
   info.name = name;
   info.splitVertical = ser::flag(*j, "splitVertical", true);
+  info.splitFill = ser::flag(*j, "splitFill", false);
+  if (j->has("skybox")) info.sky = loadSkybox((*j)["skybox"]);   // cena antiga (sem a chave) fica sem skybox
   for (auto& a : (*j)["assets"].items()) if (a.isString()) info.assets.push_back(a.asString());
   if (j->has("render")) info.render = loadRenderSettings((*j)["render"]);
   if (j->has("physics")) info.physics = loadPhysicsSettings((*j)["physics"]);

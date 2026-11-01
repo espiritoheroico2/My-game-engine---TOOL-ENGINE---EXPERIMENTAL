@@ -37,7 +37,7 @@ docs/           notas de construção
 ```
 Dependências apontam sempre para baixo: scene → events/ecs → debug → core.
 
-Status: **0.6.0-beta** - veja `docs/CHANGELOG.md`, `docs/NEXT_STEPS.md`, `docs/FSR.md`, `docs/SECURITY.md`.
+Status: **0.7.7-beta** - veja `docs/CHANGELOG.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/NEXT_STEPS.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`.
 
 ## Novidades da v0.4.0-beta
 Sombras em tempo real (cast/receive por objeto), gizmos mover/girar/escalar (W/E/R), navegação livre (Alt), foco por duplo clique,

@@ -115,7 +115,7 @@
       "name": "editor-gpu-dx12",
       "displayName": "Editor + GPU (Vulkan/OpenGL/Direct3D 12) - Windows only",
       "inherits": "editor-gpu",
-      "binaryDir": "${sourceDir}/build/editor-gpu-dx12",
+      "binaryDir": "${sourceDir}/out",
       "cacheVariables": {
         "TOOL_WITH_D3D12": "ON"
       }

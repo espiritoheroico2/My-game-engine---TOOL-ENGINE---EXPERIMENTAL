@@ -19,12 +19,14 @@ option(TOOL_BUILD_TESTS "Compilar os testes" OFF)
 option(TOOL_BUILD_SANDBOX "Compilar o programa de demonstracao (console)" OFF)
 option(TOOL_WARNINGS_AS_ERRORS "Tratar avisos como erros" OFF)
 set(TOOL_DEBUG_LEVEL 2 CACHE STRING "Nivel do DebugTool: 0=release 1=teste 2=desenvolvimento")
+set(TOOL_DYNAMIC_HEAP_MB 64 CACHE STRING "Dynamic heap do Diligent (MiB), usado pelo Vulkan")
 
 include(cmake/Warnings.cmake)
 
 include(cmake/Dependencies.cmake)
 enable_testing()
 add_compile_definitions(TOOL_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_compile_definitions(TOOL_DYNAMIC_HEAP_MB=${TOOL_DYNAMIC_HEAP_MB})
 if(WIN32)
   # windows.h defines min/max macros that break std::min/std::max; also keep it lean.
   add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)

@@ -28,15 +28,22 @@ inline void openHelp(const std::string& topic) { auto& h = helpState(); h.open =
 inline void helpIcon(const char* topic) {
   ImGuiWindow* win = ImGui::GetCurrentWindow(); if (!win || win->Collapsed) return;
   const float h = ImGui::GetFrameHeight();
-  const ImVec2 mn{win->Pos.x + win->Size.x - h * 2.f - 4.f, win->Pos.y + 2.f}, mx{mn.x + h - 4.f, mn.y + h - 4.f};
-  ImDrawList* dl = win->DrawList; dl->PushClipRect(win->Pos, {win->Pos.x + win->Size.x, win->Pos.y + win->Size.y}, false);
-  const bool hot = ImGui::IsMouseHoveringRect(mn, mx, false) && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-  const ImVec2 c{(mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f};
-  dl->AddCircleFilled(c, (mx.x - mn.x) * 0.5f, hot ? ImGui::GetColorU32(ImGuiCol_ButtonHovered) : ImGui::GetColorU32(ImGuiCol_Button));
+  const ImVec2 mn{win->Pos.x + win->Size.x - h * 2.f - 4.f, win->Pos.y + 2.f}, sz{h - 4.f, h - 4.f};
+  // Botao real (InvisibleButton): a janela nao "come" o clique como acontecia com IsMouseClicked na barra de titulo.
+  const ImVec2 saved = ImGui::GetCursorScreenPos();
+  ImGui::SetCursorScreenPos(mn);
+  ImGui::PushID(topic);
+  const bool clicked = ImGui::InvisibleButton("##helpq", sz);
+  const bool hot = ImGui::IsItemHovered();
+  ImGui::PopID();
+  ImGui::SetCursorScreenPos(saved);
+  ImDrawList* dl = win->DrawList;
+  const ImVec2 c{mn.x + sz.x * 0.5f, mn.y + sz.y * 0.5f};
+  dl->AddCircleFilled(c, sz.x * 0.5f, hot ? ImGui::GetColorU32(ImGuiCol_ButtonHovered) : ImGui::GetColorU32(ImGuiCol_Button));
   const ImVec2 ts = ImGui::CalcTextSize("?");
   dl->AddText({c.x - ts.x * 0.5f, c.y - ts.y * 0.5f}, ImGui::GetColorU32(ImGuiCol_Text), "?");
-  dl->PopClipRect();
-  if (hot) { ImGui::SetTooltip("%s", T("Help for this window (F1)")); if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) openHelp(topic); }
+  if (hot) ImGui::SetTooltip("%s", T("Help for this window (F1)"));
+  if (clicked) openHelp(topic);
 }
 
 inline bool helpIsPt() { return I18n::get().code().rfind("pt", 0) == 0; }
@@ -139,7 +146,7 @@ inline void physicsUi(Editor& ed) {
   tool::World& w = ed.scene.world();
   auto* p = w.get<PhysicsComp>(ed.selected);
   if (!p) return;
-  ImGui::SeparatorText("Physics (Newtoon)");
+  if (!ImGui::CollapsingHeader("Physics (Newtoon)", ImGuiTreeNodeFlags_DefaultOpen)) return;
   const std::string bodies = std::string(T("Static")) + '\0' + T("Dynamic") + '\0' + T("Kinematic") + '\0';
   ImGui::Combo(T("Body"), &p->body, bodies.c_str());
   const std::string cols = std::string(T("Auto (from mesh)")) + '\0' + T("Box") + '\0' + T("Sphere") + '\0';
@@ -170,7 +177,7 @@ inline void physicsUi(Editor& ed) {
 // ====================================================================================================== UI CANVAS / PARTICULAS (Inspector)
 inline void uiCanvasUi(Editor& ed) {
   tool::World& w = ed.scene.world(); auto* u = w.get<UiCanvas>(ed.selected); if (!u) return;
-  ImGui::SeparatorText(T("Game UI (camera layer)"));
+  if (!ImGui::CollapsingHeader(T("Game UI (camera layer)"), ImGuiTreeNodeFlags_DefaultOpen)) return;
   ImGui::Checkbox(T("Visible"), &u->visible);
   // escolhe a camera: vazio = todas as cameras Principais
   const auto* curName = u->camera;
@@ -210,7 +217,7 @@ inline void uiCanvasUi(Editor& ed) {
 
 inline void particleUi(Editor& ed) {
   tool::World& w = ed.scene.world(); auto* p = w.get<ParticleComp>(ed.selected); if (!p) return;
-  ImGui::SeparatorText(T("Particles"));
+  if (!ImGui::CollapsingHeader(T("Particles"), ImGuiTreeNodeFlags_DefaultOpen)) return;
   ImGui::Checkbox(T("Emitting"), &p->emitting);
   ImGui::DragInt(T("Max particles"), &p->maxParticles, 1.f, 1, 5000); ImGui::DragFloat(T("Rate (per second)"), &p->rate, 0.5f, 0.f, 5000.f); ImGui::DragFloat(T("Lifetime (s)"), &p->lifetime, 0.05f, 0.05f, 60.f);
   ImGui::DragFloat(T("Speed"), &p->speed, 0.05f, 0.f, 500.f); ImGui::SliderFloat(T("Spread (deg)"), &p->spread, 0.f, 180.f);
@@ -231,7 +238,25 @@ inline void addResourceUi(Editor& ed) {
   static const char* tips[] = {"Jumps when the action is pressed (needs a Dynamic Physics body).", "Moves with two axes from the Input Map.", "Follows another object by name, keeping an offset (cameras).",
                                "Rotates continuously.", "Reacts when this object touches another.", "Attaches an extra .js library/addon to this object's code."};
   ImGui::Spacing();
-  if (ImGui::Button(T("+ Add Resource"), {-1.f, 0.f})) ImGui::OpenPopup("addres");
+  if (ImGui::Button(T("+ Add Resource"), {ImGui::GetContentRegionAvail().x * 0.5f - 4.f, 0.f})) ImGui::OpenPopup("addres");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Add a component to this object: physics, tools, mesh, light, camera, audio, particles, UI, script"));
+  ImGui::SameLine();
+  if (ImGui::Button(T("- Remove Resource"), {-1.f, 0.f})) ImGui::OpenPopup("remres");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Remove a component from this object (the script file stays in Assets/Scripts)"));
+  if (ImGui::BeginPopup("remres")) {
+    auto rm = [&](bool has, const char* name, auto&& fn) { if (has && ImGui::MenuItem(T(name))) fn(); };
+    rm(w.has<PhysicsComp>(sel), "Physics", [&] { w.remove<PhysicsComp>(sel); });
+    rm(w.has<ToolsComp>(sel), "Tools (all)", [&] { w.remove<ToolsComp>(sel); });
+    rm(w.has<MeshRenderer>(sel), "Mesh", [&] { w.remove<MeshRenderer>(sel); });
+    rm(w.has<LightComp>(sel), "Point/Spot light", [&] { w.remove<LightComp>(sel); });
+    rm(w.has<GlobalLight>(sel), "Global Light", [&] { w.remove<GlobalLight>(sel); });
+    rm(w.has<CameraComp>(sel), "Camera", [&] { w.remove<CameraComp>(sel); });
+    rm(w.has<AudioSource>(sel), "Audio Source", [&] { if (auto* a = w.get<AudioSource>(sel)) ed.mixer.stop(a->voice); w.remove<AudioSource>(sel); });
+    rm(w.has<ParticleComp>(sel), "Particle System", [&] { w.remove<ParticleComp>(sel); });
+    rm(w.has<UiCanvas>(sel), "Game UI (canvas)", [&] { w.remove<UiCanvas>(sel); });
+    rm(w.has<ScriptComp>(sel), "ToolObject Script", [&] { w.remove<ScriptComp>(sel); });
+    ImGui::EndPopup();
+  }
   if (!ImGui::BeginPopup("addres")) return;
   auto* tl = w.get<ToolsComp>(sel);
   ImGui::SeparatorText(T("Physics"));
@@ -261,6 +286,7 @@ inline void addResourceUi(Editor& ed) {
   if (!w.has<CameraComp>(sel) && ImGui::MenuItem(T("Camera"))) w.add<CameraComp>(sel);
   if (!w.has<AudioSource>(sel) && ImGui::MenuItem(T("Audio Source"))) w.add<AudioSource>(sel);
   if (!w.has<ParticleComp>(sel) && ImGui::MenuItem(T("Particle System"))) w.add<ParticleComp>(sel);
+  if (!w.has<ScriptComp>(sel) && ImGui::MenuItem(T("ToolObject Script"))) ed.attachScript(sel);
   if (!w.has<UiCanvas>(sel) && ImGui::MenuItem(T("Game UI (canvas)"))) { UiCanvas u; UiElem& e = u.items[u.count++]; ser::copyStr(e.text, sizeof e.text, "Hello UI"); w.add<UiCanvas>(sel, u); }
   // Recursos planejados: aparecem bloqueados (cinza) ate serem implementados.
   ImGui::SeparatorText(T("Coming in a future update (locked)"));
@@ -277,7 +303,8 @@ inline void toolsUi(Editor& ed) {
   tool::World& w = ed.scene.world();
   auto* tl = w.get<ToolsComp>(ed.selected);
   if (!tl) return;
-  ImGui::SeparatorText("Tools");
+  if (!ImGui::CollapsingHeader("Tools", ImGuiTreeNodeFlags_DefaultOpen)) return;
+  if (ImGui::SmallButton(T("Help: JS library"))) openHelp("jslib");
   static const char* names[] = {"Jump", "Move", "Follow Target", "Spin", "On Collision", "Script library"};
   int removeAt = -1;
   for (int i = 0; i < tl->count; ++i) {

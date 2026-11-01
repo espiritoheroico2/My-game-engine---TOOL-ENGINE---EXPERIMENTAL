@@ -7,6 +7,7 @@
 #include "tool/debug/debug.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
 #include <typeinfo>
 #include <utility>
@@ -20,6 +21,7 @@ using ComponentId = u32;
 namespace detail {
 inline ComponentId nextComponentId() {
   static ComponentId n = 0;
+  if (n == static_cast<ComponentId>(-1)) std::abort(); // mais de 4 bilhoes de tipos de componente: o id daria a volta e corromperia os storages
   return n++;
 }
 } // namespace detail
@@ -119,10 +121,13 @@ public:
   Entity renew(Entity e) { return ids_.renew(e); }
 
   // Remove componentes fora de `keep` e restaura as tags (reuso identico).
+  // (Marca os componentes mantidos num vetor de bits: antes era um std::find por componente, O(componentes x keep).)
   void resetTo(Entity e, const std::vector<ComponentId>& keep, const TagMask& mask) {
     if (!alive(e)) return;
+    std::vector<char> kept(storages_.size(), 0);
+    for (ComponentId k : keep) if (k < kept.size()) kept[k] = 1;
     for (ComponentId id = 0; id < storages_.size(); ++id)
-      if (storages_[id] && std::find(keep.begin(), keep.end(), id) == keep.end()) storages_[id]->remove(e.index);
+      if (storages_[id] && !kept[id]) storages_[id]->remove(e.index);
     tags_[e.index] = mask;
   }
 

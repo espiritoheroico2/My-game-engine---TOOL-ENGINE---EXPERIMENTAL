@@ -41,6 +41,7 @@ struct MeshRenderer {
   float color[3] = {0.8f, 0.3f, 0.2f};
   float roughness = 0.5f, metallic = 0.f;
   char model[160] = "";
+  char texture[160] = "";     // textura de albedo (PNG/JPG/BMP/TGA em Assets); vazio = sem textura
   // Sombras, independentes entre si: um objeto pode projetar sem receber (ex.: um tronco) ou receber sem projetar (ex.: chao).
   bool castShadow = true, receiveShadow = true;
 };
@@ -64,6 +65,8 @@ struct GlobalLight {
 // Camera do jogo. A camera ativa e a que tem a tag "Principal". Duas Principais = tela dividida.
 struct CameraComp {
   float fovDeg = 55.f, nearZ = 0.1f, farZ = 200.f;
+  bool ortho2D = false;    // 2D: projecao ortografica (sem perspectiva). orthoSize = altura visivel em unidades do mundo
+  float orthoSize = 10.f;
   bool soundEar = false;   // "ouvido": esta camera e o ouvinte do audio 3D
   float earVolume = 1.f;
   tool::PostFx post;       // pos-processamento LOCAL (so desta camera); combina com o GLOBAL da cena (ver postfx.hpp)
@@ -110,9 +113,22 @@ struct UiElem {
   float fontScale = 1.f;
 };
 constexpr int kMaxUi = 16;
+// Objeto desativado (Inspector > Active, ou acao "setActive" do Narrative): nao desenha, nao simula, nao executa Tools, sem luz/sombra.
+struct Inactive {};
+
 struct UiCanvas { char camera[40] = ""; bool visible = true; int count = 0; UiElem items[kMaxUi]; }; // camera vazia = todas as cameras Principais
 
 // Particulas: emissor simples (CPU). Gravidade e quique vem das configuracoes de fisica (Newtoon) da cena.
+// Teste de ECS (comando "test ECS: N" no Console). Estado de execucao: nao vai para o arquivo de cena.
+// Fica no objeto "ECScall": cada esfera criada e filha dele e cai com a fisica Newtoon.
+struct SpawnerComp {
+  long long total = 0, spawned = 0; int perFrame = 1;
+  float height = 15.f, area = 20.f;   // altura de queda e lado do quadrado de queda (metros)
+  bool armed = false, logged = false;
+  double startedAt = -1.0;            // segundos (relogio real) do inicio da criacao
+  uint32_t seed = 2463534242u;
+};
+
 struct ParticleComp {
   bool emitting = true, loop = true; int maxParticles = 200; float rate = 40.f, lifetime = 1.5f, speed = 3.f, spread = 25.f; // spread em graus em torno do eixo +Y do objeto
   float size = 0.12f, sizeEnd = 0.02f, gravityScale = 1.f, bounce = 0.f, floorY = -1000.f; // bounce>0: quica no plano y=floorY
@@ -151,6 +167,7 @@ inline tool::Camera cameraOf(const Transform& t, const CameraComp& c) {
   cam.target = cam.eye + forwardOf(t);
   cam.up = upOf(t);
   cam.fovY = c.fovDeg * kDeg2Rad; cam.nearZ = c.nearZ; cam.farZ = c.farZ;
+  cam.ortho = c.ortho2D; cam.orthoHeight = c.orthoSize;
   return cam;
 }
 
@@ -223,7 +240,7 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
   if (auto* t = w.get<Transform>(e)) { Json o = Json::object(); o.set("pos", ser::vec(t->pos, 3)); o.set("rot", ser::vec(t->rot, 3)); o.set("scale", ser::vec(t->scale, 3)); j.set("transform", o); }
   if (auto* mr = w.get<MeshRenderer>(e)) {
     Json o = Json::object(); o.set("shape", mr->shape); o.set("color", ser::vec(mr->color, 3)); o.set("roughness", static_cast<double>(mr->roughness));
-    o.set("metallic", static_cast<double>(mr->metallic)); o.set("model", std::string(mr->model));
+    o.set("metallic", static_cast<double>(mr->metallic)); o.set("model", std::string(mr->model)); o.set("texture", std::string(mr->texture));
     o.set("castShadow", mr->castShadow); o.set("receiveShadow", mr->receiveShadow); j.set("mesh", o);
   }
   if (auto* lc = w.get<LightComp>(e)) {
@@ -237,6 +254,7 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
   }
   if (auto* c = w.get<CameraComp>(e)) {
     Json o = Json::object(); o.set("fov", static_cast<double>(c->fovDeg)); o.set("near", static_cast<double>(c->nearZ)); o.set("far", static_cast<double>(c->farZ));
+    o.set("ortho2D", c->ortho2D); o.set("orthoSize", static_cast<double>(c->orthoSize));
     o.set("soundEar", c->soundEar); o.set("earVolume", static_cast<double>(c->earVolume)); o.set("post", ser::postFx(c->post)); j.set("camera", o);
   }
   if (auto* p = w.get<PhysicsComp>(e)) {
@@ -259,6 +277,7 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     Json o = Json::object(); o.set("clip", std::string(a->clip)); o.set("volume", static_cast<double>(a->volume)); o.set("loop", a->loop); o.set("playOnStart", a->playOnStart);
     o.set("spatial", a->spatial); o.set("minDistance", static_cast<double>(a->minDistance)); o.set("maxDistance", static_cast<double>(a->maxDistance)); j.set("audio", o);
   }
+  if (w.has<Inactive>(e)) j.set("inactive", true);
   if (auto* u = w.get<UiCanvas>(e)) {
     Json o = Json::object(); o.set("camera", std::string(u->camera)); o.set("visible", u->visible); Json arr = Json::array();
     for (int i = 0; i < u->count && i < kMaxUi; ++i) { const UiElem& it = u->items[i]; Json q = Json::object();
@@ -283,7 +302,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
   if (j.has("transform")) { Transform t; const auto& o = j["transform"]; ser::readVec(o["pos"], t.pos, 3); ser::readVec(o["rot"], t.rot, 3); ser::readVec(o["scale"], t.scale, 3); w.add<Transform>(e, t); }
   if (j.has("mesh")) {
     MeshRenderer m; const auto& o = j["mesh"]; m.shape = static_cast<int>(o["shape"].asNumber(0)); ser::readVec(o["color"], m.color, 3);
-    m.roughness = ser::num(o, "roughness", 0.5f); m.metallic = ser::num(o, "metallic", 0.f); ser::copyStr(m.model, sizeof m.model, o["model"].asString());
+    m.roughness = ser::num(o, "roughness", 0.5f); m.metallic = ser::num(o, "metallic", 0.f); ser::copyStr(m.model, sizeof m.model, o["model"].asString()); ser::copyStr(m.texture, sizeof m.texture, o["texture"].asString());
     m.castShadow = ser::flag(o, "castShadow", true); m.receiveShadow = ser::flag(o, "receiveShadow", true);
     if (m.shape < 0 || m.shape > 3) m.shape = 0;
     w.add<MeshRenderer>(e, m);
@@ -300,6 +319,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
   }
   if (j.has("camera")) {
     CameraComp c; const auto& o = j["camera"]; c.fovDeg = ser::num(o, "fov", c.fovDeg); c.nearZ = ser::num(o, "near", c.nearZ); c.farZ = ser::num(o, "far", c.farZ);
+    c.ortho2D = ser::flag(o, "ortho2D", false); c.orthoSize = ser::num(o, "orthoSize", c.orthoSize);
     c.soundEar = ser::flag(o, "soundEar", false); c.earVolume = ser::num(o, "earVolume", 1.f);
     if (o.has("post")) c.post = ser::readPostFx(o["post"]);
     w.add<CameraComp>(e, c);
@@ -332,6 +352,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     a.loop = ser::flag(o, "loop", true); a.playOnStart = ser::flag(o, "playOnStart", true); a.spatial = ser::flag(o, "spatial", true);
     a.minDistance = ser::num(o, "minDistance", 1.f); a.maxDistance = ser::num(o, "maxDistance", 30.f); w.add<AudioSource>(e, a);
   }
+  if (j["inactive"].isBool() && j["inactive"].asBool()) w.add<Inactive>(e, Inactive{});
   if (j.has("ui")) {
     UiCanvas u; const auto& o = j["ui"]; ser::copyStr(u.camera, sizeof u.camera, o["camera"].asString()); u.visible = ser::flag(o, "visible", true);
     for (auto& q : o["items"].items()) {

@@ -109,13 +109,21 @@ public:
   virtual DrawStats frameStats() const = 0;
 };
 
+// Tamanho do "dynamic heap" do Vulkan (MiB). O Diligent usa 8 MB por padrao, pequeno demais para os buffers
+// uniformes por objeto do editor ("Space in dynamic heap is exhausted"). Configuravel no CMake:
+// -DTOOL_DYNAMIC_HEAP_MB=128. (OpenGL e D3D12 nao expoem um tamanho total no Diligent.)
+#ifndef TOOL_DYNAMIC_HEAP_MB
+#define TOOL_DYNAMIC_HEAP_MB 64
+#endif
+
 // Parametros de criacao de um dispositivo real. nativeWindow = HWND / X11 Window (+ display) / nullptr (offscreen).
 struct DeviceInfo {
   Backend backend = Backend::Null;
   void* nativeWindow = nullptr;   // janela nativa (Windows: HWND; X11: Window id como ponteiro)
   void* nativeDisplay = nullptr;  // X11: Display*
   u32 width = 1280, height = 720;
-  bool validation = true;
+  bool validation = false;        // camadas de validacao (Vulkan/D3D12) e depuracao GL. Custam CPU: ligue so para depurar
+  u32 dynamicHeapMB = TOOL_DYNAMIC_HEAP_MB;
 };
 
 } // namespace tool::rhi

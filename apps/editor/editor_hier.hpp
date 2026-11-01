@@ -109,6 +109,7 @@ inline tool::Camera Editor::cameraFor(tool::Entity e) {
   auto dir = [&](tool::Vec3 v) { const tool::Vec4 r = m.mul({v.x, v.y, v.z, 0.f}); return tool::normalize({r.x, r.y, r.z}); };
   cam.eye = {m.m[3][0], m.m[3][1], m.m[3][2]}; cam.target = cam.eye + dir({0, 0, -1}); cam.up = dir({0, 1, 0});
   cam.fovY = c->fovDeg * kDeg2Rad; cam.nearZ = c->nearZ; cam.farZ = c->farZ;
+  cam.ortho = c->ortho2D; cam.orthoHeight = c->orthoSize;
   return cam;
 }
 

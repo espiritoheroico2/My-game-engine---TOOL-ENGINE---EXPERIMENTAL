@@ -42,9 +42,9 @@ struct LightCB {
   f32 shadowParams[4];    // bias, 1/resolucao, forca (0 = sem sombra), normal bias em metros
   f32 shadowInfo[4];      // resolucao, raio PCF, 0, 0
 };
-struct ObjectCB { Mat4 world; f32 color[4]; f32 metallic, roughness, receiveShadow, pad; };
+struct ObjectCB { Mat4 world; f32 color[4]; f32 metallic, roughness, receiveShadow, pad; f32 texInfo[4]; }; // texInfo: largura, altura, 1 = tem textura
 struct ShadowCB { Mat4 lightViewProj, world; };
-static_assert(sizeof(FrameCB) == 80 && sizeof(LightCB) == 4096 + 32 + 64 + 32 && sizeof(ObjectCB) == 96 && sizeof(ShadowCB) == 128, "layout de cbuffer");
+static_assert(sizeof(FrameCB) == 80 && sizeof(LightCB) == 4096 + 32 + 64 + 32 && sizeof(ObjectCB) == 112 && sizeof(ShadowCB) == 128, "layout de cbuffer");
 
 class GpuRenderer {
 public:
@@ -82,7 +82,7 @@ public:
     rhi::PipelineDesc pd; pd.vs = vs_; pd.ps = ps_; pd.name = "pbr";
     pd.layout = {{3, 0}, {3, 12}, {2, 24}}; pd.vertexStride = 32;
     pd.uniformNames = {"FrameBuffer", "LightBuffer", "ObjectBuffer"};
-    pd.textureNames = {"ShadowMap"};
+    pd.textureNames = {"ShadowMap", "AlbedoMap"}; // slot 0: mapa de sombra; slot 1: textura do albedo (Load, sem sampler)
     // Cor: Vulkan/D3D12 usam alvo sRGB (o hardware converte). No OpenGL o Diligent liga GL_FRAMEBUFFER_SRGB conforme o
     // driver, entao usamos alvo UNORM e o proprio GLSL aplica o gamma: resultado igual em qualquer driver.
     colorFmt_ = dev.backend() == rhi::Backend::GLES ? rhi::Format::RGBA8 : rhi::Format::RGBA8_SRGB;
@@ -140,18 +140,46 @@ public:
   // begin/draw/end: begin() so guarda os parametros e draw() so ANOTA os objetos; tudo e enviado a GPU em end(),
   // na ordem certa: 1) passe de sombra (so objetos que projetam), 2) passe principal (agrupado por malha, o que
   // reduz trocas de buffer). Assim o chamador nao precisa saber da ordem dos passes.
-  void begin(const Camera& cam, const std::vector<Light>& lights, Vec3 ambient = {0.03f, 0.03f, 0.04f}, Vec3 clear = {0.02f, 0.025f, 0.035f}) {
+  void begin(const Camera& cam, const std::vector<Light>& lights, Vec3 ambient = {0.03f, 0.03f, 0.04f}, Vec3 clear = {0.02f, 0.025f, 0.035f}, f32 clearAlpha = 1.f) {
     if (!dev_) return;
     ++frame_;
-    cam_ = cam; lights_ = lights; ambient_ = ambient; clear_ = clear;
+    cam_ = cam; lights_ = lights; ambient_ = ambient; clear_ = clear; clearAlpha_ = clearAlpha;
     draws_.clear(); shadowOn_ = false; shadowSkip_ = false; open_ = true;
+    // Remocao de malhas que nao aparecem ha 240 quadros (antes o cache so crescia: vazamento de buffers na GPU).
+    if (dev_ && (frame_ & 63) == 0) for (auto it = meshes_.begin(); it != meshes_.end();) {
+      if (frame_ - it->second.lastUse > 240) { freeMesh(it->second); it = meshes_.erase(it); } else ++it;
+    }
+  }
+
+  // Desenha uma malha dinamica (um slot por lote). Use slots distintos para lotes diferentes no mesmo quadro.
+  void drawDynamic(u32 slot, const Mesh& m, const Mat4& world, const Material& mat) {
+    if (!open_ || m.idx.empty()) return;
+    GpuMesh& g = dynamicSlot(slot, m);
+    if (g.index.isNull()) return;
+    draws_.push_back(makeDraw(&g, world, mat));
   }
 
   void draw(const Mesh& m, const Mat4& world, const Material& mat) {
     if (!open_) return;
     GpuMesh& g = upload(m);
     if (g.index.isNull()) return;
-    draws_.push_back({&g, world, mat});
+    draws_.push_back(makeDraw(&g, world, mat));
+  }
+
+  // Textura do albedo na GPU (cache por Texture::id). Sem textura, devolve a branca 1x1 (o shader ignora).
+  rhi::TextureId textureFor(const Texture* t, f32& tw, f32& th) {
+    tw = th = 0.f;
+    if (!dev_ || !t || !t->valid() || t->id == 0) return white_;
+    if (dev_->backend() == rhi::Backend::GLES) { // PENDENTE: no OpenGL/GLES a textura nao chega ao shader (ver docs/CHECKLIST.md); fica desligada
+      if (!glesTexWarned_) { glesTexWarned_ = true; debug().report("TOOL-W150", Severity::Warning, "texturas em MeshRenderer ainda nao funcionam no OpenGL/GLES: use Vulkan ou Direct3D 12"); }
+      return white_;
+    }
+    tw = static_cast<f32>(t->w); th = static_cast<f32>(t->h);
+    if (auto it = texs_.find(t->id); it != texs_.end()) return it->second;
+    const rhi::TextureId id = dev_->createTexture({t->w, t->h, 1, rhi::Format::RGBA8, false}, t->rgba.data());
+    if (id.isNull()) { tw = th = 0.f; return white_; }
+    texs_[t->id] = id;
+    return id;
   }
 
   void end() {
@@ -175,7 +203,7 @@ public:
       cl->end(); dev_->submit(*cl); shadowValid_ = true;
     }
     // ---- 2) passe principal ----
-    const Mat4 vp = Mat4::perspective(cam_.fovY, static_cast<f32>(w_) / static_cast<f32>(h_), cam_.nearZ, cam_.farZ) * Mat4::lookAt(cam_.eye, cam_.target, cam_.up);
+    const Mat4 vp = cam_.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * Mat4::lookAt(cam_.eye, cam_.target, cam_.up);
     FrameCB fc; fc.viewProj = vp; fc.camera[0] = cam_.eye.x; fc.camera[1] = cam_.eye.y; fc.camera[2] = cam_.eye.z;
     dev_->updateBuffer(frameCb_, &fc, sizeof fc);
     LightCB lc{}; lc.count = static_cast<u32>(std::min<size_t>(lights_.size(), 64));
@@ -192,7 +220,7 @@ public:
     // Alvo UNORM (OpenGL): o clear nao passa pelo hardware sRGB, entao convertemos aqui para bater com Vulkan/D3D12.
     const bool lin2srgb = colorFmt_ == rhi::Format::RGBA8;
     auto cv = [&](f32 v) { return lin2srgb ? std::pow(std::max(v, 0.f), 1.f / 2.2f) : v; };
-    cl_->begin(color_, depth_, cv(clear_.x), cv(clear_.y), cv(clear_.z), 1.f);
+    cl_->begin(color_, depth_, cv(clear_.x), cv(clear_.y), cv(clear_.z), clearAlpha_);
     cl_->setPipeline(pipe_);
     cl_->setUniform(0, frameCb_); cl_->setUniform(1, lightCb_);
     cl_->setTexture(0, shColor_);
@@ -200,8 +228,10 @@ public:
     for (const Draw& d : draws_) {
       ObjectCB oc{}; oc.world = d.world; oc.color[0] = d.mat.albedo.x; oc.color[1] = d.mat.albedo.y; oc.color[2] = d.mat.albedo.z; oc.color[3] = 1.f;
       oc.metallic = d.mat.metallic; oc.roughness = d.mat.roughness; oc.receiveShadow = d.mat.receiveShadow ? 1.f : 0.f;
+      oc.texInfo[0] = d.tw; oc.texInfo[1] = d.th; oc.texInfo[2] = d.tw > 0.f ? 1.f : 0.f;
       dev_->updateBuffer(objCb_, &oc, sizeof oc);
       cl_->setUniform(2, objCb_);
+      cl_->setTexture(1, d.tex.isNull() ? white_ : d.tex);
       if (d.mesh != last) { cl_->setVertexBuffer(d.mesh->vertex); cl_->setIndexBuffer(d.mesh->index); last = d.mesh; }
       cl_->drawIndexed(d.mesh->count, 1);
     }
@@ -224,22 +254,58 @@ public:
   }
 
 private:
-  struct GpuMesh { rhi::BufferId vertex, index; u32 count = 0; };
-  struct Draw { const GpuMesh* mesh; Mat4 world; Material mat; };
+  // Malha na GPU. posKey/nVert/nIdx = o que foi enviado: se mudar, os buffers sao refeitos (o endereco sozinho nao basta).
+  struct GpuMesh { rhi::BufferId vertex, index; u32 count = 0; const void* posKey = nullptr; size_t nVert = 0, nIdx = 0, vCap = 0, iCap = 0; u64 lastUse = 0; };
+  struct Draw { const GpuMesh* mesh; Mat4 world; Material mat; rhi::TextureId tex; f32 tw, th; };
   struct Target { rhi::TextureId color, depth; u64 lastUse = 0; };
 
-  GpuMesh& upload(const Mesh& m) {
-    auto it = meshes_.find(&m);
-    if (it != meshes_.end()) return it->second;
-    GpuMesh g;
-    std::vector<f32> v; v.reserve(m.pos.size() * 8);
-    // Layout de vertice fixo (stride 32): POSITION f3 @0, NORMAL f3 @12, TEXCOORD0 f2 @24 (0 se a malha nao tem UV).
+  // Layout de vertice fixo (stride 32): POSITION f3 @0, NORMAL f3 @12, TEXCOORD0 f2 @24 (0 se a malha nao tem UV).
+  static void packVertices(const Mesh& m, std::vector<f32>& v) {
+    v.clear(); v.reserve(m.pos.size() * 8);
     const bool hasUv = m.uv.size() == m.pos.size() * 2;
     for (size_t i = 0; i < m.pos.size(); ++i) { v.insert(v.end(), {m.pos[i].x, m.pos[i].y, m.pos[i].z, m.normal[i].x, m.normal[i].y, m.normal[i].z, hasUv ? m.uv[2 * i] : 0.f, hasUv ? m.uv[2 * i + 1] : 0.f}); }
-    g.vertex = dev_->createBuffer({v.size() * sizeof(f32), rhi::BufferUsage::Vertex, false}, v.data());
+  }
+  void freeMesh(GpuMesh& g) {
+    if (!g.vertex.isNull()) dev_->destroy(g.vertex);
+    if (!g.index.isNull()) dev_->destroy(g.index);
+    const u64 lu = g.lastUse; g = GpuMesh{}; g.lastUse = lu;   // preserva o uso: a remocao por inatividade depende dele
+  }
+  // Cache de malhas estaticas. Reenvia se o endereco OU o tamanho mudou (um ponteiro reaproveitado nao vira malha antiga).
+  // Refaz os buffers DENTRO do mesmo no (o endereco do GpuMesh nao muda: desenhos ja enfileirados continuam validos).
+  GpuMesh& upload(const Mesh& m) {
+    GpuMesh& g = meshes_[&m];
+    g.lastUse = frame_;
+    if (!g.vertex.isNull() && g.posKey == m.pos.data() && g.nVert == m.pos.size() && g.nIdx == m.idx.size()) return g;
+    freeMesh(g);
+    packVertices(m, packBuf_);
+    g.vertex = dev_->createBuffer({packBuf_.size() * sizeof(f32), rhi::BufferUsage::Vertex, false}, packBuf_.data());
     g.index = dev_->createBuffer({m.idx.size() * sizeof(u32), rhi::BufferUsage::Index, false}, m.idx.data());
     g.count = static_cast<u32>(m.idx.size());
-    return meshes_[&m] = g;
+    g.posKey = m.pos.data(); g.nVert = m.pos.size(); g.nIdx = m.idx.size();
+    g.vCap = packBuf_.size() * sizeof(f32); g.iCap = m.idx.size() * sizeof(u32);
+    return g;
+  }
+  // Malha DINAMICA (ex.: particulas): mesmo slot = mesmos buffers, atualizados com updateBuffer.
+  // Os buffers so sao recriados quando a malha cresce alem da capacidade (com folga de 1,5x).
+  GpuMesh& dynamicSlot(u32 slot, const Mesh& m) {
+    GpuMesh& g = dyn_[slot];
+    g.lastUse = frame_;
+    packVertices(m, packBuf_);
+    const size_t vb = packBuf_.size() * sizeof(f32), ib = m.idx.size() * sizeof(u32);
+    if (g.vertex.isNull() || vb > g.vCap) {
+      if (!g.vertex.isNull()) dev_->destroy(g.vertex);
+      g.vCap = std::max<size_t>(vb, g.vCap + g.vCap / 2);
+      g.vertex = dev_->createBuffer({g.vCap, rhi::BufferUsage::Vertex, true}, nullptr);
+    }
+    if (g.index.isNull() || ib > g.iCap) {
+      if (!g.index.isNull()) dev_->destroy(g.index);
+      g.iCap = std::max<size_t>(ib, g.iCap + g.iCap / 2);
+      g.index = dev_->createBuffer({g.iCap, rhi::BufferUsage::Index, true}, nullptr);
+    }
+    if (vb) dev_->updateBuffer(g.vertex, packBuf_.data(), vb);
+    if (ib) dev_->updateBuffer(g.index, m.idx.data(), ib);
+    g.count = static_cast<u32>(m.idx.size());
+    return g;
   }
 
   void ensureShadowTarget(u32 res) {
@@ -253,10 +319,15 @@ private:
 
   void release() {
     if (!dev_) return;
-    for (auto& [k, g] : meshes_) { dev_->destroy(g.vertex); dev_->destroy(g.index); }
+    for (auto& [k, g] : meshes_) freeMesh(g);
     meshes_.clear();
+    for (auto& [k, g] : dyn_) freeMesh(g);
+    dyn_.clear();
     for (auto& [k, t] : targets_) { dev_->destroy(t.color); dev_->destroy(t.depth); }
     targets_.clear(); color_ = depth_ = kNullHandle;
+    for (auto& [k, t] : texs_) dev_->destroy(t);
+    texs_.clear();
+    if (!white_.isNull()) { dev_->destroy(white_); white_ = kNullHandle; }
     for (auto* h : {&frameCb_, &lightCb_, &objCb_, &shCb_, &shColor_, &shDepth_, &pipe_, &shPipe_, &vs_, &ps_, &shVs_, &shPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     shW_ = 0; draws_.clear(); dev_ = nullptr;
   }
@@ -265,9 +336,19 @@ private:
   rhi::ShaderId vs_, ps_, shVs_, shPs_;
   rhi::PipelineId pipe_, shPipe_;
   rhi::BufferId frameCb_, lightCb_, objCb_, shCb_;
+  std::unordered_map<u64, rhi::TextureId> texs_;   // texturas de albedo (por Texture::id)
+  rhi::TextureId white_;                           // 1x1 branca: textura padrao
+  bool glesTexWarned_ = false;
+  rhi::TextureId makeWhite() { const u8 px[4] = {255, 255, 255, 255}; return dev_->createTexture({1, 1, 1, rhi::Format::RGBA8, false}, px); }
+  Draw makeDraw(const GpuMesh* g, const Mat4& world, const Material& mat) {
+    f32 tw = 0, th = 0;
+    if (white_.isNull() && dev_) white_ = makeWhite();
+    const rhi::TextureId tex = textureFor(mat.albedoMap, tw, th);
+    return Draw{g, world, mat, tex, tw, th};
+  }
   rhi::TextureId shColor_, shDepth_; u32 shW_ = 0;   // mapa de sombra (R32F) + profundidade para o teste do passe de sombra
   ShadowSettings shadowSet_; ShadowFrustum shadowFr_; bool shadowOn_ = false, open_ = false, shadowSkip_ = false, shadowValid_ = false;
-  Camera cam_; std::vector<Light> lights_; Vec3 ambient_, clear_;
+  Camera cam_; std::vector<Light> lights_; Vec3 ambient_, clear_; f32 clearAlpha_ = 1.f;
   std::vector<Draw> draws_;
   rhi::TextureId color_, depth_;
   rhi::Format colorFmt_ = rhi::Format::RGBA8_SRGB;
@@ -275,6 +356,8 @@ private:
   u64 frame_ = 0;
   std::unique_ptr<rhi::ICommandList> cl_;
   std::unordered_map<const Mesh*, GpuMesh> meshes_;
+  std::unordered_map<u32, GpuMesh> dyn_;   // malhas dinamicas por slot
+  std::vector<f32> packBuf_;
   u32 w_ = 0, h_ = 0, drawCount_ = 0;
 };
 

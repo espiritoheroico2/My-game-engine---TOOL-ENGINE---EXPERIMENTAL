@@ -301,3 +301,84 @@ TEST(shadow_map_is_reused_when_nothing_changed_and_rebuilt_when_it_does) {
   const auto d = frame(false, 2.f);
   CHECK(d != a);                                                               // objeto mexeu e o chamador pediu rebuild: sombra mudou
 }
+
+// --- upscaling e antialiasing por software (engine/render/include/tool/render/upscale.hpp)
+#include "tool/render/upscale.hpp"
+
+TEST(upscale_flat_image_stays_flat_for_every_filter) {
+  // uma imagem lisa continua lisa em todos os filtros (pesos normalizados: soma 1)
+  std::vector<uint8_t> src(8 * 6 * 4, 117);
+  for (auto f : {tool::UpscaleFilter::Bilinear, tool::UpscaleFilter::Bicubic, tool::UpscaleFilter::Lanczos2}) {
+    std::vector<uint8_t> dst(23 * 17 * 4, 0);
+    tool::upscaleRgba(src.data(), 8, 6, dst.data(), 23, 17, f);
+    bool flat = true; for (uint8_t v : dst) if (v != 117) { flat = false; break; }
+    CHECK(flat);
+  }
+}
+
+TEST(upscale_bilinear_linear_ramp_is_exact) {
+  // gradiente horizontal 0..(w-1)*32: o bilinear reproduz a reta (sem erro de borda no meio)
+  const int sw = 4, sh = 1, dw = 8, dh = 1;
+  std::vector<uint8_t> src(sw * sh * 4, 0);
+  for (int x = 0; x < sw; ++x) for (int c = 0; c < 4; ++c) src[static_cast<size_t>(x) * 4 + c] = static_cast<uint8_t>(x * 64);
+  std::vector<uint8_t> dst(dw * dh * 4, 0);
+  tool::upscaleRgba(src.data(), sw, sh, dst.data(), dw, dh, tool::UpscaleFilter::Bilinear);
+  // destino 0: s = -0.25 -> clamp -> 0. destino 7: s = 3.25 -> clamp no ultimo pixel -> 192
+  CHECK(dst[0] == 0);
+  CHECK(std::abs(static_cast<int>(dst[7 * 4]) - 192) <= 1);
+  // destino 3 (s = 0.875*... ) deve ficar monotonico crescente
+  for (int x = 1; x < dw; ++x) CHECK(dst[static_cast<size_t>(x) * 4] >= dst[static_cast<size_t>(x - 1) * 4]);
+}
+
+TEST(upscale_lanczos_and_bicubic_keep_edges_monotonic_bounds) {
+  // degrau preto->branco: os filtros de 4 taps nao passam de 0..255 (clamp) e continuam crescendo
+  const int sw = 6, sh = 1, dw = 18;
+  std::vector<uint8_t> src(sw * 4, 0);
+  for (int x = 3; x < sw; ++x) for (int c = 0; c < 4; ++c) src[static_cast<size_t>(x) * 4 + c] = 255;
+  for (auto f : {tool::UpscaleFilter::Bicubic, tool::UpscaleFilter::Lanczos2}) {
+    std::vector<uint8_t> dst(dw * 4, 0);
+    tool::upscaleRgba(src.data(), sw, 1, dst.data(), dw, 1, f);
+    CHECK(dst[0] == 0 && dst[(dw - 1) * 4] == 255);
+    for (int x = 1; x < dw; ++x) CHECK(dst[static_cast<size_t>(x) * 4] + 2 >= dst[static_cast<size_t>(x - 1) * 4]);
+  }
+}
+
+TEST(fxaa_flat_image_unchanged_and_edge_is_softened) {
+  const int w = 16, h = 8;
+  std::vector<uint8_t> img(static_cast<size_t>(w) * h * 4, 40);
+  std::vector<uint8_t> scratch;
+  tool::fxaaRgba(img.data(), w, h, scratch);
+  bool same = true; for (uint8_t v : img) if (v != 40) { same = false; break; }
+  CHECK(same);
+  // borda DIAGONAL em escada (preto abaixo da diagonal x<y, branco acima): o FXAA deve criar tons intermediarios.
+  // (uma borda vertical perfeitamente reta nao tem serrilhado; o FXAA corretamente nao a altera)
+  std::vector<uint8_t> e(static_cast<size_t>(w) * h * 4, 0);
+  for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) { const size_t i = (static_cast<size_t>(y) * w + x) * 4; const uint8_t v = x < y ? 0 : 255; e[i] = e[i + 1] = e[i + 2] = v; e[i + 3] = 255; }
+  tool::fxaaRgba(e.data(), w, h, scratch);
+  int mid = 0; for (int y = 1; y < h - 1; ++y) for (int x = 1; x < w - 1; ++x) { const int v = e[(static_cast<size_t>(y) * w + x) * 4]; if (v > 0 && v < 255) ++mid; }
+  CHECK(mid > 0);
+  CHECK(e[(static_cast<size_t>(3) * w + 0) * 4] == 0 && e[(static_cast<size_t>(3) * w + 15) * 4] == 255);   // longe da borda nada muda
+}
+
+// --- texturas no albedo (texture.hpp) ---------------------------------------------------------------------------
+TEST(texture_texel_samples_nearest_and_repeats_outside_0_1) {
+  Texture t; t.w = 2; t.h = 1; t.id = 1; t.rgba = {255, 0, 0, 255, 0, 0, 255, 255};   // esquerda vermelha, direita azul
+  u8 o[4];
+  t.texel(0.25f, 0.5f, o); CHECK(o[0] == 255 && o[2] == 0);
+  t.texel(0.75f, 0.5f, o); CHECK(o[0] == 0 && o[2] == 255);
+  t.texel(1.25f, 0.5f, o); CHECK(o[0] == 255);     // u = 1.25 repete u = 0.25
+  t.texel(-0.25f, 0.5f, o); CHECK(o[2] == 255);    // u = -0.25 repete u = 0.75
+}
+
+TEST(texture_soft_renderer_plane_takes_the_texel_colours_by_uv) {
+  Texture t; t.w = 2; t.h = 1; t.id = 2; t.rgba = {255, 0, 0, 255, 0, 0, 255, 255};
+  SoftRenderer r(64, 64);
+  Camera cam; cam.eye = {0, 5, 0}; cam.target = {0, 0, 0}; cam.up = {0, 0, -1};   // de cima: x cresce para a direita da tela
+  r.begin(cam, {0, 0, 0});
+  r.setLights({}, {1, 1, 1});
+  Material mat{{1, 1, 1}, 0.9f, 0.f, false, false}; mat.albedoMap = &t;
+  r.draw(Mesh::plane(1.f), Mat4{}, mat);
+  u8 R = 0, G = 0, B = 0;
+  px(r, 24, 32, R, G, B); CHECK(R > B);   // lado esquerdo: u perto de 0 -> vermelho
+  px(r, 40, 32, R, G, B); CHECK(B > R);   // lado direito: u perto de 1 -> azul
+}

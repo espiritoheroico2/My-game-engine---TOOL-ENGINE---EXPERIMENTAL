@@ -40,6 +40,7 @@ inline void Editor::startPhysics() {
   play.world.gravity = {ps.gravity[0], ps.gravity[1], ps.gravity[2]};
   play.world.solverIterations = ps.solverIterations; play.world.fixedDt = 1.f / static_cast<float>(ps.stepHz);
   w.each<PhysicsComp, Transform>([&](tool::Entity e, PhysicsComp& p, Transform& t) {
+    if (w.has<Inactive>(e)) return;
     Newtoon::Transform nt; nt.position = {t.pos[0], t.pos[1], t.pos[2]}; nt.rotation = eulerToQuat(t.rot);
     Newtoon::Collider c = colliderFor(e); c.isTrigger = p.trigger;
     uint16_t id = 0; // material compartilhado por (atrito, quique)
@@ -68,6 +69,7 @@ inline void Editor::stepPlay(float dt) {
   // 2) Tools
   const auto cams = principalCameras();
   w.each<ToolsComp, Transform>([&](tool::Entity e, ToolsComp& tl, Transform& t) {
+    if (w.has<Inactive>(e)) return;
     const int bi = bodyOf(e); Newtoon::Rigidbody* rb = bi >= 0 ? &play.rb[static_cast<size_t>(bi)] : nullptr;
     const bool dyn = rb && rb->IsDynamic();
     for (int i = 0; i < tl.count; ++i) {

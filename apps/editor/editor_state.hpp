@@ -13,6 +13,7 @@
 #include "project.hpp"
 #include "project_settings.hpp"
 #include "script.hpp"
+#include "script_host.hpp"
 #include "input_map.hpp"
 #include "input_sampler.hpp"
 #include "play_runtime.hpp"
@@ -22,6 +23,7 @@
 #include "tool/audio/miniaudio_device.hpp"
 #include "tool/render/gpu_renderer.hpp"
 #include "tool/render/postfx.hpp"
+#include "tool/render/upscale.hpp"
 #include "tool/render/shadow.hpp"
 #include "tool/render/soft_renderer.hpp"
 #ifdef TOOL_EDITOR_GPU
@@ -33,6 +35,7 @@
 #include <SDL3/SDL.h>
 
 #include <cstring>
+#include <array>
 #include <deque>
 #include <memory>
 #include <unordered_map>
@@ -104,9 +107,34 @@ struct Editor {
   bool playing = false;
   // Variaveis do jogo (SavePoint/UI/Narrative) e eventos de UI da ultima passada (limpos a cada quadro de Play).
   std::uint64_t sigGpu = 0, sigCpu = 0; bool sigGpuValid = false, sigCpuValid = false;   // assinatura (casters + luz) do ultimo shadow map de cada renderer (sleeper de sombras)
-  std::unordered_map<std::string, float> vars; std::vector<std::string> uiEvents;
+  std::unordered_map<std::string, float> vars;
+  // Eventos enviados a objetos (acao "send" do Narrative / futuro script): fila por objeto, limpa a cada Play.
+  std::unordered_map<uint32_t, std::vector<std::string>> objectInbox;
+  std::vector<std::string> narrPending;   // eventos do Narrative a disparar DEPOIS do quadro (evita reentrar no runtime)
+  // Scripts ToolObject (QuickJS): so ativos durante o Play. Pedidos dos scripts entram na fila e sao aplicados depois do quadro.
+  ScriptHost scriptHost;
+  std::vector<std::pair<std::string, float>> scriptDelayed;   // destroy(nome, segundos) pendentes
+  ScriptHost::Entry scriptEntryFor(tool::Entity e);
+  void startScripts(); void tickScripts(float dt); void applyScriptCmds();
+  void scriptCall(ScriptHost::Inst& in, int what, float dt, const std::string& ev);   // what: 1 evento, 2 update
+  tool::Entity spawnCopy(const std::string& name);                                    // copia um objeto (sem gravar arquivos de script novos)
+  void stopScripts() { scriptHost.close(); scriptDelayed.clear(); }
+  // Teste de ECS (ecs_test.hpp): cria/atualiza o objeto ECScall com N esferas e da Play.
+  bool pushRuntimeBody(tool::Entity e);   // corpo fisico para um objeto criado durante o Play (sem Rebuild)
+  void tickSpawners(float dt);
+  void startEcsTest(long long n);
+  void sendEvent(const std::string& target, const std::string& ev); void setActiveByName(const std::string& n, bool on);
+  struct Bounds { tool::Vec3 center{}; float radius = 0.f; };
+  struct BoundsEntry { size_t n = 0; const void* data = nullptr; Bounds b; };
+  std::unordered_map<const tool::Mesh*, BoundsEntry> boundsCache_;   // esfera de cada malha (para o frustum culling)
+ std::vector<std::string> uiEvents;
   struct Particle { tool::Vec3 p, v; float age = 0.f, life = 1.f; };
-  struct ParticleSim { std::vector<Particle> list; float acc = 0.f; uint32_t seed = 12345u; };
+  struct ParticleSim { std::vector<Particle> list; float acc = 0.f; uint32_t seed = 12345u; uint32_t touched = 0; };
+  uint32_t particleFrame = 0;
+  int particleBudget = 100000;                         // maximo de particulas vivas somando todos os emissores
+  std::array<tool::Mesh, 64> partBatch;               // lotes por cor (malhas dinamicas, reaproveitadas)
+  std::array<tool::Vec3, 64> partColor{};             // cor de cada lote
+  void buildParticleBatches(const tool::Camera& cam, int w, int h);
   std::unordered_map<uint32_t, ParticleSim> particles;   // por indice de entidade
   void updateParticles(float dt);
   // Narrative Controller em execucao (so durante o Play) + codigo da cena
@@ -135,10 +163,33 @@ struct Editor {
   int apiChoice = 0, apiActive = 0;
   float renderScale = 0.5f;
   bool renderScaleSet = false; // o usuario mexeu na escala: nao sobrescrever ao trocar de API
+  // Upscaling e antialiasing POR SOFTWARE (CPU, tool/render/upscale.hpp), aplicados no tamanho da janela.
+  // upscaleMode: 0 = desligado (SDL escala linear), 1 = bilinear, 2 = bicubic, 3 = Lanczos2. aaMode: 0 = desligado, 1 = FXAA.
+  int upscaleMode = 2, aaMode = 0;
+  std::vector<tool::u8> sceneUp, gameUp[2], aaScratch;
+  bool softScaling() const { return upscaleMode != 0 || aaMode != 0; }
+  // Converte a imagem renderizada (rw x rh) para a janela (w x h): upscaling + AA. Devolve o buffer final (w x h).
+  const tool::u8* finishView(std::vector<tool::u8>& dst, const tool::u8* src, int rw, int rh, int w, int h) {
+    const size_t n = static_cast<size_t>(w) * static_cast<size_t>(h) * 4;
+    dst.resize(n);
+    if (rw == w && rh == h) std::memcpy(dst.data(), src, n);
+    else {
+      static const tool::UpscaleFilter filters[4] = {tool::UpscaleFilter::Bilinear, tool::UpscaleFilter::Bilinear, tool::UpscaleFilter::Bicubic, tool::UpscaleFilter::Lanczos2};
+      ZoneTimer zt(prof, Zone::PostFx);
+      tool::upscaleRgba(src, rw, rh, dst.data(), w, h, filters[std::clamp(upscaleMode, 0, 3)]);
+    }
+    if (aaMode == 1) { ZoneTimer zt(prof, Zone::PostFx); tool::fxaaRgba(dst.data(), w, h, aaScratch); }
+    return dst.data();
+  }
   // Resolucao do jogo (janela Game): 0 = acompanha a janela x escala; 1..4 = fixa (640x360, 1280x720, 1920x1080, 2560x1440); 5 = personalizada
   int resMode = 0, customW = 1280, customH = 720;
   bool pixelFilter = false; // ampliar a imagem com pixels nitidos (nearest) em vez de suave (linear)
   int fpsMode = 0;          // 0 = VSync; 1 = 30; 2 = 60; 3 = 120; 4 = sem limite
+  // Ocioso: sem evento (mouse, teclado, janela) ha 3 quadros e sem Play, as vistas 3D nao sao redesenhadas (economiza GPU/CPU).
+  int idleFrames = 0;
+  // Ocioso = nada muda na tela: sem Play, sem emissor de particulas animando (ou pausado) e sem interacao ha 3 quadros.
+  bool fxAnimating = false;   // definido por updateParticles: ha ParticleComp na cena
+  bool viewsIdle() const { return !playing && !(fxAnimating && !paused) && idleFrames > 3; }
   bool fpsDirty = true;
   int gpuBadFrames = 0;
   // Tamanho fixo escolhido (retorna false se o modo e "acompanha a janela").
@@ -180,6 +231,7 @@ struct Editor {
     if (choice == 0) { apiStatus = "Software (CPU)"; if (!renderScaleSet) renderScale = 0.5f; return; }
 #ifdef TOOL_EDITOR_GPU
     tool::rhi::DeviceInfo info; info.width = 640; info.height = 360;
+    info.validation = std::getenv("TOOL_GPU_VALIDATION") != nullptr; // depuracao: TOOL_GPU_VALIDATION=1 liga as camadas de validacao (mais lento)
     info.backend = choice == 1 ? tool::rhi::Backend::Vulkan : choice == 2 ? tool::rhi::Backend::GLES : tool::rhi::Backend::D3D12;
     if (info.backend == tool::rhi::Backend::GLES) {
 #if defined(_WIN32)
@@ -230,10 +282,9 @@ struct Editor {
     tool::Entity e = w.create();
     Name n; std::snprintf(n.text, sizeof n.text, "%s", name); w.add<Name>(e, n);
     if (withTransform) w.add<Transform>(e);
-    attachScript(e);
-    return e;
+    return e;   // sem script: o script ToolObject so existe quando o usuario clica em "Add Script"
   }
-  // Todo objeto nasce com um script ToolObject (arquivo novo em Assets/Scripts com start/update/OnDelete/DeleteAndReuse).
+  // Script ToolObject: opcional. Criado sob demanda (botao "Add Script") como arquivo em Assets/Scripts.
   void attachScript(tool::Entity e) {
     tool::World& w = scene.world();
     const std::string rel = createScriptFile(project, w.get<Name>(e)->text);
@@ -244,7 +295,7 @@ struct Editor {
   void cloneScript(tool::Entity c) {
     tool::World& w = scene.world();
     auto* sc = w.get<ScriptComp>(c);
-    if (!sc) { attachScript(c); return; }
+    if (!sc) return;   // o clone so ganha script se o original tiver
     std::string text; const bool had = readScript(project, sc->path, text);
     const std::string rel = createScriptFile(project, w.get<Name>(c)->text);
     sc->path[0] = 0;
@@ -331,6 +382,7 @@ struct Editor {
 
   // Cena nova padrao: chao, sol, camera Principal e um cubo.
   void createDefaultContent() {
+    sceneInfo.sky.enabled = true;   // cena nova: skybox de montanhas e mar (cenas antigas continuam como estavam)
     tool::Entity g = makeMesh("Ground", 2, 0, 0, 0);
     scene.world().get<Transform>(g)->scale[0] = scene.world().get<Transform>(g)->scale[2] = 14.f;
     { PhysicsComp pc; pc.body = 0; scene.world().add<PhysicsComp>(g, pc); } // o chao e estatico
@@ -365,14 +417,12 @@ struct Editor {
     }
   }
   bool openScene(const std::string& name, bool saveCurrent = true) {
+    boundsCache_.clear();   // malhas da cena anterior nao valem mais (o cache e por endereco)
     if (playing) stopPlay();
     if (saveCurrent && !sceneInfo.name.empty() && sceneInfo.name != name) saveScene();  // troca de cena = salva a atual (nao ha "sem salvar")
     SceneFile info; std::string err;
     if (!loadSceneFile(project, scene, name, info, &err)) { statusLine = err; tool::logError(err); return false; }
     sceneInfo = info; selected = {};
-    // Cenas criadas em versoes antigas: todo objeto precisa ter um script ToolObject.
-    { std::vector<tool::Entity> bare; scene.world().eachEntity([&](tool::Entity e) { if (!scene.world().has<ScriptComp>(e) && scene.world().has<Name>(e)) bare.push_back(e); });
-      for (auto e : bare) attachScript(e); }
     preloadSceneAssets();
     ensureSceneCode(); openSceneNarrative();
     undoReset();
@@ -478,18 +528,46 @@ struct Editor {
   // ---------------------------------------------------------------- renderizacao
   // Junta as luzes da cena. A primeira Global Light e o "sol": e a unica que projeta sombras.
   // `sunIdx` = posicao do sol em `lights` (-1 se nao ha sol).
+  // Esfera (centro + raio) da malha, em espaco local. Cacheada por malha (refeita se a malha for recarregada).
+  Bounds meshBounds(const tool::Mesh& m) {
+    const size_t n = m.pos.size(); const void* dp = m.pos.data();
+    auto it = boundsCache_.find(&m);
+    if (it != boundsCache_.end() && it->second.n == n && it->second.data == dp) return it->second.b;
+    // Teto de tamanho: o cache indexa pelo endereco da malha; enderecos reaproveitados sao cobertos pela checagem acima.
+    if (boundsCache_.size() > 4096) boundsCache_.clear();
+    Bounds b;
+    if (n) {
+      tool::Vec3 lo = m.pos[0], hi = m.pos[0];
+      for (const tool::Vec3& p : m.pos) { lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)}; hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)}; }
+      b.center = (lo + hi) * 0.5f; float r2 = 0.f;
+      for (const tool::Vec3& p : m.pos) { const tool::Vec3 d = p - b.center; r2 = std::max(r2, d.x * d.x + d.y * d.y + d.z * d.z); }
+      b.radius = std::sqrt(r2);
+    }
+    boundsCache_[&m] = BoundsEntry{n, dp, b};
+    return b;
+  }
+  // 6 planos do frustum (normalizados) a partir de view*proj. Usa o plano "near" de GL (-1..1): conservador tambem para D3D (0..1).
+  static std::array<tool::Vec4, 6> framePlanes(const tool::Camera& cam, int w, int h) {
+    const tool::Mat4 vp = tool::Mat4::perspective(cam.fovY, static_cast<float>(w) / static_cast<float>(std::max(1, h)), cam.nearZ, cam.farZ) * tool::Mat4::lookAt(cam.eye, cam.target, cam.up);
+    auto row = [&](int r) { return tool::Vec4{vp.m[0][r], vp.m[1][r], vp.m[2][r], vp.m[3][r]}; };
+    const tool::Vec4 r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+    auto mk = [](const tool::Vec4& a, const tool::Vec4& b, float s) { return tool::Vec4{a.x + s * b.x, a.y + s * b.y, a.z + s * b.z, a.w + s * b.w}; };
+    std::array<tool::Vec4, 6> pl{mk(r3, r0, 1.f), mk(r3, r0, -1.f), mk(r3, r1, 1.f), mk(r3, r1, -1.f), mk(r3, r2, 1.f), mk(r3, r2, -1.f)};
+    for (tool::Vec4& p : pl) { const float l = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z); if (l > 1e-8f) { p.x /= l; p.y /= l; p.z /= l; p.w /= l; } }
+    return pl;
+  }
   void collectLights(std::vector<tool::Light>& lights, tool::Vec3& ambient, int* sunIdx = nullptr) {
     ambient = {0.03f, 0.03f, 0.04f};
     bool haveSun = false;
     if (sunIdx) *sunIdx = -1;
-    scene.world().each<GlobalLight>([&](tool::Entity, GlobalLight& g) {
-      if (haveSun) return; // so a primeira Global Light vale
+    scene.world().each<GlobalLight>([&](tool::Entity ge, GlobalLight& g) {
+      if (haveSun || scene.world().has<Inactive>(ge)) return; // so a primeira Global Light vale
       haveSun = true;
       tool::Light l = sunLight(g, sunRuntime); l.castShadow = g.castShadow && sceneInfo.render.shadow.enabled;
       if (sunIdx) *sunIdx = static_cast<int>(lights.size());
       lights.push_back(l); ambient = {g.ambient[0], g.ambient[1], g.ambient[2]};
     });
-    scene.world().each<LightComp, Transform>([&](tool::Entity le, LightComp& lc, Transform&) { tool::Light l = lc.light; l.position = worldPos(le); l.castShadow = false; lights.push_back(l); });
+    scene.world().each<LightComp, Transform>([&](tool::Entity le, LightComp& lc, Transform&) { if (scene.world().has<Inactive>(le)) return; tool::Light l = lc.light; l.position = worldPos(le); l.castShadow = false; lights.push_back(l); });
   }
   const tool::Mesh* meshOf(const MeshRenderer& mr, tool::Vec3* tint = nullptr) {
     if (mr.shape == 3) return lib.mesh(mr.model, tint);
@@ -524,6 +602,14 @@ struct Editor {
       ZoneTimer zt(prof, zone);
       out = renderScene(cam, w, h, highlight);
     }
+    if (out && sceneInfo.sky.enabled && !cam.ortho) { // skybox de imagens: preenche so o fundo (alfa 0), antes do pos-processamento
+      ZoneTimer zt(prof, Zone::Sky);
+      tool::u8* px = (apiActive != 0 && out == gpuPixels.data()) ? gpuPixels.data() : renderer.pixelsMutable();
+      SkyTextures skyTex{};
+      for (size_t i = 0; i < 6; ++i) if (sceneInfo.sky.face[i][0]) skyTex[i] = lib.texture(sceneInfo.sky.face[i]); // cache no AssetLib
+      applySkybox(px, w, h, cam, sceneInfo.sky, skyTex);
+      out = px;
+    }
     if (out && fx && fx->active()) {
       ZoneTimer zt(prof, Zone::PostFx);
       tool::u8* px = (apiActive != 0 && out == gpuPixels.data()) ? gpuPixels.data() : renderer.pixelsMutable();
@@ -536,6 +622,8 @@ struct Editor {
 private:
   const tool::u8* renderScene(const tool::Camera& cam, int w, int h, bool highlight) {
     std::vector<tool::Light> lights; tool::Vec3 ambient; int sunIdx = -1;
+    // Com skybox ligado, o fundo sai com alfa 0 (o skybox e pintado depois, em renderView). 2D nao usa skybox.
+    const float bgAlpha = (sceneInfo.sky.enabled && !cam.ortho) ? 0.f : 1.f;
     collectLights(lights, ambient, &sunIdx);
     // sombras do sol: so se o sol projeta E existe pelo menos um objeto que projeta
     tool::ShadowFrustum fr; bool shadows = false;
@@ -563,11 +651,27 @@ private:
     tool::u64 tris = 0; unsigned draws = 0, casters = 0;
     auto material = [&](tool::Entity e, const MeshRenderer& mr) {
       tool::Material m{{mr.color[0], mr.color[1], mr.color[2]}, mr.roughness, mr.metallic, mr.castShadow, mr.receiveShadow};
+      if (mr.texture[0]) m.albedoMap = lib.texture(mr.texture);
       if (highlight && e == selected) m.albedo = m.albedo * 1.25f;
       return m;
     };
+    // Frustum culling: pula objetos fora da visao. Objeto que projeta sombra nunca e pulado (a sombra dele pode cair na tela).
+    const bool doCull = sceneInfo.render.frustumCull;
+    const std::array<tool::Vec4, 6> planes = doCull ? framePlanes(cam, w, h) : std::array<tool::Vec4, 6>{};
+    auto skipCulled = [&](tool::Entity e, const tool::Mesh& m, const MeshRenderer& mr) -> bool {
+      if (!doCull || (shadows && mr.castShadow)) return false;
+      const Bounds b = meshBounds(m); const tool::Mat4 wm = worldMat(e);
+      const float sc = std::max({std::hypot(wm.m[0][0], wm.m[0][1], wm.m[0][2]), std::hypot(wm.m[1][0], wm.m[1][1], wm.m[1][2]), std::hypot(wm.m[2][0], wm.m[2][1], wm.m[2][2])});
+      const tool::Vec3 c = wm.transformPoint(b.center); const float r = b.radius * sc;
+      for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) { ++prof.counters.culled; return true; }
+      return false;
+    };
     auto count = [&](const tool::Mesh& m, const tool::Material& mat) { tris += m.idx.size() / 3; ++draws; if (shadows && mat.castShadow) ++casters; };
     ++prof.counters.views; prof.counters.pixels += static_cast<tool::u64>(w) * static_cast<tool::u64>(h);
+    // Particulas: em LOTES (buildParticleBatches): quads voltados para a camera, agrupados por cor.
+    // Um lote = uma malha dinamica = uma chamada de desenho, com teste de profundidade (fica atras dos objetos).
+    buildParticleBatches(cam, w, h);
+    const tool::Mat4 identity{};
     if (apiActive != 0) {
       // Protecao: se a GPU reportar erros em quadros seguidos (ex.: memoria esgotada, driver instavel), volta para a CPU
       // em vez de congelar o editor com milhares de mensagens. O motivo fica em Settings > Graphics e no Console.
@@ -575,11 +679,13 @@ private:
       if (glCtx) SDL_GL_MakeCurrent(gpuWin, glCtx);
       struct Release { Editor& e; ~Release() { if (e.glCtx && e.gpuWin) SDL_GL_MakeCurrent(e.gpuWin, nullptr); } } release{*this};
       gpu.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
-      gpu.begin(cam, lights, ambient);
+      gpu.begin(cam, lights, ambient, {0.02f, 0.025f, 0.035f}, bgAlpha);
       if (shadows) { const bool re = sigGpuValid && sigGpu == sigNow; gpu.setShadow(sceneInfo.render.shadow, fr, re); sigGpu = sigNow; sigGpuValid = true; if (re) ++prof.counters.shadowReused; }
       scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-        if (const tool::Mesh* m = meshOf(mr)) { const tool::Material mat = material(e, mr); count(*m, mat); gpu.draw(*m, worldMat(e), mat); }
+        if (scene.world().has<Inactive>(e)) return;
+        if (const tool::Mesh* m = meshOf(mr)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); gpu.draw(*m, worldMat(e), mat); }
       });
+      for (tool::u32 b = 0; b < 64; ++b) if (!partBatch[b].idx.empty()) { const tool::Material pm{partColor[b], 1.f, 0.f, false, false}; count(partBatch[b], pm); gpu.drawDynamic(0x40000000u + b, partBatch[b], identity, pm); }
       gpu.end();
       gpuDev->present();
       tool::u32 rw = 0, rh = 0;
@@ -599,12 +705,14 @@ private:
       tris = 0; draws = 0; casters = 0; // a CPU vai contar de novo
     }
     if (static_cast<int>(renderer.width()) != w || static_cast<int>(renderer.height()) != h) renderer.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
-    renderer.begin(cam);
+    renderer.begin(cam, {0.08f, 0.09f, 0.11f}, bgAlpha);
     renderer.setLights(lights, ambient);
     if (shadows) { const bool re = sigCpuValid && sigCpu == sigNow; renderer.setShadow(sceneInfo.render.shadow, fr, re); sigCpu = sigNow; sigCpuValid = true; if (re) ++prof.counters.shadowReused; }
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-      if (const tool::Mesh* m = meshOf(mr)) { const tool::Material mat = material(e, mr); count(*m, mat); renderer.draw(*m, worldMat(e), mat); }
+      if (scene.world().has<Inactive>(e)) return;
+        if (const tool::Mesh* m = meshOf(mr)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); renderer.draw(*m, worldMat(e), mat); }
     });
+    for (tool::u32 b = 0; b < 64; ++b) if (!partBatch[b].idx.empty()) { const tool::Material pm{partColor[b], 1.f, 0.f, false, false}; count(partBatch[b], pm); renderer.draw(partBatch[b], identity, pm); }
     prof.counters.tris += tris; prof.counters.draws += draws; prof.counters.shadowCasters += casters; prof.counters.shadowTris += renderer.shadowTriangles();
     return renderer.pixels();
   }
@@ -679,6 +787,7 @@ public:
     bool logic = false;
     scene.world().each<PhysicsComp>([&](tool::Entity, PhysicsComp&) { logic = true; });
     scene.world().each<ToolsComp>([&](tool::Entity, ToolsComp&) { logic = true; });
+    scene.world().each<SpawnerComp>([&](tool::Entity, SpawnerComp&) { logic = true; });   // o Stop precisa desfazer as esferas criadas
     if (logic) { /* snapshot abaixo cobre o bake */ }
     play.clear(); vars.clear(); uiEvents.clear();
     if (logic) { const UndoState st = captureState(); play.snapshot = st.data; play.snapshotSel = st.selected; play.hasSnapshot = true; } // o Play pode mover/apagar objetos: ao parar, volta tudo
@@ -686,13 +795,15 @@ public:
       for (tool::Entity e : bodies) bakeWorld(e); } // corpo fisico dentro de um pai: solta do pai (a fisica trabalha em espaco de mundo); Stop restaura
     applyInputMap();
     startPhysics();
-    playing = true; paused = false; stepOnce = false; sunRuntime = 0.f;
+    playing = true; paused = false; stepOnce = false; sunRuntime = 0.f; objectInbox.clear(); narrPending.clear();
     updateListener();
     scene.world().each<AudioSource>([&](tool::Entity e, AudioSource& a) { if (a.playOnStart) playSource(e); });
     startNarrative();
+    startScripts();
   }
   void stopPlay() {
     narrRun.reset();
+    stopScripts();
     playing = false; paused = false; stepOnce = false; sunRuntime = 0.f;
     scene.world().each<AudioSource>([&](tool::Entity, AudioSource& a) { mixer.stop(a.voice); a.voice = {}; });
     if (play.hasSnapshot) { restoreState(UndoState{play.snapshot, play.snapshotSel}); statusLine = "Play stopped: scene restored"; }
@@ -716,6 +827,8 @@ public:
     }
     std::vector<std::string> evs; evs.swap(uiEvents);
     tickNarrative(static_cast<float>(dt), evs);
+    tickScripts(static_cast<float>(dt));
+    tickSpawners(static_cast<float>(dt));
     stepPlay(static_cast<float>(dt));
     updateListener();
   }
@@ -725,3 +838,5 @@ public:
 #include "editor_hier.hpp"
 #include "editor_play.hpp"
 #include "scene_logic.hpp"
+#include "editor_scripts.hpp"
+#include "ecs_test.hpp"
