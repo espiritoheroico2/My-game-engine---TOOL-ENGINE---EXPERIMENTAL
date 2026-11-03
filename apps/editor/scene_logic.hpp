@@ -45,6 +45,7 @@ inline void Editor::openSceneNarrative() {
   if (sceneInfo.narrative.empty()) return;
   const fs::path g = project.resolve(sceneInfo.narrative);
   if (!g.empty() && narrative.path() != g.string()) narrative.open(g.string());
+  narrative.setScene(sceneInfo.name); // bloco padrao da cena (nome da cena, indestrutivel)
 }
 
 inline tool::Entity Editor::findByName(const std::string& n) {

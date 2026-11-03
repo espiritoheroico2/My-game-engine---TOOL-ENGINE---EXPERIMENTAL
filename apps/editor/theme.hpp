@@ -8,6 +8,7 @@
 #include "tool/core/json.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -46,8 +47,37 @@ class Theme {
 public:
   ThemeBase base = builtinThemes()[0].base;
   std::string current = "Dark"; // chave de preset, nome de arquivo ou "Custom"
-  float scale = 1.f;
+  // Escala da interface: 125% por padrao (como o Windows em Full HD). Vale para fontes e para as medidas do layout.
+  static constexpr float kDefaultScale = 1.25f;
+  float scale = kDefaultScale;
   std::vector<ThemeFile> files;
+
+  // Medidas-base do ImGui, capturadas uma vez. Assim a escala nunca acumula a cada chamada.
+  static const ImGuiStyle& metricsBase() { static const ImGuiStyle s; return s; }
+
+  // Aplica so o layout (padding, espacamento, barras, bordas) e a escala das fontes. Nao mexe nas cores.
+  void applyMetrics() const {
+    ImGuiStyle& s = ImGui::GetStyle();
+    ImVec4 keep[ImGuiCol_COUNT];
+    std::memcpy(keep, s.Colors, sizeof keep);
+    s = metricsBase();
+    s.ScaleAllSizes(scale);
+    std::memcpy(s.Colors, keep, sizeof keep);
+    const float k = scale;
+    // Formas: mais "ar" que o padrao do ImGui (valores da tela de 100%, multiplicados pela escala).
+    s.WindowRounding = s.PopupRounding = base.rounding;
+    s.FrameRounding = s.GrabRounding = s.TabRounding = s.ScrollbarRounding = base.rounding;
+    s.ChildRounding = base.rounding;
+    s.WindowPadding = {10 * k, 8 * k};
+    s.FramePadding = {8 * k, 4 * k};
+    s.ItemSpacing = {8 * k, 6 * k};
+    s.ItemInnerSpacing = {6 * k, 4 * k};
+    s.WindowBorderSize = 1.f;
+    s.FrameBorderSize = 0.f;
+    s.TabBarOverlineSize = 2.f;
+    s.WindowMenuButtonPosition = ImGuiDir_None;
+    ImGui::GetIO().FontGlobalScale = scale;
+  }
 
   static ImVec4 mix(ImVec4 a, ImVec4 b, float t) { return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t}; }
   static ImVec4 alpha(ImVec4 c, float a) { c.w = a; return c; }
@@ -55,6 +85,7 @@ public:
 
   // Gera a paleta completa a partir das 5 cores-base e aplica no estilo do ImGui.
   void apply() const {
+    applyMetrics();
     ImGuiStyle& s = ImGui::GetStyle();
     const ThemeBase& b = base;
     const bool light = luma(b.bg) > 0.5f;
@@ -118,19 +149,6 @@ public:
     c[ImGuiCol_NavWindowingDimBg] = alpha(b.bg, 0.5f);
     c[ImGuiCol_ModalWindowDimBg] = alpha(b.bg, 0.6f);
 
-    // Formas: mais "ar" que o padrao do ImGui.
-    s.WindowRounding = s.PopupRounding = b.rounding;
-    s.FrameRounding = s.GrabRounding = s.TabRounding = s.ScrollbarRounding = b.rounding;
-    s.ChildRounding = b.rounding;
-    s.WindowPadding = {10, 8};
-    s.FramePadding = {8, 4};
-    s.ItemSpacing = {8, 6};
-    s.ItemInnerSpacing = {6, 4};
-    s.WindowBorderSize = 1.f;
-    s.FrameBorderSize = 0.f;
-    s.TabBarOverlineSize = 2.f;
-    s.WindowMenuButtonPosition = ImGuiDir_None;
-    ImGui::GetIO().FontGlobalScale = scale;
   }
 
   void setPreset(size_t i) {
@@ -154,7 +172,7 @@ public:
   // Salva base + todas as cores finais (inclusive ajustes avancados).
   bool save(const std::string& path, const std::string& name) const {
     tool::Json j = tool::Json::object(), colors = tool::Json::object();
-    j.set("name", name); j.set("rounding", base.rounding); j.set("scale", scale);
+    j.set("name", name); j.set("uiVersion", 2.0); j.set("rounding", base.rounding); j.set("scale", scale);
     j.set("bg", col(base.bg)); j.set("surface", col(base.surface)); j.set("text", col(base.text)); j.set("accent", col(base.accent)); j.set("border", col(base.border));
     for (int i = 0; i < ImGuiCol_COUNT; ++i) colors.set(ImGui::GetStyleColorName(i), col(ImGui::GetStyle().Colors[i]));
     j.set("colors", colors);
@@ -174,7 +192,9 @@ public:
     base.bg = readCol((*j)["bg"], base.bg); base.surface = readCol((*j)["surface"], base.surface); base.text = readCol((*j)["text"], base.text);
     base.accent = readCol((*j)["accent"], base.accent); base.border = readCol((*j)["border"], base.border);
     base.rounding = static_cast<float>((*j)["rounding"].asNumber(base.rounding));
-    scale = std::clamp(static_cast<float>((*j)["scale"].asNumber(scale)), 0.7f, 2.5f);
+    // Arquivos salvos antes da versao 2 traziam escala 1.0 por padrao: nesses, usamos a nova escala padrao (125%).
+    const bool v2 = (*j)["uiVersion"].asNumber(0.0) >= 2.0;
+    scale = v2 ? std::clamp(static_cast<float>((*j)["scale"].asNumber(kDefaultScale)), 0.7f, 2.5f) : kDefaultScale;
     apply();
     for (auto& [name, v] : (*j)["colors"].members())
       for (int i = 0; i < ImGuiCol_COUNT; ++i)

@@ -7,8 +7,10 @@
 #include "tool/render/shadow.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace tool {
@@ -56,6 +58,121 @@ struct Mesh {
         const u32 a = static_cast<u32>(y * (seg + 1) + x), b = a + 1, c = a + static_cast<u32>(seg + 1), d = c + 1;
         for (u32 i : {a, b, c, b, d, c}) m.idx.push_back(i);
       }
+    return m;
+  }
+
+  // ---- Formas extras (cilindro, cone, capsula, roda, prisma triangular e hexagonal) -------------------------------
+  // Todas sao gravadas com a face de fora virada para fora: addTri() inverte a ordem de um triangulo se ele apontar
+  // para dentro da normal do vertice. Assim as formas nao dependem de uma convencao de enrolamento.
+  u32 addVtx(Vec3 p, Vec3 n) {
+    pos.push_back(p); normal.push_back(n); uv.push_back(0.f); uv.push_back(0.f);
+    return static_cast<u32>(pos.size() - 1);
+  }
+  void addTri(u32 a, u32 b, u32 c) {
+    const Vec3 pa = pos[a], pb = pos[b], pc = pos[c], n = normal[a];
+    const f32 ux = pb.x - pa.x, uy = pb.y - pa.y, uz = pb.z - pa.z, vx = pc.x - pa.x, vy = pc.y - pa.y, vz = pc.z - pa.z;
+    const f32 gx = uy * vz - uz * vy, gy = uz * vx - ux * vz, gz = ux * vy - uy * vx;
+    if (gx * n.x + gy * n.y + gz * n.z < 0.f) std::swap(b, c);
+    idx.push_back(a); idx.push_back(b); idx.push_back(c);
+  }
+  // Revolucao de um perfil (r, y) em torno do eixo Y. smooth = normais suaves nos pontos do perfil (capsula);
+  // senao cada trecho e plano (cilindro, cone). Perfil de baixo para cima, por fora.
+  static Mesh lathe(const std::vector<std::pair<f32, f32>>& prof, int seg, bool smooth) {
+    Mesh m;
+    const size_t n = prof.size();
+    if (n < 2) return m;
+    std::vector<std::pair<f32, f32>> sn(n - 1, {1.f, 0.f}); // normal de cada trecho no plano (r, y): (dy, -dr) aponta para fora
+    for (size_t j = 0; j + 1 < n; ++j) {
+      const f32 dr = prof[j + 1].first - prof[j].first, dy = prof[j + 1].second - prof[j].second;
+      const f32 len = std::sqrt(dr * dr + dy * dy);
+      if (len > 1e-6f) sn[j] = {dy / len, -dr / len};
+    }
+    // normal usada por um vertice do trecho j: no inicio (endPt=false) ou no fim (endPt=true) do trecho.
+    auto nrm = [&](size_t j, bool endPt) {
+      if (!smooth) return sn[j];
+      std::pair<f32, f32> s = sn[j];
+      const bool has = endPt ? (j + 2 < n) : (j > 0);
+      if (has) { const auto o = sn[endPt ? j + 1 : j - 1]; s.first += o.first; s.second += o.second; }
+      const f32 l = std::sqrt(s.first * s.first + s.second * s.second);
+      if (l > 1e-6f) s = {s.first / l, s.second / l};
+      return s;
+    };
+    for (size_t j = 0; j + 1 < n; ++j) {
+      const f32 dr = prof[j + 1].first - prof[j].first, dy = prof[j + 1].second - prof[j].second;
+      if (std::sqrt(dr * dr + dy * dy) < 1e-6f) continue; // trecho de tamanho zero: nada a desenhar
+      const auto a = nrm(j, false), b = nrm(j, true);
+      std::vector<u32> r0(static_cast<size_t>(seg) + 1), r1(static_cast<size_t>(seg) + 1);
+      for (int k = 0; k <= seg; ++k) {
+        const f32 ph = 2.f * 3.14159265f * static_cast<f32>(k) / static_cast<f32>(seg), c = std::cos(ph), s = std::sin(ph);
+        r0[static_cast<size_t>(k)] = m.addVtx(Vec3{prof[j].first * c, prof[j].second, prof[j].first * s}, Vec3{a.first * c, a.second, a.first * s});
+        r1[static_cast<size_t>(k)] = m.addVtx(Vec3{prof[j + 1].first * c, prof[j + 1].second, prof[j + 1].first * s}, Vec3{b.first * c, b.second, b.first * s});
+      }
+      for (int k = 0; k < seg; ++k) {
+        const size_t i = static_cast<size_t>(k);
+        m.addTri(r0[i], r0[i + 1], r1[i]);
+        m.addTri(r0[i + 1], r1[i + 1], r1[i]);
+      }
+    }
+    return m;
+  }
+  // Cilindro de raio r e altura h, centrado na origem (base em -h/2, topo em +h/2).
+  static Mesh cylinder(f32 r = 0.5f, f32 h = 1.f, int seg = 32) {
+    const f32 hh = h * 0.5f;
+    return lathe({{0.f, -hh}, {r, -hh}, {r, hh}, {0.f, hh}}, seg, false);
+  }
+  // Cone: base de raio r em -h/2, ponta em +h/2.
+  static Mesh cone(f32 r = 0.5f, f32 h = 1.f, int seg = 32) {
+    const f32 hh = h * 0.5f;
+    return lathe({{0.f, -hh}, {r, -hh}, {0.f, hh}}, seg, false);
+  }
+  // Capsula: cilindro com semiesferas nas pontas; altura total h (inclui as semiesferas).
+  static Mesh capsule(f32 r = 0.35f, f32 h = 1.f, int seg = 24, int caps = 8) {
+    const f32 PI = 3.14159265f, L = std::max(0.f, h - 2.f * r) * 0.5f;
+    std::vector<std::pair<f32, f32>> prof;
+    for (int i = 0; i <= caps; ++i) { const f32 t = -PI * 0.5f + PI * 0.5f * static_cast<f32>(i) / static_cast<f32>(caps); prof.push_back({r * std::cos(t), -L + r * std::sin(t)}); }
+    for (int i = 0; i <= caps; ++i) { const f32 t = PI * 0.5f * static_cast<f32>(i) / static_cast<f32>(caps); prof.push_back({r * std::cos(t), L + r * std::sin(t)}); }
+    return lathe(prof, seg, true);
+  }
+  // Roda: aro (toroide) no plano XY, com o eixo no Z. Diametro externo = 2 * (R + r).
+  static Mesh wheel(f32 R = 0.4f, f32 r = 0.1f, int seg = 32, int tseg = 12) {
+    Mesh m;
+    const f32 PI = 3.14159265f;
+    for (int i = 0; i <= seg; ++i)
+      for (int j = 0; j <= tseg; ++j) {
+        const f32 u = 2.f * PI * static_cast<f32>(i) / static_cast<f32>(seg), v = 2.f * PI * static_cast<f32>(j) / static_cast<f32>(tseg);
+        const f32 cu = std::cos(u), su = std::sin(u), cv = std::cos(v), sv = std::sin(v);
+        m.addVtx(Vec3{(R + r * cv) * cu, (R + r * cv) * su, r * sv}, Vec3{cv * cu, cv * su, sv});
+      }
+    for (int i = 0; i < seg; ++i)
+      for (int j = 0; j < tseg; ++j) {
+        const u32 a = static_cast<u32>(i * (tseg + 1) + j), b = a + static_cast<u32>(tseg + 1);
+        m.addTri(a, a + 1, b);
+        m.addTri(a + 1, b + 1, b);
+      }
+    return m;
+  }
+  // Prisma regular de `sides` lados (3 = triangulo, 6 = hexagono), raio circunscrito r, altura h, centrado na origem.
+  static Mesh prism(int sides, f32 r = 0.5f, f32 h = 0.5f) {
+    Mesh m;
+    const f32 PI = 3.14159265f, hh = h * 0.5f;
+    for (int k = 0; k < sides; ++k) {
+      const f32 a0 = 2.f * PI * static_cast<f32>(k) / static_cast<f32>(sides), a1 = 2.f * PI * static_cast<f32>(k + 1) / static_cast<f32>(sides), am = (a0 + a1) * 0.5f;
+      const Vec3 n{std::cos(am), 0.f, std::sin(am)};
+      const u32 b0 = m.addVtx(Vec3{r * std::cos(a0), -hh, r * std::sin(a0)}, n), b1 = m.addVtx(Vec3{r * std::cos(a1), -hh, r * std::sin(a1)}, n);
+      const u32 t0 = m.addVtx(Vec3{r * std::cos(a0), hh, r * std::sin(a0)}, n), t1 = m.addVtx(Vec3{r * std::cos(a1), hh, r * std::sin(a1)}, n);
+      m.addTri(b0, b1, t0);
+      m.addTri(b1, t1, t0);
+    }
+    for (const f32 s : {-1.f, 1.f}) { // tampas: leque a partir do centro
+      const Vec3 n{0.f, s, 0.f};
+      const u32 c = m.addVtx(Vec3{0.f, s * hh, 0.f}, n);
+      std::vector<u32> ring(static_cast<size_t>(sides));
+      for (int k = 0; k < sides; ++k) {
+        const f32 a = 2.f * PI * static_cast<f32>(k) / static_cast<f32>(sides);
+        ring[static_cast<size_t>(k)] = m.addVtx(Vec3{r * std::cos(a), s * hh, r * std::sin(a)}, n);
+      }
+      for (int k = 0; k < sides; ++k) m.addTri(c, ring[static_cast<size_t>(k)], ring[static_cast<size_t>((k + 1) % sides)]);
+    }
     return m;
   }
 };

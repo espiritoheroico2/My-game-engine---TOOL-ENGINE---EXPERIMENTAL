@@ -35,7 +35,8 @@ constexpr float kDeg2Rad = 3.14159265f / 180.f;
 struct Name { char text[40] = "Object"; };
 struct Transform { float pos[3] = {0, 0, 0}, rot[3] = {0, 0, 0}, scale[3] = {1, 1, 1}; };
 
-// shape: 0 cubo, 1 esfera, 2 plano, 3 modelo importado (caminho relativo ao projeto em `model`).
+// shape: 0 cubo, 1 esfera, 2 plano, 3 modelo importado (caminho relativo ao projeto em `model`),
+// 4 cilindro, 5 cone, 6 capsula, 7 roda, 8 prisma triangular, 9 prisma hexagonal.
 struct MeshRenderer {
   int shape = 0;
   float color[3] = {0.8f, 0.3f, 0.2f};
@@ -115,6 +116,9 @@ struct UiElem {
 constexpr int kMaxUi = 16;
 // Objeto desativado (Inspector > Active, ou acao "setActive" do Narrative): nao desenha, nao simula, nao executa Tools, sem luz/sombra.
 struct Inactive {};
+// Objeto travado (cadeado da Hierarquia): o editor nao deixa mover, girar, escalar, editar no Inspector nem apagar.
+// Nao afeta o jogo: Narrative e scripts continuam podendo alterar o objeto.
+struct Locked {};
 
 struct UiCanvas { char camera[40] = ""; bool visible = true; int count = 0; UiElem items[kMaxUi]; }; // camera vazia = todas as cameras Principais
 
@@ -132,7 +136,18 @@ struct SpawnerComp {
 struct ParticleComp {
   bool emitting = true, loop = true; int maxParticles = 200; float rate = 40.f, lifetime = 1.5f, speed = 3.f, spread = 25.f; // spread em graus em torno do eixo +Y do objeto
   float size = 0.12f, sizeEnd = 0.02f, gravityScale = 1.f, bounce = 0.f, floorY = -1000.f; // bounce>0: quica no plano y=floorY
-  float color[3] = {1.f, 0.6f, 0.2f}, colorEnd[3] = {0.8f, 0.1f, 0.05f}; float alpha = 0.9f; bool worldSpace = true;
+  // Cores: 4 paradas ao longo da vida (inicio, 1/3, 2/3, fim), interpoladas suavemente.
+  float color[3] = {1.f, 0.6f, 0.2f}, color2[3] = {1.f, 0.42f, 0.12f}, color3[3] = {0.9f, 0.22f, 0.07f}, colorEnd[3] = {0.8f, 0.1f, 0.05f};
+  float alpha = 0.9f; bool worldSpace = true;
+  int form = 0;                          // 0 bolinha, 1 quadrado, 2 triangulo, 3 estrela, 4 anel, 5 risco (na direcao do movimento)
+  int area = 0;                          // onde nasce: 0 ponto, 1 caixa aleatoria, 2 esfera aleatoria
+  float areaSize[3] = {1.f, 0.2f, 1.f};  // caixa: tamanho em X/Y/Z; esfera: X = diametro
+  bool fadeOpacity = true;               // a opacidade cai ate zero no fim da vida
+  float fadeDelay = 0.f;                 // segundos de espera antes de comecar a ficar transparente
+  bool route = false; int routeCount = 0;                       // trajetoria: pontos locais do objeto, curva suave entre eles
+  float routePts[8][3] = {{0, 0, 0}, {0, 1, 0}, {1, 2, 0}, {1, 3, 1}, {0, 4, 1}, {0, 5, 0}, {0, 0, 0}, {0, 0, 0}};
+  bool tornado = false;                  // gira em torno do eixo +Y, em funil (se a trajetoria estiver ligada, ela tem prioridade)
+  float tornadoSpeed = 1.5f, tornadoRadius = 0.6f, tornadoHeight = 2.f;  // voltas/s, raio da base, altura do funil
 };
 
 struct AudioSource {
@@ -278,6 +293,7 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     o.set("spatial", a->spatial); o.set("minDistance", static_cast<double>(a->minDistance)); o.set("maxDistance", static_cast<double>(a->maxDistance)); j.set("audio", o);
   }
   if (w.has<Inactive>(e)) j.set("inactive", true);
+  if (w.has<Locked>(e)) j.set("locked", true);
   if (auto* u = w.get<UiCanvas>(e)) {
     Json o = Json::object(); o.set("camera", std::string(u->camera)); o.set("visible", u->visible); Json arr = Json::array();
     for (int i = 0; i < u->count && i < kMaxUi; ++i) { const UiElem& it = u->items[i]; Json q = Json::object();
@@ -289,7 +305,13 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     Json o = Json::object(); o.set("emitting", p->emitting); o.set("loop", p->loop); o.set("max", p->maxParticles); o.set("rate", static_cast<double>(p->rate)); o.set("lifetime", static_cast<double>(p->lifetime));
     o.set("speed", static_cast<double>(p->speed)); o.set("spread", static_cast<double>(p->spread)); o.set("size", static_cast<double>(p->size)); o.set("sizeEnd", static_cast<double>(p->sizeEnd));
     o.set("gravityScale", static_cast<double>(p->gravityScale)); o.set("bounce", static_cast<double>(p->bounce)); o.set("floorY", static_cast<double>(p->floorY));
-    o.set("color", ser::vec(p->color, 3)); o.set("colorEnd", ser::vec(p->colorEnd, 3)); o.set("alpha", static_cast<double>(p->alpha)); o.set("worldSpace", p->worldSpace); j.set("particles", o);
+    o.set("color", ser::vec(p->color, 3)); o.set("color2", ser::vec(p->color2, 3)); o.set("color3", ser::vec(p->color3, 3)); o.set("colorEnd", ser::vec(p->colorEnd, 3));
+    o.set("alpha", static_cast<double>(p->alpha)); o.set("worldSpace", p->worldSpace);
+    o.set("form", p->form); o.set("area", p->area); o.set("areaSize", ser::vec(p->areaSize, 3));
+    o.set("fadeOpacity", p->fadeOpacity); o.set("fadeDelay", static_cast<double>(p->fadeDelay));
+    o.set("route", p->route); { Json pts = Json::array(); for (int i = 0; i < p->routeCount && i < 8; ++i) pts.push(ser::vec(p->routePts[i], 3)); o.set("routePts", pts); }
+    o.set("tornado", p->tornado); o.set("tornadoSpeed", static_cast<double>(p->tornadoSpeed)); o.set("tornadoRadius", static_cast<double>(p->tornadoRadius)); o.set("tornadoHeight", static_cast<double>(p->tornadoHeight));
+    j.set("particles", o);
   }
   return j;
 }
@@ -304,7 +326,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     MeshRenderer m; const auto& o = j["mesh"]; m.shape = static_cast<int>(o["shape"].asNumber(0)); ser::readVec(o["color"], m.color, 3);
     m.roughness = ser::num(o, "roughness", 0.5f); m.metallic = ser::num(o, "metallic", 0.f); ser::copyStr(m.model, sizeof m.model, o["model"].asString()); ser::copyStr(m.texture, sizeof m.texture, o["texture"].asString());
     m.castShadow = ser::flag(o, "castShadow", true); m.receiveShadow = ser::flag(o, "receiveShadow", true);
-    if (m.shape < 0 || m.shape > 3) m.shape = 0;
+    if (m.shape < 0 || m.shape > 9) m.shape = 0;
     w.add<MeshRenderer>(e, m);
   }
   if (j.has("light")) {
@@ -353,6 +375,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     a.minDistance = ser::num(o, "minDistance", 1.f); a.maxDistance = ser::num(o, "maxDistance", 30.f); w.add<AudioSource>(e, a);
   }
   if (j["inactive"].isBool() && j["inactive"].asBool()) w.add<Inactive>(e, Inactive{});
+  if (j["locked"].isBool() && j["locked"].asBool()) w.add<Locked>(e, Locked{});
   if (j.has("ui")) {
     UiCanvas u; const auto& o = j["ui"]; ser::copyStr(u.camera, sizeof u.camera, o["camera"].asString()); u.visible = ser::flag(o, "visible", true);
     for (auto& q : o["items"].items()) {
@@ -370,6 +393,15 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     p.size = ser::clampNum(o, "size", 0.12f, 0.001f, 50.f); p.sizeEnd = ser::clampNum(o, "sizeEnd", 0.02f, 0.f, 50.f); p.gravityScale = ser::clampNum(o, "gravityScale", 1.f, -10.f, 10.f);
     p.bounce = ser::clampNum(o, "bounce", 0.f, 0.f, 1.f); p.floorY = ser::clampNum(o, "floorY", -1000.f, -1e5f, 1e5f);
     ser::readVec(o["color"], p.color, 3); ser::readVec(o["colorEnd"], p.colorEnd, 3); p.alpha = ser::clampNum(o, "alpha", 0.9f, 0.f, 1.f); p.worldSpace = ser::flag(o, "worldSpace", true);
+    // cores 2 e 3: se o arquivo for antigo (so cor inicial e final), ficam nas posicoes 1/3 e 2/3 da interpolacao antiga
+    for (int c = 0; c < 3; ++c) { p.color2[c] = p.color[c] + (p.colorEnd[c] - p.color[c]) / 3.f; p.color3[c] = p.color[c] + (p.colorEnd[c] - p.color[c]) * 2.f / 3.f; }
+    ser::readVec(o["color2"], p.color2, 3); ser::readVec(o["color3"], p.color3, 3);
+    p.form = std::clamp(static_cast<int>(o["form"].asNumber(0)), 0, 5); p.area = std::clamp(static_cast<int>(o["area"].asNumber(0)), 0, 2);
+    ser::readVec(o["areaSize"], p.areaSize, 3);
+    p.fadeOpacity = ser::flag(o, "fadeOpacity", true); p.fadeDelay = ser::clampNum(o, "fadeDelay", 0.f, 0.f, 600.f);
+    p.route = ser::flag(o, "route", false); { int k = 0; for (auto& v : o["routePts"].items()) if (k < 8) { ser::readVec(v, p.routePts[k], 3); ++k; } p.routeCount = k; }
+    p.tornado = ser::flag(o, "tornado", false); p.tornadoSpeed = ser::clampNum(o, "tornadoSpeed", 1.5f, -20.f, 20.f);
+    p.tornadoRadius = ser::clampNum(o, "tornadoRadius", 0.6f, 0.f, 50.f); p.tornadoHeight = ser::clampNum(o, "tornadoHeight", 2.f, -100.f, 100.f);
     w.add<ParticleComp>(e, p);
   }
   return e;

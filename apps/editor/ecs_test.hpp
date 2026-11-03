@@ -109,9 +109,11 @@ inline void runConsoleCommand(Editor& ed, const std::string& raw) {
   if (c == "help") {
     tool::logInfo("test ECS: N   -> N esferas caem do ceu como filhas do objeto ECScall (padrao 10000, maximo 1000000)");
     tool::logInfo("clear         -> limpa o Console");
+    tool::logInfo("scripts       -> verifica os scripts de todos os objetos da cena (erros e avisos com linha)");
     return;
   }
   if (c == "clear") { ed.console.clear(); return; }
+  if (c == "scripts") { ed.checkAllScripts(); return; }
   if (c.rfind("test ecs", 0) == 0) {
     size_t i = 8;
     while (i < c.size() && (std::isspace(static_cast<unsigned char>(c[i])) || c[i] == ':')) ++i;

@@ -22,7 +22,10 @@ public:
   void newGraph() {
     graph_ = *tool::Json::parse(R"({"version":1,"variables":{"hp":{"type":"number","value":100}},"nodes":[],"links":[]})");
     path_.clear(); placed_.clear(); status_.clear();
+    ensureSceneBlock();
   }
+  // Cena ativa: o grafo aberto passa a ter o bloco padrao da cena (indestrutivel, com o nome da cena).
+  void setScene(const std::string& name) { sceneName_ = name; if (ensureSceneBlock() && !path_.empty()) save(); } // bloco novo: grava ja no arquivo da cena
   bool open(const std::string& path) {
     std::ifstream f(path, std::ios::binary); if (!f) { status_ = "could not open " + path; return false; }
     std::stringstream ss; ss << f.rdbuf();
@@ -95,7 +98,8 @@ private:
       ImNodes::BeginNode(static_cast<int>(i));
       // Largura do no controlada: texto longo (id/argumento) e cortado, senao o no cresce a cada quadro (imnodes dimensiona pelo conteudo).
       auto clip = [](std::string t, size_t cap) { if (t.size() > cap) t = t.substr(0, cap - 1) + "~"; return t; };
-      ImNodes::BeginNodeTitleBar(); ImGui::TextUnformatted(clip(type + " [" + id + "]", 30).c_str()); ImNodes::EndNodeTitleBar();
+      const bool pinned = nd.has("pinned");   // bloco padrao da cena: nome = cena, nao pode ser apagado
+      ImNodes::BeginNodeTitleBar(); ImGui::TextUnformatted(pinned ? clip("Scene: " + nd["label"].asString(), 30).c_str() : clip(type + " [" + id + "]", 30).c_str()); ImNodes::EndNodeTitleBar();
       ImGui::Dummy(ImVec2(150.f, 0.f)); // largura minima fixa
       const bool isTrigger = type == "trigger" || type == "onvar" || type == "start" || type == "update" || type == "create", isCond = type == "compare" || type == "and" || type == "or" || type == "not";
       if (!isTrigger && !isCond) { ImNodes::BeginInputAttribute(attr(i, kIn)); ImGui::TextUnformatted(editor::T("input")); ImNodes::EndInputAttribute(); }
@@ -137,7 +141,7 @@ private:
       ImGui::EndPopup();
     }
     // apagar selecionados
-    if (ImGui::IsKeyPressed(ImGuiKey_Delete) && ImNodes::NumSelectedNodes() > 0) {
+    if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete) && ImNodes::NumSelectedNodes() > 0) {
       std::vector<int> sel(static_cast<size_t>(ImNodes::NumSelectedNodes())); ImNodes::GetSelectedNodes(sel.data());
       std::sort(sel.rbegin(), sel.rend());
       for (int idx : sel) removeNode(static_cast<size_t>(idx));
@@ -164,7 +168,8 @@ private:
     auto number = [&](const char* label, const char* key) { double v = nd[key].asNumber(); if (ImGui::InputDouble(editor::T(label), &v)) nd.set(key, v); };
     auto op = [&] { static const char* ops[] = {"==", "!=", "<", "<=", ">", ">="}; int cur = 0; for (int i = 0; i < 6; ++i) if (nd["op"].asString() == ops[i]) cur = i; if (ImGui::Combo("op", &cur, ops, 6)) nd.set("op", ops[cur]); };
     auto mode = [&] { static const char* m[] = {"oneshot", "session", "reactivable"}; int cur = 0; for (int i = 0; i < 3; ++i) if (nd["mode"].asString() == m[i]) cur = i; if (ImGui::Combo("modo", &cur, m, 3)) nd.set("mode", m[cur]); };
-    text("id", "id");
+    if (nd.has("pinned")) ImGui::TextDisabled("%s", editor::T("Scene block: it can't be deleted. Its name follows the scene."));
+    else text("id", "id");
     if (type == "trigger") { text("event", "event"); mode(); number("group", "group"); }
     else if (type == "start") ImGui::TextDisabled("%s", editor::T("Runs once when the game starts (Play)."));
     else if (type == "update") ImGui::TextDisabled("%s", editor::T("Runs every frame while playing."));
@@ -225,20 +230,35 @@ private:
   void removeNode(size_t idx) {
     auto* nodes = graph_.find("nodes"); auto* links = graph_.find("links");
     if (idx >= nodes->items().size()) return;
+    if (nodes->at(idx).has("pinned")) { status_ = "the scene block can't be deleted"; return; } // bloco padrao: indestrutivel
     const std::string id = nodes->at(idx)["id"].asString();
     for (size_t l = links->items().size(); l-- > 0;) if (links->at(l)["from"].asString() == id || links->at(l)["to"].asString() == id) links->removeAt(l);
     nodes->removeAt(idx); placed_.erase(id);
     for (auto& n : nodes->items()) placed_.erase(n["id"].asString()); // reposiciona (indices mudaram)
   }
+  // Garante um unico bloco fixo da cena (no start marcado com "pinned"); atualiza o nome se a cena foi renomeada.
+  bool ensureSceneBlock() {
+    auto* nodes = graph_.find("nodes");
+    if (!nodes || sceneName_.empty()) return false;
+    for (size_t i = 0; i < nodes->items().size(); ++i)
+      if (nodes->at(i).has("pinned")) { nodes->at(i).set("label", sceneName_); return false; }
+    std::string id = "scene";
+    for (int k = 2; findNode(*nodes, id) >= 0; ++k) id = "scene" + std::to_string(k);
+    tool::Json nd = tool::Json::object();
+    nd.set("id", id); nd.set("type", "start"); nd.set("pinned", true); nd.set("label", sceneName_);
+    nd.set("x", 40.0); nd.set("y", 40.0);
+    nodes->push(nd);
+    return true;
+  }
   static int findNode(const tool::Json& nodes, const std::string& id) { for (size_t i = 0; i < nodes.items().size(); ++i) if (nodes.items()[i]["id"].asString() == id) return static_cast<int>(i); return -1; }
   void syncPositions() {
-    auto* nodes = graph_.find("nodes"); if (!nodes) return;
+    auto* nodes = graph_.find("nodes"); if (!nodes || !canvasReady_) return; // sem canvas desenhado (ex.: testes) nao ha posicoes para ler
     for (size_t i = 0; i < nodes->items().size(); ++i) { const ImVec2 p = ImNodes::GetNodeGridSpacePos(static_cast<int>(i)); nodes->at(i).set("x", static_cast<double>(p.x)); nodes->at(i).set("y", static_cast<double>(p.y)); }
   }
 
   tool::Json graph_;
   bool canvasReady_ = false;
-  std::string path_, status_, compileMsg_;
+  std::string path_, status_, compileMsg_, sceneName_;
   bool compileOk_ = false;
   std::set<std::string> placed_;
   char pathBuf_[256] = "narrative_graph.json", newVar_[32] = "", testEvent_[64] = "event";

@@ -62,13 +62,80 @@ struct GizmoState {
   bool dragging() const { return active >= 0; }
 };
 
+// Caixa alinhada aos eixos do objeto no mundo (cantos da malha ja transformados). false se nao tem malha.
+inline bool worldBox(Editor& ed, tool::Entity e, tool::Vec3& lo, tool::Vec3& hi) {
+  auto& w = ed.scene.world();
+  const MeshRenderer* mr = w.get<MeshRenderer>(e); if (!mr) return false;
+  const tool::Mesh* m = ed.meshOf(*mr); if (!m || m->pos.empty()) return false;
+  const tool::Mat4 wm = ed.worldMat(e);
+  lo = hi = wm.transformPoint(m->pos[0]);
+  for (const tool::Vec3& p : m->pos) {
+    const tool::Vec3 q = wm.transformPoint(p);
+    lo = {std::min(lo.x, q.x), std::min(lo.y, q.y), std::min(lo.z, q.z)};
+    hi = {std::max(hi.x, q.x), std::max(hi.y, q.y), std::max(hi.z, q.z)};
+  }
+  return true;
+}
+
+// COLAR (ima de contato): encosta o objeto na superficie mais proxima de outro objeto, sem sobrepor e sem deixar vao.
+// Para cada outro objeto com malha, testa encostar uma face de `e` na face oposta dele, no eixo X, Y ou Z. So vale
+// se os outros dois eixos ja se sobrepoem (ou seja, as superficies realmente se encaram). Descarta encostos que
+// criariam sobreposicao com um terceiro objeto e escolhe o de menor deslocamento. Retorna false se nao achou nada.
+inline bool snapToContact(Editor& ed, tool::Entity e) {
+  auto& w = ed.scene.world();
+  tool::Vec3 alo{}, ahi{};
+  if (!w.alive(e) || w.has<Locked>(e) || !w.get<Transform>(e) || !worldBox(ed, e, alo, ahi)) return false;
+  struct Box { tool::Vec3 lo, hi; };
+  std::vector<Box> others;
+  w.eachEntity([&](tool::Entity o) {
+    if (o == e || !w.alive(o) || w.has<Inactive>(o) || ed.isDescendant(o, e)) return;
+    Box b; if (worldBox(ed, o, b.lo, b.hi)) others.push_back(b);
+  });
+  if (others.empty()) return false;
+  const float eps = 1e-4f;
+  auto get = [](const tool::Vec3& v, int k) { return k == 0 ? v.x : k == 1 ? v.y : v.z; };
+  auto overlapsAt = [&](int k, float shift, const Box& b) { // A deslocado em `shift` no eixo k sobrepoe b (com folga)?
+    for (int j = 0; j < 3; ++j) {
+      float lo = get(alo, j), hi = get(ahi, j);
+      if (j == k) { lo += shift; hi += shift; }
+      if (!(lo < get(b.hi, j) - eps && hi > get(b.lo, j) + eps)) return false;
+    }
+    return true;
+  };
+  bool found = false; float bestAbs = 0.f; int bestK = 0; float bestDelta = 0.f;
+  for (const Box& b : others) {
+    for (int k = 0; k < 3; ++k) {
+      bool sideBySide = true; // os outros dois eixos precisam se sobrepor
+      for (int j = 0; j < 3; ++j) if (j != k && !(get(alo, j) < get(b.hi, j) && get(ahi, j) > get(b.lo, j))) sideBySide = false;
+      if (!sideBySide) continue;
+      const float cands[2] = {get(b.hi, k) - get(alo, k),    // face de A encostando na face de cima de b
+                              get(b.lo, k) - get(ahi, k)};   // face de A encostando na face de baixo de b
+      for (float d : cands) {
+        bool clash = false;
+        for (const Box& c : others) if (overlapsAt(k, d, c)) { clash = true; break; }
+        if (clash) continue;
+        if (!found || std::fabs(d) < bestAbs) { found = true; bestAbs = std::fabs(d); bestK = k; bestDelta = d; }
+      }
+    }
+  }
+  if (!found) return false;
+  tool::Vec3 dv{bestK == 0 ? bestDelta : 0.f, bestK == 1 ? bestDelta : 0.f, bestK == 2 ? bestDelta : 0.f};
+  auto* t = w.get<Transform>(e);
+  const tool::Entity par = ed.parentOf(e);
+  if (w.alive(par)) { // o deslocamento e do mundo: converte para o espaco local do pai
+    const tool::Vec4 l = inverseAffine(ed.worldMat(par)).mul({dv.x, dv.y, dv.z, 0.f});
+    t->pos[0] += l.x; t->pos[1] += l.y; t->pos[2] += l.z;
+  } else { t->pos[0] += dv.x; t->pos[1] += dv.y; t->pos[2] += dv.z; }
+  return true;
+}
+
 // Desenha o gizmo do objeto selecionado e trata o mouse. Retorna true se o gizmo "consumiu" o clique (nao selecionar outro objeto).
 // `hovered` = o mouse esta sobre a imagem da janela Scene.
 inline bool transformGizmo(Editor& ed, ImDrawList* dl, const ViewXf& v, GizmoState& gs, bool hovered) {
   tool::World& w = ed.scene.world();
   if (!w.alive(ed.selected)) { gs = GizmoState{}; return false; }
   auto* t = w.get<Transform>(ed.selected);
-  if (!t) { gs = GizmoState{}; return false; }
+  if (!t || w.has<Locked>(ed.selected)) { gs = GizmoState{}; return false; } // travado: sem gizmo
   ImGuiIO& io = ImGui::GetIO();
   const tool::Vec3 P = ed.worldPos(ed.selected);
   ImVec2 c0; if (!v.point(P, c0)) return false;
@@ -77,7 +144,7 @@ inline bool transformGizmo(Editor& ed, ImDrawList* dl, const ViewXf& v, GizmoSta
   const ImU32 base[3] = {IM_COL32(235, 70, 70, 255), IM_COL32(90, 220, 90, 255), IM_COL32(80, 120, 245, 255)};
   const ImU32 hi = IM_COL32(255, 235, 90, 255);
   const int mode = ed.gizmoMode;
-  const bool ctrl = io.KeyCtrl;
+  const bool ctrl = io.KeyCtrl || ed.snapOn; // Ctrl ou o ima da barra flutuante: encaixe na grade
 
   // ---- 1) qual alca esta sob o mouse? (so se nao estiver arrastando)
   int hot = -1;
@@ -140,9 +207,10 @@ inline bool transformGizmo(Editor& ed, ImDrawList* dl, const ViewXf& v, GizmoSta
         if (sl2 > 4.f) {
           const float along = (d.x * sx + d.y * sy) / sl2 * len; // metros ao longo do eixo
           if (mode == 0) {
-            float val = gs.start.pos[a] + along; if (ctrl) val = std::round(val / 0.25f) * 0.25f;
+            const float step = std::max(0.01f, ed.snapStep);
+            float val = gs.start.pos[a] + along; if (ctrl) val = std::round(val / step) * step;
             if (gs.hasParent) { // o eixo do gizmo e do MUNDO: converte o deslocamento para o espaco do pai
-              const float al = ctrl ? std::round(along / 0.25f) * 0.25f : along; const tool::Vec4 dl4 = gs.parentInv.mul({ax[a].x * al, ax[a].y * al, ax[a].z * al, 0.f});
+              const float al = ctrl ? std::round(along / step) * step : along; const tool::Vec4 dl4 = gs.parentInv.mul({ax[a].x * al, ax[a].y * al, ax[a].z * al, 0.f});
               t->pos[0] = gs.start.pos[0] + dl4.x; t->pos[1] = gs.start.pos[1] + dl4.y; t->pos[2] = gs.start.pos[2] + dl4.z; val = al;
             } else t->pos[a] = val;
             char b[48]; std::snprintf(b, sizeof b, "%s %.2f m", a == 0 ? "X" : a == 1 ? "Y" : "Z", static_cast<double>(val)); readout = b;

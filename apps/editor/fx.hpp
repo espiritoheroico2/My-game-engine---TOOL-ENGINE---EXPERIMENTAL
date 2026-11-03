@@ -18,13 +18,56 @@ inline float rnd(uint32_t& s) { s = s * 1664525u + 1013904223u; return static_ca
 //  1) SERIAL: le o mundo (worldMat nao e thread-safe) e calcula, por emissor, base de emissao, gravidade e quantas
 //     particulas pode criar neste quadro (respeitando o limite do emissor e o ORCAMENTO global de particulas).
 //  2) PARALELA: cada emissor cria e integra as proprias particulas (lista e semente proprias: nao ha dado compartilhado).
-// Emissores sem Play/edicao continuam simulando (como antes). Emissor que sumiu do mundo e descartado sem std::find.
+// Desenho: drawParticleOverlay, sobre a vista (cor verdadeira, alfa real, sem iluminacao).
 namespace fxdetail {
 struct EmitterJob {
   Editor::ParticleSim* sim = nullptr; const ParticleComp* pc = nullptr;
   tool::Vec3 org{}, up{}, u{}, v{}, g{};
-  int spawn = 0;   // particulas novas neste quadro (ja limitadas)
+  tool::Mat4 wm{};   // matriz do emissor (a trajetoria e em coordenadas locais)
+  int spawn = 0;     // particulas novas neste quadro (ja limitadas)
 };
+
+// Deslocamento do nascimento dentro da area (local: x = u, y = up, z = v).
+inline tool::Vec3 areaOffset(const ParticleComp& pc, uint32_t& s) {
+  if (pc.area == 1) { const float x = rnd(s) * 2.f - 1.f, y = rnd(s) * 2.f - 1.f, z = rnd(s) * 2.f - 1.f;
+    return {x * pc.areaSize[0] * 0.5f, y * pc.areaSize[1] * 0.5f, z * pc.areaSize[2] * 0.5f}; }
+  if (pc.area == 2) { const float z = rnd(s) * 2.f - 1.f, a = rnd(s) * 6.2831853f, rr = std::cbrt(rnd(s)) * pc.areaSize[0] * 0.5f;
+    const float q = std::sqrt(std::max(0.f, 1.f - z * z)); return {q * std::cos(a) * rr, z * rr, q * std::sin(a) * rr}; }
+  return {};
+}
+
+// Trajetoria: curva Catmull-Rom que passa por todos os pontos. t em 0..1 percorre a curva inteira.
+inline tool::Vec3 routeSample(const ParticleComp& pc, float t) {
+  const int n = std::clamp(pc.routeCount, 0, 8);
+  if (n == 0) return {};
+  auto P = [&](int i) { i = std::clamp(i, 0, n - 1); return tool::Vec3{pc.routePts[i][0], pc.routePts[i][1], pc.routePts[i][2]}; };
+  if (n == 1) return P(0);
+  const float f = std::clamp(t, 0.f, 1.f) * static_cast<float>(n - 1);
+  const int i = std::min(static_cast<int>(f), n - 2);
+  const float s = f - static_cast<float>(i);
+  const tool::Vec3 p0 = P(i - 1), p1 = P(i), p2 = P(i + 1), p3 = P(i + 2);
+  auto cr = [s](float a, float b, float c, float d) { return 0.5f * ((2.f * b) + (-a + c) * s + (2.f * a - 5.f * b + 4.f * c - d) * s * s + (-a + 3.f * b - 3.f * c + d) * s * s * s); };
+  return {cr(p0.x, p1.x, p2.x, p3.x), cr(p0.y, p1.y, p2.y, p3.y), cr(p0.z, p1.z, p2.z, p3.z)};
+}
+
+// Cor em 4 paradas (inicio, 1/3, 2/3, fim): interpolacao linear entre elas.
+inline tool::Vec3 particleColor(const ParticleComp& pc, float t) {
+  const float* st[4] = {pc.color, pc.color2, pc.color3, pc.colorEnd};
+  const float f = std::clamp(t, 0.f, 1.f) * 3.f;
+  const int i = std::min(static_cast<int>(f), 2);
+  const float k = f - static_cast<float>(i);
+  return {st[i][0] + (st[i + 1][0] - st[i][0]) * k, st[i][1] + (st[i + 1][1] - st[i][1]) * k, st[i][2] + (st[i + 1][2] - st[i][2]) * k};
+}
+
+// Opacidade: fica no nivel 'alpha' ate o atraso acabar e cai ate zero no fim da vida (se fadeOpacity estiver ligado).
+inline float particleAlpha(const ParticleComp& pc, const Editor::Particle& p) {
+  float a = pc.alpha;
+  if (pc.fadeOpacity) {
+    const float life = std::max(p.life, 1e-3f), d = std::clamp(pc.fadeDelay, 0.f, life * 0.999f);
+    a *= 1.f - std::clamp((p.age - d) / (life - d), 0.f, 1.f);
+  }
+  return std::clamp(a, 0.f, 1.f);
+}
 }
 
 inline void Editor::updateParticles(float dt) {
@@ -46,7 +89,7 @@ inline void Editor::updateParticles(float dt) {
     const tool::Vec4 up4 = wm.mul({0.f, 1.f, 0.f, 0.f}); tool::Vec3 up{up4.x, up4.y, up4.z}; const float ul = tool::length(up); up = ul > 1e-5f ? up * (1.f / ul) : tool::Vec3{0.f, 1.f, 0.f};
     const tool::Vec3 ref = std::fabs(up.y) < 0.99f ? tool::Vec3{0.f, 1.f, 0.f} : tool::Vec3{1.f, 0.f, 0.f};
     tool::Vec3 u = tool::cross(up, ref); u = u * (1.f / std::max(1e-5f, tool::length(u))); const tool::Vec3 v = tool::cross(up, u);
-    fxdetail::EmitterJob job; job.sim = &sim; job.pc = &pc; job.org = org; job.up = up; job.u = u; job.v = v; job.g = g0 * pc.gravityScale;
+    fxdetail::EmitterJob job; job.sim = &sim; job.pc = &pc; job.org = org; job.up = up; job.u = u; job.v = v; job.g = g0 * pc.gravityScale; job.wm = wm;
     const long long cap = std::clamp(pc.maxParticles, 1, 5000);
     if (pc.emitting) {
       sim.acc += pc.rate * dt;
@@ -65,14 +108,27 @@ inline void Editor::updateParticles(float dt) {
       for (int k = 0; k < jb.spawn; ++k) {
         const float ang = fxdetail::rnd(sim.seed) * 6.2831853f, cone = std::sin(pc.spread * 0.0174533f * std::sqrt(fxdetail::rnd(sim.seed)));
         const tool::Vec3 dir = jb.up * std::sqrt(std::max(0.f, 1.f - cone * cone)) + jb.u * (std::cos(ang) * cone) + jb.v * (std::sin(ang) * cone);
-        Particle p; p.p = jb.org; p.v = dir * (pc.speed * (0.75f + 0.5f * fxdetail::rnd(sim.seed))); p.life = pc.lifetime * (0.8f + 0.4f * fxdetail::rnd(sim.seed));
+        Particle p; p.v = dir * (pc.speed * (0.75f + 0.5f * fxdetail::rnd(sim.seed))); p.life = pc.lifetime * (0.8f + 0.4f * fxdetail::rnd(sim.seed));
+        p.phase = fxdetail::rnd(sim.seed) * 6.2831853f; p.jit = fxdetail::areaOffset(pc, sim.seed);
+        p.p = jb.org + jb.u * p.jit.x + jb.up * p.jit.y + jb.v * p.jit.z;
         sim.list.push_back(p);
       }
+      const bool path = pc.route && pc.routeCount >= 1, spiral = !path && pc.tornado;
       for (size_t i = 0; i < sim.list.size();) {
         Particle& p = sim.list[i]; p.age += dt;
         if (p.age >= p.life) { sim.list[i] = sim.list.back(); sim.list.pop_back(); continue; }
-        p.v = p.v + jb.g * dt; p.p = p.p + p.v * dt;
-        if (pc.bounce > 0.f && p.p.y < pc.floorY) { p.p.y = pc.floorY; p.v.y = -p.v.y * pc.bounce; p.v.x *= 0.9f; p.v.z *= 0.9f; }
+        const float t = std::clamp(p.age / std::max(p.life, 1e-4f), 0.f, 1.f);
+        if (path) { // trajetoria: a particula percorre a curva (pontos locais do objeto) durante a vida
+          const tool::Vec3 l = fxdetail::routeSample(pc, t) + p.jit;
+          const tool::Vec4 wp = jb.wm.mul({l.x, l.y, l.z, 1.f}); p.p = {wp.x, wp.y, wp.z};
+        } else if (spiral) { // tornado: gira em torno do eixo do objeto e sobe abrindo em funil
+          const float th = p.phase + 6.2831853f * pc.tornadoSpeed * p.age, rr = pc.tornadoRadius * (0.3f + 0.7f * t);
+          const tool::Vec3 base = jb.org + jb.u * p.jit.x + jb.up * p.jit.y + jb.v * p.jit.z + jb.up * (pc.tornadoHeight * t);
+          p.p = base + jb.u * (std::cos(th) * rr) + jb.v * (std::sin(th) * rr);
+        } else {
+          p.v = p.v + jb.g * dt; p.p = p.p + p.v * dt;
+          if (pc.bounce > 0.f && p.p.y < pc.floorY) { p.p.y = pc.floorY; p.v.y = -p.v.y * pc.bounce; p.v.x *= 0.9f; p.v.z *= 0.9f; }
+        }
         ++i;
       }
     }
@@ -81,40 +137,63 @@ inline void Editor::updateParticles(float dt) {
   for (auto it = particles.begin(); it != particles.end();) { if (it->second.touched != particleFrame) it = particles.erase(it); else ++it; }
 }
 
-// Lotes de particulas para a camera: quads voltados para ela, agrupados por cor (4 niveis por canal = ate 64 lotes).
-// Cada lote vira UMA malha dinamica = UMA chamada de desenho (antes eram N chamadas, uma por particula).
-// Particulas fora do frustum sao descartadas aqui (culling por esfera).
-inline void Editor::buildParticleBatches(const tool::Camera& cam, int w, int h) {
-  for (auto& m : partBatch) { m.pos.clear(); m.normal.clear(); m.uv.clear(); m.idx.clear(); }
-  const tool::Vec3 fwd = tool::normalize(cam.target - cam.eye);
-  const tool::Vec3 right = tool::normalize(tool::cross(fwd, cam.up)), up = tool::cross(right, fwd);
-  const tool::Vec3 nrm = fwd * -1.f;   // quad olha para a camera
-  const auto planes = framePlanes(cam, w, h);
-  scene.world().each<ParticleComp>([&](tool::Entity e, ParticleComp& pc) {
-    if (scene.world().has<Inactive>(e)) return;
-    auto it = particles.find(e.index); if (it == particles.end()) return;
-    for (const Particle& p : it->second.list) {
+// Particulas desenhadas sobre a vista: cor e alfa reais (sem iluminacao e sem escurecer). `selected` mostra a
+// trajetoria do objeto selecionado na Scene. Nao ha teste de profundidade: ficam por cima dos objetos.
+inline void drawParticleOverlay(Editor& ed, const tool::Camera& cam, ImVec2 org, ImVec2 size, tool::Entity selected) {
+  if (size.x < 2.f || size.y < 2.f) return;
+  tool::World& w = ed.scene.world(); ImDrawList* dl = ImGui::GetWindowDrawList();
+  const tool::Mat4 vp = cam.projection(size.x, size.y) * tool::Mat4::lookAt(cam.eye, cam.target, cam.up);
+  const tool::Vec3 fwd = tool::normalize(cam.target - cam.eye), right = tool::normalize(tool::cross(fwd, cam.up));
+  auto toScr = [&](tool::Vec3 p, ImVec2& s) {
+    const tool::Vec4 c = vp.mul({p.x, p.y, p.z, 1.f});
+    if (!cam.ortho && c.w < cam.nearZ) return false;
+    s = {org.x + (c.x / c.w * 0.5f + 0.5f) * size.x, org.y + (1.f - (c.y / c.w * 0.5f + 0.5f)) * size.y};
+    return true;
+  };
+  dl->PushClipRect(org, {org.x + size.x, org.y + size.y}, true);
+  w.each<ParticleComp>([&](tool::Entity e, ParticleComp& pc) {
+    if (w.has<Inactive>(e)) return;
+    if (e == selected && pc.route && pc.routeCount >= 2) { // trajetoria: linha amarela + pontos de controle
+      const tool::Mat4 wm = ed.worldMat(e); ImVec2 prev{}; bool hasPrev = false;
+      for (int k = 0; k <= 64; ++k) {
+        const tool::Vec3 l = fxdetail::routeSample(pc, static_cast<float>(k) / 64.f); const tool::Vec4 wp = wm.mul({l.x, l.y, l.z, 1.f});
+        ImVec2 s; if (!toScr({wp.x, wp.y, wp.z}, s)) { hasPrev = false; continue; }
+        if (hasPrev) dl->AddLine(prev, s, IM_COL32(255, 220, 80, 230), 2.f);
+        prev = s; hasPrev = true;
+      }
+      for (int i = 0; i < pc.routeCount; ++i) {
+        const tool::Vec4 wp = wm.mul({pc.routePts[i][0], pc.routePts[i][1], pc.routePts[i][2], 1.f}); ImVec2 s;
+        if (toScr({wp.x, wp.y, wp.z}, s)) { dl->AddCircleFilled(s, 4.f, IM_COL32(255, 220, 80, 255)); dl->AddCircle(s, 6.f, IM_COL32(0, 0, 0, 200), 0, 1.f); }
+      }
+    }
+    auto it = ed.particles.find(e.index); if (it == ed.particles.end()) return;
+    for (const Editor::Particle& p : it->second.list) {
       const float t = std::clamp(p.age / std::max(p.life, 1e-4f), 0.f, 1.f);
       const float sz = pc.size + (pc.sizeEnd - pc.size) * t;
       if (sz <= 1e-3f) continue;
-      bool out = false;
-      for (const tool::Vec4& pl : planes) if (pl.x * p.p.x + pl.y * p.p.y + pl.z * p.p.z + pl.w < -sz) { out = true; break; }
-      if (out) { ++prof.counters.culled; continue; }
-      const float k = pc.alpha * (1.f - t * t);   // "some" aos poucos: escurece e encolhe
-      const float col[3] = {(pc.color[0] + (pc.colorEnd[0] - pc.color[0]) * t) * k, (pc.color[1] + (pc.colorEnd[1] - pc.color[1]) * t) * k, (pc.color[2] + (pc.colorEnd[2] - pc.color[2]) * t) * k};
-      auto lvl = [](float c) { return std::clamp(static_cast<int>(std::lround(std::clamp(c, 0.f, 1.f) * 3.f)), 0, 3); };
-      const int bucket = lvl(col[0]) * 16 + lvl(col[1]) * 4 + lvl(col[2]);
-      tool::Mesh& m = partBatch[static_cast<size_t>(bucket)];
-      partColor[static_cast<size_t>(bucket)] = {lvl(col[0]) / 3.f, lvl(col[1]) / 3.f, lvl(col[2]) / 3.f};
-      const float hs = sz * 0.5f;
-      const tool::Vec3 r = right * hs, u = up * hs;
-      const uint32_t base = static_cast<uint32_t>(m.pos.size());
-      m.pos.push_back(p.p - r - u); m.pos.push_back(p.p + r - u); m.pos.push_back(p.p + r + u); m.pos.push_back(p.p - r + u);
-      for (int c = 0; c < 4; ++c) m.normal.push_back(nrm);
-      m.uv.insert(m.uv.end(), {0.f, 1.f, 1.f, 1.f, 1.f, 0.f, 0.f, 0.f});
-      m.idx.insert(m.idx.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+      const float a = fxdetail::particleAlpha(pc, p);
+      if (a <= 0.003f) continue;
+      ImVec2 s; if (!toScr(p.p, s)) continue;
+      ImVec2 sr; if (!toScr(p.p + right * (sz * 0.5f), sr)) continue;
+      const float r = std::max(1.f, std::hypot(sr.x - s.x, sr.y - s.y));
+      if (s.x + r < org.x || s.x - r > org.x + size.x || s.y + r < org.y || s.y - r > org.y + size.y) { ++ed.prof.counters.culled; continue; }
+      const tool::Vec3 c = fxdetail::particleColor(pc, t);
+      const ImU32 col = ImGui::GetColorU32({c.x, c.y, c.z, a});
+      switch (pc.form) {
+        case 1: dl->AddRectFilled({s.x - r, s.y - r}, {s.x + r, s.y + r}, col); break;
+        case 2: dl->AddTriangleFilled({s.x, s.y - r * 1.2f}, {s.x - r, s.y + r * 0.8f}, {s.x + r, s.y + r * 0.8f}, col); break;
+        case 3: { ImVec2 pts[10]; for (int k = 0; k < 10; ++k) { const float ang = -1.5708f + k * 0.6283185f, rr = (k % 2) ? r * 0.45f : r * 1.2f; pts[k] = {s.x + std::cos(ang) * rr, s.y + std::sin(ang) * rr}; }
+          dl->AddConcavePolyFilled(pts, 10, col); break; }
+        case 4: dl->AddCircle(s, r, col, 16, std::max(1.f, r * 0.35f)); break;
+        case 5: { ImVec2 q = s; const tool::Vec3 back = p.p - p.v * 0.04f; ImVec2 qb; if (toScr(back, qb)) q = qb;
+          dl->AddLine(q, s, col, std::max(1.f, r * 0.8f)); break; }
+        default: { // bolinha suave: halo + nucleo
+          dl->AddCircleFilled(s, r * 1.6f, ImGui::GetColorU32({c.x, c.y, c.z, a * 0.25f}), 16);
+          dl->AddCircleFilled(s, r, col, 16); break; }
+      }
     }
   });
+  dl->PopClipRect();
 }
 
 // "{nome}" no texto vira o valor da variavel do jogo (ed.vars); suporta varias por texto.

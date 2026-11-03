@@ -14,6 +14,7 @@
 #include "project_settings.hpp"
 #include "script.hpp"
 #include "script_host.hpp"
+#include "script_check.hpp"
 #include "input_map.hpp"
 #include "input_sampler.hpp"
 #include "play_runtime.hpp"
@@ -70,6 +71,8 @@ struct Editor {
   bool showHierarchy = true, showInspector = true, showConsole = true, showProfiler = true, showScene = true, showGame = true;
   bool showAssets = true, showScenes = true, showNarrative = true, showSettings = true, showInputMap = false;
   bool resetLayout = false;
+  bool lockInterface = false;  // Interface travada: abas/janelas nao saem do encaixe e os divisores nao se mexem (menu Interface)
+  bool dockWithShift = false;  // encaixar/desencaixar janelas so segurando Shift (evita encaixes acidentais)
   int focusSettings = 0, settingsTab = -1;
 
   // projeto / cena
@@ -86,6 +89,8 @@ struct Editor {
   // visualizacao
   tool::SoftRenderer renderer{640, 360};
   tool::Mesh cube = tool::Mesh::cube(0.5f), sphere = tool::Mesh::sphere(0.5f), plane = tool::Mesh::plane(0.5f);
+  tool::Mesh cylinder = tool::Mesh::cylinder(0.5f, 1.f), cone = tool::Mesh::cone(0.5f, 1.f), capsule = tool::Mesh::capsule(0.35f, 1.f),
+           wheel = tool::Mesh::wheel(), triPrism = tool::Mesh::prism(3, 0.5f, 1.f), hexPrism = tool::Mesh::prism(6, 0.5f, 1.f); // formas extras (shape 4..9)
   ViewTex sceneTex, gameTex[2];
   float yaw = 0.6f, pitch = 0.35f, dist = 9.f;
   tool::Vec3 target{0, 0.5f, 0};
@@ -93,6 +98,8 @@ struct Editor {
   bool showPostInScene = true; // aplicar o pos-processamento GLOBAL tambem na janela Scene
   // Gizmo de transformacao (Scene): 0 = mover (W), 1 = rotacionar (E), 2 = escalar (R); espaco global/local nao e usado (eixos do mundo)
   int gizmoMode = 0;
+  bool snapOn = false;       // ima da barra flutuante: o gizmo encaixa na grade de snapStep (igual a Ctrl ao arrastar)
+  float snapStep = 0.25f;    // passo da grade do ima, em metros
   // Desfazer/Refazer (undo.hpp). `interactingPrev` detecta o fim de uma interacao do usuario.
   UndoStack undoStack; bool interactingPrev = false;
   // Navegacao livre (tecla Alt): camera em primeira pessoa na janela Scene. WASD anda, Q/E desce/sobe, Shift acelera.
@@ -115,9 +122,11 @@ struct Editor {
   ScriptHost scriptHost;
   std::vector<std::pair<std::string, float>> scriptDelayed;   // destroy(nome, segundos) pendentes
   ScriptHost::Entry scriptEntryFor(tool::Entity e);
-  void startScripts(); void tickScripts(float dt); void applyScriptCmds();
+  void startScripts(); void checkAllScripts(); void tickScripts(float dt); void applyScriptCmds(); void fillScriptInput();
   void scriptCall(ScriptHost::Inst& in, int what, float dt, const std::string& ev);   // what: 1 evento, 2 update
-  tool::Entity spawnCopy(const std::string& name);                                    // copia um objeto (sem gravar arquivos de script novos)
+  // copia um objeto (sem gravar arquivos de script novos). newName: nome da copia ("" = mantem o nome);
+  // pos: posicao local da copia (nullptr = mantem a do original).
+  tool::Entity spawnCopy(const std::string& name, const std::string& newName = std::string(), const float* pos = nullptr);
   void stopScripts() { scriptHost.close(); scriptDelayed.clear(); }
   // Teste de ECS (ecs_test.hpp): cria/atualiza o objeto ECScall com N esferas e da Play.
   bool pushRuntimeBody(tool::Entity e);   // corpo fisico para um objeto criado durante o Play (sem Rebuild)
@@ -128,13 +137,10 @@ struct Editor {
   struct BoundsEntry { size_t n = 0; const void* data = nullptr; Bounds b; };
   std::unordered_map<const tool::Mesh*, BoundsEntry> boundsCache_;   // esfera de cada malha (para o frustum culling)
  std::vector<std::string> uiEvents;
-  struct Particle { tool::Vec3 p, v; float age = 0.f, life = 1.f; };
+  struct Particle { tool::Vec3 p, v; float age = 0.f, life = 1.f; float phase = 0.f; tool::Vec3 jit{}; };  // jit: deslocamento do nascimento (local)
   struct ParticleSim { std::vector<Particle> list; float acc = 0.f; uint32_t seed = 12345u; uint32_t touched = 0; };
   uint32_t particleFrame = 0;
   int particleBudget = 100000;                         // maximo de particulas vivas somando todos os emissores
-  std::array<tool::Mesh, 64> partBatch;               // lotes por cor (malhas dinamicas, reaproveitadas)
-  std::array<tool::Vec3, 64> partColor{};             // cor de cada lote
-  void buildParticleBatches(const tool::Camera& cam, int w, int h);
   std::unordered_map<uint32_t, ParticleSim> particles;   // por indice de entidade
   void updateParticles(float dt);
   // Narrative Controller em execucao (so durante o Play) + codigo da cena
@@ -350,10 +356,13 @@ struct Editor {
   }
   void assignAsset(const std::string& rel) { if (std::find(sceneInfo.assets.begin(), sceneInfo.assets.end(), rel) == sceneInfo.assets.end()) sceneInfo.assets.push_back(rel); }
   tool::Entity duplicate(tool::Entity e) {
+    // A copia fica no MESMO pai (o save/load nao leva a ligacao de pai). keepWorld=false: a posicao local e a copiada.
+    const tool::Entity par = parentOf(e);
     tool::Entity c = loadEntity(scene, saveEntity(scene, e));
     cloneScript(c);
     if (auto* t = scene.world().get<Transform>(c)) t->pos[0] += 0.5f;
     if (auto* a = scene.world().get<AudioSource>(c)) a->voice = {};
+    if (scene.world().alive(par)) setParent(c, par, false);
     return c;
   }
   void destroy(tool::Entity e);                     // apaga o objeto e todos os seus filhos (editor_hier.hpp)
@@ -571,7 +580,17 @@ struct Editor {
   }
   const tool::Mesh* meshOf(const MeshRenderer& mr, tool::Vec3* tint = nullptr) {
     if (mr.shape == 3) return lib.mesh(mr.model, tint);
-    return mr.shape == 1 ? &sphere : mr.shape == 2 ? &plane : &cube;
+    switch (mr.shape) {
+      case 1: return &sphere;
+      case 2: return &plane;
+      case 4: return &cylinder;
+      case 5: return &cone;
+      case 6: return &capsule;
+      case 7: return &wheel;
+      case 8: return &triPrism;
+      case 9: return &hexPrism;
+      default: return &cube;
+    }
   }
 
   // Esfera que envolve todos os objetos que PROJETAM sombra (planos grandes, como o chao, ficam de fora: so recebem).
@@ -668,10 +687,6 @@ private:
     };
     auto count = [&](const tool::Mesh& m, const tool::Material& mat) { tris += m.idx.size() / 3; ++draws; if (shadows && mat.castShadow) ++casters; };
     ++prof.counters.views; prof.counters.pixels += static_cast<tool::u64>(w) * static_cast<tool::u64>(h);
-    // Particulas: em LOTES (buildParticleBatches): quads voltados para a camera, agrupados por cor.
-    // Um lote = uma malha dinamica = uma chamada de desenho, com teste de profundidade (fica atras dos objetos).
-    buildParticleBatches(cam, w, h);
-    const tool::Mat4 identity{};
     if (apiActive != 0) {
       // Protecao: se a GPU reportar erros em quadros seguidos (ex.: memoria esgotada, driver instavel), volta para a CPU
       // em vez de congelar o editor com milhares de mensagens. O motivo fica em Settings > Graphics e no Console.
@@ -685,7 +700,6 @@ private:
         if (scene.world().has<Inactive>(e)) return;
         if (const tool::Mesh* m = meshOf(mr)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); gpu.draw(*m, worldMat(e), mat); }
       });
-      for (tool::u32 b = 0; b < 64; ++b) if (!partBatch[b].idx.empty()) { const tool::Material pm{partColor[b], 1.f, 0.f, false, false}; count(partBatch[b], pm); gpu.drawDynamic(0x40000000u + b, partBatch[b], identity, pm); }
       gpu.end();
       gpuDev->present();
       tool::u32 rw = 0, rh = 0;
@@ -712,7 +726,6 @@ private:
       if (scene.world().has<Inactive>(e)) return;
         if (const tool::Mesh* m = meshOf(mr)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); renderer.draw(*m, worldMat(e), mat); }
     });
-    for (tool::u32 b = 0; b < 64; ++b) if (!partBatch[b].idx.empty()) { const tool::Material pm{partColor[b], 1.f, 0.f, false, false}; count(partBatch[b], pm); renderer.draw(partBatch[b], identity, pm); }
     prof.counters.tris += tris; prof.counters.draws += draws; prof.counters.shadowCasters += casters; prof.counters.shadowTris += renderer.shadowTriangles();
     return renderer.pixels();
   }
@@ -827,7 +840,8 @@ public:
     }
     std::vector<std::string> evs; evs.swap(uiEvents);
     tickNarrative(static_cast<float>(dt), evs);
-    tickScripts(static_cast<float>(dt));
+    try { tickScripts(static_cast<float>(dt)); }   // uma falha do sistema de scripts para os scripts, nao o editor
+    catch (...) { tool::debug().report("TOOL-S009", tool::Severity::Error, "script system stopped after an internal error; the editor keeps running"); scriptHost.close(); }
     tickSpawners(static_cast<float>(dt));
     stepPlay(static_cast<float>(dt));
     updateListener();

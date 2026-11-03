@@ -1,4 +1,4 @@
-# ToolEngine (Game engine leve sem nome definido)
+# ToolEngine (nome de trabalho)
 
 Engine 3D leve, multi-API, em C++20. Estrutura pensada para o **Visual Studio Code**.
 
@@ -37,7 +37,11 @@ docs/           notas de construção
 ```
 Dependências apontam sempre para baixo: scene → events/ecs → debug → core.
 
-Status: **0.7.7-beta** - veja `docs/CHANGELOG.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/NEXT_STEPS.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`.
+Status: **0.7.12-beta** - veja `docs/CHANGELOG.md`, `docs/UI_SPRITE_PLAN.md`, `docs/SCRIPT_ERRORS.md`, `docs/LIGHTING_REVIEW.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/NEXT_STEPS.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`.
+
+**Novidades da 0.7.9-beta (erros de script):** verificador de scripts enquanto voce digita (linha e trecho), erros de execucao com linha, try/catch, avisos para objeto inexistente e NaN, e filtros no Console. Codigos em `docs/SCRIPT_ERRORS.md`.
+
+**0.7.8-beta (editor):** escala de UI 125% por padrao; icones de olho e cadeado na Hierarchy; botao direito na cena (Editar/Excluir); barra flutuante na cena com ima e "Encostar no contato"; campo de comando no Console com historico; autocomplete de scripts no VS Code (`toolengine.d.ts`, snippets e `jsconfig.json` criados ao abrir o projeto). Detalhes em `docs/CHANGELOG.md`.
 
 ## Novidades da v0.4.0-beta
 Sombras em tempo real (cast/receive por objeto), gizmos mover/girar/escalar (W/E/R), navegação livre (Alt), foco por duplo clique,

@@ -221,11 +221,59 @@ inline void particleUi(Editor& ed) {
   ImGui::Checkbox(T("Emitting"), &p->emitting);
   ImGui::DragInt(T("Max particles"), &p->maxParticles, 1.f, 1, 5000); ImGui::DragFloat(T("Rate (per second)"), &p->rate, 0.5f, 0.f, 5000.f); ImGui::DragFloat(T("Lifetime (s)"), &p->lifetime, 0.05f, 0.05f, 60.f);
   ImGui::DragFloat(T("Speed"), &p->speed, 0.05f, 0.f, 500.f); ImGui::SliderFloat(T("Spread (deg)"), &p->spread, 0.f, 180.f);
-  ImGui::DragFloat(T("Size start"), &p->size, 0.005f, 0.001f, 50.f); ImGui::DragFloat(T("Size end"), &p->sizeEnd, 0.005f, 0.f, 50.f);
-  ImGui::ColorEdit3(T("Color start"), p->color); ImGui::ColorEdit3(T("Color end"), p->colorEnd); ImGui::SliderFloat(T("Opacity"), &p->alpha, 0.f, 1.f);
+  if (ImGui::TreeNodeEx(T("Shape and spawn area"), ImGuiTreeNodeFlags_DefaultOpen)) {
+    const std::string forms = std::string(T("Dot")) + '\0' + T("Square") + '\0' + T("Triangle") + '\0' + T("Star") + '\0' + T("Ring") + '\0' + T("Streak (motion)") + '\0';
+    ImGui::Combo(T("Shape"), &p->form, forms.c_str());
+    const std::string areas = std::string(T("Point")) + '\0' + T("Random box") + '\0' + T("Random sphere") + '\0';
+    ImGui::Combo(T("Spawn area"), &p->area, areas.c_str());
+    if (p->area) { ImGui::DragFloat3(T("Area size"), p->areaSize, 0.02f, 0.f, 100.f, "%.2f"); if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Box: size in X, Y and Z. Sphere: X is the diameter. Each particle is born at a random point inside.")); }
+    ImGui::DragFloat(T("Size start"), &p->size, 0.005f, 0.001f, 50.f); ImGui::DragFloat(T("Size end"), &p->sizeEnd, 0.005f, 0.f, 50.f);
+    ImGui::TreePop();
+  }
+  if (ImGui::TreeNodeEx(T("Colors and opacity"), ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::TextDisabled("%s", T("Four colors over the lifetime: start, 1/3, 2/3 and end. Colors keep their brightness (no darkening)."));
+    ImGui::ColorEdit3(T("Color 1 (start)"), p->color); ImGui::ColorEdit3(T("Color 2"), p->color2); ImGui::ColorEdit3(T("Color 3"), p->color3); ImGui::ColorEdit3(T("Color 4 (end)"), p->colorEnd);
+    ImGui::SliderFloat(T("Opacity"), &p->alpha, 0.f, 1.f);
+    ImGui::Checkbox(T("Opacity over time"), &p->fadeOpacity);
+    if (p->fadeOpacity) {
+      ImGui::DragFloat(T("Opacity delay (s)"), &p->fadeDelay, 0.05f, 0.f, p->lifetime, "%.2f");
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Seconds the particle stays at full Opacity before it starts to fade. It is fully transparent at the end of its life."));
+    }
+    ImGui::TreePop();
+  }
+  if (ImGui::TreeNode(T("Trace route"))) {
+    ImGui::Checkbox(T("Follow the route"), &p->route);
+    ImGui::TextDisabled("%s", T("Points are local to this object. Each particle travels the smooth curve through them over its lifetime. The Scene view draws the route while this object is selected."));
+    for (int i = 0; i < p->routeCount; ++i) {
+      ImGui::PushID(i);
+      ImGui::SetNextItemWidth(-64.f);
+      ImGui::DragFloat3("##pt", p->routePts[i], 0.05f, 0.f, 0.f, "%.2f");
+      ImGui::SameLine(); if (ImGui::SmallButton("x")) { for (int k = i; k + 1 < p->routeCount; ++k) for (int c = 0; c < 3; ++c) p->routePts[k][c] = p->routePts[k + 1][c]; --p->routeCount; ImGui::PopID(); break; }
+      ImGui::PopID();
+    }
+    if (p->routeCount < 8 && ImGui::SmallButton(T("Add point"))) {
+      float* last = p->routeCount > 0 ? p->routePts[p->routeCount - 1] : nullptr;
+      float* dst = p->routePts[p->routeCount];
+      dst[0] = last ? last[0] + 1.f : 0.f; dst[1] = last ? last[1] : 0.f; dst[2] = last ? last[2] : 0.f;
+      ++p->routeCount;
+    }
+    if (p->routeCount > 0) { ImGui::SameLine(); if (ImGui::SmallButton(T("Clear route"))) p->routeCount = 0; }
+    ImGui::TreePop();
+  }
+  if (ImGui::TreeNode(T("Tornado"))) {
+    ImGui::Checkbox(T("Spin (tornado)"), &p->tornado);
+    if (p->tornado) {
+      ImGui::SliderFloat(T("Turns per second"), &p->tornadoSpeed, 0.f, 6.f, "%.2f");
+      ImGui::DragFloat(T("Base radius"), &p->tornadoRadius, 0.02f, 0.f, 50.f, "%.2f");
+      ImGui::DragFloat(T("Height"), &p->tornadoHeight, 0.05f, 0.f, 100.f, "%.2f");
+      ImGui::TextDisabled("%s", T("The particles rise and spread out like a funnel. If Trace route is on, the route wins."));
+    }
+    ImGui::TreePop();
+  }
+  ImGui::SeparatorText(T("Motion"));
   ImGui::SliderFloat(T("Gravity scale (world physics)"), &p->gravityScale, -3.f, 3.f);
   ImGui::SliderFloat(T("Bounce on floor"), &p->bounce, 0.f, 1.f); if (p->bounce > 0.f) ImGui::DragFloat(T("Floor Y"), &p->floorY, 0.05f);
-  ImGui::TextDisabled("%s", T("Emits along the object's +Y axis. Drawn as soft dots over the view (no depth test)."));
+  ImGui::TextDisabled("%s", T("Emits along the object's +Y axis. Drawn over the view with real colour and opacity (no depth test)."));
   if (ImGui::SmallButton(T("Remove Particles"))) w.remove<ParticleComp>(ed.selected);
 }
 

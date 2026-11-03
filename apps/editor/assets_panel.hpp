@@ -10,6 +10,7 @@
 #include "editor_state.hpp"
 #include "extra_ui.hpp"
 #include "i18n.hpp"
+#include "script_kit.hpp"
 
 #include "imgui.h"
 
@@ -26,8 +27,17 @@ inline std::mutex& importMutex() { static std::mutex m; return m; }
 inline std::vector<std::string>& importQueue() { static std::vector<std::string> q; return q; }
 inline void queueImport(const std::string& path) { std::lock_guard lk(importMutex()); importQueue().push_back(path); }
 
+// Um item da pasta atual, ja resolvido (nome, tipo, tamanho). Fica em cache: ver refreshEntries.
+struct AssetEntry {
+  fs::path path; std::string name, lname, rel, ext;
+  bool dir = false; AssetKind kind{}; std::uintmax_t size = 0;
+};
+
 struct AssetsUi {
   std::string folder = "Assets";   // pasta atual, relativa ao projeto
+  // cache da listagem (recarrega ao trocar de pasta, ao mudar a revisao ou a cada 2 s)
+  std::vector<AssetEntry> entries; std::string entriesFolder; unsigned entriesRev = ~0u;
+  double entriesTime = -1e9; bool entriesValid = false;
   bool iconView = true;
   float iconSize = 84.f;
   char filter[48] = "";
@@ -45,6 +55,10 @@ struct AssetsUi {
   std::string sceneDeleteTarget; bool openSceneDelete = false;
 };
 inline AssetsUi& ui() { static AssetsUi u; return u; }
+
+// Revisao da pasta Assets: cada operacao de arquivo chama touchAssets(), e os caches recarregam.
+inline unsigned& assetsRevision() { static unsigned r = 0; return r; }
+inline void touchAssets() { ++assetsRevision(); }
 
 inline const char* kindLabel(AssetKind k) {
   switch (k) {
@@ -92,6 +106,7 @@ inline std::string renameAsset(Editor& ed, const std::string& relOld, const std:
   if (fs::exists(newp, ec)) return "A file with that name already exists";
   fs::rename(oldp, newp, ec);
   if (ec) return "Rename failed: " + ec.message();
+  touchAssets();
   const std::string nr = ed.project.relative(newp);
   updateReferences(ed, relOld, nr);
   ed.saveScene();
@@ -105,6 +120,7 @@ inline std::string deleteAsset(Editor& ed, const std::string& rel) {
   if (p.empty() || !insideAssets(ed, p) || fs::path(rel) == "Assets") return "Path outside the Assets folder";
   std::error_code ec;
   fs::remove_all(p, ec);
+  touchAssets();
   ed.lib.clear();
   if (ec) return "Delete failed: " + ec.message();
   ed.statusLine = "Deleted " + rel;
@@ -124,6 +140,7 @@ inline void instantiateAsset(Editor& ed, const std::string& rel, bool atTarget =
 inline void processImports(Editor& ed) {
   std::vector<std::string> q;
   { std::lock_guard lk(importMutex()); q.swap(importQueue()); }
+  if (!q.empty()) touchAssets();
   for (auto& src : q) {
     std::string err;
     const fs::path dst = ed.project.importFile(src, ed.project.root / ui().folder, &err);
@@ -176,11 +193,46 @@ inline void openTextEditor(const fs::path& p) {
   u.textPath = p.string(); u.textOpen = true; u.textStatus.clear();
 }
 
+inline std::string assetsLower(std::string s) {
+  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return s;
+}
+
+// Recarrega a lista da pasta atual so quando preciso. Antes isso rodava a cada quadro: varria a pasta e fazia
+// um stat por arquivo para mostrar o tamanho. Com muitos assets isso travava a interface.
+inline void refreshEntries(Editor& ed, const fs::path& base) {
+  AssetsUi& u = ui();
+  const double now = ImGui::GetTime();
+  if (u.entriesValid && u.entriesFolder == u.folder && u.entriesRev == assetsRevision() && now - u.entriesTime < 2.0) return;
+  u.entriesValid = true; u.entriesFolder = u.folder; u.entriesRev = assetsRevision(); u.entriesTime = now;
+  u.entries.clear();
+  ed.project.ensure();
+  // Arquivos de apoio do VS Code (typings, jsconfig, snippets): uma vez por raiz de projeto.
+  static fs::path kitRoot;
+  if (kitRoot != ed.project.root) { kitRoot = ed.project.root; ensureScriptKit(kitRoot); }
+  std::error_code ec;
+  for (auto& e : fs::directory_iterator(base, fs::directory_options::skip_permission_denied, ec)) {
+    AssetEntry en;
+    en.path = e.path();
+    en.dir = e.is_directory(ec);
+    en.name = en.path.filename().string();
+    en.lname = assetsLower(en.name);
+    en.ext = en.path.extension().string();
+    en.rel = ed.project.relative(en.path);
+    en.kind = kindOf(en.path, en.dir);
+    if (!en.dir) { std::error_code se; en.size = fs::file_size(en.path, se); if (se) en.size = 0; }
+    u.entries.push_back(std::move(en));
+  }
+  std::sort(u.entries.begin(), u.entries.end(), [](const AssetEntry& a, const AssetEntry& b) {
+    if (a.dir != b.dir) return a.dir;
+    return a.lname < b.lname;
+  });
+}
+
 inline void drawAssets(Editor& ed) {
   AssetsUi& u = ui();
   if (!ImGui::Begin(W("Assets", "assets").c_str(), &ed.showAssets)) { ImGui::End(); return; }
   helpIcon("start");
-  ed.project.ensure();
   const fs::path base = ed.project.root / u.folder;
   std::error_code ec;
   if (!fs::exists(base, ec)) u.folder = "Assets";
@@ -211,28 +263,19 @@ inline void drawAssets(Editor& ed) {
   ImGui::Separator();
 
   // --- itens
-  struct Item { fs::path path; bool dir; AssetKind kind; };
-  std::vector<Item> items;
-  std::string flt = u.filter; std::transform(flt.begin(), flt.end(), flt.begin(), ::tolower);
-  for (auto& e : fs::directory_iterator(base, fs::directory_options::skip_permission_denied, ec)) {
-    const bool d = e.is_directory(ec);
-    std::string n = e.path().filename().string(), l = n; std::transform(l.begin(), l.end(), l.begin(), ::tolower);
-    if (!flt.empty() && l.find(flt) == std::string::npos) continue;
-    items.push_back({e.path(), d, kindOf(e.path(), d)});
-  }
-  std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
-    if (a.dir != b.dir) return a.dir;
-    std::string x = a.path.filename().string(), y = b.path.filename().string();
-    std::transform(x.begin(), x.end(), x.begin(), ::tolower); std::transform(y.begin(), y.end(), y.begin(), ::tolower);
-    return x < y;
-  });
+  refreshEntries(ed, base);
+  const std::string flt = assetsLower(u.filter);
+  std::vector<const AssetEntry*> items; items.reserve(u.entries.size());
+  for (const AssetEntry& en : u.entries) if (flt.empty() || en.lname.find(flt) != std::string::npos) items.push_back(&en);
 
   ImGui::BeginChild("assetitems", ImVec2(0, 0), ImGuiChildFlags_None);
   const float tile = u.iconSize, pad = 8.f, lineH = ImGui::GetTextLineHeightWithSpacing();
   const int cols = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x / (tile + pad)));
   int idx = 0;
-  for (auto& it : items) {
-    const std::string name = it.path.filename().string(), rel = ed.project.relative(it.path);
+  for (const AssetEntry* ip : items) {
+    const AssetEntry& it = *ip;
+    const std::string& name = it.name;
+    const std::string& rel = it.rel;
     ImGui::PushID(rel.c_str());
     bool clicked = false, dbl = false;
     if (u.iconView) {
@@ -241,7 +284,7 @@ inline void drawAssets(Editor& ed) {
       clicked = ImGui::Selectable("##tile", u.selected == rel, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(tile, tile + lineH * 1.3f));
       dbl = clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
       ImDrawList* dl = ImGui::GetWindowDrawList();
-      drawTileIcon(dl, pos, tile, it.kind, it.path.extension().string().c_str());
+      drawTileIcon(dl, pos, tile, it.kind, it.ext.c_str());
       dl->PushClipRect({pos.x, pos.y + tile}, {pos.x + tile, pos.y + tile + lineH * 1.3f}, true);
       const ImVec2 ts = ImGui::CalcTextSize(name.c_str());
       dl->AddText({pos.x + std::max(0.f, (tile - ts.x) * 0.5f), pos.y + tile + 2.f}, ImGui::GetColorU32(ImGuiCol_Text), name.c_str());
@@ -251,7 +294,7 @@ inline void drawAssets(Editor& ed) {
       clicked = ImGui::Selectable(label.c_str(), u.selected == rel, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns);
       dbl = clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
       ImGui::SameLine(ImGui::GetContentRegionAvail().x * 0.6f); ImGui::TextDisabled("%s", T(kindLabel(it.kind)));
-      if (!it.dir) { ImGui::SameLine(ImGui::GetContentRegionAvail().x * 0.85f + ImGui::GetCursorPosX() * 0.f); std::error_code e2; ImGui::TextDisabled("%.1f KB", static_cast<double>(fs::file_size(it.path, e2)) / 1024.0); }
+      if (!it.dir) { ImGui::SameLine(ImGui::GetContentRegionAvail().x * 0.85f); ImGui::TextDisabled("%.1f KB", static_cast<double>(it.size) / 1024.0); }
     }
     if (clicked) u.selected = rel;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", name.c_str());
@@ -285,7 +328,7 @@ inline void drawAssets(Editor& ed) {
     ++idx;
   }
   if (items.empty()) ImGui::TextDisabled("%s", T("This folder is empty."));
-  if (ImGui::IsKeyPressed(ImGuiKey_F2) && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !u.selected.empty()) { u.renameTarget = u.selected; std::snprintf(u.renameBuf, sizeof u.renameBuf, "%s", fs::path(u.selected).filename().string().c_str()); u.openRename = true; }
+  if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F2) && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !u.selected.empty()) { u.renameTarget = u.selected; std::snprintf(u.renameBuf, sizeof u.renameBuf, "%s", fs::path(u.selected).filename().string().c_str()); u.openRename = true; }
   if (ImGui::BeginPopupContextWindow("assetsbg", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
     if (ImGui::MenuItem(T("New folder"))) u.openNewFolder = true;
     if (ImGui::MenuItem(T("New text file"))) u.openNewFile = true;
@@ -324,14 +367,14 @@ inline void drawAssets(Editor& ed) {
   if (u.openNewFolder) { ImGui::OpenPopup("New folder##dlg"); u.openNewFolder = false; }
   if (ImGui::BeginPopupModal("New folder##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     const bool enter = ImGui::InputText("##nf", u.newFolderBuf, sizeof u.newFolderBuf, ImGuiInputTextFlags_EnterReturnsTrue);
-    if (ImGui::Button(T("OK")) || enter) { if (safeName(u.newFolderBuf)) fs::create_directories(base / u.newFolderBuf, ec); ImGui::CloseCurrentPopup(); }
+    if (ImGui::Button(T("OK")) || enter) { if (safeName(u.newFolderBuf)) { fs::create_directories(base / u.newFolderBuf, ec); touchAssets(); } ImGui::CloseCurrentPopup(); }
     ImGui::SameLine(); if (ImGui::Button(T("Cancel"))) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
   }
   if (u.openNewFile) { ImGui::OpenPopup("New text file##dlg"); u.openNewFile = false; }
   if (ImGui::BeginPopupModal("New text file##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     const bool enter = ImGui::InputText("##ntf", u.newFileBuf, sizeof u.newFileBuf, ImGuiInputTextFlags_EnterReturnsTrue);
-    if (ImGui::Button(T("OK")) || enter) { if (safeName(u.newFileBuf) && !fs::exists(base / u.newFileBuf, ec)) writeTextFile(base / u.newFileBuf, ""); ImGui::CloseCurrentPopup(); }
+    if (ImGui::Button(T("OK")) || enter) { if (safeName(u.newFileBuf) && !fs::exists(base / u.newFileBuf, ec)) { writeTextFile(base / u.newFileBuf, ""); touchAssets(); } ImGui::CloseCurrentPopup(); }
     ImGui::SameLine(); if (ImGui::Button(T("Cancel"))) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
   }
@@ -344,6 +387,7 @@ inline void drawAssets(Editor& ed) {
       if (ImGui::Button(T("Save")) && u.textBuf.size() > 1) {
         const bool ok = writeTextFile(u.textPath, std::string(u.textBuf.data()));
         u.textStatus = ok ? "Saved." : "Failed to save.";
+        touchAssets();
         ed.lib.clear();
       }
       ImGui::SameLine(); ImGui::TextDisabled("%s", T(u.textStatus.c_str()));

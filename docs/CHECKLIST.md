@@ -4,6 +4,82 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 
 ## Feito
 
+### 0.7.12-beta (particulas e correcoes do editor)
+- [x] Particulas escuras corrigidas (cor e alfa reais, sem iluminacao)
+- [x] Delete e F2 nao agem sobre o objeto enquanto um campo de texto esta ativo
+- [x] Particulas: formatos (bolinha, quadrado, triangulo, estrela, anel, risco)
+- [x] Particulas: area de nascimento aleatoria (caixa e esfera)
+- [x] Particulas: 4 cores ao longo da vida
+- [x] Particulas: opacidade ao longo do tempo e atraso da opacidade
+- [x] Particulas: trajetoria com curva suave (Trace route) e desenho no editor
+- [x] Particulas: tornado (giro em funil)
+- [x] Selftest do editor: 188 checks, 0 falhas
+- [~] Texto apagando sozinho no console/renomear: nao reproduzido; precisa de tecla e campo exatos
+- [~] Aparencia das particulas e da trajetoria: nao vista na tela
+- [ ] Particulas com teste de profundidade (passe com mistura alfa no renderizador)
+- [ ] Gravidade e quique para trajetoria e tornado
+
+### 0.7.11-beta (formas 3D, interface travada, bloco da cena, Inspector)
+- [x] Formas 3D: cilindro, cone, capsula, roda, prisma triangular e hexagonal (menu e Mesh Renderer)
+- [x] Interface: travar layout (sem desencaixar nem dividir), encaixe so com Shift, Redefinir layout
+- [x] Narrative: bloco padrao da cena com o nome da cena, indestrutivel
+- [x] Inspector: Transform X/Y/Z, Active e Locked na mesma linha, rodape (Adicionar componente, Recolher/Abrir tudo)
+- [x] Selftest do editor: 182 checks, 0 falhas
+- [~] Inspector: secoes de Fisica, Ferramentas e Script ainda no formato antigo
+- [~] Aparencia do Inspector e do menu Interface: nao vista na tela, conferir
+- [ ] Copiar componente e Remover componente no Inspector
+- [ ] Colisor exato para cilindro, cone, capsula, roda e prismas (hoje caixa envolvente)
+- [ ] Build Windows/MSVC desta versao: nao compilado nesta maquina
+
+### 0.7.10-beta (profiler do sistema e revisao de iluminacao)
+- [x] Profiler: CPU total, nucleos em uso, CPU por nucleo e do editor
+- [x] Profiler: RAM do sistema e do editor
+- [x] Profiler: VRAM do processo (DXGI no Windows, amdgpu no Linux) ou motivo
+- [x] Profiler: tamanhos de cache (L1, L2, L3)
+- [x] Help: "Casts shadows" em luz pontual corrigido (nao existe)
+- [x] Revisao da iluminacao em docs/LIGHTING_REVIEW.md
+- [x] Selftest do editor: 172 checks, 0 falhas
+- [~] Caminho Windows do Profiler (DXGI, NtQuerySystemInformation): nao compilado nesta maquina
+- [ ] Taxa de acerto do cache (exige contadores de hardware)
+- [ ] VRAM do motor (recursos criados pelo renderizador)
+- [ ] Tempo de GPU do passe de sombra (timestamps)
+- [ ] Sombra de luz pontual (mapa de cubo) e spot
+- [ ] Cascatas de sombra (CSM) para o sol; remover ou ligar `cascadeSplits` e `assignLights`
+
+### 0.7.9-beta (erros de script e console)
+- [x] Verificador de scripts enquanto digita (Inspector), com linha e trecho
+- [x] Verificacao ao salvar, ao dar Play e pelo botao "Check scripts" / comando `scripts`
+- [x] Sintaxe com linha e coluna (QuickJS, sem executar)
+- [x] Regras: obj.position, class, this, import, console.log, funcao desconhecida com sugestao, argumentos, teclas, maiusculas
+- [x] Erro de execucao com funcao, linha e coluna; try/catch funciona no script
+- [x] Argumento invalido lanca TypeError (nao vira NaN em silencio)
+- [x] Aviso para objeto inexistente (S005) e valor invalido no Transform (S006)
+- [x] debug.warn e debug.error; snippet ttry
+- [x] Console: filtros por nivel e texto, Copy, clique seleciona o objeto
+- [x] Help: secao Erros e try/catch (EN e PT); docs/SCRIPT_ERRORS.md
+- [x] Help: tutoriais de FPS e de portas com E (EN e PT), codigo testado no selftest
+- [x] Selftest do editor: 166 checks, 0 falhas
+- [~] Lista de problemas no Inspector e filtros do Console: nao verificados visualmente
+- [ ] Verificador tambem no editor de texto de arquivos (hoje so no Inspector e no Console)
+
+### 0.7.8-beta (usabilidade do editor e scripts)
+- [x] Cache da lista de assets e dos combos (sem varredura de pasta a cada quadro)
+- [x] Escala padrao da UI em 125% (migracao de temas antigos)
+- [x] Icones de olho (ocultar) e cadeado (travar) na Hierarchy
+- [x] Duplicar filho mantem o pai
+- [x] Menu de botao direito na cena: Editar e Excluir
+- [x] Barra flutuante na Cena com Mover, Girar, Escalar, ima e "Encostar no contato"
+- [x] Campo de comando no Console com historico
+- [x] Scripts: `position`, `setRotation`, `setColor`, `input`, `instantiate` com posicao e nome
+- [x] Template de script em funcoes (start, update, OnEventTrigger)
+- [x] Help: API e 12 exemplos testados (selftest roda todos)
+- [x] Autocomplete do VS Code: `toolengine.d.ts`, snippets e `jsconfig.json` gerados ao abrir o projeto
+- [x] Selftest do editor: 146 checks, 0 falhas
+- [~] Verificacao visual (icones, barra flutuante, escala 125%, console): nao feita neste ambiente
+- [~] Ganho de desempenho do editor: nao medido (usar Profiler, zona "Panels")
+- [ ] Propriedades de shader expostas aos scripts
+- [ ] Biblioteca SpriteUi (plano em `docs/UI_SPRITE_PLAN.md`; implementacao com o usuario)
+
 ### Etapa 1 (0.7.1-beta)
 - [x] Partículas com teste de profundidade (ficam atrás de objetos da frente, continuam emitindo)
 - [x] Economia de GPU com o editor ocioso (renderiza só quando há mudança)

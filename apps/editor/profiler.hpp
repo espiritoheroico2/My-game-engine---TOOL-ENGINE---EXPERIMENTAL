@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "sysmon.hpp"
+
 #if defined(_WIN32)
 #define PSAPI_VERSION 2   // GetProcessMemoryInfo vem do kernel32 (nenhuma biblioteca extra para linkar)
 #include <windows.h>
@@ -61,6 +63,7 @@ struct FrameProfiler {
   float cur[static_cast<size_t>(Zone::Count)] = {};                              // zonas do quadro em andamento
   FrameCounters counters, last;                                                  // `last` = quadro anterior (para mostrar)
   double memoryMB = 0, peakMemoryMB = 0;
+  SysMonitor sys;                                                                // CPU, nucleos, RAM, VRAM e cache (amostra a cada 0,5 s)
   bool paused = false;                                                           // congela o grafico para inspecionar
   Clock::time_point frameStart = Clock::now();
 
@@ -75,6 +78,7 @@ struct FrameProfiler {
     }
     std::memset(cur, 0, sizeof cur);
     last = counters; counters = FrameCounters{};
+    sys.update(std::chrono::duration<double>(now.time_since_epoch()).count());
     if ((++memTick & 31) == 1) { memoryMB = processMemoryMB(); peakMemoryMB = std::max(peakMemoryMB, memoryMB); } // memoria: 1 leitura a cada 32 quadros
   }
   void add(Zone z, float ms) { cur[static_cast<int>(z)] += ms; }

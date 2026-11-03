@@ -38,37 +38,24 @@ inline std::string scriptClassName(const std::string& objectName) {
   return n.substr(0, 40);
 }
 
-// Texto inicial de um script ToolObject.
+// Texto inicial de um script. Usa a mesma forma que o runtime QuickJS executa: funcoes (sem classes).
+// A lista completa da API e os exemplos testados ficam na janela Help > "Scripts: exemplos (QuickJS)".
 inline std::string scriptTemplate(const std::string& objectName) {
-  const std::string cls = scriptClassName(objectName);
-  return "// ToolObject script for \"" + cls + "\".\n"
-         "// Edit freely. The engine calls these functions on the object this script is attached to.\n"
-         "// (Running scripts needs the script runtime, planned for a later version; the file is already saved with the scene.)\n"
+  std::string n; for (char c : objectName) if (c != '"' && c != '\\' && c != '\n' && c != '\r') n += c;
+  return "// Script of the object \"" + n + "\" (QuickJS). The engine calls these functions during Play.\n"
+         "//   start(obj)              once, when the object starts\n"
+         "//   update(obj, dt)         every frame (dt = seconds since the last frame)\n"
+         "//   OnEventTrigger(obj, name) every event sent to this object (send, or the Narrative)\n"
+         "// Example: obj.transform.rot[1] += 45 * dt;   // spins 45 degrees per second\n"
+         "// Help > Scripts: examples has tested examples (player, shooting, cameras, colors, events).\n"
          "\n"
-         "class " + cls + " extends ToolObject {\n"
-         "  // Called once, when the object starts (when Play begins or when it is created while playing).\n"
-         "  start() {\n"
-         "  }\n"
+         "export function start(obj) {\n"
+         "}\n"
          "\n"
-         "  // Called every frame. dt = seconds since the last frame.\n"
-         "  update(dt) {\n"
-         "  }\n"
+         "export function update(obj, dt) {\n"
+         "}\n"
          "\n"
-         "  // Called when this object starts touching another one (needs a Physics component). other = the other object.\n"
-         "  onCollisionEnter(other) {\n"
-         "  }\n"
-         "\n"
-         "  // Called when another object enters this object's trigger zone (Physics > Trigger).\n"
-         "  onTriggerEnter(other) {\n"
-         "  }\n"
-         "\n"
-         "  // Called right before the object is deleted for good.\n"
-         "  OnDelete() {\n"
-         "  }\n"
-         "\n"
-         "  // Called when DeleteAndReuse() parks this object in the pool (it may come back later, identical).\n"
-         "  DeleteAndReuse() {\n"
-         "  }\n"
+         "export function OnEventTrigger(obj, name) {\n"
          "}\n";
 }
 

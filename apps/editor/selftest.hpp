@@ -12,6 +12,9 @@
 #include <cstdlib>
 #include "skybox.hpp"
 #include "image_io.hpp"
+#include "help_content.hpp"
+#include "script_kit.hpp"
+#include "narrative_panel.hpp"
 
 namespace editor {
 
@@ -173,8 +176,9 @@ inline int runSelfTest(const std::string& samplesDir) {
   ed.attachScript(sc);   // botao "Add Script"
   auto* scr = ed.scene.world().get<ScriptComp>(sc);
   check(scr && scr->path[0] && fs::exists(ed.project.resolve(scr->path)), "Add Script creates the ToolObject script file on demand");
-  std::string stext; check(readScript(ed.project, scr->path, stext) && stext.find("start()") != std::string::npos && stext.find("update(dt)") != std::string::npos
-                           && stext.find("OnDelete()") != std::string::npos && stext.find("DeleteAndReuse()") != std::string::npos, "script has start/update/OnDelete/DeleteAndReuse");
+  std::string stext; check(readScript(ed.project, scr->path, stext) && stext.find("export function start(obj)") != std::string::npos
+                           && stext.find("export function update(obj, dt)") != std::string::npos && stext.find("export function OnEventTrigger(obj, name)") != std::string::npos
+                           && stext.find("class ") == std::string::npos, "script template uses the runtime's function form (start/update/OnEventTrigger, no classes)");
   check(!scriptPathOk(ed.project, "../x.js") && !scriptPathOk(ed.project, "Scenes/x.js") && !scriptPathOk(ed.project, "Assets/x.txt") && !scriptPathOk(ed.project, "/etc/passwd.js"), "script paths outside Assets/ or not .js are rejected");
   const std::string scrPath = scr->path;   // copia: duplicate() adiciona componentes e pode realocar o storage (ponteiro some)
   tool::Entity dupS = ed.duplicate(sc);
@@ -290,6 +294,193 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(hk == 1 && ed.parentOf(rk) == rp, "hierarchy: parent survives save/load (undo snapshot)");
     ed.destroy(rp); int left = 0; w.each<Name>([&](tool::Entity, Name& n) { const std::string t = n.text; if (t == "HPar" || t == "HKid" || t == "HGrand") ++left; });
     check(left == 0, "hierarchy: deleting the parent deletes the whole subtree");
+    { // duplicar um filho mantem o pai; o cadeado (Locked) sobrevive ao save/load
+      const tool::Entity p2 = ed.make("DPar"), k2 = ed.make("DKid");
+      ed.setParent(k2, p2, false);
+      const tool::Entity copy = ed.duplicate(k2);
+      check(ed.parentOf(copy) == p2, "duplicate: a copy of a child stays under the same parent");
+      w.add<Locked>(k2, Locked{});
+      const UndoState st2 = ed.captureState(); ed.restoreState(st2);
+      bool lockedBack = false; w.each<Name>([&](tool::Entity e, Name& n) { if (std::string(n.text) == "DKid" && w.has<Locked>(e)) lockedBack = true; });
+      check(lockedBack, "lock: the locked flag survives save/load");
+      std::vector<tool::Entity> del; w.each<Name>([&](tool::Entity e, Name& n) { const std::string t = n.text; if (t == "DPar" || t == "DKid") del.push_back(e); });
+      for (auto d : del) ed.destroy(d);
+    }
+    { // convencoes de direcao: frente = -Z girado por rot (graus); rot X positivo olha para cima
+      Transform t; t.rot[1] = 90.f; const tool::Vec3 f = forwardOf(t);
+      check(std::fabs(f.x + 1.f) < 1e-3f && std::fabs(f.z) < 1e-3f, "convention: yaw 90 turns forward to -X (script formula)");
+      Transform p; p.rot[0] = 30.f; const tool::Vec3 fp = forwardOf(p);
+      check(fp.y > 0.4f, "convention: positive pitch looks up (scripts use it that way)");
+    }
+    if (ScriptHost::compiledIn()) { // cada exemplo do Help roda sem erro (e o template de script tambem)
+      auto runBlock = [&](const std::string& name, const std::string& code, std::string& err) {
+        ScriptHost host; ScriptHost::Entry en; en.name = name; en.source = code; en.enabled = true;
+        host.open({en});
+        if (host.instances().empty()) { err = "not loaded"; return false; }
+        ScriptHost::Inst& in = *host.instances()[0];
+        host.input.held = {"W"}; host.input.pressed = {"F", "E", "Enter", "1", "2", "Mouse0"}; host.input.mouseDx = 3.f; host.input.mouseDy = -2.f;
+        { const float z[3] = {0.f, 0.f, 0.f}; const float o[3] = {1.f, 1.f, 1.f}; host.pushTransform(in, z, z, o); }   // como o editor faz antes de cada chamada
+        host.callStart(in);
+        for (int i = 0; i < 3; ++i) host.callUpdate(in, 0.016f);
+        host.callEvent(in, "abrir"); host.callEvent(in, "acertado");
+        if (in.failed) { err = in.error; return false; }
+        return true;
+      };
+      int ran = 0; bool allOk = true; std::string firstErr;
+      for (const HelpTopic& t : helpTopics()) {
+        if (std::string(t.id) != "api" && std::string(t.id) != "script_examples" && std::string(t.id).rfind("tutorial_", 0) != 0) continue;
+        const std::string body = t.bodyEn; size_t pos = 0; bool inCode = false; std::string code; int idx = 0;
+        while (pos < body.size()) {
+          size_t e = body.find('\n', pos); if (e == std::string::npos) e = body.size();
+          const std::string line = body.substr(pos, e - pos); pos = e + 1;
+          if (line.rfind("```", 0) == 0) {
+            if (!inCode) { inCode = true; code.clear(); }
+            else { inCode = false; ++idx; std::string err;
+              if (code.find("function") != std::string::npos) { ++ran; if (!runBlock(std::string(t.id) + std::to_string(idx), code, err)) { allOk = false; if (firstErr.empty()) firstErr = std::string(t.id) + " #" + std::to_string(idx) + ": " + err; } } }
+            continue;
+          }
+          if (inCode) code += line + "\n";
+        }
+      }
+      std::string terr;
+      const std::string msgRan = "help: the script examples are there (" + std::to_string(ran) + " blocks)";
+      check(ran >= 12, msgRan.c_str());
+      const std::string msgOk = "help: every script example runs without error" + (firstErr.empty() ? std::string() : " (" + firstErr + ")");
+      check(allOk, msgOk.c_str());
+      ScriptHost host; ScriptHost::Entry en; en.name = "Cubo"; en.source = std::string(scriptTemplate("Cubo")); en.enabled = true; host.open({en});
+      check(!host.instances().empty() && (host.callStart(*host.instances()[0]), host.callUpdate(*host.instances()[0], 0.016f), !host.instances()[0]->failed), "template: the new script file runs (start/update)");
+    }
+    { // autocomplete do VS Code: o toolengine.d.ts declara TODA global que o runtime registra, e os snippets vem dos exemplos
+      const std::string dts = editor::scriptkit_detail::kDts;
+      const char* globals[] = {"send", "setActive", "instantiate", "destroy", "addComponent", "removeComponent",
+                               "setPosition", "setRotation", "setColor", "position"};
+      bool allDeclared = true; std::string missing;
+      for (const char* g : globals) {
+        const std::string decl = std::string("declare function ") + g + "(";
+        if (dts.find(decl) == std::string::npos) { allDeclared = false; missing += std::string(" ") + g; }
+      }
+      check(allDeclared, ("typings: every script function is declared in toolengine.d.ts" + (missing.empty() ? std::string() : " (missing:" + missing + ")")).c_str());
+      check(dts.find("declare const input") != std::string::npos && dts.find("declare const time") != std::string::npos &&
+            dts.find("declare const debug") != std::string::npos, "typings: input, time and debug are declared");
+      const std::string snip = editor::scriptkit_detail::kSnippets;
+      size_t snipCount = 0;
+      for (size_t p = snip.find("\"prefix\""); p != std::string::npos; p = snip.find("\"prefix\"", p + 1)) ++snipCount;
+      check(snipCount >= 12 && snip.find("export function update") != std::string::npos && snip.find("input.down(") != std::string::npos,
+            ("snippets: " + std::to_string(snipCount) + " snippets from the tested examples").c_str());
+    }
+    { // verificador de scripts: regras de uso, sintaxe com linha, e erros de execucao com linha / try-catch / avisos
+      using editor::checkScriptSource;
+      using editor::ScriptIssue;
+      auto has = [](const std::vector<ScriptIssue>& v, const char* code) { for (const auto& i : v) if (i.code == code) return true; return false; };
+      auto firstLine = [](const std::vector<ScriptIssue>& v, const char* code) { for (const auto& i : v) if (i.code == code) return i.line; return -1; };
+      auto msgOf = [](const std::vector<ScriptIssue>& v, const char* code) { for (const auto& i : v) if (i.code == code) return i.msg; return std::string(); };
+      auto errors = [](const std::vector<ScriptIssue>& v) { int n = 0; for (const auto& i : v) if (i.sev == tool::Severity::Error) ++n; return n; };
+      const auto good = checkScriptSource("export function update(obj, dt) {\n  obj.transform.rot[1] += 45 * dt;\n}\n", "Cubo");
+      check(good.empty(), "check: a valid cube script has no problems");
+      const auto pos = checkScriptSource("export function update(obj, dt) {\n  obj.position[0] += 1;\n}\n", "Cubo");
+      check(has(pos, "TOOL-S007") && firstLine(pos, "TOOL-S007") == 2, "check: obj.position is an error on the right line (S007)");
+      check(has(checkScriptSource("class Cubo {}\n", "Cubo"), "TOOL-S008"), "check: class is an error (S008)");
+      check(has(checkScriptSource("export function update(obj, dt) {\n  this.x = 1;\n}\n", "Cubo"), "TOOL-S008"), "check: this is reported (S008)");
+      const auto syn = checkScriptSource("export function update(obj, dt) {\n  let a = ;\n}\n", "Cubo");
+      check(has(syn, "TOOL-S001") && firstLine(syn, "TOOL-S001") == 2, "check: a syntax error is reported on its line (S001)");
+      const auto typo = checkScriptSource("export function update(obj, dt) {\n  setpos('Cubo', 1, 2, 3);\n}\n", "Cubo");
+      check(has(typo, "TOOL-S004") && msgOf(typo, "TOOL-S004").find("setPosition") != std::string::npos, "check: a misspelled API name suggests the right one");
+      const auto arity = checkScriptSource("export function update(obj, dt) {\n  setPosition('Cubo', 1, 2);\n}\n", "Cubo");
+      check(has(arity, "TOOL-S004") && msgOf(arity, "TOOL-S004").find("found 3") != std::string::npos, "check: wrong number of arguments is reported");
+      check(has(checkScriptSource("export function update(obj, dt) {\n  if (input.down('w')) {}\n}\n", "Cubo"), "TOOL-S004"), "check: a key name in the wrong case is reported");
+      check(has(checkScriptSource("export function update(obj, dt) {\n  console.log('oi');\n}\n", "Cubo"), "TOOL-S004"), "check: console.log is reported (use debug.console)");
+      check(has(checkScriptSource("let x = 1;\n", "Cubo"), "TOOL-S003"), "check: a script without start/update/OnEventTrigger is warned (S003)");
+      check(has(checkScriptSource("export function update(obj, dt) {\n  naoExiste(obj);\n}\n", "Cubo"), "TOOL-S004"), "check: a call to an undeclared function is reported");
+      check(!has(checkScriptSource("export function update(obj, dt) {\n  const f = (a) => a + 1;\n  debug.console(f(2));\n}\n", "Cubo"), "TOOL-S004"), "check: declared functions and parameters are not reported");
+      // os exemplos do Help nao podem ter erro (senao o verificador acusaria codigo que roda)
+      int checkedEx = 0, badEx = 0; std::string badExMsg;
+      for (const HelpTopic& t : helpTopics()) {
+        if (std::string(t.id) != "api" && std::string(t.id) != "script_examples" && std::string(t.id).rfind("tutorial_", 0) != 0) continue;
+        const std::string body = t.bodyEn; size_t p0 = 0; bool inCode = false; std::string code;
+        while (p0 < body.size()) {
+          size_t e = body.find('\n', p0); if (e == std::string::npos) e = body.size();
+          const std::string line = body.substr(p0, e - p0); p0 = e + 1;
+          if (line.rfind("```", 0) == 0) {
+            if (!inCode) { inCode = true; code.clear(); }
+            else { inCode = false; if (code.find("function") != std::string::npos) {
+              ++checkedEx; const auto v = checkScriptSource(code, "Ex");
+              if (errors(v) > 0) { ++badEx; if (badExMsg.empty()) badExMsg = msgOf(v, "TOOL-S001") + msgOf(v, "TOOL-S004") + msgOf(v, "TOOL-S007") + msgOf(v, "TOOL-S008"); } } }
+            continue;
+          }
+          if (inCode) code += line + "\n";
+        }
+      }
+      check(checkedEx >= 12 && badEx == 0, ("check: the Help examples have no errors (" + std::to_string(checkedEx) + " checked" + (badExMsg.empty() ? std::string() : ", first: " + badExMsg) + ")").c_str());
+      if (ScriptHost::compiledIn()) { // execucao: erros com linha, try/catch, avisos de alvo e de valor
+        auto runOne = [&](const char* code, ScriptHost& host, ScriptHost::Inst*& out) {
+          ScriptHost::Entry en; en.name = "Cubo"; en.source = code; en.enabled = true;
+          host.open({en});
+          out = host.instances().empty() ? nullptr : host.instances()[0].get();
+          if (!out) return;
+          { const float z[3] = {0.f, 0.f, 0.f}; const float o[3] = {1.f, 1.f, 1.f}; host.pushTransform(*out, z, z, o); }
+          host.callStart(*out);
+          host.callUpdate(*out, 0.016f);
+        };
+        const size_t h0 = tool::debug().history().size();
+        auto newCode = [&](const char* code) { const auto hist = tool::debug().history(); for (size_t i = h0; i < hist.size(); ++i) if (hist[i].code == code) return true; return false; };
+        { ScriptHost host; host.exists = [](const std::string& n) { return n == "Cubo"; };
+          ScriptHost::Inst* in = nullptr; runOne("export function update(obj, dt) {\n  setPosition('Nada', 1, 2, 3);\n}\n", host, in);
+          check(in && !in->failed && newCode("TOOL-S005"), "run: a command to a missing object warns (S005) and the script keeps running"); }
+        { ScriptHost host; host.exists = [](const std::string&) { return true; };
+          ScriptHost::Inst* in = nullptr; runOne("export function update(obj, dt) {\n  try { setPosition('Cubo', 1); } catch (e) { debug.warn('falhou: ' + e.message); }\n}\n", host, in);
+          check(in && !in->failed && host.cmds.empty(), "run: an error inside try/catch is caught and the script keeps running"); }
+        { ScriptHost host; host.exists = [](const std::string&) { return true; };
+          ScriptHost::Inst* in = nullptr; runOne("export function update(obj, dt) {\n  setPosition('Cubo', 'abc', 2, 3);\n}\n", host, in);
+          check(in && in->failed && in->errLine == 2 && in->error.find("finite number") != std::string::npos, "run: a bad argument stops the script with the line (2) and a clear message"); }
+        { ScriptHost host; host.exists = [](const std::string&) { return true; };
+          ScriptHost::Inst* in = nullptr; runOne("export function update(obj, dt) {\n  let a = 1;\n  null.x;\n}\n", host, in);
+          check(in && in->failed && in->errLine == 3 && in->phase == "update", "run: a runtime error reports the line (3) and the phase (update)"); }
+        { ScriptHost host; host.exists = [](const std::string&) { return true; };
+          ScriptHost::Inst* in = nullptr; runOne("export function update(obj, dt) {\n  obj.transform.pos[1] = NaN;\n}\n", host, in);
+          float p[3] = {0, 0, 0}, r[3] = {0, 0, 0}, sc[3] = {1, 1, 1};
+          const bool okPull = in && host.pullTransform(*in, p, r, sc);
+          check(in && !okPull && newCode("TOOL-S006"), "run: NaN in obj.transform is ignored with a warning (S006)"); }
+        { ScriptHost host; host.exists = [](const std::string&) { return true; };
+          ScriptHost::Inst* in = nullptr; runOne("export function update(obj, dt) {\n  setPosition('Cubo', 1, 2, 3);\n}\n", host, in);
+          check(in && !in->failed && host.cmds.size() == 1, "run: a valid setPosition queues one command"); }
+        check(newCode("TOOL-S005") && newCode("TOOL-S002") && newCode("TOOL-S006"), "run: the codes reach the debug history (S002, S005, S006)");
+      }
+    }
+    { // Profiler: medidas do sistema. Um laco ocupado de 0,7 s tem que aparecer como uso de CPU do editor.
+      editor::SysMonitor mon;
+      const auto t0 = std::chrono::steady_clock::now();
+      auto secs = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
+      mon.update(secs());
+      volatile double sink = 0;
+      const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(700);
+      while (std::chrono::steady_clock::now() < until) sink = sink + 1.0;
+      mon.update(secs());
+      const editor::SysSnapshot& s2 = mon.get();
+      check(s2.cpuOk, "system: CPU use is measured");
+      check(s2.coresOnline >= 1 && s2.core.size() == static_cast<size_t>(s2.coresOnline), "system: one CPU value per core");
+      check(s2.cpuTotal >= 0.f && s2.cpuTotal <= 100.f && s2.editorCpu > 0.f && s2.editorCpu <= 100.f,
+            "system: percentages are in range and the busy loop shows as editor CPU");
+      check(s2.ramOk && s2.ramTotalMB > 0.0 && s2.ramUsedMB <= s2.ramTotalMB, "system: RAM total and used");
+      check(!s2.caches.empty() || !s2.cacheNote.empty(), "system: cache sizes, or the reason they are missing");
+      check(s2.vramOk || !s2.vramNote.empty(), "system: VRAM is measured or says why it is not");
+    }
+    { // colar (ima de contato): o cubo anda ate encostar no vizinho, sem vao e sem sobrepor
+      const tool::Entity b = ed.make("SnapB"), a = ed.make("SnapA");
+      MeshRenderer mb; mb.shape = 0; w.add<MeshRenderer>(b, mb);
+      MeshRenderer ma; ma.shape = 0; w.add<MeshRenderer>(a, ma);
+      w.get<Transform>(b)->pos[0] = 0.f; w.get<Transform>(a)->pos[0] = 3.f; w.get<Transform>(a)->pos[1] = 0.25f;
+      // isola o cenario: esconde os outros objetos (Inactive) so durante o teste
+      std::vector<tool::Entity> others; w.each<MeshRenderer>([&](tool::Entity o, MeshRenderer&) { if (o != a && o != b && !w.has<Inactive>(o)) others.push_back(o); });
+      for (auto o : others) w.add<Inactive>(o, Inactive{});
+      const bool ok = snapToContact(ed, a);
+      for (auto o : others) if (w.alive(o)) w.remove<Inactive>(o);
+      tool::Vec3 blo{}, bhi{}, alo{}, ahi{};
+      worldBox(ed, b, blo, bhi); worldBox(ed, a, alo, ahi);
+      check(ok, "snap: finds the neighbour's face to touch");
+      check(std::fabs(alo.x - bhi.x) < 1e-3f && alo.y < bhi.y && ahi.y > blo.y, "snap: face touches the neighbour, no gap and no overlap");
+      std::vector<tool::Entity> del; w.each<Name>([&](tool::Entity e, Name& n) { const std::string t = n.text; if (t == "SnapA" || t == "SnapB") del.push_back(e); });
+      for (auto d : del) ed.destroy(d);
+    }
   }
   { // particulas e UI
     tool::World& w = ed.scene.world(); const tool::Entity pe = ed.make("FxP"); ParticleComp pc; pc.rate = 100.f; pc.maxParticles = 50; w.add<ParticleComp>(pe, pc);
@@ -301,6 +492,36 @@ inline int runSelfTest(const std::string& samplesDir) {
     w.each<UiCanvas>([&](tool::Entity, UiCanvas& uc) { if (uc.count == 1 && std::string(uc.items[0].action) == "health") okUi = true; }); w.each<ParticleComp>([&](tool::Entity, ParticleComp& pq) { if (pq.maxParticles == 50) okFx = true; });
     check(okUi && okFx, "ui + particles survive save/load");
     ed.particles.clear();
+  }
+  { // formas 3D extras: indices validos, normais unitarias e faces viradas para fora (ver Mesh::addTri)
+    const tool::Mesh shapes[] = {tool::Mesh::cylinder(), tool::Mesh::cone(), tool::Mesh::capsule(), tool::Mesh::wheel(), tool::Mesh::prism(3), tool::Mesh::prism(6)};
+    const char* names[] = {"cylinder", "cone", "capsule", "wheel", "triangle prism", "hexagon prism"};
+    for (size_t s = 0; s < 6; ++s) {
+      const tool::Mesh& m = shapes[s];
+      bool idxOk = !m.idx.empty() && m.idx.size() % 3 == 0 && m.normal.size() == m.pos.size(), outOk = true, nrmOk = true;
+      for (uint32_t i : m.idx) if (i >= m.pos.size()) idxOk = false;
+      for (const tool::Vec3& n : m.normal) if (std::fabs(std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z) - 1.f) > 1e-3f) nrmOk = false;
+      for (size_t t = 0; idxOk && t + 2 < m.idx.size(); t += 3) {
+        const tool::Vec3 a = m.pos[m.idx[t]], b = m.pos[m.idx[t + 1]], c = m.pos[m.idx[t + 2]], n = m.normal[m.idx[t]];
+        const tool::Vec3 u{b.x - a.x, b.y - a.y, b.z - a.z}, v{c.x - a.x, c.y - a.y, c.z - a.z};
+        const float g = (u.y * v.z - u.z * v.y) * n.x + (u.z * v.x - u.x * v.z) * n.y + (u.x * v.y - u.y * v.x) * n.z;
+        if (g < -1e-7f) outOk = false;   // a face aponta para dentro
+      }
+      check(idxOk && nrmOk && outOk, (std::string("shape ") + names[s] + ": valid triangles, unit normals, faces point outwards").c_str());
+    }
+    const tool::Entity wheelE = ed.makeMesh("Roda", 7, 0, 0, 0);
+    check(ed.meshOf(*ed.scene.world().get<MeshRenderer>(wheelE)) == &ed.wheel, "primitives: shape 7 (wheel) maps to its mesh");
+  }
+  { // bloco padrao da cena no Narrative: um unico bloco fixo com o nome da cena, que acompanha a renomeacao
+    editor::NarrativePanel np;
+    np.setScene("Fase 1");
+    auto countPinned = [&] { int k = 0; const auto* nodes = np.graph().find("nodes"); if (nodes) for (auto& n : nodes->items()) k += n.has("pinned") ? 1 : 0; return k; };
+    check(countPinned() == 1, "narrative: the scene block is created once");
+    np.setScene("Fase 2");
+    const auto* nodes = np.graph().find("nodes");
+    check(countPinned() == 1 && nodes && nodes->items()[0]["label"].asString() == "Fase 2", "narrative: the scene block follows the scene name without duplicating");
+    tool::narr::Program prog; std::string err;
+    check(tool::narr::Compiler().compile(np.graph(), prog, err), "narrative: a graph with the scene block compiles");
   }
   { // codigo da cena + Narrative em Play
     ed.sceneInfo.name = "STest"; ed.sceneInfo.narrative.clear(); ed.sceneInfo.script.clear();
@@ -377,11 +598,24 @@ inline int runSelfTest(const std::string& samplesDir) {
     for (int i = 0; i < 60; ++i) ed.updateParticles(1.f / 30.f);
     size_t alive = 0; for (auto& [k, sim] : ed.particles) alive += sim.list.size();
     check(alive > 0 && alive <= 25, "particle budget caps the live particles across emitters");
-    ed.buildParticleBatches(ed.sceneCamera(), 640, 360);
-    size_t quads = 0; int batches = 0;
-    for (auto& m : ed.partBatch) if (!m.idx.empty()) { ++batches; quads += m.idx.size() / 6; }
-    check(quads <= alive && batches <= 64, "particle batches: at most one quad per live particle and at most 64 batches");
-    check(quads < 2 || batches < static_cast<int>(quads), "particle batches: fewer draw calls than particles (colors share a batch)");
+    { // particulas: 4 cores ao longo da vida, opacidade com atraso, trajetoria e area de nascimento
+      ParticleComp pc; pc.color[0] = 1.f; pc.color2[0] = 0.5f; pc.color3[0] = 0.25f; pc.colorEnd[0] = 0.f;
+      check(std::fabs(fxdetail::particleColor(pc, 0.f).x - 1.f) < 1e-5f && std::fabs(fxdetail::particleColor(pc, 1.f).x) < 1e-5f, "particles: color 1 at the start and color 4 at the end");
+      check(std::fabs(fxdetail::particleColor(pc, 1.f / 3.f).x - 0.5f) < 1e-4f && std::fabs(fxdetail::particleColor(pc, 2.f / 3.f).x - 0.25f) < 1e-4f, "particles: colors 2 and 3 at 1/3 and 2/3 of the life");
+      Editor::Particle q; q.life = 2.f; q.age = 1.f; pc.alpha = 0.8f; pc.fadeDelay = 1.f; pc.fadeOpacity = true;
+      check(std::fabs(fxdetail::particleAlpha(pc, q) - 0.8f) < 1e-5f, "particles: opacity stays full during the delay");
+      q.age = 2.f; check(fxdetail::particleAlpha(pc, q) < 1e-4f, "particles: opacity reaches zero at the end of the life");
+      q.age = 1.5f; check(std::fabs(fxdetail::particleAlpha(pc, q) - 0.4f) < 1e-4f, "particles: opacity fades halfway after the delay");
+      pc.fadeOpacity = false; q.age = 1.9f; check(std::fabs(fxdetail::particleAlpha(pc, q) - 0.8f) < 1e-5f, "particles: without opacity over time, alpha is constant");
+      ParticleComp rt; rt.route = true; rt.routeCount = 3;
+      const float rp[3][3] = {{0.f, 0.f, 0.f}, {1.f, 0.f, 0.f}, {2.f, 0.f, 0.f}};
+      for (int i = 0; i < 3; ++i) for (int c = 0; c < 3; ++c) rt.routePts[i][c] = rp[i][c];
+      const tool::Vec3 r0 = fxdetail::routeSample(rt, 0.f), r1 = fxdetail::routeSample(rt, 1.f), rm = fxdetail::routeSample(rt, 0.5f);
+      check(std::fabs(r0.x) < 1e-5f && std::fabs(r1.x - 2.f) < 1e-5f && std::fabs(rm.x - 1.f) < 1e-3f, "trace route: the curve starts at the first point, ends at the last and passes the middle one");
+      ParticleComp sp; sp.area = 2; sp.areaSize[0] = 2.f; uint32_t seed = 777u; bool inside = true;
+      for (int i = 0; i < 200; ++i) { const tool::Vec3 o = fxdetail::areaOffset(sp, seed); if (std::sqrt(o.x * o.x + o.y * o.y + o.z * o.z) > 1.f + 1e-4f) inside = false; }
+      check(inside, "spawn area: random sphere points stay inside the sphere");
+    }
     w.destroy(fxA); ed.particles.clear(); ed.particleBudget = 100000;
   }
   { // objetos inativos, acao send e culling

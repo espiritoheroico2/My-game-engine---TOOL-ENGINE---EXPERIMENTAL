@@ -1,5 +1,170 @@
 # Changelog
 
+## 0.7.12-beta — particulas: formatos, area, trajetoria, tornado, 4 cores e opacidade; correcoes do editor
+
+**Correcoes**
+- Particulas escuras: a cor era multiplicada por um fator que ia a zero no fim da vida e as malhas passavam pela iluminacao (lado de tras ficava escuro). Agora cor e alfa sao reais, sem iluminacao. Ao tocar o chao ou no fim da vida a particula fica transparente, nao preta.
+- Delete e F2 (renomear) agiam sobre o objeto selecionado mesmo com um campo de texto ativo (ex.: buscar na Hierarquia). Agora esses atalhos so valem fora de campos de texto. Tambem vale para o Delete dos nos do Narrative e para o F2 dos Assets.
+- Nao foi possivel reproduzir o "texto apagando sozinho" no console ou ao renomear pelo codigo. Se continuar, anote a tecla usada e em qual campo acontece.
+
+**Particulas: novos recursos**
+- Formatos: Bolinha (com halo), Quadrado, Triangulo, Estrela, Anel e Risco (na direcao do movimento).
+- Area de nascimento: Ponto, Caixa aleatoria (tamanho X/Y/Z) e Esfera aleatoria.
+- 4 cores ao longo da vida: inicio, 1/3, 2/3 e fim (antes eram 2).
+- Opacidade ao longo do tempo (ligada por padrao, para manter o visual de sumir) e Atraso da opacidade (segundos com opacidade total antes de sumir).
+- Trajetoria (Trace route): ate 8 pontos locais ao objeto. A particula percorre a curva suave que passa por eles durante a vida. A Scene desenha a trajetoria (linha amarela) com o objeto selecionado.
+- Tornado: a particula gira em torno do eixo +Y e sobe abrindo em funil. Velocidade em voltas/s, raio da base e altura. Se a trajetoria estiver ligada, ela tem prioridade.
+- Serializacao: os campos novos sao salvos na cena. Cenas antigas abrem com o visual anterior (as cores 2 e 3 sao calculadas a partir da inicial e da final).
+
+**Limitacoes**
+- As particulas agora sao desenhadas por cima da vista, sem teste de profundidade: aparecem na frente de paredes (antes eram escondidas por objetos). Um passe com mistura alfa no renderizador resolveria isso; ainda nao existe.
+- Trajetoria e tornado nao usam gravidade nem quique.
+
+**Testes**
+- Selftest: 188 checks, 0 falhas (cores em 4 paradas, opacidade com atraso, curva que passa pelos pontos, area de nascimento dentro da esfera).
+
+**Pendente / nao verificado**
+- Aparencia das particulas na tela e no Inspector: nao vi o resultado; confira no seu computador.
+- Build Windows/MSVC: nao compilado nesta maquina.
+
+## 0.7.11-beta — formas 3D, interface travada, bloco da cena no Narrative, Inspector reorganizado
+
+**Formas 3D (novas)**
+- Menu Hierarquia > Criar > "Mais formas": Cilindro, Cone, Capsula, Roda, Prisma triangular e Prisma hexagonal. Tambem aparecem no campo Forma do Mesh Renderer (shapes 4 a 9).
+- Todas as malhas tem a face de fora virada para fora (a ordem dos triangulos e corrigida ao gerar) e sao testadas no selftest.
+- Fisica: as formas novas usam caixa envolvente como colisor (aproximacao). Esfera continua como esfera.
+
+**Interface travada e encaixe**
+- Novo menu **Interface**:
+  - **Travar interface**: abas e janelas nao saem dos encaixes, nao viram janela flutuante ao clicar e os divisores nao se mexem. Vale para os encaixes ja existentes. Para desfazer, desligue a opcao ou use Redefinir layout.
+  - **Encaixar so segurando Shift**: encaixar ou desencaixar uma janela exige Shift, o que evita que janelas se soltem ao clicar.
+  - Redefinir layout.
+- As duas opcoes sao salvas em editor_settings.json.
+- Limite: janela que ja estiver flutuando antes de travar continua flutuando; use Redefinir layout para encaixa-la de volta.
+
+**Narrative Controller: bloco padrao da cena**
+- Todo grafo de cena tem um bloco fixo (inicio) com o nome da cena: "Cena: <nome>".
+- Indestrutivel: a tecla Delete nao apaga esse bloco.
+- Acompanha o nome da cena; nao precisa vincular o codigo do Narrative a cena. O grafo ja e Assets/Narrative/<cena>.narr.json.
+- Em cenas antigas, o bloco e criado ao abrir a cena e gravado no arquivo da cena na hora.
+
+**Inspector (reorganizado)**
+- Transform com linhas X / Y / Z coloridas e rotulos alinhados.
+- Active e Locked na mesma linha.
+- Rodape: Adicionar componente (o mesmo menu do Adicionar recurso), Recolher tudo, Abrir tudo.
+- Limite: o redesenho nao cobre todos os cards (ex.: as secoes de Fisica, Ferramentas e Script continuam no formato atual) e ainda nao ha Copiar componente nem Remover componente.
+
+**Testes**
+- Selftest: 182 checks, 0 falhas (eram 172): geometria das formas, mapeamento de shape e bloco do Narrative.
+- Teste sem janela (--frames) executado com o Inspector e o menu novos, sem erros.
+
+**Pendente / nao verificado**
+- Aparencia do Inspector e do menu Interface: nao vi a tela; confira no seu computador.
+- Build Windows/MSVC: nao compilado nesta maquina (ambiente Linux).
+
+## 0.7.10-beta — profiler com CPU, RAM, VRAM e cache; revisao de iluminacao
+
+**Correcao de build (Windows / MSVC)**
+- `script_check.hpp`: a variavel `near` foi renomeada para `closest`. Em Windows, `<windows.h>` define `near` como macro vazia e o build parava com erro C2059/C2513.
+- `sysmon.hpp`: a leitura do nome do processador usa a variavel de ambiente `PROCESSOR_IDENTIFIER` (sem linkar advapi32).
+
+**Profiler: secao "System: CPU, RAM, VRAM and cache"**
+- CPU total, nucleos em uso (acima de 25%) e uso do proprio editor, em % de todos os nucleos.
+- CPU por nucleo (lista expansivel).
+- RAM do sistema (usada e total) e memoria do editor (com pico).
+- VRAM do processo, como o driver informa. Windows: DXGI (`QueryVideoMemoryInfo`). Linux: driver amdgpu (`/sys/class/drm`). Onde nao ha medida, o painel diz o motivo.
+- Tamanhos de cache por nivel (L1 dados e instrucoes, L2, L3) e tamanho da linha.
+- Amostragem a cada 0,5 s: custo baixo, sem medir por quadro.
+- Nao medido: taxa de acerto do cache (exige contadores de hardware). A VRAM do motor (recursos que ele criou) ainda nao e contada separadamente.
+- Teste no selftest: um laco ocupado aparece como uso do editor; percentuais no intervalo; RAM e cache presentes.
+- Windows: codigo escrito sem compilar nem rodar nesta maquina (ambiente Linux). Revise no seu build.
+
+**Iluminacao: revisao (docs/LIGHTING_REVIEW.md)**
+- Corrigido: o Help dizia que luz pontual tinha sombra com "Casts shadows". Era falso (a caixa nao existe). Texto corrigido em EN e PT.
+- Achados: sombra so para o sol; mapa unico de 40 m; PCF fixo; bias constante; `cascadeSplits` e `assignLights` nao usados; sem tempo de GPU do passe de sombra.
+- Nenhuma sombra nova nesta versao: planejada para a biblioteca de iluminacao.
+
+## 0.7.9-beta — erros de script: verificador, try/catch e console
+
+**Por que um cubo "nao funcionava"**
+- Erros comuns eram silenciosos: `obj.position` (o certo e `obj.transform.pos`), nome de objeto errado em `setPosition`, argumento faltando, texto no lugar de numero (que virava NaN e podia fazer o objeto sumir). Agora cada caso tem mensagem.
+
+**Verificador de scripts (novo)**
+- Enquanto voce digita, o Inspector verifica o script (0,4 s depois da ultima tecla) e lista os problemas com a linha e o trecho.
+- Ao salvar, ao dar Play e pelo botao "Check scripts" do Console (ou o comando `scripts`), o resultado vai para o Console com o nome do objeto.
+- Sintaxe: o QuickJS compila sem executar e informa linha e coluna (TOOL-S001).
+- Regras: `obj.position`, `obj.transform.pos.x`, `class`, `this`, `import`, `console.log`, funcao desconhecida (com sugestao, ex.: `setpos` -> `setPosition`), numero de argumentos, tecla invalida, `Input.` com maiuscula, nome de funcao parecido com o da Unity, objeto sem start/update/OnEventTrigger.
+- Os 14 exemplos do Help passam sem erro.
+
+**Erros de execucao**
+- Erro durante start/update/evento mostra a funcao, a linha e a coluna (TOOL-S002).
+- Argumento invalido (texto, NaN, faltando) lanca TypeError com mensagem clara: o script pode usar try/catch.
+- Comando para objeto inexistente: aviso TOOL-S005, uma vez por Play, e o script continua.
+- NaN ou valor fora da faixa no Transform: aviso TOOL-S006 dizendo o campo, e a mudanca e ignorada.
+- Falha interna do sistema de scripts no tick: o editor continua e os scripts param (TOOL-S009).
+
+**Scripts: novas funcoes**
+- `debug.warn(msg)` e `debug.error(msg)` (aviso e erro no Console; o script continua).
+- Snippet de try/catch no VS Code (`ttry`).
+
+**Console**
+- Filtros por nivel (Info, Warnings, Errors) e por texto (ex.: nome do objeto ou codigo TOOL-S007).
+- Botao Copy: copia as linhas visiveis.
+- Clique numa linha "[Nome] ..." seleciona o objeto na cena.
+- Botao "Check scripts" e comando `scripts`.
+
+**Help**
+- Secao "Erros e try/catch" nos topicos da API (EN e PT). Tabela de codigos em `docs/SCRIPT_ERRORS.md`.
+- Dois tutoriais novos no grupo Scripts (EN e PT): "Tutorial: criar um jogo de FPS" (movimento, mira, tiro com instantiate, alvo que muda de cor) e "Tutorial: portas que abrem com E" (porta que sobe perto do jogador, com evento "abrir"). O codigo dos tutoriais roda no selftest.
+
+**Testes**
+- Selftest do editor: 166 checks, 0 falhas. Novos: cada regra do verificador (com a linha), exemplos do Help sem erro, try/catch, erro com linha, argumento invalido, NaN, objeto inexistente.
+- Nao verificado visualmente nesta versao (ambiente sem tela): lista de problemas no Inspector e filtros do Console.
+
+## 0.7.8-beta — usabilidade do editor, scripts com autocomplete
+
+**Desempenho do editor**
+- Lista de assets em cache: a pasta so e relida quando muda, quando o projeto muda ou a cada 2 s (antes varria a pasta e fazia um stat por arquivo a cada quadro).
+- Lista de assets por tipo (combos) em cache, invalidada por revisao de assets.
+- Medido: nao medido ainda. Confira no Profiler, zona "Panels".
+
+**Interface**
+- Escala padrao da UI em 125% (como o Windows em Full HD). Fica no editor de tema, secao "Shape and size" ("UI scale", com botoes 100% e 125%).
+- Temas salvos antes desta versao (sem `uiVersion` 2 no arquivo) passam a usar 125%. Temas novos guardam a escala escolhida.
+
+**Hierarquia**
+- Icone de olho: oculta/mostra o objeto no editor.
+- Icone de cadeado: trava o objeto no editor (nao aparece no jogo nem no Narrative). Travado nao pode ser movido pelo gizmo, nem trocar de pai, e o Inspector fica desabilitado.
+- Duplicar um filho cria a copia dentro do mesmo pai.
+- Botao direito no objeto: Editar ou Excluir.
+
+**Cena**
+- Barra flutuante na Cena (estilo Unity): Mover, Girar, Escalar, cadeado de snap (ima) e "Encostar no contato".
+- Ima: com ele ligado, o movimento segue o passo escolhido (0,05 a 2 m), e "Encostar no contato" cola o objeto na face do vizinho mais proximo, sem vao e sem sobrepor. Clashes com outros objetos sao rejeitados.
+
+**Console**
+- Campo de texto para digitar comandos, com historico (setas para cima e baixo) e botao Executar. O campo fica sempre visivel.
+
+**Scripts (QuickJS)**
+- Novas funcoes: `position(nome)`, `setRotation`, `setColor` (MeshRenderer, cores 0 a 1), `instantiate(modelo, x, y, z)` com posicao e nome da copia.
+- Novo objeto `input`: `input.down("W")`, `input.pressed("Space")`, `input.mouseDelta()`. Teclas: W A S D Q E R F 1 2 Space Shift Ctrl Alt setas Enter Escape, Mouse0 e Mouse1.
+- Template de script novo: funcoes `start(obj)`, `update(obj, dt)` e `OnEventTrigger(obj, name)` (antes era uma classe, que nao rodava).
+- Autocomplete no VS Code: ao abrir o projeto o editor escreve `toolengine.d.ts` (tipos de todas as funcoes e objetos), `.vscode/toolengine.code-snippets` (13 snippets) e `jsconfig.json` (so se nao existir).
+
+**Help**
+- Topicos "API de script" e "Scripts: exemplos" reescritos (EN e PT) com a API real.
+- 12 exemplos testados: mover e girar, andar com WASD, primeira pessoa, terceira pessoa, projetil e tiro, cor do mesh, evento, receber evento, trigger para o Narrative, andar ate outro objeto, start/instantiate/destroy/componentes, ligar e desligar.
+- Exemplo de shader (propriedade de shader) segue como roteiro: a API ainda nao expoe parametros de shader.
+- Blocos de codigo invalidos em outros topicos foram trocados por um texto que aponta para o exemplo correto.
+
+**Testes**
+- Selftest do editor: 146 checks, 0 falhas. Inclui: cada exemplo do Help roda sem erro, o `toolengine.d.ts` declara toda funcao registrada, snap sem vao e sem sobreposicao, duplicar mantem o pai, travar salva e carrega.
+- Nao verificado visualmente nesta versao (ambiente sem tela): layout dos icones, barra flutuante, escala 125% e console.
+
+**Planejado (nao implementado)**
+- Biblioteca SpriteUi (UI e sprites no lugar do ImGui): plano por fases em `docs/UI_SPRITE_PLAN.md`.
+- Propriedades de shader expostas aos scripts.
+
 ## 0.7.7-beta — desempenho (stutters, partículas, skybox por imagens, heap)
 
 **Corrigido**
