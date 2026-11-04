@@ -8,6 +8,7 @@
 //      (projetadas com a mesma matriz da camera), entao funcionam igual em qualquer API grafica.
 #pragma once
 #include "components.hpp"
+#include "voxel.hpp"
 #include "narrative_panel.hpp"
 #include "profiler.hpp"
 #include "project.hpp"
@@ -40,6 +41,7 @@
 #include <deque>
 #include <memory>
 #include <unordered_map>
+#include <map>
 #include <functional>
 #include <string>
 #include <vector>
@@ -70,9 +72,12 @@ struct Editor {
   // janelas
   bool showHierarchy = true, showInspector = true, showConsole = true, showProfiler = true, showScene = true, showGame = true;
   bool showAssets = true, showScenes = true, showNarrative = true, showSettings = true, showInputMap = false;
+  bool showEditorInfo = false, showExport = false;   // File > Editor info / Export game
   bool resetLayout = false;
   bool lockInterface = false;  // Interface travada: abas/janelas nao saem do encaixe e os divisores nao se mexem (menu Interface)
   bool dockWithShift = false;  // encaixar/desencaixar janelas so segurando Shift (evita encaixes acidentais)
+  bool showCulled = false;     // Scene: mostra em vermelho os objetos que a camera de jogo nao desenha
+  bool logKeys = false;        // depuracao: escreve no Console cada tecla e texto digitado
   int focusSettings = 0, settingsTab = -1;
 
   // projeto / cena
@@ -89,6 +94,32 @@ struct Editor {
   // visualizacao
   tool::SoftRenderer renderer{640, 360};
   tool::Mesh cube = tool::Mesh::cube(0.5f), sphere = tool::Mesh::sphere(0.5f), plane = tool::Mesh::plane(0.5f);
+  // Nivel de detalhe: esfera de baixa resolucao (8x5 = ~80 triangulos contra ~576) para objetos longe da camera.
+  tool::Mesh sphereFar = tool::Mesh::sphere(0.5f, 8, 5);
+  // Malhas dos chunks de blocos, por entidade. Refeitas so quando a revisao do chunk muda.
+  std::unordered_map<uint64_t, std::unique_ptr<ChunkMeshes>> chunkCache_;
+  // A malha e refeita quando o proprio chunk OU um vizinho muda (o carimbo junta as revisoes de todos).
+  ChunkMeshes& chunkMeshesOf(tool::Entity e, const VoxelChunk& c, const ChunkNeighbors& nb = ChunkNeighbors{}) {
+    if (chunkCache_.size() > 8192) chunkCache_.clear();   // teto: entidades apagadas nao vazam para sempre
+    const uint64_t key = (static_cast<uint64_t>(e.generation) << 32) | e.index;
+    auto& p = chunkCache_[key];
+    if (!p) p = std::make_unique<ChunkMeshes>();
+    uint64_t stamp = c.revision * 1000003ull + static_cast<uint64_t>(c.cell * 1000.f);
+    for (const VoxelChunk* n : nb) stamp = stamp * 1315423911ull + (n ? n->revision + 1ull : 0ull);
+    if (!p->built || p->stamp != stamp || p->cell != c.cell) { buildChunkMeshes(c, *p, nb); p->stamp = stamp; p->cell = c.cell; }
+    return *p;
+  }
+  // Cria um chunk de blocos. `terrain` = preenche com o terreno de teste. A origem fica na quina (0,0,0) do chunk.
+  tool::Entity makeVoxel(const char* name, int cx, int cz, bool terrain) {
+    tool::Entity e = make(name);
+    VoxelChunk vc; if (terrain) fillTerrain(vc, cx, cz);
+    const float span = vc.cell * kChunkSize;
+    Transform* t = scene.world().get<Transform>(e); t->pos[0] = static_cast<float>(cx) * span; t->pos[2] = static_cast<float>(cz) * span;
+    scene.world().add<VoxelChunk>(e, vc);
+    return e;
+  }
+  static constexpr float kSphereFarDistance = 25.f;   // metros; alem disso a esfera usa a malha simples
+
   tool::Mesh cylinder = tool::Mesh::cylinder(0.5f, 1.f), cone = tool::Mesh::cone(0.5f, 1.f), capsule = tool::Mesh::capsule(0.35f, 1.f),
            wheel = tool::Mesh::wheel(), triPrism = tool::Mesh::prism(3, 0.5f, 1.f), hexPrism = tool::Mesh::prism(6, 0.5f, 1.f); // formas extras (shape 4..9)
   ViewTex sceneTex, gameTex[2];
@@ -495,8 +526,10 @@ struct Editor {
 
   // ---------------------------------------------------------------- camera da janela Scene (orbita ou navegacao livre)
   tool::Vec3 flyForward() const { return {std::sin(flyYaw) * std::cos(flyPitch) * -1.f, std::sin(flyPitch), -std::cos(flyYaw) * std::cos(flyPitch)}; }
+  // Distancia de desenho da cena (Settings > Lighting and shadows): sobrescreve o Far de cada camera quando > 0.
+  tool::Camera withDrawDistance(tool::Camera c) const { if (sceneInfo.render.drawDistance > 0.f) c.farZ = sceneInfo.render.drawDistance; return c; }
   tool::Camera sceneCamera() const {
-    tool::Camera cam; cam.farZ = 500.f;
+    tool::Camera cam; cam.farZ = sceneInfo.render.drawDistance > 0.f ? sceneInfo.render.drawDistance : 500.f;
     if (freeFly) { cam.eye = flyPos; cam.target = flyPos + flyForward(); return cam; }
     cam.target = target;
     cam.eye = {target.x + dist * std::cos(pitch) * std::sin(yaw), target.y + dist * std::sin(pitch), target.z + dist * std::cos(pitch) * std::cos(yaw)};
@@ -593,6 +626,16 @@ struct Editor {
     }
   }
 
+  // Malha de um MeshRenderer escolhida pela distancia da camera. So a esfera tem nivel de detalhe.
+  const tool::Mesh* lodMeshOf(tool::Entity e, const MeshRenderer& mr, const tool::Camera& cam) {
+    if (mr.shape == 1) {
+      const tool::Mat4 wm = worldMat(e);
+      const float dx = wm.m[3][0] - cam.eye.x, dy = wm.m[3][1] - cam.eye.y, dz = wm.m[3][2] - cam.eye.z;
+      if (dx * dx + dy * dy + dz * dz > kSphereFarDistance * kSphereFarDistance) return &sphereFar;
+    }
+    return meshOf(mr);
+  }
+
   // Esfera que envolve todos os objetos que PROJETAM sombra (planos grandes, como o chao, ficam de fora: so recebem).
   // O mapa de sombra cobre so essa regiao -> mais nitidez por texel e zero custo se ninguem projeta sombra.
   // Retorna false se nao ha nenhum projetor.
@@ -605,6 +648,15 @@ struct Editor {
       (void)t; const float r = sc * 0.9f; // 0.87 = meia diagonal do cubo unitario
       lo = {std::min(lo.x, p.x - r), std::min(lo.y, p.y - r), std::min(lo.z, p.z - r)};
       hi = {std::max(hi.x, p.x + r), std::max(hi.y, p.y + r), std::max(hi.z, p.z + r)};
+      ++n;
+    });
+    scene.world().each<VoxelChunk, Transform>([&](tool::Entity ce, VoxelChunk& vc, Transform&) {
+      if (scene.world().has<Inactive>(ce)) return;
+      const tool::Mat4 wm = worldMat(ce); const tool::Vec3 p{wm.m[3][0], wm.m[3][1], wm.m[3][2]};
+      const float span = vc.cell * kChunkSize;
+      const tool::Vec3 a{p.x, p.y, p.z}, b{p.x + span, p.y + span, p.z + span};
+      lo = {std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z)};
+      hi = {std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z)};
       ++n;
     });
     if (n == 0) return false;
@@ -661,9 +713,13 @@ private:
       mixu(static_cast<std::uint64_t>(sceneInfo.render.shadow.resolution));
       scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
         if (!mr.castShadow) return;
-        const tool::Mesh* m = meshOf(mr); if (!m) return;
+        const tool::Mesh* m = lodMeshOf(e, mr, cam); if (!m) return;
         mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m)); const tool::Mat4 wm = worldMat(e);
         for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(wm.m[c][r]);
+      });
+      scene.world().each<VoxelChunk, Transform>([&](tool::Entity ce, VoxelChunk& vc, Transform&) {
+        if (scene.world().has<Inactive>(ce)) return;
+        mixu(ce.index); mixu(ce.generation); mixu(vc.revision); mixf(vc.cell);
       });
       sigNow = hs;
     } else { sigGpuValid = sigCpuValid = false; }
@@ -686,6 +742,38 @@ private:
       return false;
     };
     auto count = [&](const tool::Mesh& m, const tool::Material& mat) { tris += m.idx.size() / 3; ++draws; if (shadows && mat.castShadow) ++casters; };
+    // Chunks de blocos: uma malha por tipo de bloco, desenhada uma vez. Culling pela esfera do chunk.
+    auto drawChunks = [&](auto& target) {
+      // Indice da grade: chunk alinhado a um multiplo do seu tamanho tem vizinhos (para o culling de borda).
+      std::map<std::array<int, 3>, const VoxelChunk*> grid;
+      scene.world().each<VoxelChunk>([&](tool::Entity ce, VoxelChunk& vc) {
+        if (scene.world().has<Inactive>(ce)) return;
+        const tool::Mat4 wm = worldMat(ce);
+        const float s = vc.cell * kChunkSize;
+        const float px = wm.m[3][0] / s, py = wm.m[3][1] / s, pz = wm.m[3][2] / s;
+        const int gx = static_cast<int>(std::lround(px)), gy = static_cast<int>(std::lround(py)), gz = static_cast<int>(std::lround(pz));
+        if (std::fabs(px - gx) < 1e-3f && std::fabs(py - gy) < 1e-3f && std::fabs(pz - gz) < 1e-3f) grid[{gx, gy, gz}] = &vc;
+      });
+      scene.world().each<VoxelChunk>([&](tool::Entity ce, VoxelChunk& vc) {
+        if (scene.world().has<Inactive>(ce)) return;
+        const tool::Mat4 wm = worldMat(ce);
+        const float s = vc.cell * kChunkSize;
+        const int gx = static_cast<int>(std::lround(wm.m[3][0] / s)), gy = static_cast<int>(std::lround(wm.m[3][1] / s)), gz = static_cast<int>(std::lround(wm.m[3][2] / s));
+        auto neighborAt = [&](int dx, int dy, int dz) -> const VoxelChunk* { auto it = grid.find({gx + dx, gy + dy, gz + dz}); return it == grid.end() ? nullptr : it->second; };
+        const ChunkNeighbors nb = {neighborAt(1, 0, 0), neighborAt(-1, 0, 0), neighborAt(0, 1, 0), neighborAt(0, -1, 0), neighborAt(0, 0, 1), neighborAt(0, 0, -1)};
+        if (doCull && !shadows) {
+          const float half = vc.cell * kChunkSize * 0.5f, r = half * 1.7321f;   // meia diagonal do chunk
+          const tool::Vec3 c = wm.transformPoint({half, half, half});
+          for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) { ++prof.counters.culled; return; }
+        }
+        ChunkMeshes& cm = chunkMeshesOf(ce, vc, nb);
+        for (int t = 1; t < kBlockTypes; ++t) {
+          const tool::Mesh& m = cm.byType[t]; if (m.idx.empty()) continue;
+          const tool::Material mat{{vc.palette[t][0], vc.palette[t][1], vc.palette[t][2]}, 0.8f, 0.f, true, true};
+          count(m, mat); target.draw(m, wm, mat);
+        }
+      });
+    };
     ++prof.counters.views; prof.counters.pixels += static_cast<tool::u64>(w) * static_cast<tool::u64>(h);
     if (apiActive != 0) {
       // Protecao: se a GPU reportar erros em quadros seguidos (ex.: memoria esgotada, driver instavel), volta para a CPU
@@ -698,8 +786,9 @@ private:
       if (shadows) { const bool re = sigGpuValid && sigGpu == sigNow; gpu.setShadow(sceneInfo.render.shadow, fr, re); sigGpu = sigNow; sigGpuValid = true; if (re) ++prof.counters.shadowReused; }
       scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
         if (scene.world().has<Inactive>(e)) return;
-        if (const tool::Mesh* m = meshOf(mr)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); gpu.draw(*m, worldMat(e), mat); }
+        if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); gpu.draw(*m, worldMat(e), mat); }
       });
+      drawChunks(gpu);
       gpu.end();
       gpuDev->present();
       tool::u32 rw = 0, rh = 0;
@@ -724,8 +813,9 @@ private:
     if (shadows) { const bool re = sigCpuValid && sigCpu == sigNow; renderer.setShadow(sceneInfo.render.shadow, fr, re); sigCpu = sigNow; sigCpuValid = true; if (re) ++prof.counters.shadowReused; }
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
       if (scene.world().has<Inactive>(e)) return;
-        if (const tool::Mesh* m = meshOf(mr)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); renderer.draw(*m, worldMat(e), mat); }
+        if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); renderer.draw(*m, worldMat(e), mat); }
     });
+    drawChunks(renderer);
     prof.counters.tris += tris; prof.counters.draws += draws; prof.counters.shadowCasters += casters; prof.counters.shadowTris += renderer.shadowTriangles();
     return renderer.pixels();
   }

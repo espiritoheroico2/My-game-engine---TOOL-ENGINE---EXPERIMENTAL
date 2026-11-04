@@ -120,6 +120,20 @@ struct Inactive {};
 // Nao afeta o jogo: Narrative e scripts continuam podendo alterar o objeto.
 struct Locked {};
 
+// Chunk de blocos (estilo Minecraft): uma entidade com uma grade 16x16x16. Cada bloco guarda um tipo (0 = ar).
+// A malha sai so com as faces visiveis (voxel.hpp) e e desenhada uma vez por tipo de bloco, nao uma vez por bloco.
+constexpr int kChunkSize = 16;
+constexpr int kChunkBlocks = kChunkSize * kChunkSize * kChunkSize;
+constexpr int kBlockTypes = 8;   // tipo 0 = ar; 1..7 = materiais da paleta
+struct VoxelChunk {
+  unsigned char blocks[kChunkBlocks] = {};
+  float cell = 1.f;   // tamanho de um bloco, em metros
+  float palette[kBlockTypes][3] = {{0, 0, 0}, {0.45f, 0.72f, 0.30f}, {0.52f, 0.37f, 0.22f}, {0.52f, 0.53f, 0.55f},
+                                   {0.86f, 0.80f, 0.55f}, {0.30f, 0.55f, 0.85f}, {0.80f, 0.25f, 0.22f}, {0.95f, 0.95f, 0.95f}};
+  unsigned revision = 1;   // sobe a cada edicao: a malha e refeita e a GPU reenvia os buffers
+  static int index(int x, int y, int z) { return (y * kChunkSize + z) * kChunkSize + x; }
+  unsigned char at(int x, int y, int z) const { return (x < 0 || y < 0 || z < 0 || x >= kChunkSize || y >= kChunkSize || z >= kChunkSize) ? 0 : blocks[index(x, y, z)]; }
+};
 struct UiCanvas { char camera[40] = ""; bool visible = true; int count = 0; UiElem items[kMaxUi]; }; // camera vazia = todas as cameras Principais
 
 // Particulas: emissor simples (CPU). Gravidade e quique vem das configuracoes de fisica (Newtoon) da cena.
@@ -139,7 +153,7 @@ struct ParticleComp {
   // Cores: 4 paradas ao longo da vida (inicio, 1/3, 2/3, fim), interpoladas suavemente.
   float color[3] = {1.f, 0.6f, 0.2f}, color2[3] = {1.f, 0.42f, 0.12f}, color3[3] = {0.9f, 0.22f, 0.07f}, colorEnd[3] = {0.8f, 0.1f, 0.05f};
   float alpha = 0.9f; bool worldSpace = true;
-  int form = 0;                          // 0 bolinha, 1 quadrado, 2 triangulo, 3 estrela, 4 anel, 5 risco (na direcao do movimento)
+  int form = 0;                          // 0 bolinha, 1 quadrado, 2 triangulo, 3 estrela, 4 anel, 5 risco (na direcao do movimento), 6 fumaca
   int area = 0;                          // onde nasce: 0 ponto, 1 caixa aleatoria, 2 esfera aleatoria
   float areaSize[3] = {1.f, 0.2f, 1.f};  // caixa: tamanho em X/Y/Z; esfera: X = diametro
   bool fadeOpacity = true;               // a opacidade cai ate zero no fim da vida
@@ -294,6 +308,12 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
   }
   if (w.has<Inactive>(e)) j.set("inactive", true);
   if (w.has<Locked>(e)) j.set("locked", true);
+  if (auto* vc = w.get<VoxelChunk>(e)) {
+    Json o = Json::object(); o.set("cell", static_cast<double>(vc->cell)); o.set("palette", ser::vec(&vc->palette[0][0], kBlockTypes * 3));
+    Json rle = Json::array();   // pares [tipo, quantidade]: um chunk de terreno com muito ar cabe em poucas linhas
+    for (int i = 0; i < kChunkBlocks;) { const unsigned char v = vc->blocks[i]; int n = 1; while (i + n < kChunkBlocks && vc->blocks[i + n] == v) ++n; rle.push(static_cast<int>(v)); rle.push(n); i += n; }
+    o.set("rle", rle); j.set("voxels", o);
+  }
   if (auto* u = w.get<UiCanvas>(e)) {
     Json o = Json::object(); o.set("camera", std::string(u->camera)); o.set("visible", u->visible); Json arr = Json::array();
     for (int i = 0; i < u->count && i < kMaxUi; ++i) { const UiElem& it = u->items[i]; Json q = Json::object();
@@ -376,6 +396,17 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
   }
   if (j["inactive"].isBool() && j["inactive"].asBool()) w.add<Inactive>(e, Inactive{});
   if (j["locked"].isBool() && j["locked"].asBool()) w.add<Locked>(e, Locked{});
+  if (j.has("voxels")) {
+    VoxelChunk vc; const auto& o = j["voxels"]; vc.cell = ser::clampNum(o, "cell", 1.f, 0.01f, 100.f);
+    ser::readVec(o["palette"], &vc.palette[0][0], kBlockTypes * 3);
+    int pos = 0; const auto& runs = o["rle"].items();
+    for (size_t k = 0; k + 1 < runs.size() && pos < kChunkBlocks; k += 2) {
+      const int v = std::clamp(static_cast<int>(runs[k].asNumber(0)), 0, kBlockTypes - 1);
+      const int n = std::clamp(static_cast<int>(runs[k + 1].asNumber(0)), 0, kChunkBlocks - pos);
+      for (int q = 0; q < n; ++q) vc.blocks[pos++] = static_cast<unsigned char>(v);
+    }
+    w.add<VoxelChunk>(e, vc);
+  }
   if (j.has("ui")) {
     UiCanvas u; const auto& o = j["ui"]; ser::copyStr(u.camera, sizeof u.camera, o["camera"].asString()); u.visible = ser::flag(o, "visible", true);
     for (auto& q : o["items"].items()) {
@@ -396,7 +427,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     // cores 2 e 3: se o arquivo for antigo (so cor inicial e final), ficam nas posicoes 1/3 e 2/3 da interpolacao antiga
     for (int c = 0; c < 3; ++c) { p.color2[c] = p.color[c] + (p.colorEnd[c] - p.color[c]) / 3.f; p.color3[c] = p.color[c] + (p.colorEnd[c] - p.color[c]) * 2.f / 3.f; }
     ser::readVec(o["color2"], p.color2, 3); ser::readVec(o["color3"], p.color3, 3);
-    p.form = std::clamp(static_cast<int>(o["form"].asNumber(0)), 0, 5); p.area = std::clamp(static_cast<int>(o["area"].asNumber(0)), 0, 2);
+    p.form = std::clamp(static_cast<int>(o["form"].asNumber(0)), 0, 6); p.area = std::clamp(static_cast<int>(o["area"].asNumber(0)), 0, 2);
     ser::readVec(o["areaSize"], p.areaSize, 3);
     p.fadeOpacity = ser::flag(o, "fadeOpacity", true); p.fadeDelay = ser::clampNum(o, "fadeDelay", 0.f, 0.f, 600.f);
     p.route = ser::flag(o, "route", false); { int k = 0; for (auto& v : o["routePts"].items()) if (k < 8) { ser::readVec(v, p.routePts[k], 3); ++k; } p.routeCount = k; }

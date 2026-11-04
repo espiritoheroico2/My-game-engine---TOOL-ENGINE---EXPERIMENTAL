@@ -13,3 +13,6 @@ Projeto Final/
 editor_settings.json
 editor_layout.ini
 editor_theme.json
+
+# Saida da exportacao do editor (File > Export game)
+Projeto Final/Export/

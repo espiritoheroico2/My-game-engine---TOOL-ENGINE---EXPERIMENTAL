@@ -187,6 +187,10 @@ inline void drawParticleOverlay(Editor& ed, const tool::Camera& cam, ImVec2 org,
         case 4: dl->AddCircle(s, r, col, 16, std::max(1.f, r * 0.35f)); break;
         case 5: { ImVec2 q = s; const tool::Vec3 back = p.p - p.v * 0.04f; ImVec2 qb; if (toScr(back, qb)) q = qb;
           dl->AddLine(q, s, col, std::max(1.f, r * 0.8f)); break; }
+        case 6: { // fumaca: halo leve por fora, borda densa e miolo quase transparente (volumetrica)
+          dl->AddCircleFilled(s, r, ImGui::GetColorU32({c.x, c.y, c.z, a * 0.22f}), 24);
+          dl->AddCircle(s, r * 0.82f, ImGui::GetColorU32({c.x, c.y, c.z, a * 0.7f}), 24, std::max(1.f, r * 0.4f));
+          dl->AddCircleFilled(s, r * 0.4f, ImGui::GetColorU32({c.x, c.y, c.z, a * 0.1f}), 16); break; }
         default: { // bolinha suave: halo + nucleo
           dl->AddCircleFilled(s, r * 1.6f, ImGui::GetColorU32({c.x, c.y, c.z, a * 0.25f}), 16);
           dl->AddCircleFilled(s, r, col, 16); break; }

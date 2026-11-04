@@ -255,7 +255,7 @@ public:
 
 private:
   // Malha na GPU. posKey/nVert/nIdx = o que foi enviado: se mudar, os buffers sao refeitos (o endereco sozinho nao basta).
-  struct GpuMesh { rhi::BufferId vertex, index; u32 count = 0; const void* posKey = nullptr; size_t nVert = 0, nIdx = 0, vCap = 0, iCap = 0; u64 lastUse = 0; };
+  struct GpuMesh { rhi::BufferId vertex, index; u32 count = 0; const void* posKey = nullptr; size_t nVert = 0, nIdx = 0, vCap = 0, iCap = 0; u64 lastUse = 0; u32 rev = 0; };
   struct Draw { const GpuMesh* mesh; Mat4 world; Material mat; rhi::TextureId tex; f32 tw, th; };
   struct Target { rhi::TextureId color, depth; u64 lastUse = 0; };
 
@@ -275,13 +275,13 @@ private:
   GpuMesh& upload(const Mesh& m) {
     GpuMesh& g = meshes_[&m];
     g.lastUse = frame_;
-    if (!g.vertex.isNull() && g.posKey == m.pos.data() && g.nVert == m.pos.size() && g.nIdx == m.idx.size()) return g;
+    if (!g.vertex.isNull() && g.posKey == m.pos.data() && g.nVert == m.pos.size() && g.nIdx == m.idx.size() && g.rev == m.revision) return g;
     freeMesh(g);
     packVertices(m, packBuf_);
     g.vertex = dev_->createBuffer({packBuf_.size() * sizeof(f32), rhi::BufferUsage::Vertex, false}, packBuf_.data());
     g.index = dev_->createBuffer({m.idx.size() * sizeof(u32), rhi::BufferUsage::Index, false}, m.idx.data());
     g.count = static_cast<u32>(m.idx.size());
-    g.posKey = m.pos.data(); g.nVert = m.pos.size(); g.nIdx = m.idx.size();
+    g.posKey = m.pos.data(); g.nVert = m.pos.size(); g.nIdx = m.idx.size(); g.rev = m.revision;
     g.vCap = packBuf_.size() * sizeof(f32); g.iCap = m.idx.size() * sizeof(u32);
     return g;
   }

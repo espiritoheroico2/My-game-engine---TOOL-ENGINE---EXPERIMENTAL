@@ -24,6 +24,9 @@ struct Mesh {
   std::vector<Vec3> pos, normal;
   std::vector<u32> idx;
   std::vector<f32> uv;
+  // Versao da malha: quem gera a malha de novo (ex.: chunk de blocos editado) sobe este numero. A GPU compara-o
+  // para reenviar os buffers mesmo quando o tamanho e o endereco dos dados nao mudaram.
+  u32 revision = 0;
 
   static Mesh plane(f32 half = 5.f) {
     Mesh m;

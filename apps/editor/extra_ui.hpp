@@ -174,6 +174,39 @@ inline void physicsUi(Editor& ed) {
   if (ImGui::SmallButton(T("Remove Physics"))) w.remove<PhysicsComp>(ed.selected);
 }
 
+// ====================================================================================================== CHUNK DE BLOCOS (Inspector)
+// Edicao: escolhe a camada (y) e o pincel; clicar numa celula pinta o bloco (pincel "Air" apaga). Cada edicao sobe a
+// revisao do chunk, e a malha e refeita. Edicoes do Inspector ainda nao entram no Undo.
+inline void voxelUi(Editor& ed) {
+  tool::World& w = ed.scene.world(); auto* vc = w.get<VoxelChunk>(ed.selected); if (!vc) return;
+  if (!ImGui::CollapsingHeader(T("Voxel chunk (blocks)"), ImGuiTreeNodeFlags_DefaultOpen)) return;
+  static int layer = 0, brush = 1;
+  ImGui::Text("%s: %u / %d", T("Solid blocks"), solidCount(*vc), kChunkBlocks);
+  ImGui::SetNextItemWidth(140.f);
+  if (ImGui::DragFloat(T("Block size (m)"), &vc->cell, 0.01f, 0.05f, 10.f)) ++vc->revision;
+  const char* names[kBlockTypes] = {T("Air (erase)"), T("Grass"), T("Dirt"), T("Stone"), T("Sand"), T("Water"), T("Brick"), T("Snow")};
+  ImGui::SetNextItemWidth(160.f); ImGui::Combo(T("Brush"), &brush, names, kBlockTypes);
+  if (brush > 0) { ImGui::SameLine(); ImGui::SetNextItemWidth(150.f); ImGui::ColorEdit3("##brushcolor", vc->palette[brush], ImGuiColorEditFlags_NoInputs); }
+  if (ImGui::Button(T("Fill terrain"))) {
+    const auto* tr = w.get<Transform>(ed.selected);
+    const float span = vc->cell * kChunkSize;
+    fillTerrain(*vc, tr ? static_cast<int>(std::lround(tr->pos[0] / span)) : 0, tr ? static_cast<int>(std::lround(tr->pos[2] / span)) : 0);
+  }
+  ImGui::SameLine(); if (ImGui::Button(T("Clear"))) clearChunk(*vc);
+  ImGui::SetNextItemWidth(220.f); ImGui::SliderInt(T("Layer (y)"), &layer, 0, kChunkSize - 1);
+  for (int z = 0; z < kChunkSize; ++z)
+    for (int x = 0; x < kChunkSize; ++x) {
+      const unsigned char t = vc->at(x, layer, z);
+      const ImVec4 col = t ? ImVec4(vc->palette[t][0], vc->palette[t][1], vc->palette[t][2], 1.f) : ImVec4(0.18f, 0.18f, 0.2f, 1.f);
+      ImGui::PushStyleColor(ImGuiCol_Button, col);
+      ImGui::PushID(x + z * kChunkSize);
+      if (ImGui::Button("##cell", {12.f, 12.f})) setBlock(*vc, x, layer, z, static_cast<unsigned char>(brush));
+      ImGui::PopID();
+      ImGui::PopStyleColor();
+      if (x < kChunkSize - 1) ImGui::SameLine(0.f, 2.f);
+    }
+}
+
 // ====================================================================================================== UI CANVAS / PARTICULAS (Inspector)
 inline void uiCanvasUi(Editor& ed) {
   tool::World& w = ed.scene.world(); auto* u = w.get<UiCanvas>(ed.selected); if (!u) return;
@@ -215,6 +248,16 @@ inline void uiCanvasUi(Editor& ed) {
   if (ImGui::SmallButton(T("Remove UI"))) w.remove<UiCanvas>(ed.selected);
 }
 
+// Preset de fumaca: lenta, cresce, sobe um pouco, cinza, some aos poucos depois de um tempo parada.
+inline void applySmokePreset(ParticleComp& p) {
+  p.form = 6; p.area = 1; p.areaSize[0] = 0.8f; p.areaSize[1] = 0.2f; p.areaSize[2] = 0.8f;
+  p.rate = 10.f; p.maxParticles = 250; p.lifetime = 5.f; p.speed = 0.5f; p.spread = 22.f;
+  p.size = 0.35f; p.sizeEnd = 1.8f; p.gravityScale = -0.12f; p.bounce = 0.f;
+  const float g[4][3] = {{0.62f, 0.62f, 0.64f}, {0.5f, 0.5f, 0.52f}, {0.38f, 0.38f, 0.4f}, {0.26f, 0.26f, 0.28f}};
+  for (int c = 0; c < 3; ++c) { p.color[c] = g[0][c]; p.color2[c] = g[1][c]; p.color3[c] = g[2][c]; p.colorEnd[c] = g[3][c]; }
+  p.alpha = 0.55f; p.fadeOpacity = true; p.fadeDelay = 1.5f; p.tornado = false; p.route = false;
+}
+
 inline void particleUi(Editor& ed) {
   tool::World& w = ed.scene.world(); auto* p = w.get<ParticleComp>(ed.selected); if (!p) return;
   if (!ImGui::CollapsingHeader(T("Particles"), ImGuiTreeNodeFlags_DefaultOpen)) return;
@@ -222,7 +265,9 @@ inline void particleUi(Editor& ed) {
   ImGui::DragInt(T("Max particles"), &p->maxParticles, 1.f, 1, 5000); ImGui::DragFloat(T("Rate (per second)"), &p->rate, 0.5f, 0.f, 5000.f); ImGui::DragFloat(T("Lifetime (s)"), &p->lifetime, 0.05f, 0.05f, 60.f);
   ImGui::DragFloat(T("Speed"), &p->speed, 0.05f, 0.f, 500.f); ImGui::SliderFloat(T("Spread (deg)"), &p->spread, 0.f, 180.f);
   if (ImGui::TreeNodeEx(T("Shape and spawn area"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    const std::string forms = std::string(T("Dot")) + '\0' + T("Square") + '\0' + T("Triangle") + '\0' + T("Star") + '\0' + T("Ring") + '\0' + T("Streak (motion)") + '\0';
+    const std::string forms = std::string(T("Dot")) + '\0' + T("Square") + '\0' + T("Triangle") + '\0' + T("Star") + '\0' + T("Ring") + '\0' + T("Streak (motion)") + '\0' + T("Smoke") + '\0';
+    if (ImGui::SmallButton(T("Smoke preset"))) applySmokePreset(*p);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Sets slow, rising, grey smoke with soft edges. Adjust the values afterwards."));
     ImGui::Combo(T("Shape"), &p->form, forms.c_str());
     const std::string areas = std::string(T("Point")) + '\0' + T("Random box") + '\0' + T("Random sphere") + '\0';
     ImGui::Combo(T("Spawn area"), &p->area, areas.c_str());
@@ -302,6 +347,7 @@ inline void addResourceUi(Editor& ed) {
     rm(w.has<AudioSource>(sel), "Audio Source", [&] { if (auto* a = w.get<AudioSource>(sel)) ed.mixer.stop(a->voice); w.remove<AudioSource>(sel); });
     rm(w.has<ParticleComp>(sel), "Particle System", [&] { w.remove<ParticleComp>(sel); });
     rm(w.has<UiCanvas>(sel), "Game UI (canvas)", [&] { w.remove<UiCanvas>(sel); });
+    rm(w.has<VoxelChunk>(sel), "Voxel chunk", [&] { w.remove<VoxelChunk>(sel); });
     rm(w.has<ScriptComp>(sel), "ToolObject Script", [&] { w.remove<ScriptComp>(sel); });
     ImGui::EndPopup();
   }
@@ -336,6 +382,7 @@ inline void addResourceUi(Editor& ed) {
   if (!w.has<ParticleComp>(sel) && ImGui::MenuItem(T("Particle System"))) w.add<ParticleComp>(sel);
   if (!w.has<ScriptComp>(sel) && ImGui::MenuItem(T("ToolObject Script"))) ed.attachScript(sel);
   if (!w.has<UiCanvas>(sel) && ImGui::MenuItem(T("Game UI (canvas)"))) { UiCanvas u; UiElem& e = u.items[u.count++]; ser::copyStr(e.text, sizeof e.text, "Hello UI"); w.add<UiCanvas>(sel, u); }
+  if (!w.has<VoxelChunk>(sel) && ImGui::MenuItem(T("Voxel chunk (blocks)"))) { VoxelChunk vc; fillTerrain(vc, 0, 0); w.add<VoxelChunk>(sel, vc); }
   // Recursos planejados: aparecem bloqueados (cinza) ate serem implementados.
   ImGui::SeparatorText(T("Coming in a future update (locked)"));
   ImGui::BeginDisabled();

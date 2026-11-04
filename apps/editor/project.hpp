@@ -185,6 +185,7 @@ private:
 struct RenderSettings {
   tool::ShadowSettings shadow;
   bool frustumCull = true;         // pula objetos fora da visao da camera (sombras continuam corretas)
+  float drawDistance = 0.f;        // distancia de desenho (0 = usa o Far de cada camera); vale para Scene e Game
   tool::PostFx post;               // vale para todas as cameras; cada camera pode somar/substituir com o seu (postfx.hpp)
 };
 
@@ -228,7 +229,7 @@ inline tool::Json saveRenderSettings(const RenderSettings& r) {
   s.set("enabled", r.shadow.enabled); s.set("resolution", r.shadow.resolution); s.set("distance", static_cast<double>(r.shadow.distance));
   s.set("bias", static_cast<double>(r.shadow.bias)); s.set("normalBias", static_cast<double>(r.shadow.normalBias)); s.set("pcf", r.shadow.pcf);
   s.set("strength", static_cast<double>(r.shadow.strength));
-  o.set("shadow", s); o.set("post", ser::postFx(r.post)); o.set("frustumCull", r.frustumCull);
+  o.set("shadow", s); o.set("post", ser::postFx(r.post)); o.set("frustumCull", r.frustumCull); o.set("drawDistance", static_cast<double>(r.drawDistance));
   return o;
 }
 // Todo valor lido do arquivo e limitado a uma faixa segura (um .scene.json editado a mao nao pode travar o render).
@@ -240,7 +241,7 @@ inline RenderSettings loadRenderSettings(const tool::Json& o) {
   r.shadow.normalBias = ser::clampNum(s, "normalBias", 1.5f, 0.f, 8.f); r.shadow.pcf = std::clamp(static_cast<int>(ser::num(s, "pcf", 1.f)), 0, 2);
   r.shadow.strength = ser::clampNum(s, "strength", 0.85f, 0.f, 1.f);
   if (o.has("post")) r.post = ser::readPostFx(o["post"]);
-  r.frustumCull = ser::flag(o, "frustumCull", true);
+  r.frustumCull = ser::flag(o, "frustumCull", true); r.drawDistance = ser::clampNum(o, "drawDistance", 0.f, 0.f, 20000.f);
   return r;
 }
 

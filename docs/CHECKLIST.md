@@ -4,6 +4,32 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 
 ## Feito
 
+### 0.7.14-beta (desempenho com muitos objetos e chunks opcionais)
+- [x] Benchmark headless: `--ecs N` e `--voxel N` (exige `--project` de teste)
+- [x] Esfera com nivel de detalhe acima de 25 m (sombra e culling coerentes)
+- [x] Hierarquia com mais de 300 objetos em lista achatada com ImGuiListClipper
+- [x] Malha com revisao: GPU reenvia os buffers quando a malha muda
+- [x] BVH: pilha de 128 sem descarte silencioso (ajuste de corretude)
+- [x] Chunks de blocos: componente, malha de faces visiveis, culling entre chunks, RLE na cena
+- [x] Chunks: Inspector com grade por camada, pincel e terreno de teste
+- [x] Traducoes pt-BR e es dos textos novos
+- [x] Selftest do editor: 207 checks, 0 falhas
+- [~] Chunks no caminho da GPU: compila, nao executado nesta maquina
+- [~] Esfera distante e hierarquia achatada: nao vistas na tela
+- [ ] Colisao de fisica por chunk
+- [ ] Undo para edicoes de blocos do Inspector
+- [ ] Selecao de chunk no viewport
+- [ ] Sombra dos chunks em mundos grandes (area do mapa de sombra)
+
+### 0.7.13-beta (exportacao Windows x64 e Linux x64, Editor info, modo jogador, Newtoon)
+- [x] Exportacao Windows x64 e Linux x64 com launcher
+- [x] Janela Editor info (salva em project.json)
+- [x] Modo jogador (`--player`)
+- [x] Integracao do Newtoon como arquivos e patch
+- [x] Selftest do editor: 196 checks, 0 falhas
+- [ ] Android, WebGL, UWP
+- [ ] Versao do executavel no Windows
+
 ### 0.7.12-beta (particulas e correcoes do editor)
 - [x] Particulas escuras corrigidas (cor e alfa reais, sem iluminacao)
 - [x] Delete e F2 nao agem sobre o objeto enquanto um campo de texto esta ativo

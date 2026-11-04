@@ -15,6 +15,8 @@
 #include "help_content.hpp"
 #include "script_kit.hpp"
 #include "narrative_panel.hpp"
+#include "export.hpp"
+#include <algorithm>
 
 namespace editor {
 
@@ -208,6 +210,31 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(ed.renameTag(ed.scene.tag("jogador"), "heroi") && ed.hasTagLinked(pl, "player"), "renaming a linked tag keeps the link working");
     check(ed.projSettings.save(ed.project), "project settings saved");
     ProjectSettings ps2; check(ps2.load(ed.project) && ps2.namesFor("player").size() == 2, "project settings (tag links) reload from project.json"); }
+  // ---- Editor info e exportacao
+  { ProjectSettings bare; const auto miss = bare.missingInfo();
+    check(miss.size() == 5 && std::find(miss.begin(), miss.end(), "Studio") != miss.end(), "empty Editor info lists every required field (version has a valid default)");
+    check(ProjectSettings::validVersion("1") && ProjectSettings::validVersion("1.2.3") && ProjectSettings::validVersion("1.2.3.4") && !ProjectSettings::validVersion("1.2.3.4.5") && !ProjectSettings::validVersion("a.b") && !ProjectSettings::validVersion("70000.1") && !ProjectSettings::validVersion("1..2") && !ProjectSettings::validVersion(""), "version: 1 to 4 numbers, each 0..65535");
+    check(bare.copyrightText(2026) == "Copyright (c) 2026 ", "automatic copyright text follows the studio name");
+    const bool win = platformAvailable(0); const int plat = win ? 0 : 2;
+    const std::string exe = win ? "ToolEditor.exe" : "ToolEditor";
+    const fs::path xt = fs::temp_directory_path() / "toolengine_export_test";
+    std::error_code xe; fs::remove_all(xt, xe);
+    const fs::path fakeEd = xt / "editor";
+    fs::create_directories(fakeEd / "assets" / "shaders");
+    writeTextFile(fakeEd / exe, "fake editor"); writeTextFile(fakeEd / "assets" / "shaders" / "x.txt", "shader");
+    ProjectSettings ok = ed.projSettings; ok.projectName = "Test Game"; ok.author = "Creator"; ok.info.studio = "Studio"; ok.info.country = "Brasil"; ok.info.description = "Teste"; ok.info.version = "1.0.0";
+    ProjectSettings bad = ok; bad.info.studio.clear();
+    const xp::Result rBad = xp::exportGame(ed.project, bad, plat, fakeEd, exe, xt / "out");
+    check(!rBad.ok && !fs::exists(xt / "out"), "export refuses incomplete Editor info and creates nothing");
+    const xp::Result r = xp::exportGame(ed.project, ok, plat, fakeEd, exe, xt / "out");
+    check(r.ok && fs::exists(r.folder / (win ? "Test Game.exe" : "Test Game")) && fs::exists(r.folder / "export.json") && fs::exists(r.folder / "Data" / "Project" / "project.json") && fs::exists(r.folder / "assets" / "shaders" / "x.txt"), "export copies executable, assets and project data");
+    check(fs::exists(r.folder / (win ? "Play.bat" : "play.sh")), "export writes the launcher");
+    const xp::Result again = xp::exportGame(ed.project, ok, plat, fakeEd, exe, xt / "out");
+    check(again.ok, "exporting again replaces the previous export");
+    ok.projectName = "Other Game";
+    fs::create_directories(xt / "out" / (std::string("Other Game") + (win ? "-win64" : "-linux64")) / "mine");
+    check(!xp::exportGame(ed.project, ok, plat, fakeEd, exe, xt / "out").ok, "export refuses to replace a folder that is not an export");
+    fs::remove_all(xt, xe); }
   // ---- desfazer/refazer + selecao por raio
   { ed.openScene("Main", false); ed.undoReset();
     tool::Entity u = ed.makeMesh("UndoCube", 0, 3.f, 0.5f, 0); ed.selected = u;
@@ -640,6 +667,52 @@ inline int runSelfTest(const std::string& samplesDir) {
   { // pause
     ed.startPlay(); ed.paused = true; const float sun0 = ed.sunRuntime; ed.sunRuntime = sun0; ed.tick(1.0);
     check(ed.sunRuntime == sun0, "pause: tick does nothing while paused"); ed.stopPlay(); check(!ed.paused, "pause: stopping Play clears the pause");
+  }
+
+  { // chunks de blocos: faces visiveis, editar sobe a revisao, cache refeito, ida e volta na cena
+    VoxelChunk full; for (auto& b : full.blocks) b = 1;
+    ChunkMeshes cmFull; buildChunkMeshes(full, cmFull);
+    check(cmFull.faces == 6 * 16 * 16 && cmFull.byType[1].idx.size() == static_cast<size_t>(6 * 16 * 16 * 6), "voxel: a solid 16^3 chunk exposes only its outer faces (1536)");
+    VoxelChunk one; one.blocks[VoxelChunk::index(5, 5, 5)] = 2;
+    ChunkMeshes cmOne; buildChunkMeshes(one, cmOne);
+    check(cmOne.faces == 6 && cmOne.byType[2].pos.size() == 24, "voxel: a single block has 6 faces");
+    VoxelChunk two; two.blocks[VoxelChunk::index(5, 5, 5)] = 2; two.blocks[VoxelChunk::index(6, 5, 5)] = 2;
+    ChunkMeshes cmTwo; buildChunkMeshes(two, cmTwo);
+    check(cmTwo.faces == 10, "voxel: two touching blocks hide the face between them (10 faces)");
+    VoxelChunk rt; fillTerrain(rt, 2, -1);
+    const unsigned r0 = rt.revision;
+    check(setBlock(rt, 0, 15, 0, 4) && rt.revision == r0 + 1 && !setBlock(rt, 0, 15, 0, 4), "voxel: an edit bumps the revision once; the same value changes nothing");
+    check(!setBlock(rt, 16, 0, 0, 1) && !setBlock(rt, 0, 0, 0, kBlockTypes), "voxel: out-of-range edits are refused");
+    const tool::Entity ve = ed.scene.world().create();
+    ed.scene.world().add<VoxelChunk>(ve, rt);
+    check(ed.chunkMeshesOf(ve, rt).revision == rt.revision, "voxel: the mesh cache follows the chunk revision");
+    VoxelChunk* live = ed.scene.world().get<VoxelChunk>(ve);
+    setBlock(*live, 1, 15, 1, 6);
+    check(ed.chunkMeshesOf(ve, *live).revision == live->revision, "voxel: the cache is rebuilt after an edit");
+    const VoxelChunk expect = *live;   // copia por valor: carregar a cena pode realocar os componentes
+    const tool::Entity back = loadEntity(ed.scene, saveEntity(ed.scene, ve));
+    const VoxelChunk* bv = ed.scene.world().alive(back) ? ed.scene.world().get<VoxelChunk>(back) : nullptr;
+    check(bv && std::memcmp(bv->blocks, expect.blocks, sizeof expect.blocks) == 0, "voxel: blocks survive a scene save/load (RLE round trip)");
+    check(bv && bv->palette[6][0] == expect.palette[6][0] && bv->cell == expect.cell, "voxel: palette and block size survive a save/load");
+    clearChunk(rt);
+    check(solidCount(rt) == 0, "voxel: clear empties the chunk");
+    tool::Entity mv = ed.makeVoxel("Chunk", 1, 0, false);
+    check(ed.scene.world().get<Transform>(mv)->pos[0] == 16.f * ed.scene.world().get<VoxelChunk>(mv)->cell, "voxel: chunk (1,0) sits one chunk span to the right");
+    // Imagem de conferencia (so com TOOL_VOXEL_SHOT=<arquivo.ppm>): 3x3 chunks de terreno vistos pela camera.
+    if (const char* shotPath = std::getenv("TOOL_VOXEL_SHOT")) {
+      std::vector<tool::Entity> grid;
+      for (int cz = 0; cz < 3; ++cz) for (int cx = 0; cx < 3; ++cx) grid.push_back(ed.makeVoxel("Chunk", cx, cz, true));
+      tool::Camera cam; cam.eye = {16, 16, 40}; cam.target = {16, 4, 16}; cam.up = {0, 1, 0}; cam.fovY = 0.9f; cam.nearZ = 0.1f; cam.farZ = 300.f;
+      const int W = 640, H = 360;
+      const tool::u8* px = ed.renderView(cam, W, H, false);
+      if (px) if (std::FILE* f = std::fopen(shotPath, "wb")) {
+        std::fprintf(f, "P6\n%d %d\n255\n", W, H);
+        for (int i = 0; i < W * H; ++i) std::fwrite(px + i * 4, 1, 3, f);
+        std::fclose(f);
+      }
+      for (tool::Entity g : grid) ed.scene.world().destroy(g);
+    }
+    ed.scene.world().destroy(mv); ed.scene.world().destroy(ve); if (ed.scene.world().alive(back)) ed.scene.world().destroy(back);
   }
 
   fs::remove_all(tmp, ec);

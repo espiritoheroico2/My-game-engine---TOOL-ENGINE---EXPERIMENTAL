@@ -4,8 +4,8 @@
 // "enemy"). Elas nao podem ser renomeadas. Para usar outro nome no seu projeto, crie sua tag (ex.: "jogador") e
 // LIGUE-A a uma pre-definida em Settings > Tags: a engine passa a tratar "jogador" como "player".
 //
-// EXPORTACAO: o preset de plataforma ja e guardado, mas a funcao esta DESLIGADA (kExportEnabled = false): a UI
-// mostra os campos bloqueados. Sera ligada quando existirem os exportadores (docs/NEXT_STEPS.md).
+// EXPORTACAO: "Editor info" guarda os dados do estudio/criador (usados no pacote e no export.json). O jogo
+// exportado e uma copia do proprio editor em modo --player mais a pasta Data/Project (ver export.hpp).
 //
 // SEGURANCA: o arquivo e texto editavel -> toda leitura limita tamanho/quantidade e so aceita alvos conhecidos.
 #pragma once
@@ -29,7 +29,17 @@ struct TagLink { std::string alias, target; };  // alias (tag do usuario) -> tar
 
 // Plataformas de exportacao previstas (ver doc de design, secao de exportacao).
 inline constexpr std::array<const char*, 6> kExportPlatforms = {"Windows x64", "Windows ARM64", "Linux x64", "Android (ARM64)", "Web (WebAssembly)", "UWP"};
-inline constexpr bool kExportEnabled = false; // desligado por enquanto (pedido do projeto): so guarda a preferencia
+// Quais plataformas ESTE build consegue exportar: a copia do editor so roda no sistema em que foi compilada.
+// Windows x64 no build Windows, Linux x64 no build Linux. Android, Web e UWP ainda precisam de toolchain proprio.
+inline bool platformAvailable(int i) {
+#if defined(_WIN32)
+  return i == 0;
+#elif defined(__linux__)
+  return i == 2;
+#else
+  return false;
+#endif
+}
 
 struct ExportPreset {
   int platform = 0;                // indice em kExportPlatforms
@@ -44,6 +54,39 @@ struct ProjectSettings {
   char externalEditor[160] = "";
   // Identificacao do projeto, escolhida na janela de inicio (nome e autor). Ficam em project.json.
   std::string projectName, author;
+  // "Editor info": dados do estudio e do jogo que vao para o pacote exportado (export.json).
+  struct Info { std::string studio, country, city, version = "1.0.0.0", description, copyright, website; } info;
+
+  // Uma string por campo obrigatorio que ainda falta (ou tem valor invalido). Vazio = pronto para exportar.
+  std::vector<std::string> missingInfo() const {
+    std::vector<std::string> m;
+    if (projectName.empty()) m.push_back("Product name");
+    if (author.empty()) m.push_back("Creator");
+    if (info.studio.empty()) m.push_back("Studio");
+    if (info.country.empty()) m.push_back("Country");
+    if (!validVersion(info.version)) m.push_back("Version");
+    if (info.description.empty()) m.push_back("Description");
+    return m;
+  }
+  // Versao no formato 1.2 ate 1.2.3.4; cada parte e um numero de 0 a 65535 (limite do Windows).
+  static bool validVersion(const std::string& v) {
+    int parts = 0; size_t i = 0;
+    while (true) {
+      size_t start = i; long n = 0;
+      while (i < v.size() && v[i] >= '0' && v[i] <= '9') { n = n * 10 + (v[i] - '0'); if (n > 65535) return false; ++i; }
+      if (i == start) return false;
+      ++parts;
+      if (i == v.size()) break;
+      if (v[i] != '.') return false;
+      ++i;
+    }
+    return parts >= 1 && parts <= 4;
+  }
+  // Copyright automatico quando o usuario deixa em branco: "Copyright (c) <ano> <estudio>".
+  std::string copyrightText(int year) const {
+    if (!info.copyright.empty()) return info.copyright;
+    return "Copyright (c) " + std::to_string(year) + " " + info.studio;
+  }
 
   // Tags (nomes) que a engine deve tratar como `builtin`: ela mesma + todas as ligadas a ela.
   std::vector<std::string> namesFor(const std::string& builtin) const {
@@ -72,6 +115,10 @@ struct ProjectSettings {
     ex.set("compressAssets", exportPreset.compressAssets); ex.set("stripEditorData", exportPreset.stripEditorData);
     j.set("exportPreset", ex); j.set("externalEditor", std::string(externalEditor));
     j.set("name", projectName); j.set("author", author);
+    Json in = Json::object();
+    in.set("studio", info.studio); in.set("country", info.country); in.set("city", info.city); in.set("version", info.version);
+    in.set("description", info.description); in.set("copyright", info.copyright); in.set("website", info.website);
+    j.set("editorInfo", in);
     return j;
   }
   void fromJson(const tool::Json& j) {
@@ -81,6 +128,12 @@ struct ProjectSettings {
     ser::copyStr(externalEditor, sizeof externalEditor, j["externalEditor"].asString());
     projectName = j["name"].asString().substr(0, 100);
     author = j["author"].asString().substr(0, 100);
+    const auto& in = j["editorInfo"];
+    info.studio = in["studio"].asString().substr(0, 100); info.country = in["country"].asString().substr(0, 100);
+    info.city = in["city"].asString().substr(0, 100);
+    if (!in["version"].asString().empty()) info.version = in["version"].asString().substr(0, 32);
+    info.description = in["description"].asString().substr(0, 400); info.copyright = in["copyright"].asString().substr(0, 200);
+    info.website = in["website"].asString().substr(0, 200);
     const auto& ex = j["exportPreset"];
     exportPreset.platform = std::clamp(static_cast<int>(ser::num(ex, "platform", 0.f)), 0, static_cast<int>(kExportPlatforms.size()) - 1);
     ser::copyStr(exportPreset.appName, sizeof exportPreset.appName, ex["appName"].asString().empty() ? "MyGame" : ex["appName"].asString());

@@ -4,6 +4,7 @@
 #include "newtoon_types.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <vector>
 
 namespace Newtoon {
@@ -26,6 +27,7 @@ inline float RayAABB(const Vec3& o, const Vec3& invD, const AABB& b, float maxT)
 
 class BVH {
  public:
+  static constexpr int kStack = 128;   // entradas da pilha de percurso (ver Query)
   std::vector<BVHNode> nodes;
 
   // `boxes[i]` = AABB da entidade i; `valid[i]` = 0 para ignorar. Reaproveita a memoria entre chamadas.
@@ -41,11 +43,13 @@ class BVH {
   template <class F> // f(entity) para cada folha cuja caixa toca `q`
   void Query(const AABB& q, F&& f) const {
     if (nodes.empty()) return;
-    int stack[64]; int sp = 0; stack[sp++] = 0;
+    // Pilha: a arvore e de divisao pela mediana (profundidade ~log2 n), entao 64 entradas cobrem qualquer n realista.
+    // Nao ha descarte silencioso: se a pilha estourar, o assert avisa em debug.
+    int stack[kStack]; int sp = 0; stack[sp++] = 0;
     while (sp) {
       const BVHNode& n = nodes[static_cast<size_t>(stack[--sp])];
       if (!Overlaps(n.bounds, q)) continue;
-      if (n.IsLeaf()) f(n.entity); else if (sp < 62) { stack[sp++] = n.left; stack[sp++] = n.right; }
+      if (n.IsLeaf()) f(n.entity); else { assert(sp + 2 <= kStack); stack[sp++] = n.left; stack[sp++] = n.right; }
     }
   }
   // Percorre folhas que o raio pode tocar (ordem arbitraria); `visit(entity, maxT&)` pode reduzir maxT ao achar um acerto.
@@ -53,11 +57,11 @@ class BVH {
   void RayQuery(const Vec3& o, const Vec3& d, float& maxT, F&& visit) const {
     if (nodes.empty()) return;
     const Vec3 inv{std::fabs(d.x) > 1e-12f ? 1.f / d.x : 1e12f, std::fabs(d.y) > 1e-12f ? 1.f / d.y : 1e12f, std::fabs(d.z) > 1e-12f ? 1.f / d.z : 1e12f};
-    int stack[64]; int sp = 0; stack[sp++] = 0;
+    int stack[kStack]; int sp = 0; stack[sp++] = 0;
     while (sp) {
       const BVHNode& n = nodes[static_cast<size_t>(stack[--sp])];
       if (RayAABB(o, inv, n.bounds, maxT) < 0.f) continue;
-      if (n.IsLeaf()) visit(n.entity, maxT); else if (sp < 62) { stack[sp++] = n.left; stack[sp++] = n.right; }
+      if (n.IsLeaf()) visit(n.entity, maxT); else { assert(sp + 2 <= kStack); stack[sp++] = n.left; stack[sp++] = n.right; }
     }
   }
 

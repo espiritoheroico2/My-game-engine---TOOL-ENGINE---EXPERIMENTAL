@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.7.14-beta — desempenho com muitos objetos (benchmark, chunks de blocos opcionais, LOD da esfera, hierarquia achatada)
+
+**Desempenho**
+- Esfera com nivel de detalhe: acima de 25 m da camera, a esfera usa malha 8x5 (~80 triangulos) em vez de 24x12 (~576). A sombra e o culling usam a mesma escolha. Distancia em `Editor::kSphereFarDistance`.
+- Hierarquia com mais de 300 objetos vira lista achatada e indentada dentro de um `ImGuiListClipper`: so as linhas visiveis sao montadas. Abaixo do limite, a arvore com setas continua igual. Nesse modo nao ha setas para recolher ramos.
+- Malha com numero de revisao (`Mesh::revision`): a GPU reenvia os buffers quando a malha muda, mesmo com o mesmo tamanho.
+- BVH (Newtoon): a pilha de percurso tem 128 entradas e nao descarta filhos em silencio (antes, `sp < 62` podia perder pares). Nao era a causa do travamento com 5000 objetos; e um ajuste de corretude.
+
+**Chunks de blocos (recurso opcional)**
+- Componente `VoxelChunk`: grade 16x16x16, 8 tipos de bloco, paleta e tamanho do bloco editaveis. Salvo na cena em RLE (pares tipo/quantidade).
+- Malha so com as faces visiveis, uma malha por tipo de bloco; faces na borda de um chunk sao escondidas pelo chunk vizinho.
+- Cache refeito quando o chunk ou um vizinho muda (carimbo de revisoes).
+- Menu Hierarquia > Criar > "Voxel chunk (blocks)" e Adicionar recurso > "Voxel chunk (blocks)".
+- Inspector: grade da camada escolhida (y), pincel por tipo, "Preencher com terreno" e "Limpar".
+- Projeto sem chunks nao muda: o desenho dos chunks nao faz nada quando nao existem.
+
+**Benchmark (headless)**
+- `ToolEditor --project <pasta de teste> --ecs N`: cria N esferas (como `test ECS: N`) e imprime media, p50, p95 e maximo por quadro, com o tempo de cada zona do Profiler.
+- `ToolEditor --project <pasta de teste> --voxel N`: o mesmo, com N chunks de terreno.
+- Sem janela de projeto, sem gravar cena nem configuracoes. `--project` e obrigatorio, para o teste nao tocar no projeto.
+
+**Medicoes** (renderizador CPU, sandbox sem GPU; apresentacao ~105-220 ms e do SDL software desta maquina)
+
+| Cena | Triangulos | Raster da cena | Media do quadro |
+|---|---|---|---|
+| 5000 esferas (antes) | 2,88 M | 145 ms | 760 ms |
+| 5000 esferas (depois) | 0,80 M | 82 ms | 485 ms |
+| 500 chunks (128 mil blocos) | 0,73 M | 27 ms | 150 ms |
+| 1000 chunks (512 mil blocos) | 1,46 M | 56 ms | 181 ms |
+
+A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
+
+**Correcoes de build**
+- Windows (MSVC): o nome `near` era macro do windows.h e quebrava o build dos chunks; renomeado para `neighborAt`. Checado tambem com o mingw (`-fsyntax-only`).
+
+**Testes**
+- Selftest: 207 checks, 0 falhas (novos: faces visiveis, edicao e revisao, cache, ida e volta na cena, posicao dos chunks).
+- `TOOL_VOXEL_SHOT=<arquivo.ppm>` no selftest grava uma imagem de 3x3 chunks para conferencia.
+
+**Pendente / nao verificado**
+- Chunks sem colisao de fisica (o caminho esperado e um colisor estatico por chunk).
+- Edicoes do Inspector nao entram no Undo; clicar num chunk no viewport nao seleciona (a selecao funciona pela Hierarquia).
+- Caminho da GPU (Diligent) com chunks e a revisao da malha: compila, nao executado nesta maquina.
+- Esfera distante e hierarquia achatada: nao vistas na tela.
+- Mapa de sombra dos chunks: cobre so a area dos objetos com malha; em mundos grandes pode cortar sombras.
+- Texto apagando sozinho: ainda nao reproduzido. Precisa do log de teclas (Interface > Registrar eventos de teclado) e do campo exato.
+
+## 0.7.13-beta — exportacao para Windows x64 e Linux x64, janela Editor info, modo jogador, integracao do Newtoon
+
+> Entrada reconstruida a partir do registro de trabalho. Confira os itens antes de publicar.
+
+**Exportacao**
+- File > Export game: gera uma pasta com o editor, as DLLs (Windows), `assets/`, `Data/Project` e um launcher (`Play.bat` no Windows, `play.sh` no Linux). Plataformas: Windows x64 e Linux x64. Android, WebGL e UWP ainda nao.
+- A exportacao recusa projeto com informacoes incompletas e nao substitui uma pasta que nao seja de exportacao (`export.json`).
+- Versao do executavel (propriedades do arquivo no Windows) ainda nao e gravada.
+
+**Editor info**
+- File > Editor info: nome do produto, criador, estudio, pais, cidade, versao (formato 1 a 4 partes numericas), descricao, copyright e site. Salvo em `Project/project.json`.
+
+**Modo jogador**
+- `--player`: abre `Data/Project`, inicia o Play em tela cheia, Esc fecha, nada e salvo. Usado pelo launcher exportado.
+
+**Newtoon**
+- Integracao das adicoes da fisica (matematica, BVH, pool de threads, modulos de esqueleto, veiculo e ragdoll) para o repositorio oficial, entregue como arquivos e patch. Nao foi commitado no repositorio oficial.
+
+**Editor**
+- Forma "Smoke" para particulas, com predefinicao.
+
+**Testes**
+- Selftest: 196 checks, 0 falhas.
+
+**Pendente**
+- Android, WebGL e UWP.
+- Versao do executavel no Windows.
+- Visualizacao do modo jogador em tela cheia (so testado sem janela).
+
 ## 0.7.12-beta — particulas: formatos, area, trajetoria, tornado, 4 cores e opacidade; correcoes do editor
 
 **Correcoes**

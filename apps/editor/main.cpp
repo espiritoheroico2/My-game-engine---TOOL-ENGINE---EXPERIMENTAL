@@ -6,6 +6,7 @@
 #include "assets_panel.hpp"
 #include <cctype>
 #include "editor_state.hpp"
+#include "export_ui.hpp"
 #include "extra_ui.hpp"
 #include "fx.hpp"
 #include "i18n.hpp"
@@ -273,6 +274,7 @@ void drawHierarchy(Editor& ed) {
     if (ImGui::MenuItem(T("Point Light"))) ed.selected = ed.makePointLight();
     if (ImGui::MenuItem(T("Audio Source"))) ed.selected = ed.makeAudio("");
     ImGui::Separator();
+    if (ImGui::MenuItem(T("Voxel chunk (blocks)"))) ed.selected = ed.makeVoxel("Chunk", 0, 0, true);
     if (ImGui::MenuItem(T("Particle System"))) { ed.selected = ed.make("Particles"); w.add<ed_::ParticleComp>(ed.selected); w.get<ed_::Transform>(ed.selected)->pos[1] = 1.f; }
     if (ImGui::MenuItem(T("Game UI (canvas)"))) { ed.selected = ed.make("UI"); ed_::UiCanvas u; ed_::UiElem& el = u.items[u.count++]; ed_::ser::copyStr(el.text, sizeof el.text, "Score: {score}"); w.add<ed_::UiCanvas>(ed.selected, u); }
     ImGui::EndPopup();
@@ -299,10 +301,23 @@ void drawHierarchy(Editor& ed) {
   tool::Entity toDelete{}; tool::Entity dragChild{}, dragParent{}; bool doReparent = false, doUnparent = false;
   tool::Entity renameE{}; bool wantRename = false; static char renBuf[40] = "";
   auto beginRename = [&](tool::Entity e) { renameE = e; wantRename = true; if (auto* nm = w.get<ed_::Name>(e)) std::snprintf(renBuf, sizeof renBuf, "%s", nm->text); };
+  // Com muitos objetos, a arvore vira uma lista achatada (indentada) dentro de um ImGuiListClipper: so as linhas
+  // visiveis sao montadas. Abaixo do limite, a arvore com setas continua como antes.
+  constexpr size_t kFlatHierarchy = 300;
+  std::vector<std::pair<tool::Entity, int>> flat;
+  std::function<void(tool::Entity, int)> collect = [&](tool::Entity e, int depth) {
+    flat.push_back({e, depth});
+    auto it = kids.find(key(e));
+    if (it != kids.end() && depth < 32) for (tool::Entity c : it->second) collect(c, depth + 1);
+  };
+  for (tool::Entity r : roots) collect(r, 0);
+  const bool flatMode = flat.size() > kFlatHierarchy;
   std::function<void(tool::Entity, int)> row = [&](tool::Entity e, int depth) {
     auto* n = w.get<ed_::Name>(e);
     const char* prefix = w.has<ed_::CameraComp>(e) ? (ed.isPrincipal(e) ? "[cam*] " : "[cam] ") : w.has<ed_::GlobalLight>(e) ? "[sun] " : w.has<ed_::LightComp>(e) ? "[light] " : w.has<ed_::AudioSource>(e) ? "[snd] " : w.has<ed_::ParticleComp>(e) ? "[fx] " : w.has<ed_::UiCanvas>(e) ? "[ui] " : "";
     ImGui::PushID(static_cast<int>(e.index) ^ (static_cast<int>(e.generation) << 20));
+    const float indent = flatMode ? static_cast<float>(depth) * 14.f : 0.f;
+    if (indent > 0.f) ImGui::Indent(indent);
     { // olho (ocultar/mostrar) e cadeado (travar), antes do nome
       const bool hiddenE = w.has<ed_::Inactive>(e), lockedE = w.has<ed_::Locked>(e);
       if (rowIcon("eye", 0, !hiddenE, T("Show / hide the object. Hidden objects are not drawn, simulated or lit."))) {
@@ -316,8 +331,12 @@ void drawHierarchy(Editor& ed) {
     }
     char label[96]; std::snprintf(label, sizeof label, "%s%s##%u", prefix, n ? n->text : T("(unnamed)"), e.index);
     auto it = kids.find(key(e)); const bool leaf = it == kids.end();
-    ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen | (leaf ? ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen : 0) | (ed.selected == e ? ImGuiTreeNodeFlags_Selected : 0);
-    const bool open = ImGui::TreeNodeEx(label, fl);
+    bool open = false;
+    if (flatMode) ImGui::Selectable(label, ed.selected == e, ImGuiSelectableFlags_SpanAvailWidth);
+    else {
+      ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen | (leaf ? ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen : 0) | (ed.selected == e ? ImGuiTreeNodeFlags_Selected : 0);
+      open = ImGui::TreeNodeEx(label, fl);
+    }
     if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) { ed.selected = e; if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) ed.focusOn(e); }
     if (ImGui::BeginDragDropSource()) { ImGui::SetDragDropPayload("HIER_ENTITY", &e, sizeof e); ImGui::TextUnformatted(n ? n->text : "?"); ImGui::EndDragDropSource(); }
     if (ImGui::BeginDragDropTarget()) {
@@ -334,10 +353,16 @@ void drawHierarchy(Editor& ed) {
       if (ImGui::MenuItem(T("Delete"))) toDelete = e;
       ImGui::EndPopup();
     }
-    if (!leaf && open) { if (depth < 32) for (tool::Entity c : it->second) row(c, depth + 1); ImGui::TreePop(); }
+    if (!flatMode && !leaf && open) { if (depth < 32) for (tool::Entity c : it->second) row(c, depth + 1); ImGui::TreePop(); }
+    if (indent > 0.f) ImGui::Unindent(indent);
     ImGui::PopID();
   };
-  for (tool::Entity r : roots) row(r, 0);
+  if (flatMode) {
+    ImGuiListClipper clip;
+    clip.Begin(static_cast<int>(flat.size()));
+    while (clip.Step()) for (int i = clip.DisplayStart; i < clip.DisplayEnd; ++i) row(flat[static_cast<size_t>(i)].first, flat[static_cast<size_t>(i)].second);
+    clip.End();
+  } else for (tool::Entity r : roots) row(r, 0);
   // soltar no espaco vazio da janela = remove o pai
   ImGui::Dummy({ImGui::GetContentRegionAvail().x, std::max(24.f, ImGui::GetContentRegionAvail().y)});
   if (ImGui::BeginDragDropTarget()) {
@@ -490,6 +515,7 @@ void drawInspector(Editor& ed) {
   }
   editor::physicsUi(ed);
   editor::toolsUi(ed);
+  editor::voxelUi(ed);
   editor::uiCanvasUi(ed);
   editor::particleUi(ed);
   editor::addResourceUi(ed);
@@ -668,18 +694,50 @@ void drawProfiler(Editor& ed) {
 // --- Janelas de visualizacao (Scene e Game) -------------------------------------------------------------------
 // Grid no plano Y=0 (linhas de 1 m, destaque a cada 5 m) + eixos X (vermelho), Y (verde), Z (azul).
 void drawGrid(ImDrawList* dl, const ViewXf& v) {
-  constexpr int N = 24;
+  // Grid infinito: as linhas acompanham a camera (o passo cresce com a altura) e a vista corta o excesso.
+  // Assim o grid nunca termina, nao importa quao longe a camera esteja do centro.
+  const float s = std::max(1.f, std::pow(10.f, std::floor(std::log10(std::max(1.f, std::abs(v.eye.y)) / 10.f))));
+  constexpr int N = 60;
+  const float cx = std::round(v.eye.x / s) * s, cz = std::round(v.eye.z / s) * s, reach = N * s;
   for (int i = -N; i <= N; ++i) {
+    const float off = static_cast<float>(i) * s;
     const bool major = i % 5 == 0;
-    const float fade = std::clamp(1.f - std::abs(static_cast<float>(i)) / static_cast<float>(N + 4), 0.15f, 1.f);
+    const float d = std::abs(off) / reach, fade = std::clamp(1.f - d * d, 0.f, 1.f);
     const ImU32 col = IM_COL32(200, 200, 215, static_cast<int>((major ? 70 : 34) * fade));
-    if (i != 0) { line3(dl, v, {static_cast<float>(i), 0, -N}, {static_cast<float>(i), 0, N}, col); line3(dl, v, {-N, 0, static_cast<float>(i)}, {N, 0, static_cast<float>(i)}, col); }
+    line3(dl, v, {cx + off, 0, cz - reach}, {cx + off, 0, cz + reach}, col);
+    line3(dl, v, {cx - reach, 0, cz + off}, {cx + reach, 0, cz + off}, col);
   }
-  line3(dl, v, {-N, 0, 0}, {N, 0, 0}, IM_COL32(230, 70, 70, 190), 1.6f);
-  line3(dl, v, {0, 0, -N}, {0, 0, N}, IM_COL32(70, 110, 240, 190), 1.6f);
+  const float big = 1.e4f;
+  line3(dl, v, {-big, 0, 0}, {big, 0, 0}, IM_COL32(230, 70, 70, 190), 1.6f);
+  line3(dl, v, {0, 0, -big}, {0, 0, big}, IM_COL32(70, 110, 240, 190), 1.6f);
   line3(dl, v, {0, 0, 0}, {0, 6, 0}, IM_COL32(80, 220, 90, 220), 1.6f);
-  auto label = [&](tool::Vec3 p, const char* t, ImU32 c) { ImVec2 s; if (v.point(p, s)) dl->AddText(s, c, t); };
+  auto label = [&](tool::Vec3 p, const char* t, ImU32 c) { ImVec2 s2; if (v.point(p, s2)) dl->AddText(s2, c, t); };
   label({6.4f, 0, 0}, "X", IM_COL32(230, 90, 90, 255)); label({0, 6.4f, 0}, "Y", IM_COL32(100, 230, 110, 255)); label({0, 0, 6.4f}, "Z", IM_COL32(100, 140, 255, 255));
+}
+
+// Visualizacao de culling (Scene > Culled): em vermelho, os objetos que a camera de jogo principal NAO desenha
+// (fora do campo de visao ou alem da distancia de desenho). Mostra o que fica invisivel durante o Play.
+void drawCulledOverlay(Editor& ed, ImDrawList* dl, const ViewXf& xf) {
+  const auto cams = ed.principalCameras();
+  if (cams.empty()) return;
+  const tool::Camera gc = ed.cameraFor(cams[0]);
+  const auto planes = Editor::framePlanes(gc, std::max(1, static_cast<int>(xf.size.x)), std::max(1, static_cast<int>(xf.size.y)));
+  tool::World& w = ed.scene.world();
+  w.each<ed_::MeshRenderer>([&](tool::Entity e, ed_::MeshRenderer& mr) {
+    if (w.has<ed_::Inactive>(e)) return;
+    const tool::Mesh* m = ed.meshOf(mr); if (!m) return;
+    const Editor::Bounds bd = ed.meshBounds(*m); const tool::Mat4 wm = ed.worldMat(e);
+    const float sc = std::max({std::hypot(wm.m[0][0], wm.m[0][1], wm.m[0][2]), std::hypot(wm.m[1][0], wm.m[1][1], wm.m[1][2]), std::hypot(wm.m[2][0], wm.m[2][1], wm.m[2][2])});
+    const tool::Vec3 c = wm.transformPoint(bd.center); const float r = bd.radius * sc;
+    bool culled = false;
+    for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) { culled = true; break; }
+    if (!culled) return;
+    const ImU32 red = IM_COL32(255, 70, 70, 230);
+    const tool::Vec3 lo{c.x - r, c.y - r, c.z - r}, hi{c.x + r, c.y + r, c.z + r};
+    const tool::Vec3 k[8] = {{lo.x, lo.y, lo.z}, {hi.x, lo.y, lo.z}, {hi.x, hi.y, lo.z}, {lo.x, hi.y, lo.z}, {lo.x, lo.y, hi.z}, {hi.x, lo.y, hi.z}, {hi.x, hi.y, hi.z}, {lo.x, hi.y, hi.z}};
+    const int ed4[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6}, {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+    for (const auto& pr : ed4) line3(dl, xf, k[pr[0]], k[pr[1]], red, 1.f);
+  });
 }
 
 void circleXZ(ImDrawList* dl, const ViewXf& v, tool::Vec3 c, float r, ImU32 col) {
@@ -744,6 +802,8 @@ void drawSceneView(Editor& ed, SDL_Renderer* sdl) {
   playButton(ed);
   ImGui::SameLine(); ImGui::Checkbox(T("Grid"), &ed.showGridScene);
   ImGui::SameLine(); ImGui::Checkbox(T("Gizmos"), &ed.showGizmos);
+  ImGui::SameLine(); ImGui::Checkbox(T("Culled"), &ed.showCulled);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Shows in red the objects the game camera does not draw (outside its view or beyond the draw distance)."));
   {
     ImGui::SameLine(); ImGui::Checkbox(T("Post-fx"), &ed.showPostInScene);
     ImGui::SameLine(); ImGui::TextDisabled("%s", ed.freeFly ? T("FREE NAVIGATION: WASD move, Q/E down/up, Shift fast, wheel speed, Alt/Esc exit")
@@ -773,6 +833,7 @@ void drawSceneView(Editor& ed, SDL_Renderer* sdl) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(origin, {origin.x + static_cast<float>(w), origin.y + static_cast<float>(h)}, true);
     if (ed.showGridScene) drawGrid(dl, xf);
+    if (ed.showCulled) drawCulledOverlay(ed, dl, xf);
     if (ed.showGizmos) { drawGizmos(ed, dl, xf); editor::drawPhysicsShapes(ed, dl, xf); }
     dl->PopClipRect();
     // soltar um modelo/som do painel Assets cria o objeto na cena
@@ -885,15 +946,20 @@ void drawSceneView(Editor& ed, SDL_Renderer* sdl) {
   ImGui::End();
 }
 
-void drawGameView(Editor& ed, SDL_Renderer* sdl) {
+void drawGameView(Editor& ed, SDL_Renderer* sdl, bool player = false) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-  if (!ImGui::Begin(W("Game", "game").c_str(), &ed.showGame)) { ImGui::End(); ImGui::PopStyleVar(); return; }
-  editor::helpIcon("start");
+  if (player) { // jogo exportado (--player): janela cheia, sem barra de ferramentas nem docas
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->Pos); ImGui::SetNextWindowSize(vp->Size);
+    if (!ImGui::Begin("##player", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoDocking)) { ImGui::End(); ImGui::PopStyleVar(); return; }
+  } else {
+    if (!ImGui::Begin(W("Game", "game").c_str(), &ed.showGame)) { ImGui::End(); ImGui::PopStyleVar(); return; }
+    editor::helpIcon("start");
+  }
   ImGui::PopStyleVar();
-  ImGui::SetCursorPos({ImGui::GetCursorPosX() + 6.f, ImGui::GetCursorPosY() + 4.f});
-  playButton(ed);
+  if (!player) { ImGui::SetCursorPos({ImGui::GetCursorPosX() + 6.f, ImGui::GetCursorPosY() + 4.f}); playButton(ed); }
   const auto cams = ed.principalCameras();
-  ImGui::SameLine(); ImGui::TextDisabled("%s", F("Principal cameras: %zu%s", cams.size(), cams.size() >= 2 ? (ed.sceneInfo.splitVertical ? " (vertical split)" : " (horizontal split)") : "").c_str());
+  if (!player) { ImGui::SameLine(); ImGui::TextDisabled("%s", F("Principal cameras: %zu%s", cams.size(), cams.size() >= 2 ? (ed.sceneInfo.splitVertical ? " (vertical split)" : " (horizontal split)") : "").c_str()); }
   const ImVec2 avail = ImGui::GetContentRegionAvail();
   if (cams.empty()) {
     ImGui::SetCursorPos({12, ImGui::GetCursorPosY() + 12});
@@ -1145,6 +1211,8 @@ void drawLightingTab(Editor& ed) {
     c |= ImGui::ColorEdit3(T("Ambient light"), g->ambient); c |= ImGui::Checkbox(T("Sun casts shadows"), &g->castShadow);
   } else ImGui::TextDisabled("%s", T("No Global Light in this scene (Hierarchy > + Create > Global Light)."));
   c |= ImGui::Checkbox(T("Frustum culling (skip objects outside the camera view)"), &r.frustumCull);
+  c |= ImGui::DragFloat(T("Draw distance (0 = each camera's Far)"), &r.drawDistance, 1.f, 0.f, 20000.f, "%.0f");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Objects farther than this are not drawn in the Scene and Game views. 0 = use the Far value of each camera. Very large values make distant objects flicker (depth precision)."));
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Objects outside the camera view are not drawn. Objects that cast shadows are always drawn."));
   ImGui::SeparatorText(T("Real-time shadows"));
   c |= ImGui::Checkbox(T("Enable shadows"), &r.shadow.enabled);
@@ -1210,21 +1278,14 @@ void drawTagsTab(Editor& ed) {
   ImGui::TextDisabled("%s", T("Renaming a tag changes it in every object and in the other scene files."));
 }
 
-// --- Configuracoes > Project (preset de exportacao: guardado, mas DESLIGADO) ----------------------------------
+// --- Configuracoes > Project (links de tags, editor externo, nota sobre exportacao) ------------------------------
 void drawProjectTab(Editor& ed) {
-  auto& ex = ed.projSettings.exportPreset; bool c = false;
+  bool c = false;
   ImGui::SeparatorText(T("External code editor"));
   c |= ImGui::InputTextWithHint(T("Editor command"), T("empty = system default (Notepad on Windows)"), ed.projSettings.externalEditor, sizeof ed.projSettings.externalEditor);
   ImGui::TextDisabled("%s", T("Examples: code   |   notepad++.exe   |   C:\\Program Files\\Notepad++\\notepad++.exe. Run directly, never through a shell."));
-  ImGui::SeparatorText(T("Export preset"));
-  ImGui::TextColored({1.f, .8f, .3f, 1.f}, "%s", T("Export is not active yet. The preset is only stored for the future."));
-  ImGui::BeginDisabled(!ed_::kExportEnabled);
-  std::string plats; for (auto* p : ed_::kExportPlatforms) { plats += p; plats += '\0'; }
-  c |= ImGui::Combo(T("Target platform"), &ex.platform, plats.c_str());
-  c |= ImGui::InputText(T("Game name"), ex.appName, sizeof ex.appName);
-  c |= ImGui::Checkbox(T("Compress assets"), &ex.compressAssets); c |= ImGui::Checkbox(T("Leave editor-only data out"), &ex.stripEditorData);
-  ImGui::Button(T("Export...")); 
-  ImGui::EndDisabled();
+  ImGui::SeparatorText(T("Export"));
+  ImGui::TextDisabled("%s", T("Fill in File > Editor info, then use File > Export game."));
   if (c) ed.projSettings.save(ed.project);
 }
 
@@ -1265,6 +1326,8 @@ void drawMenu(Editor& ed, bool& quit) {
     if (ImGui::MenuItem(T("Save graph"))) ed.narrative.save();
     ImGui::Separator();
     if (ImGui::MenuItem(T("Settings..."))) openSettings(ed, 0);
+    if (ImGui::MenuItem(T("Editor info..."))) ed.showEditorInfo = true;
+    if (ImGui::MenuItem(T("Export game..."))) ed.showExport = true;
     if (ImGui::MenuItem(T("Quit"))) quit = true;
     ImGui::EndMenu();
   }
@@ -1288,6 +1351,8 @@ void drawMenu(Editor& ed, bool& quit) {
     ImGui::MenuItem(T("Lock interface"), nullptr, &ed.lockInterface);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Locks the layout: tabs and windows can't be dragged out of the docks, and the splitters don't move. Use Reset layout to change it again."));
     ImGui::MenuItem(T("Dock only while holding Shift"), nullptr, &ed.dockWithShift);
+    ImGui::MenuItem(T("Log keyboard events (debug)"), nullptr, &ed.logKeys);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Writes each key press, release and typed text to the Console. Use it to find the key that erases text."));
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Hold Shift to dock or undock a window. Stops windows from detaching by accident when you click."));
     ImGui::Separator();
     if (ImGui::MenuItem(T("Reset layout"))) ed.resetLayout = true;
@@ -1343,6 +1408,17 @@ void applyLayoutLock(ImGuiDockNode* node, bool lock) {
   const ImGuiDockNodeFlags f = ImGuiDockNodeFlags_NoUndocking | ImGuiDockNodeFlags_NoDockingSplit | ImGuiDockNodeFlags_NoResize;
   node->SharedFlags = lock ? (node->SharedFlags | f) : (node->SharedFlags & ~f);
   for (ImGuiDockNode* child : node->ChildNodes) applyLayoutLock(child, lock);
+}
+
+// Travar interface: cancela o arrasto de janela pela barra de titulo e encaixa de volta as janelas que estiverem
+// flutuando (so as do editor: nomes com "###"). Roda a cada quadro enquanto a opcao estiver ligada.
+void lockWindows(ImGuiID dock) {
+  ImGuiContext& g = *ImGui::GetCurrentContext();
+  if (g.MovingWindow) { ImGui::ClearActiveID(); g.MovingWindow = nullptr; }
+  for (ImGuiWindow* win : g.Windows) {
+    if (!win->WasActive || win->DockIsActive || (win->Flags & ImGuiWindowFlags_Popup) || !std::strstr(win->Name, "###")) continue;
+    ImGui::DockBuilderDockWindow(win->Name, dock);
+  }
 }
 
 // Layout padrao estilo Unity: hierarquia/cenas a esquerda, inspetor a direita, assets/console embaixo, Scene+Game no centro.
@@ -1445,12 +1521,18 @@ void loadUiFont(ImGuiIO& io) {
 }
 
 int main(int argc, char** argv) {
-  int maxFrames = 0; int startApi = -1; bool startPlaying = false, selfTest = false;
+  int maxFrames = 0; int startApi = -1; bool startPlaying = false, selfTest = false, playerMode = false;
+  long long ecsCount = 0;   // --ecs N: benchmark de N esferas (ver abaixo)
+  long long voxelCount = 0; // --voxel N: benchmark de N chunks de terreno (16x16x16 blocos cada)
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--frames") == 0) maxFrames = std::atoi(argv[i + 1]);
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--ecs") == 0) ecsCount = std::atoll(argv[i + 1]);
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--voxel") == 0) voxelCount = std::atoll(argv[i + 1]);
+  const bool headless = maxFrames > 0 || ecsCount > 0 || voxelCount > 0;   // sem dialogo de projeto, sem gravar cena/configuracoes
   std::string projectArg;   // --project <pasta>: abre esse projeto direto, sem a janela de inicio
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--project") == 0) projectArg = argv[i + 1];
+  if ((ecsCount > 0 || voxelCount > 0) && projectArg.empty()) { std::fprintf(stderr, "--ecs/--voxel precisam de --project <pasta de teste> (nao grava o projeto)\n"); return 1; }
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--api") == 0) startApi = std::strcmp(argv[i + 1], "vulkan") == 0 ? 1 : std::strcmp(argv[i + 1], "opengl") == 0 ? 2 : std::strcmp(argv[i + 1], "d3d12") == 0 ? 3 : 0;
-  for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--play") == 0) startPlaying = true; if (std::strcmp(argv[i], "--selftest") == 0) selfTest = true; }
+  for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--play") == 0) startPlaying = true; if (std::strcmp(argv[i], "--selftest") == 0) selfTest = true; if (std::strcmp(argv[i], "--player") == 0) playerMode = true; }
   std::string startLang, startTheme, startScene, focusWin, selectName; int startTab = -1; bool showInputMapAtStart = false; std::string narrativeFile;
   for (int i = 1; i + 1 < argc; ++i) {
     if (std::strcmp(argv[i], "--lang") == 0) startLang = argv[i + 1];
@@ -1472,14 +1554,14 @@ int main(int argc, char** argv) {
   SDL_Window* window = SDL_CreateWindow("ToolEngine Editor", 1600, 900, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, maxFrames > 0 ? "software" : nullptr) : nullptr;
   if (!window || !renderer) { std::fprintf(stderr, "window/renderer: %s\n", SDL_GetError()); return 1; }
-  SDL_SetRenderVSync(renderer, 1);
+  SDL_SetRenderVSync(renderer, ecsCount > 0 ? 0 : 1);   // --ecs: sem vsync, para medir o custo real do quadro
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImNodes::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
-  io.IniFilename = maxFrames > 0 ? nullptr : "editor_layout.ini";
+  io.IniFilename = headless ? nullptr : "editor_layout.ini";
   ImGui::StyleColorsDark();
   loadUiFont(io);
   ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
@@ -1491,7 +1573,7 @@ int main(int argc, char** argv) {
   ed.theme.scan("assets/themes");
   ed.theme.apply();
   std::string lastScene, lastProject; int savedApi = 0;
-  if (maxFrames == 0) savedApi = loadSettings(ed, lastScene, lastProject);
+  if (!headless) savedApi = loadSettings(ed, lastScene, lastProject);
   if (!startLang.empty()) editor::I18n::get().select(startLang);
   if (startTab >= 0) openSettings(ed, startTab);
   if (!startTheme.empty()) {
@@ -1510,6 +1592,13 @@ int main(int argc, char** argv) {
 
   // projeto: cria Project/Assets e Project/Scenes; abre a ultima cena (ou cria "Main" na primeira vez)
   // Projeto: --project <pasta> abre direto; senao (uso normal) a janela de inicio pede nome, autor e pasta.
+  if (playerMode) { // jogo exportado: o executavel fica na pasta do jogo, com Data/Project ao lado
+    std::error_code pe;
+    const std::filesystem::path base = editor::editorFolder();
+    std::filesystem::current_path(base, pe);
+    projectArg = (base / "Data" / "Project").string();
+    startPlaying = true;
+  }
   if (!projectArg.empty()) {
     std::string err;
     std::error_code mk;
@@ -1517,7 +1606,7 @@ int main(int argc, char** argv) {
     const std::filesystem::path root = editor::openProjectFolder(projectArg, err);
     if (root.empty()) { std::fprintf(stderr, "--project: %s (%s)\n", err.c_str(), projectArg.c_str()); SDL_Quit(); return 1; }
     ed.project.root = root;
-  } else if (maxFrames == 0) {
+  } else if (!headless) {
     editor::ProjectDialog dlg;
     dlg.lastProject = lastProject;
     const std::string loc = editor::defaultProjectsFolder(lastProject);
@@ -1562,25 +1651,37 @@ int main(int argc, char** argv) {
   if (showInputMapAtStart) ed.showInputMap = true;
   if (!narrativeFile.empty()) ed.narrative.open(narrativeFile);
   if (startPlaying) ed.startPlay();
+  // --ecs N: benchmark sem vsync. Cria N esferas (como "test ECS: N"), mede o tempo de cada quadro depois do nascimento
+  // e imprime media, p50, p95 e maximo. Sai sozinho ao fim de 300 quadros medidos.
+  if (ecsCount > 0) ed.startEcsTest(ecsCount);
+  if (voxelCount > 0) {   // chunks em grade quadrada, todos com terreno
+    const long long side = static_cast<long long>(std::ceil(std::sqrt(static_cast<double>(voxelCount))));
+    for (long long i = 0; i < voxelCount; ++i) ed.makeVoxel("Chunk", static_cast<int>(i % side), static_cast<int>(i / side), true);
+  }
   if (!selectName.empty()) ed.scene.world().eachEntity([&](tool::Entity e) { auto* n = ed.scene.world().get<editor::Name>(e); if (n && selectName == n->text) ed.selected = e; });
 
   bool quit = false;
   int frame = 0, layoutFocus = 0;
   const Uint64 t0 = SDL_GetTicks();
+  const bool bench = ecsCount > 0 || voxelCount > 0;
+  std::vector<double> benchMs; bool benchArmed = false;
   while (!quit) {
     const Uint64 frameStart = SDL_GetTicksNS();
-    if (ed.fpsDirty && renderer) { SDL_SetRenderVSync(renderer, ed.fpsMode == 0 && maxFrames == 0 ? 1 : 0); ed.fpsDirty = false; }
+    if (ed.fpsDirty && renderer) { SDL_SetRenderVSync(renderer, ed.fpsMode == 0 && !headless ? 1 : 0); ed.fpsDirty = false; }
     tool::debug().beginFrame();
     ed.prof.beginFrame();
     SDL_Event e;
     // Ocioso: espera ate 16 ms pelo proximo evento (em vez de girar o quadro sem parar). O evento volta para a fila.
     // A espera vem ANTES da zona de medicao: nao e trabalho e nao deve aparecer como "Events + input".
-    if (ed.viewsIdle() && maxFrames == 0) { SDL_Event waited; if (SDL_WaitEventTimeout(&waited, 16)) SDL_PushEvent(&waited); }
+    if (ed.viewsIdle() && !headless) { SDL_Event waited; if (SDL_WaitEventTimeout(&waited, 16)) SDL_PushEvent(&waited); }
     std::unique_ptr<editor::ZoneTimer> zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Events); // um cronometro de cada vez
     int nEvents = 0;
     while (SDL_PollEvent(&e)) {
       ++nEvents;
       ImGui_ImplSDL3_ProcessEvent(&e);
+      if (ed.logKeys && (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP))
+        tool::logInfo(std::string("[keys] ") + (e.type == SDL_EVENT_KEY_DOWN ? "down " : "up ") + SDL_GetKeyName(e.key.key) + (e.key.repeat ? " (repeat)" : "") + (ImGui::GetIO().WantTextInput ? " [text field]" : ""));
+      if (ed.logKeys && e.type == SDL_EVENT_TEXT_INPUT) tool::logInfo(std::string("[keys] text '") + (e.text.text ? e.text.text : "") + "'");
       if (e.type == SDL_EVENT_MOUSE_MOTION && ed.freeFly) { ed.mouseDX += e.motion.xrel; ed.mouseDY += e.motion.yrel; } // navegacao livre: mouse capturado
       if (e.type == SDL_EVENT_QUIT || (e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && e.window.windowID == SDL_GetWindowID(window))) quit = true;
       if (e.type == SDL_EVENT_DROP_FILE && e.drop.data) editor::queueImport(e.drop.data); // arrastar arquivos do sistema para a janela
@@ -1605,44 +1706,52 @@ int main(int argc, char** argv) {
     const auto panelsStart = editor::FrameProfiler::Clock::now();
 
     ImGui_ImplSDLRenderer3_NewFrame(); ImGui_ImplSDL3_NewFrame(); ImGui::NewFrame();
-    if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) ed.saveScene();
+    if (!playerMode && !ImGui::GetIO().WantTextInput && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) ed.saveScene();
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) { // F1: ajuda do topico da janela em foco
       const char* topic = "start"; ImGuiWindow* nav = ImGui::GetCurrentContext()->NavWindow;
       if (nav) { const std::string nm = nav->Name; auto has = [&](const char* k) { return nm.find(k) != std::string::npos; };
         if (has("###view")) topic = "scene"; else if (has("###insp") || has("###hier")) topic = "objects"; else if (has("###prof") || has("###settings")) topic = "profiler"; else if (has("###narr")) topic = "narrative"; else if (has("###inmap")) topic = "inputmap"; }
       editor::openHelp(topic);
     }
+    if (playerMode && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) quit = true; // jogo exportado: Esc fecha
     if (!ImGui::GetIO().WantTextInput) { // Desfazer / Refazer
       if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) ed.undo();
       if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y) || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z)) ed.redo();
     }
     ed.undoTick(ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsKeyDown(ImGuiKey_Delete) || ed.freeFly); // fim de interacao = novo passo do historico
-    drawMenu(ed, quit);
-    drawStatusBar(ed);
-    if (!focusWin.empty() && frame == 24) ImGui::SetWindowFocus(("###" + focusWin).c_str());
-    const ImGuiID dock = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
-    if (ed.resetLayout || ImGui::DockBuilderGetNode(dock) == nullptr || ImGui::DockBuilderGetNode(dock)->IsLeafNode()) {
-      buildDefaultLayout(dock, ImGui::GetMainViewport()->WorkSize);
-      ed.resetLayout = false; layoutFocus = 12;
+    if (playerMode) {
+      drawGameView(ed, renderer, true);
+    } else {
+      drawMenu(ed, quit);
+      drawStatusBar(ed);
+      if (!focusWin.empty() && frame == 24) ImGui::SetWindowFocus(("###" + focusWin).c_str());
+      const ImGuiID dock = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
+      if (ed.resetLayout || ImGui::DockBuilderGetNode(dock) == nullptr || ImGui::DockBuilderGetNode(dock)->IsLeafNode()) {
+        buildDefaultLayout(dock, ImGui::GetMainViewport()->WorkSize);
+        ed.resetLayout = false; layoutFocus = 12;
+      }
+      ImGui::GetIO().ConfigDockingWithShift = ed.dockWithShift;          // encaixe so com Shift, se ligado
+      applyLayoutLock(ImGui::DockBuilderGetNode(dock), ed.lockInterface); // travar layout, se ligado (cada quadro)
+      if (ed.lockInterface) lockWindows(dock);
+      const bool focusTabs = layoutFocus > 0 && --layoutFocus == 0; // seleciona as abas ativas do layout padrao (Inspector, Scene, Assets)
+      if (ed.showHierarchy) drawHierarchy(ed);
+      if (focusTabs) ImGui::SetNextWindowFocus();
+      if (ed.showInspector) drawInspector(ed);
+      if (focusTabs) ImGui::SetNextWindowFocus();
+      if (ed.showScene) drawSceneView(ed, renderer);
+      if (ed.showGame) drawGameView(ed, renderer);
+      if (ed.showConsole) drawConsole(ed);
+      if (ed.showProfiler) drawProfiler(ed);
+      if (focusTabs) ImGui::SetNextWindowFocus();
+      if (ed.showAssets) editor::drawAssets(ed);
+      if (ed.showScenes) editor::drawScenes(ed);
+      if (ed.showSettings) drawSettings(ed);
+      if (ed.showNarrative) ed.narrative.draw(&ed.showNarrative);
+      if (ed.showInputMap) editor::drawInputMap(ed, &ed.showInputMap);
+      if (editor::helpState().open) editor::drawHelp(ed, &editor::helpState().open);
+      if (ed.showEditorInfo) editor::drawEditorInfo(ed, &ed.showEditorInfo);
+      if (ed.showExport) editor::drawExport(ed, &ed.showExport);
     }
-    ImGui::GetIO().ConfigDockingWithShift = ed.dockWithShift;          // encaixe so com Shift, se ligado
-    applyLayoutLock(ImGui::DockBuilderGetNode(dock), ed.lockInterface); // travar layout, se ligado (cada quadro)
-    const bool focusTabs = layoutFocus > 0 && --layoutFocus == 0; // seleciona as abas ativas do layout padrao (Inspector, Scene, Assets)
-    if (ed.showHierarchy) drawHierarchy(ed);
-    if (focusTabs) ImGui::SetNextWindowFocus();
-    if (ed.showInspector) drawInspector(ed);
-    if (focusTabs) ImGui::SetNextWindowFocus();
-    if (ed.showScene) drawSceneView(ed, renderer);
-    if (ed.showGame) drawGameView(ed, renderer);
-    if (ed.showConsole) drawConsole(ed);
-    if (ed.showProfiler) drawProfiler(ed);
-    if (focusTabs) ImGui::SetNextWindowFocus();
-    if (ed.showAssets) editor::drawAssets(ed);
-    if (ed.showScenes) editor::drawScenes(ed);
-    if (ed.showSettings) drawSettings(ed);
-    if (ed.showNarrative) ed.narrative.draw(&ed.showNarrative);
-    if (ed.showInputMap) editor::drawInputMap(ed, &ed.showInputMap);
-    if (editor::helpState().open) editor::drawHelp(ed, &editor::helpState().open);
     { // "Panels" = tempo dos paineis SEM as renderizacoes 3D (essas ja foram contadas nas suas proprias zonas)
       const float total = std::chrono::duration<float, std::milli>(editor::FrameProfiler::Clock::now() - panelsStart).count();
       const float inner = ed.prof.cur[static_cast<int>(editor::Zone::SceneRender)] + ed.prof.cur[static_cast<int>(editor::Zone::GameRender)] + ed.prof.cur[static_cast<int>(editor::Zone::PostFx)] + ed.prof.cur[static_cast<int>(editor::Zone::Sky)];
@@ -1650,7 +1759,7 @@ int main(int argc, char** argv) {
     }
     zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Ui);
     ImGui::Render();
-    if (maxFrames == 0 && (ed.themeDirty || ed.langDirty || ed.settingsDirty) && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) { saveSettings(ed); ed.themeDirty = ed.langDirty = ed.settingsDirty = false; }
+    if (!headless && !playerMode && (ed.themeDirty || ed.langDirty || ed.settingsDirty) && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) { saveSettings(ed); ed.themeDirty = ed.langDirty = ed.settingsDirty = false; }
 
     { const ImVec4 bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg); SDL_SetRenderDrawColor(renderer, static_cast<Uint8>(bg.x * 255), static_cast<Uint8>(bg.y * 255), static_cast<Uint8>(bg.z * 255), 255); }
     SDL_RenderClear(renderer);
@@ -1658,15 +1767,34 @@ int main(int argc, char** argv) {
     zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Present);
     SDL_RenderPresent(renderer);
     tool::debug().endFrame();
-    if (ed.fpsMode >= 1 && ed.fpsMode <= 3 && maxFrames == 0) { // limite manual de FPS (30/60/120): espera o que sobrar do quadro
+    if (ed.fpsMode >= 1 && ed.fpsMode <= 3 && !headless) { // limite manual de FPS (30/60/120): espera o que sobrar do quadro
       static const Uint64 target[4] = {0, 1000000000ull / 30, 1000000000ull / 60, 1000000000ull / 120};
       const Uint64 spent = SDL_GetTicksNS() - frameStart;
       if (spent < target[ed.fpsMode]) SDL_DelayNS(target[ed.fpsMode] - spent);
     }
     zone.reset();
     ++frame; if (maxFrames > 0 && frame >= maxFrames) quit = true;
+    if (bench) {
+      bool armed = false;
+      ed.scene.world().each<editor::SpawnerComp>([&](tool::Entity, editor::SpawnerComp& s) { if (s.armed) armed = true; });
+      if (armed) benchArmed = true;
+      if (voxelCount > 0 && frame == 10) benchArmed = true;   // chunks nao tem nascimento: mede a partir do 10o quadro
+      if (benchArmed && !armed) {   // nascimento terminou: mede os proximos quadros
+        benchMs.push_back(static_cast<double>(SDL_GetTicksNS() - frameStart) / 1e6);
+        if (benchMs.size() >= 300) {
+          std::vector<double> s = benchMs; std::sort(s.begin(), s.end());
+          double sum = 0; for (double v : s) sum += v;
+          std::printf("ECS bench: %s, %zu bodies, %zu frames\n", ecsCount > 0 ? (std::to_string(ecsCount) + " spheres").c_str() : (std::to_string(voxelCount) + " voxel chunks").c_str(), ed.play.ents.size(), s.size());
+          std::printf("ECS bench: avg %.2f ms (%.1f fps), p50 %.2f ms, p95 %.2f ms, max %.2f ms\n", sum / s.size(), 1000.0 * s.size() / sum,
+                      s[s.size() / 2], s[s.size() * 95 / 100], s.back());
+          for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::printf("ECS bench:   %-34s %7.2f ms\n", editor::zoneName(static_cast<editor::Zone>(z)), static_cast<double>(ed.prof.zoneAvg(static_cast<editor::Zone>(z))));
+          std::printf("ECS bench:   last frame: %llu draws, %llu triangles, %llu culled\n", static_cast<unsigned long long>(ed.prof.last.draws), static_cast<unsigned long long>(ed.prof.last.tris), static_cast<unsigned long long>(ed.prof.last.culled));
+          quit = true;
+        }
+      }
+    }
   }
-  if (maxFrames == 0) { ed.saveScene(); saveSettings(ed); } // ao sair, grava a cena e as configuracoes
+  if (!headless && !playerMode) { ed.saveScene(); saveSettings(ed); } // ao sair, grava a cena e as configuracoes (nunca no jogo exportado)
   ed.stopPlay();
   tool::Logger::get().setSink(nullptr);
   ed.sceneTex.destroy(); ed.gameTex[0].destroy(); ed.gameTex[1].destroy();
