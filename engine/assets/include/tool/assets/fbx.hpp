@@ -218,8 +218,7 @@ struct Model {
   std::string name;
   Mat4 local;
   std::vector<i64> geoms;
-  i64 material = 0;
-  int materialCount = 0;
+  std::vector<i64> materials; // materiais ligados ao modelo, na ordem do arquivo (a LayerElementMaterial aponta para eles)
 };
 
 } // namespace fbx_detail
@@ -288,38 +287,56 @@ inline ImportResult importFbx(const std::vector<u8>& bytes, const ImportOptions&
       const i64 child = c.props[1].i, parent = c.props[2].i;
       auto pm = models.find(parent);
       if (geoNodes.count(child) && pm != models.end()) pm->second.geoms.push_back(child);
-      else if (matNodes.count(child) && pm != models.end()) { if (pm->second.materialCount++ == 0) pm->second.material = child; }
+      else if (matNodes.count(child) && pm != models.end()) pm->second.materials.push_back(child);
       else if (models.count(child)) models[child].parent = parent; // pai 0 = raiz da cena
     }
 
-  // Matriz de mundo de um modelo = pai * local, subindo ate a raiz (limite de profundidade contra ciclos).
-  auto worldOf = [&](const Model& m, bool& ok) {
-    Mat4 w = m.local;
-    const Model* cur = &m;
-    for (size_t depth = 0; cur->parent != 0; ++depth) {
-      auto it = models.find(cur->parent);
-      if (it == models.end()) break;
-      if (depth > opt.limits.maxDepth) { ok = false; return w; }
-      cur = &it->second;
-      w = cur->local * w;
-    }
-    return w;
+  // Hierarquia: cada Model vira um no (ordem de visita: pai antes do filho). Raizes = modelos sem pai.
+  // A transformacao de uma raiz inclui sceneRoot (escala da unidade e eixo "up" do arquivo).
+  std::map<i64, std::vector<i64>> kids;
+  std::vector<i64> rootIds;
+  for (const auto& [id, m] : models) {
+    if (m.parent != 0 && models.count(m.parent)) kids[m.parent].push_back(id);
+    else rootIds.push_back(id);
+  }
+  std::map<i64, int> nodeOf;
+  auto addNode = [&](auto&& self, i64 id, int parentNode, size_t depth) -> bool {
+    if (depth > opt.limits.maxDepth) return false;
+    if (md.nodes.size() >= opt.limits.maxNodes) return false;
+    const Model& m = models[id];
+    ModelNode n;
+    n.name = m.name;
+    n.parent = parentNode;
+    n.local = parentNode < 0 ? sceneRoot * m.local : m.local;
+    const int me = static_cast<int>(md.nodes.size());
+    md.nodes.push_back(std::move(n));
+    nodeOf[id] = me;
+    for (i64 k : kids[id]) if (!self(self, k, me, depth + 1)) return false;
+    return true;
   };
+  for (i64 r : rootIds) if (!addNode(addNode, r, -1, 0)) return failure("FBX: hierarquia de modelos profunda demais ou com ciclo", code::kImportLimit);
+  if (nodeOf.size() != models.size()) md.warnings.push_back("modelos em ciclo de hierarquia ignorados");
 
   for (auto& [id, m] : models) {
     if (m.geoms.empty()) continue;
-    bool ok = true;
-    const Mat4 world = sceneRoot * worldOf(m, ok);
-    if (!ok) return failure("FBX: hierarquia de modelos com ciclo");
-    Material mat;
-    mat.albedo = {0.8f, 0.8f, 0.8f}; mat.metallic = 0.f; mat.roughness = 0.6f;
-    if (m.material != 0) {
-      const Node* p70 = props70Of(*matNodes[m.material]);
-      const Vec3 dc = vec3P(p70, "DiffuseColor", vec3P(p70, "Diffuse", {0.8f, 0.8f, 0.8f}));
-      const f32 df = static_cast<f32>(numP(p70, "DiffuseFactor", 1.0));
-      mat.albedo = dc * df;
-    }
-    if (m.materialCount > 1) md.warnings.push_back("'" + m.name + "': varios materiais por objeto nao suportados; usando o primeiro");
+    const auto nit = nodeOf.find(id);
+    if (nit == nodeOf.end()) continue;
+    const int node = nit->second;
+    // Material do slot k do modelo (cor difusa); slot invalido cai no material padrao.
+    auto slotMaterial = [&](int k) {
+      Material mat;
+      mat.albedo = {0.8f, 0.8f, 0.8f}; mat.metallic = 0.f; mat.roughness = 0.6f;
+      if (k >= 0 && static_cast<size_t>(k) < m.materials.size()) {
+        const auto mit = matNodes.find(m.materials[static_cast<size_t>(k)]);
+        if (mit != matNodes.end()) {
+          const Node* p70 = props70Of(*mit->second);
+          const Vec3 dc = vec3P(p70, "DiffuseColor", vec3P(p70, "Diffuse", {0.8f, 0.8f, 0.8f}));
+          const f32 df = static_cast<f32>(numP(p70, "DiffuseFactor", 1.0));
+          mat.albedo = dc * df;
+        }
+      }
+      return mat;
+    };
     for (i64 gid : m.geoms) {
       const Node& g = *geoNodes[gid];
       const Node *vn = g.child("Vertices"), *pn = g.child("PolygonVertexIndex");
@@ -355,6 +372,20 @@ inline ImportResult importFbx(const std::vector<u8>& bytes, const ImportOptions&
         return true;
       };
 
+      // Material de cada poligono (LayerElementMaterial): o valor e o slot na lista de materiais do modelo.
+      std::vector<i64> matIdx;
+      std::string matMap;
+      if (const Node* mln = g.child("LayerElementMaterial")) {
+        if (auto* mp = mln->child("MappingInformationType"); mp && !mp->props.empty()) matMap = mp->props[0].s;
+        if (auto* ma = mln->child("Materials"); ma && !ma->props.empty()) matIdx = ma->props[0].ai;
+      }
+      auto slotOf = [&](size_t q) -> int {
+        if (matIdx.empty()) return 0;
+        const size_t s = matMap == "AllSame" ? 0 : q;
+        return (s < matIdx.size() && matIdx[s] >= 0) ? static_cast<int>(matIdx[s]) : 0;
+      };
+      std::vector<int> triSlot; // material (slot) de cada triangulo emitido
+
       Mesh mesh;
       const bool hasN = ln.data != nullptr, hasUv = lu.data != nullptr;
       mesh.pos.reserve(P.size());
@@ -384,7 +415,7 @@ inline ImportResult importFbx(const std::vector<u8>& bytes, const ImportOptions&
         poly.push_back(static_cast<u32>(p));
         if (endOfPoly) {
           if (polyOk && poly.size() >= 3)
-            for (size_t k = 1; k + 1 < poly.size(); ++k) mesh.idx.insert(mesh.idx.end(), {poly[0], poly[k], poly[k + 1]}); // leque
+            for (size_t k = 1; k + 1 < poly.size(); ++k) { mesh.idx.insert(mesh.idx.end(), {poly[0], poly[k], poly[k + 1]}); triSlot.push_back(slotOf(q)); } // leque
           else ++droppedPolys;
           poly.clear();
           polyOk = true;
@@ -393,16 +424,39 @@ inline ImportResult importFbx(const std::vector<u8>& bytes, const ImportOptions&
       }
       if (droppedPolys) md.warnings.push_back("'" + m.name + "': " + std::to_string(droppedPolys) + " poligono(s) invalido(s) ignorado(s)");
       if (!hasN) md.warnings.push_back("'" + m.name + "': sem normais no arquivo; calculadas por face");
-      if (!finalizeMesh(mesh, md.warnings, m.name, /*smooth=*/false)) { md.warnings.push_back("'" + m.name + "': malha vazia ignorada"); continue; }
-      bakeTransform(mesh, world);
-      ModelPart part;
-      part.name = m.name;
-      part.mesh = std::move(mesh);
-      part.material = mat;
-      md.parts.push_back(std::move(part));
+      // Uma sub-malha por material: se todos os triangulos usam o mesmo, a malha segue inteira (sem copia).
+      std::map<int, Mesh> bySlot;
+      bool oneSlot = true;
+      for (int k : triSlot) oneSlot = oneSlot && k == triSlot[0];
+      if (oneSlot) { if (!triSlot.empty()) bySlot[triSlot[0]] = std::move(mesh); }
+      else
+        for (size_t t = 0; t < triSlot.size(); ++t) {
+          Mesh& dst = bySlot[triSlot[t]];
+          for (size_t k = 0; k < 3; ++k) {
+            const u32 c = mesh.idx[3 * t + k];
+            dst.idx.push_back(static_cast<u32>(dst.pos.size()));
+            dst.pos.push_back(mesh.pos[c]);
+            if (hasN && c < mesh.normal.size()) dst.normal.push_back(mesh.normal[c]);
+            if (hasUv && 2 * static_cast<size_t>(c) + 1 < mesh.uv.size()) { dst.uv.push_back(mesh.uv[2 * c]); dst.uv.push_back(mesh.uv[2 * c + 1]); }
+          }
+        }
+      if (bySlot.empty()) md.warnings.push_back("'" + m.name + "': malha vazia ignorada");
+      for (auto& [slot, sub] : bySlot) {
+        const std::string partName = bySlot.size() > 1 ? m.name + "." + std::to_string(slot) : m.name;
+        if (!finalizeMesh(sub, md.warnings, partName, /*smooth=*/false)) { md.warnings.push_back("'" + partName + "': malha vazia ignorada"); continue; }
+        // A malha fica no espaco local do no (a hierarquia aplica a transformacao).
+        ModelPart part;
+        part.name = partName;
+        part.mesh = std::move(sub);
+        part.material = slotMaterial(slot);
+        part.node = node;
+        md.nodes[static_cast<size_t>(node)].parts.push_back(static_cast<int>(md.parts.size()));
+        md.parts.push_back(std::move(part));
+      }
     }
   }
   if (md.parts.empty()) return failure("o arquivo FBX nao tem malhas");
+  normalizeNodes(md);
   if (root.child("Takes") || objects->child("AnimationStack")) md.warnings.push_back("animacoes ignoradas (ainda nao suportadas)");
   if (objects->child("Texture")) md.warnings.push_back("texturas ignoradas (so cor difusa por enquanto)");
   for (auto& w : md.warnings) debug().report(code::kImportWarn, Severity::Warning, "FBX: " + w);

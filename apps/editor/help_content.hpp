@@ -387,8 +387,8 @@ Copy an example, paste it in the script of an object (Inspector > Script > Edit)
 # 1. Move and spin
 ```
 export function update(obj, dt) {
-  obj.transform.pos[1] = 1 + Math.sin(time.now) * 0.5;   // sobe e desce
-  obj.transform.rot[1] += 45 * dt;                       // gira 45 graus por segundo (eixo Y)
+  obj.transform.pos[1] = 1 + Math.sin(time.now) * 0.5;   // go up and down
+  obj.transform.rot[1] += 45 * dt;                       // spin 45 degrees per second (Y axis)
 }
 ```
 
@@ -396,8 +396,8 @@ export function update(obj, dt) {
 ```
 export function update(obj, dt) {
   const r = obj.transform.rot[1] * Math.PI / 180;
-  const fx = -Math.sin(r), fz = -Math.cos(r);   // frente do objeto
-  const dx = Math.cos(r), dz = -Math.sin(r);    // direita do objeto
+  const fx = -Math.sin(r), fz = -Math.cos(r);   // object's forward
+  const dx = Math.cos(r), dz = -Math.sin(r);    // object's right
   let mx = 0, mz = 0;
   if (input.down("W")) { mx += fx; mz += fz; }
   if (input.down("S")) { mx -= fx; mz -= fz; }
@@ -414,8 +414,8 @@ Put this on the player. The camera must be a separate object named "Camera" (not
 let yaw = 0, pitch = 0;
 export function update(obj, dt) {
   const m = input.mouseDelta();
-  yaw -= m[0] * 0.2;                                          // mouse para os lados gira
-  pitch = Math.max(-80, Math.min(80, pitch - m[1] * 0.2));    // mouse para cima olha para cima
+  yaw -= m[0] * 0.2;                                          // moving the mouse sideways turns
+  pitch = Math.max(-80, Math.min(80, pitch - m[1] * 0.2));    // moving the mouse up looks up
   obj.transform.rot[1] = yaw;
   const r = yaw * Math.PI / 180;
   const fx = -Math.sin(r), fz = -Math.cos(r), dx = Math.cos(r), dz = -Math.sin(r);
@@ -427,7 +427,7 @@ export function update(obj, dt) {
   obj.transform.pos[0] += mx * 5 * dt;
   obj.transform.pos[2] += mz * 5 * dt;
   const p = obj.transform.pos;
-  setPosition("Camera", p[0], p[1] + 1.6, p[2]);   // olhos a 1,6 m do chao
+  setPosition("Camera", p[0], p[1] + 1.6, p[2]);   // eyes 1.6 m above the ground
   setRotation("Camera", pitch, yaw, 0);
 }
 ```
@@ -438,7 +438,7 @@ Put this on the player. The camera "Camera" is a separate object and follows beh
 let orbita = 0;
 export function update(obj, dt) {
   const m = input.mouseDelta();
-  orbita -= m[0] * 0.3;                              // arrastar o mouse gira a camera em volta
+  orbita -= m[0] * 0.3;                              // dragging the mouse orbits the camera
   obj.transform.rot[1] = orbita;
   const r = orbita * Math.PI / 180;
   const fx = -Math.sin(r), fz = -Math.cos(r), dx = Math.cos(r), dz = -Math.sin(r);
@@ -450,9 +450,9 @@ export function update(obj, dt) {
   obj.transform.pos[0] += mx * 5 * dt;
   obj.transform.pos[2] += mz * 5 * dt;
   const p = obj.transform.pos;
-  const d = 4, alt = 1.8;                            // distancia e altura da camera
+  const d = 4, alt = 1.8;                            // camera distance and height
   setPosition("Camera", p[0] - fx * d, p[1] + alt, p[2] - fz * d);
-  setRotation("Camera", -15, orbita, 0);             // olha um pouco para baixo, para o jogador
+  setRotation("Camera", -15, orbita, 0);             // looks slightly down at the player
 }
 ```
 
@@ -462,7 +462,7 @@ Put this on the player. Create a cube named "Bala" in the scene (it stays still;
 export function update(obj, dt) {
   if (input.pressed("F")) {
     const p = obj.transform.pos, r = obj.transform.rot;
-    const bala = instantiate("Bala", p[0], p[1] + 1, p[2]);   // devolve o nome da copia: "Bala#1", "Bala#2"...
+    const bala = instantiate("Bala", p[0], p[1] + 1, p[2]);   // returns the copy's name: "Bala#1", "Bala#2"...
     setRotation(bala, 0, r[1], 0);
   }
 }
@@ -471,7 +471,7 @@ Put this on the object "Bala" too. It makes each copy fly, hit the object "Alvo"
 ```
 let idade = 0;
 export function update(obj, dt) {
-  if (obj.name === "Bala") return;                 // o modelo fica parado: so as copias voam
+  if (obj.name === "Bala") return;                 // the model stays still: only the copies fly
   idade += dt;
   const r = obj.transform.rot[1] * Math.PI / 180, v = 25 * dt;
   obj.transform.pos[0] -= Math.sin(r) * v;
@@ -512,12 +512,13 @@ export function update(obj, dt) {
 Not exposed to scripts yet. What a script can change on a material today is the base color, with setColor (example 6). Roughness, metallic and custom shader parameters depend on the material (.tmat) parameter system, which is not done yet.
 
 # 8. Send an event
+Needs an object named "Porta" and objects tagged "inimigo" (see Settings > Tags) to receive the events.
 ```
 export function update(obj, dt) {
   if (input.pressed("E")) {
-    send("Porta", "abrir");          // pelo nome do objeto
-    send("tag:inimigo", "alerta");   // pela tag: todos os objetos com a tag "inimigo"
-    send("*", "tudo");               // para todos os objetos
+    send("Porta", "abrir");          // by object name
+    send("tag:inimigo", "alerta");   // by tag: every object tagged "inimigo"
+    send("*", "tudo");               // to every object
   }
 }
 ```
@@ -537,15 +538,16 @@ The Narrative graph receives the same events as the scripts. Add a "trigger" blo
 ```
 export function update(obj, dt) {
   if (input.pressed("Enter")) {
-    send("*", "cena3");   // chega aos scripts e ao Narrative (bloco trigger "cena3")
+    send("*", "cena3");   // reaches the scripts and the Narrative (trigger block "cena3")
   }
 }
 ```
 
 # 11. Move toward another object
+Needs an object named "Alvo" in the scene.
 ```
 export function update(obj, dt) {
-  const alvo = position("Alvo");           // [x, y, z], ou undefined se nao existe
+  const alvo = position("Alvo");           // [x, y, z], or undefined if it does not exist
   if (!alvo) return;
   const p = obj.transform.pos;
   const dx = alvo[0] - p[0], dz = alvo[2] - p[2], d = Math.hypot(dx, dz);
@@ -556,17 +558,471 @@ export function update(obj, dt) {
 # 12. Start, instantiate, destroy and components
 ```
 export function start(obj) {
-  const b = instantiate("Bala", 0, 2, 0);   // copia do objeto "Bala" (devolve o nome)
-  destroy(b, 2.0);                          // apaga a copia depois de 2 s
-  addComponent(obj, "AudioSource");         // tipos: MeshRenderer, AudioSource, ParticleComp
+  const b = instantiate("Bala", 0, 2, 0);   // copy of the object "Bala" (returns its name)
+  destroy(b, 2.0);                          // removes the copy after 2 s
+  addComponent(obj, "AudioSource");         // types: MeshRenderer, AudioSource, ParticleComp
 }
 ```
 
 # 13. Turn objects on and off
+Needs an object named "Inimigo 3" in the scene.
 ```
 export function update(obj, dt) {
   if (input.pressed("1")) setActive("Inimigo 3", false);
   if (input.pressed("2")) setActive("Inimigo 3", true);
+}
+```
+
+# 14. Bounce with |sin|
+```
+export function update(obj, dt) {
+  const height = Math.abs(Math.sin(time.now * 3)) * 2;   // |sin| is never negative: it bounces up
+  obj.transform.pos[1] = 0.5 + height;                    // 0.5 m base + bounce height
+}
+```
+
+# 15. Orbit around a point (facing the center)
+```
+const center = [0, 0, 0], radius = 3;
+export function update(obj, dt) {
+  const a = time.now * 0.8;                                 // angle grows with time
+  obj.transform.pos[0] = center[0] + Math.cos(a) * radius;
+  obj.transform.pos[2] = center[2] + Math.sin(a) * radius;
+  obj.transform.rot[1] = (Math.PI / 2 - a) * 180 / Math.PI; // always turns toward the center
+}
+```
+
+# 16. Follow a target with lerp
+Needs an object named "Jogador" in the scene.
+```
+export function update(obj, dt) {
+  const target = position("Jogador");               // where the target is now
+  if (!target) return;                              // no target: do nothing
+  const k = Math.min(1, 3 * dt);                    // fraction of the gap closed this frame
+  const p = obj.transform.pos;
+  for (let i = 0; i < 3; i++) p[i] += (target[i] - p[i]) * k;   // lerp toward the target
+}
+```
+
+# 17. Color pulse
+```
+export function update(obj, dt) {
+  const f = (Math.sin(time.now * 4) + 1) / 2;       // goes from 0 to 1 and back
+  setColor(obj.name, f, 0.2, 1 - f);                // mixes red and blue
+}
+```
+
+# 18. Blink by squashing the scale
+```
+export function update(obj, dt) {
+  const on = Math.floor(time.now * 2) % 2 === 0;    // switches every 0.5 s
+  obj.transform.scale[1] = on ? 1 : 0.05;           // 5% of the height is almost invisible
+}
+```
+
+# 19. Toggle on a key press
+```
+let on = true;
+export function update(obj, dt) {
+  if (input.pressed("Space")) {                     // only on the frame the key goes down
+    on = !on;                                       // flip the state
+    const v = on ? 1 : 0.1;
+    setColor(obj.name, v, v, v);                    // white when on, dark gray when off
+  }
+}
+```
+
+# 20. Drag to rotate (hold the left mouse button)
+```
+export function update(obj, dt) {
+  if (!input.down("Mouse0")) return;                // only while the left button is held
+  const m = input.mouseDelta();
+  obj.transform.rot[1] += m[0] * 0.5;               // horizontal drag spins on Y
+  obj.transform.rot[0] += m[1] * 0.5;               // vertical drag tilts on X
+}
+```
+
+# 21. Countdown with dt
+```
+let left = 10;
+export function update(obj, dt) {
+  if (left <= 0) return;                            // already finished
+  left -= dt;                                       // subtract the frame time
+  if (left <= 0) {
+    debug.console("Time is up!");
+    send("*", "tempo");                             // tell every object
+  }
+}
+```
+
+# 22. Spawn a copy every 2 seconds
+The copy removes itself after 3 seconds. The template "Moeda" must exist in the scene.
+```
+let next = 0;
+export function update(obj, dt) {
+  if (time.now < next) return;                      // not time yet
+  next = time.now + 2;                              // next copy in 2 seconds
+  const c = instantiate("Moeda", obj.transform.pos[0], 1, obj.transform.pos[2]);
+  destroy(c, 3);                                    // the copy is removed after 3 s
+}
+```
+
+# 23. Count events (OnEventTrigger)
+Put this on the object that counts. Example 24 sends the "moeda" event to the object named "Jogador".
+```
+let points = 0;
+export function OnEventTrigger(obj, name) {
+  if (name === "moeda") {                           // sent by a coin (example 24)
+    points += 1;
+    debug.console("Points: " + points);
+  }
+  if (name === "reset") points = 0;                 // another event resets the count
+}
+```
+
+# 24. Pick up by proximity
+Put this on the coin. The player must be named "Jogador".
+```
+export function update(obj, dt) {
+  const p = position("Jogador");
+  if (!p) return;
+  const q = obj.transform.pos;
+  const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+  if (d < 1.5) {                                    // close enough to pick it up
+    send("Jogador", "moeda");                       // the player's script gets the event (example 23)
+    destroy(obj.name);                              // the coin disappears
+  }
+}
+```
+
+# 25. Patrol between waypoints
+```
+const points = [[-3, 0, 0], [3, 0, 0], [3, 0, 3], [-3, 0, 3]];   // waypoints in world space
+let target = 0;
+export function update(obj, dt) {
+  const w = points[target], p = obj.transform.pos;
+  const dx = w[0] - p[0], dy = w[1] - p[1], dz = w[2] - p[2];
+  const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (d < 0.1) { target = (target + 1) % points.length; return; }   // arrived: next waypoint
+  const step = Math.min(d, 2 * dt);                 // do not overshoot
+  p[0] += dx / d * step; p[1] += dy / d * step; p[2] += dz / d * step;
+}
+```
+
+# 26. Scale pulse
+```
+export function update(obj, dt) {
+  const s = 1 + Math.sin(time.now * 6) * 0.15;      // grows and shrinks by 15%
+  obj.transform.scale = [s, s, s];                  // same scale on all axes
+}
+```
+
+# 27. Clamp and wrap helpers
+```
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+function wrap(v, min, max) { const t = max - min; return ((v - min) % t + t) % t + min; }
+export function update(obj, dt) {
+  const p = obj.transform.pos;
+  p[0] = clamp(p[0], -5, 5);                        // stays inside -5 .. 5 on X
+  p[2] = wrap(p[2] + 2 * dt, -5, 5);                // walks forever on Z, coming back on the other side
+}
+```
+
+# 28. Deterministic zigzag
+Same path every time: no random numbers.
+```
+let dir = 1, x = 0, z = 0;
+export function update(obj, dt) {
+  x += dir * 3 * dt;
+  if (x > 3) { x = 3; dir = -1; z += 1; }           // right side: turn back and step forward on Z
+  if (x < -3) { x = -3; dir = 1; z += 1; }          // left side: turn back and step forward on Z
+  obj.transform.pos[0] = x;
+  obj.transform.pos[2] = z;
+}
+```
+
+# 29. State machine (idle, move, return)
+```
+let state = "idle", timer = 0;
+export function update(obj, dt) {
+  timer += dt;
+  const p = obj.transform.pos;
+  if (state === "idle" && timer > 1) { state = "move"; timer = 0; }        // wait 1 s, then go
+  else if (state === "move") {
+    p[0] += 2 * dt;
+    if (p[0] > 3) { state = "return"; timer = 0; }                         // far enough: come back
+  } else if (state === "return") {
+    p[0] -= 2 * dt;
+    if (p[0] <= 0) { p[0] = 0; state = "idle"; timer = 0; }                // home: rest again
+  }
+}
+```
+
+# 30. Log once per second
+```
+let last = -1;
+export function update(obj, dt) {
+  const s = Math.floor(time.now);                   // whole seconds since Play
+  if (s === last) return;                           // same second as before: stay quiet
+  last = s;
+  debug.console(obj.name + " has been running for " + s + " s");
+}
+```
+
+# 31. Show a hint when the player is near
+Put this on an invisible trigger object. The object "Dica" (the hint) starts inactive in the scene.
+```
+export function update(obj, dt) {
+  const p = position("Jogador");
+  if (!p) return;
+  const q = obj.transform.pos;
+  const near = Math.hypot(p[0] - q[0], p[2] - q[2]) < 2;   // horizontal distance under 2 m
+  setActive("Dica", near);                          // show the hint only when near
+}
+```
+
+# 32. Face a point with atan2
+```
+export function update(obj, dt) {
+  const target = position("Alvo");
+  if (!target) return;
+  const p = obj.transform.pos;
+  const dx = target[0] - p[0], dz = target[2] - p[2];
+  obj.transform.rot[1] = Math.atan2(-dx, -dz) * 180 / Math.PI;   // the front is (-sin, -cos) of the yaw
+}
+```
+
+# 33. Warn when too far (only once)
+```
+let warned = false;
+export function update(obj, dt) {
+  const target = position("Alvo");
+  if (!target) return;
+  const p = obj.transform.pos;
+  const d = Math.hypot(target[0] - p[0], target[1] - p[1], target[2] - p[2]);
+  if (d > 10 && !warned) {
+    warned = true;                                  // warn once, not on every frame
+    debug.warn(obj.name + " is more than 10 m from Alvo");
+  }
+  if (d <= 10) warned = false;                      // back in range: warn again next time
+}
+```
+
+# 34. Ease-out animation
+```
+let t = 0;
+function easeOut(x) { return 1 - Math.pow(1 - x, 3); }   // fast at the start, slow at the end
+export function update(obj, dt) {
+  if (t >= 1) return;                               // animation finished
+  t = Math.min(1, t + dt * 0.5);                    // takes 2 seconds
+  obj.transform.pos[0] = easeOut(t) * 4;            // moves from 0 to 4 on X
+}
+```
+
+# 35. Sine on three axes (Lissajous)
+```
+export function update(obj, dt) {
+  const t = time.now;
+  obj.transform.pos[0] = Math.sin(t) * 2;           // X: back and forth
+  obj.transform.pos[1] = 1 + Math.sin(t * 2) * 0.5; // Y: faster up and down
+  obj.transform.pos[2] = Math.sin(t * 0.5) * 3;     // Z: slow drift
+}
+```
+
+# 36. Jump with gravity (no physics engine)
+Press Space to jump.
+```
+let vy = 0;
+const floor = 0.5;                                  // height of the ground
+export function update(obj, dt) {
+  const p = obj.transform.pos;
+  if (input.pressed("Space") && p[1] <= floor + 0.01) vy = 6;   // jump: upward speed
+  vy -= 15 * dt;                                    // gravity pulls down
+  p[1] += vy * dt;
+  if (p[1] < floor) { p[1] = floor; vy = 0; }       // landed
+}
+```
+
+# 37. Reset to the start with R
+```
+let start0 = null;
+export function start(obj) {
+  start0 = obj.transform.pos.slice();               // remember where it started
+}
+export function update(obj, dt) {
+  if (input.pressed("R")) {
+    obj.transform.pos = start0.slice();             // back to the start
+    obj.transform.rot = [0, 0, 0];
+  }
+}
+```
+
+# 38. Color lerp
+```
+const colorA = [1, 0.2, 0.2], colorB = [0.2, 0.4, 1];   // two colors
+export function update(obj, dt) {
+  const t = (Math.sin(time.now) + 1) / 2;           // 0 to 1 and back
+  const c = colorA.map((a, i) => a + (colorB[i] - a) * t);   // mixes each channel
+  setColor(obj.name, c[0], c[1], c[2]);
+}
+```
+
+# 39. Enter and exit a zone
+Put this on an invisible object. Each change sends one event, not one per frame.
+```
+let inside = false;
+export function update(obj, dt) {
+  const p = position("Jogador");
+  if (!p) return;
+  const q = obj.transform.pos;
+  const now = Math.abs(p[0] - q[0]) < 1 && Math.abs(p[2] - q[2]) < 1;   // inside a 2 x 2 m box
+  if (now && !inside) { inside = true; send("*", "enter_zone"); }        // just entered
+  if (!now && inside) { inside = false; send("*", "exit_zone"); }        // just left
+}
+```
+
+# 40. Helper functions at the top
+```
+function distance(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); }
+function stepToward(p, target, step) {              // moves p by at most step toward target
+  const d = distance(p, target);
+  if (d <= step) { p[0] = target[0]; p[1] = target[1]; p[2] = target[2]; return; }
+  for (let i = 0; i < 3; i++) p[i] += (target[i] - p[i]) / d * step;
+}
+export function update(obj, dt) {
+  const target = position("Alvo");
+  if (target) stepToward(obj.transform.pos, target, 2 * dt);   // walks toward Alvo at 2 m/s
+}
+```
+
+# 41. Orbiting shield around the player
+Put this on "Jogador". The object "Escudo" is moved by the script (it does not need a script).
+```
+export function update(obj, dt) {
+  const p = position("Jogador");
+  if (!p) return;
+  const a = time.now * 2;                           // angle grows with time
+  setPosition("Escudo", p[0] + Math.cos(a) * 1.2, p[1] + 1, p[2] + Math.sin(a) * 1.2);
+}
+```
+
+# 42. Clock hand with setRotation
+Put this on the object "Relogio". The object "Ponteiro" is the second hand.
+```
+export function update(obj, dt) {
+  const sec = time.now % 60;                        // seconds inside the current minute
+  setRotation("Ponteiro", 0, 0, -sec * 6);          // 360 / 60 = 6 degrees per second
+}
+```
+
+# 43. Pause with Escape
+```
+let paused = false;
+export function update(obj, dt) {
+  if (input.pressed("Escape")) paused = !paused;    // Escape toggles the pause
+  if (paused) return;                               // paused: skip the rotation below
+  obj.transform.rot[1] += 90 * dt;
+}
+```
+
+# 44. Hold Shift to grow
+```
+export function update(obj, dt) {
+  if (!input.down("Shift")) return;                 // only while Shift is held
+  const s = Math.min(3, obj.transform.scale[0] + dt);   // grows 1 unit per second, up to 3
+  obj.transform.scale = [s, s, s];
+}
+```
+
+# 45. Q and E raise and lower
+```
+export function update(obj, dt) {
+  if (input.down("E")) obj.transform.pos[1] += 2 * dt;   // E raises
+  if (input.down("Q")) obj.transform.pos[1] -= 2 * dt;   // Q lowers
+  obj.transform.pos[1] = Math.max(0, obj.transform.pos[1]);   // never below the floor
+}
+```
+
+# 46. Bobbing out of sync
+The phase comes from the name, so each object with this script bobs at its own moment.
+```
+export function update(obj, dt) {
+  const phase = obj.name.length * 0.7;              // each name gives a different phase
+  obj.transform.pos[1] = 1 + Math.sin(time.now * 2 + phase) * 0.3;
+}
+```
+
+# 47. Remove itself after an event
+```
+export function OnEventTrigger(obj, name) {
+  if (name === "fim") {                             // another object sent "fim"
+    setColor(obj.name, 1, 1, 1);
+    destroy(obj.name, 1);                           // removes itself 1 s later
+  }
+}
+```
+
+# 48. Relay an event to a tag
+```
+export function OnEventTrigger(obj, name) {
+  if (name === "alarme") {                          // heard the alarm
+    send("tag:guarda", "alerta");                   // pass it on to every object tagged "guarda"
+    debug.console(obj.name + " relayed the alarm");
+  }
+}
+```
+
+# 49. Click to cycle colors
+```
+const colors = [[1, 0.2, 0.2], [0.2, 1, 0.2], [0.2, 0.4, 1]];
+let i = 0;
+export function update(obj, dt) {
+  if (!input.pressed("Mouse0")) return;             // one click
+  i = (i + 1) % colors.length;                      // next color in the list
+  const c = colors[i];
+  setColor(obj.name, c[0], c[1], c[2]);
+}
+```
+
+# 50. Hold Space to spin faster
+```
+let speed = 30;                                     // degrees per second
+export function update(obj, dt) {
+  const target = input.down("Space") ? 360 : 30;    // fast while Space is held
+  speed += (target - speed) * Math.min(1, 4 * dt);  // eases toward the target speed
+  obj.transform.rot[1] += speed * dt;
+}
+```
+
+# 51. Grow when the player is near
+```
+export function update(obj, dt) {
+  const p = position("Jogador");
+  if (!p) return;
+  const q = obj.transform.pos;
+  const d = Math.hypot(p[0] - q[0], p[2] - q[2]);
+  const s = Math.max(0.5, Math.min(2, 4 - d));      // 2 when close, 0.5 when far
+  obj.transform.scale = [s, s, s];
+}
+```
+
+# 52. Periodic event with a timer
+```
+let next = 3;
+export function update(obj, dt) {
+  if (time.now < next) return;
+  next = time.now + 3;                              // every 3 seconds
+  send("tag:luz", "blink");                         // every object tagged "luz" gets the event
+}
+```
+
+# 53. Snap to a grid on Enter
+```
+export function update(obj, dt) {
+  if (!input.pressed("Enter")) return;              // snap only when Enter is pressed
+  const p = obj.transform.pos, grid = 0.5;          // grid size: 0.5 m
+  p[0] = Math.round(p[0] / grid) * grid;            // snaps X to the grid
+  p[2] = Math.round(p[2] / grid) * grid;            // snaps Z to the grid
 }
 ```
 
@@ -707,6 +1163,7 @@ export function update(obj, dt) {
 Ainda nao exposto aos scripts. O que um script muda hoje no material e a cor base, com setColor (exemplo 6). Rugosidade, metalico e parametros proprios do shader dependem do sistema de parametros do material (.tmat), que ainda nao foi feito.
 
 # 8. Enviar um evento
+Precisa de um objeto chamado "Porta" e de objetos com a tag "inimigo" (veja Settings > Tags) para receber os eventos.
 ```
 export function update(obj, dt) {
   if (input.pressed("E")) {
@@ -738,6 +1195,7 @@ export function update(obj, dt) {
 ```
 
 # 11. Andar ate outro objeto
+Precisa de um objeto chamado "Alvo" na cena.
 ```
 export function update(obj, dt) {
   const alvo = position("Alvo");           // [x, y, z], ou undefined se nao existe
@@ -758,10 +1216,464 @@ export function start(obj) {
 ```
 
 # 13. Ligar e desligar objetos
+Precisa de um objeto chamado "Inimigo 3" na cena.
 ```
 export function update(obj, dt) {
   if (input.pressed("1")) setActive("Inimigo 3", false);
   if (input.pressed("2")) setActive("Inimigo 3", true);
+}
+```
+
+# 14. Quicar com |sin|
+```
+export function update(obj, dt) {
+  const height = Math.abs(Math.sin(time.now * 3)) * 2;   // |sin| nunca e negativo: quica para cima
+  obj.transform.pos[1] = 0.5 + height;                    // base de 0,5 m + altura do quique
+}
+```
+
+# 15. Orbitar um ponto (olhando para o centro)
+```
+const center = [0, 0, 0], radius = 3;
+export function update(obj, dt) {
+  const a = time.now * 0.8;                                 // angulo cresce com o tempo
+  obj.transform.pos[0] = center[0] + Math.cos(a) * radius;
+  obj.transform.pos[2] = center[2] + Math.sin(a) * radius;
+  obj.transform.rot[1] = (Math.PI / 2 - a) * 180 / Math.PI; // sempre vira para o centro
+}
+```
+
+# 16. Seguir um alvo com lerp
+Precisa de um objeto chamado "Jogador" na cena.
+```
+export function update(obj, dt) {
+  const target = position("Jogador");               // onde o alvo esta agora
+  if (!target) return;                              // sem alvo: nao faz nada
+  const k = Math.min(1, 3 * dt);                    // fracao da distancia fechada neste quadro
+  const p = obj.transform.pos;
+  for (let i = 0; i < 3; i++) p[i] += (target[i] - p[i]) * k;   // lerp em direcao ao alvo
+}
+```
+
+# 17. Pulso de cor
+```
+export function update(obj, dt) {
+  const f = (Math.sin(time.now * 4) + 1) / 2;       // vai de 0 a 1 e volta
+  setColor(obj.name, f, 0.2, 1 - f);                // mistura vermelho e azul
+}
+```
+
+# 18. Piscar esmagando a escala
+```
+export function update(obj, dt) {
+  const on = Math.floor(time.now * 2) % 2 === 0;    // troca a cada 0,5 s
+  obj.transform.scale[1] = on ? 1 : 0.05;           // 5% da altura: quase invisivel
+}
+```
+
+# 19. Alternar com uma tecla
+```
+let on = true;
+export function update(obj, dt) {
+  if (input.pressed("Space")) {                     // so no quadro em que a tecla e apertada
+    on = !on;                                       // inverte o estado
+    const v = on ? 1 : 0.1;
+    setColor(obj.name, v, v, v);                    // branco ligado, cinza escuro desligado
+  }
+}
+```
+
+# 20. Arrastar para girar (segure o botao esquerdo)
+```
+export function update(obj, dt) {
+  if (!input.down("Mouse0")) return;                // so enquanto o botao esquerdo estiver apertado
+  const m = input.mouseDelta();
+  obj.transform.rot[1] += m[0] * 0.5;               // arrastar na horizontal gira no eixo Y
+  obj.transform.rot[0] += m[1] * 0.5;               // arrastar na vertical inclina no eixo X
+}
+```
+
+# 21. Contagem regressiva com dt
+```
+let left = 10;
+export function update(obj, dt) {
+  if (left <= 0) return;                            // ja terminou
+  left -= dt;                                       // desconta o tempo do quadro
+  if (left <= 0) {
+    debug.console("Tempo esgotado!");
+    send("*", "tempo");                             // avisa todos os objetos
+  }
+}
+```
+
+# 22. Criar uma copia a cada 2 segundos
+A copia se remove depois de 3 segundos. O modelo "Moeda" precisa existir na cena.
+```
+let next = 0;
+export function update(obj, dt) {
+  if (time.now < next) return;                      // ainda nao e hora
+  next = time.now + 2;                              // proxima copia em 2 segundos
+  const c = instantiate("Moeda", obj.transform.pos[0], 1, obj.transform.pos[2]);
+  destroy(c, 3);                                    // a copia e removida depois de 3 s
+}
+```
+
+# 23. Contar eventos (OnEventTrigger)
+Coloque no objeto que conta. O exemplo 24 envia o evento "moeda" ao objeto chamado "Jogador".
+```
+let points = 0;
+export function OnEventTrigger(obj, name) {
+  if (name === "moeda") {                           // enviado por uma moeda (exemplo 24)
+    points += 1;
+    debug.console("Pontos: " + points);
+  }
+  if (name === "reset") points = 0;                 // outro evento zera a contagem
+}
+```
+
+# 24. Pegar por proximidade
+Coloque na moeda. O jogador precisa se chamar "Jogador".
+```
+export function update(obj, dt) {
+  const p = position("Jogador");
+  if (!p) return;
+  const q = obj.transform.pos;
+  const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+  if (d < 1.5) {                                    // perto o suficiente para pegar
+    send("Jogador", "moeda");                       // o script do jogador recebe o evento (exemplo 23)
+    destroy(obj.name);                              // a moeda desaparece
+  }
+}
+```
+
+# 25. Patrulhar entre pontos de passagem
+```
+const points = [[-3, 0, 0], [3, 0, 0], [3, 0, 3], [-3, 0, 3]];   // pontos de passagem no mundo
+let target = 0;
+export function update(obj, dt) {
+  const w = points[target], p = obj.transform.pos;
+  const dx = w[0] - p[0], dy = w[1] - p[1], dz = w[2] - p[2];
+  const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (d < 0.1) { target = (target + 1) % points.length; return; }   // chegou: proximo ponto
+  const step = Math.min(d, 2 * dt);                 // nao ultrapassa o ponto
+  p[0] += dx / d * step; p[1] += dy / d * step; p[2] += dz / d * step;
+}
+```
+
+# 26. Pulso de escala
+```
+export function update(obj, dt) {
+  const s = 1 + Math.sin(time.now * 6) * 0.15;      // cresce e diminui 15%
+  obj.transform.scale = [s, s, s];                  // mesma escala nos tres eixos
+}
+```
+
+# 27. Funcoes clamp e wrap
+```
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+function wrap(v, min, max) { const t = max - min; return ((v - min) % t + t) % t + min; }
+export function update(obj, dt) {
+  const p = obj.transform.pos;
+  p[0] = clamp(p[0], -5, 5);                        // fica entre -5 e 5 no eixo X
+  p[2] = wrap(p[2] + 2 * dt, -5, 5);                // anda sem parar em Z, voltando do outro lado
+}
+```
+
+# 28. Zigue-zague deterministico
+Sempre o mesmo caminho: sem numeros aleatorios.
+```
+let dir = 1, x = 0, z = 0;
+export function update(obj, dt) {
+  x += dir * 3 * dt;
+  if (x > 3) { x = 3; dir = -1; z += 1; }           // lado direito: volta e avanca em Z
+  if (x < -3) { x = -3; dir = 1; z += 1; }          // lado esquerdo: volta e avanca em Z
+  obj.transform.pos[0] = x;
+  obj.transform.pos[2] = z;
+}
+```
+
+# 29. Maquina de estados (parado, andar, voltar)
+```
+let state = "idle", timer = 0;
+export function update(obj, dt) {
+  timer += dt;
+  const p = obj.transform.pos;
+  if (state === "idle" && timer > 1) { state = "move"; timer = 0; }        // espera 1 s e anda
+  else if (state === "move") {
+    p[0] += 2 * dt;
+    if (p[0] > 3) { state = "return"; timer = 0; }                         // longe o bastante: volta
+  } else if (state === "return") {
+    p[0] -= 2 * dt;
+    if (p[0] <= 0) { p[0] = 0; state = "idle"; timer = 0; }                // em casa: descansa
+  }
+}
+```
+
+# 30. Registrar uma vez por segundo
+```
+let last = -1;
+export function update(obj, dt) {
+  const s = Math.floor(time.now);                   // segundos inteiros desde o Play
+  if (s === last) return;                           // mesmo segundo de antes: fica quieto
+  last = s;
+  debug.console(obj.name + " esta ligado ha " + s + " s");
+}
+```
+
+# 31. Mostrar uma dica quando o jogador esta perto
+Coloque em um objeto invisivel de gatilho. O objeto "Dica" comeca desativado na cena.
+```
+export function update(obj, dt) {
+  const p = position("Jogador");
+  if (!p) return;
+  const q = obj.transform.pos;
+  const near = Math.hypot(p[0] - q[0], p[2] - q[2]) < 2;   // distancia horizontal menor que 2 m
+  setActive("Dica", near);                          // mostra a dica so quando estiver perto
+}
+```
+
+# 32. Olhar para um ponto com atan2
+```
+export function update(obj, dt) {
+  const target = position("Alvo");
+  if (!target) return;
+  const p = obj.transform.pos;
+  const dx = target[0] - p[0], dz = target[2] - p[2];
+  obj.transform.rot[1] = Math.atan2(-dx, -dz) * 180 / Math.PI;   // a frente e (-sin, -cos) do yaw
+}
+```
+
+# 33. Avisar quando estiver longe (so uma vez)
+```
+let warned = false;
+export function update(obj, dt) {
+  const target = position("Alvo");
+  if (!target) return;
+  const p = obj.transform.pos;
+  const d = Math.hypot(target[0] - p[0], target[1] - p[1], target[2] - p[2]);
+  if (d > 10 && !warned) {
+    warned = true;                                  // avisa uma vez, nao a cada quadro
+    debug.warn(obj.name + " esta a mais de 10 m do Alvo");
+  }
+  if (d <= 10) warned = false;                      // voltou para perto: avisa de novo na proxima vez
+}
+```
+
+# 34. Animacao com ease-out
+```
+let t = 0;
+function easeOut(x) { return 1 - Math.pow(1 - x, 3); }   // rapido no inicio, devagar no fim
+export function update(obj, dt) {
+  if (t >= 1) return;                               // animacao terminou
+  t = Math.min(1, t + dt * 0.5);                    // dura 2 segundos
+  obj.transform.pos[0] = easeOut(t) * 4;            // vai de 0 a 4 no eixo X
+}
+```
+
+# 35. Seno em tres eixos (Lissajous)
+```
+export function update(obj, dt) {
+  const t = time.now;
+  obj.transform.pos[0] = Math.sin(t) * 2;           // X: vai e volta
+  obj.transform.pos[1] = 1 + Math.sin(t * 2) * 0.5; // Y: sobe e desce mais rapido
+  obj.transform.pos[2] = Math.sin(t * 0.5) * 3;     // Z: deriva lenta
+}
+```
+
+# 36. Pulo com gravidade (sem motor de fisica)
+Aperte Space para pular.
+```
+let vy = 0;
+const floor = 0.5;                                  // altura do chao
+export function update(obj, dt) {
+  const p = obj.transform.pos;
+  if (input.pressed("Space") && p[1] <= floor + 0.01) vy = 6;   // pulo: velocidade para cima
+  vy -= 15 * dt;                                    // a gravidade puxa para baixo
+  p[1] += vy * dt;
+  if (p[1] < floor) { p[1] = floor; vy = 0; }       // pousou
+}
+```
+
+# 37. Voltar ao inicio com R
+```
+let start0 = null;
+export function start(obj) {
+  start0 = obj.transform.pos.slice();               // guarda onde comecou
+}
+export function update(obj, dt) {
+  if (input.pressed("R")) {
+    obj.transform.pos = start0.slice();             // volta ao inicio
+    obj.transform.rot = [0, 0, 0];
+  }
+}
+```
+
+# 38. Interpolar cores (lerp)
+```
+const colorA = [1, 0.2, 0.2], colorB = [0.2, 0.4, 1];   // duas cores
+export function update(obj, dt) {
+  const t = (Math.sin(time.now) + 1) / 2;           // 0 a 1 e volta
+  const c = colorA.map((a, i) => a + (colorB[i] - a) * t);   // mistura cada canal
+  setColor(obj.name, c[0], c[1], c[2]);
+}
+```
+
+# 39. Entrar e sair de uma zona
+Coloque em um objeto invisivel. Cada mudanca envia um evento, nao um por quadro.
+```
+let inside = false;
+export function update(obj, dt) {
+  const p = position("Jogador");
+  if (!p) return;
+  const q = obj.transform.pos;
+  const now = Math.abs(p[0] - q[0]) < 1 && Math.abs(p[2] - q[2]) < 1;   // dentro de uma caixa de 2 x 2 m
+  if (now && !inside) { inside = true; send("*", "enter_zone"); }        // acabou de entrar
+  if (!now && inside) { inside = false; send("*", "exit_zone"); }        // acabou de sair
+}
+```
+
+# 40. Funcoes auxiliares no topo
+```
+function distance(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); }
+function stepToward(p, target, step) {              // move p no maximo step em direcao ao alvo
+  const d = distance(p, target);
+  if (d <= step) { p[0] = target[0]; p[1] = target[1]; p[2] = target[2]; return; }
+  for (let i = 0; i < 3; i++) p[i] += (target[i] - p[i]) / d * step;
+}
+export function update(obj, dt) {
+  const target = position("Alvo");
+  if (target) stepToward(obj.transform.pos, target, 2 * dt);   // anda até o Alvo a 2 m/s
+}
+```
+
+# 41. Escudo orbitando o jogador
+Coloque no "Jogador". O objeto "Escudo" e movido pelo script (nao precisa de script).
+```
+export function update(obj, dt) {
+  const p = position("Jogador");
+  if (!p) return;
+  const a = time.now * 2;                           // angulo cresce com o tempo
+  setPosition("Escudo", p[0] + Math.cos(a) * 1.2, p[1] + 1, p[2] + Math.sin(a) * 1.2);
+}
+```
+
+# 42. Ponteiro de relogio com setRotation
+Coloque no objeto "Relogio". O objeto "Ponteiro" e o ponteiro dos segundos.
+```
+export function update(obj, dt) {
+  const sec = time.now % 60;                        // segundos dentro do minuto atual
+  setRotation("Ponteiro", 0, 0, -sec * 6);          // 360 / 60 = 6 graus por segundo
+}
+```
+
+# 43. Pausar com Escape
+```
+let paused = false;
+export function update(obj, dt) {
+  if (input.pressed("Escape")) paused = !paused;    // Escape liga e desliga a pausa
+  if (paused) return;                               // pausado: pula a rotacao abaixo
+  obj.transform.rot[1] += 90 * dt;
+}
+```
+
+# 44. Segurar Shift para crescer
+```
+export function update(obj, dt) {
+  if (!input.down("Shift")) return;                 // so enquanto Shift estiver apertado
+  const s = Math.min(3, obj.transform.scale[0] + dt);   // cresce 1 unidade por segundo, ate 3
+  obj.transform.scale = [s, s, s];
+}
+```
+
+# 45. Q e E para subir e descer
+```
+export function update(obj, dt) {
+  if (input.down("E")) obj.transform.pos[1] += 2 * dt;   // E sobe
+  if (input.down("Q")) obj.transform.pos[1] -= 2 * dt;   // Q desce
+  obj.transform.pos[1] = Math.max(0, obj.transform.pos[1]);   // nunca abaixo do chao
+}
+```
+
+# 46. Oscilar fora de sincronia
+A fase vem do nome, entao cada objeto com este script oscila no seu proprio tempo.
+```
+export function update(obj, dt) {
+  const phase = obj.name.length * 0.7;              // cada nome gera uma fase diferente
+  obj.transform.pos[1] = 1 + Math.sin(time.now * 2 + phase) * 0.3;
+}
+```
+
+# 47. Remover-se depois de um evento
+```
+export function OnEventTrigger(obj, name) {
+  if (name === "fim") {                             // outro objeto enviou "fim"
+    setColor(obj.name, 1, 1, 1);
+    destroy(obj.name, 1);                           // remove-se 1 s depois
+  }
+}
+```
+
+# 48. Repassar um evento para uma tag
+```
+export function OnEventTrigger(obj, name) {
+  if (name === "alarme") {                          // ouviu o alarme
+    send("tag:guarda", "alerta");                   // repassa para todos com a tag "guarda"
+    debug.console(obj.name + " repassou o alarme");
+  }
+}
+```
+
+# 49. Clicar para trocar de cor
+```
+const colors = [[1, 0.2, 0.2], [0.2, 1, 0.2], [0.2, 0.4, 1]];
+let i = 0;
+export function update(obj, dt) {
+  if (!input.pressed("Mouse0")) return;             // um clique
+  i = (i + 1) % colors.length;                      // proxima cor da lista
+  const c = colors[i];
+  setColor(obj.name, c[0], c[1], c[2]);
+}
+```
+
+# 50. Segurar Space para girar mais rapido
+```
+let speed = 30;                                     // graus por segundo
+export function update(obj, dt) {
+  const target = input.down("Space") ? 360 : 30;    // rapido enquanto Space estiver apertado
+  speed += (target - speed) * Math.min(1, 4 * dt);  // suaviza ate a velocidade alvo
+  obj.transform.rot[1] += speed * dt;
+}
+```
+
+# 51. Crescer quando o jogador esta perto
+```
+export function update(obj, dt) {
+  const p = position("Jogador");
+  if (!p) return;
+  const q = obj.transform.pos;
+  const d = Math.hypot(p[0] - q[0], p[2] - q[2]);
+  const s = Math.max(0.5, Math.min(2, 4 - d));      // 2 quando perto, 0,5 quando longe
+  obj.transform.scale = [s, s, s];
+}
+```
+
+# 52. Evento periodico com temporizador
+```
+let next = 3;
+export function update(obj, dt) {
+  if (time.now < next) return;
+  next = time.now + 3;                              // a cada 3 segundos
+  send("tag:luz", "blink");                         // todo objeto com a tag "luz" recebe o evento
+}
+```
+
+# 53. Encaixar na grade ao apertar Enter
+```
+export function update(obj, dt) {
+  if (!input.pressed("Enter")) return;              // encaixa so quando Enter e apertado
+  const p = obj.transform.pos, grid = 0.5;          // tamanho da grade: 0,5 m
+  p[0] = Math.round(p[0] / grid) * grid;            // encaixa X na grade
+  p[2] = Math.round(p[2] / grid) * grid;            // encaixa Z na grade
 }
 ```
 

@@ -4,8 +4,8 @@
 //  1. Container: .glb = cabecalho "glTF" + chunk JSON + chunk BIN; .gltf = JSON puro (buffers por URI).
 //  2. O JSON descreve: buffers -> bufferViews -> accessors (tipo/contagem/stride) -> meshes/primitives ->
 //     nodes (hierarquia + transformacao) -> scenes. Lemos so o necessario para desenhar.
-//  3. Cada no com malha vira 1+ ModelPart (1 por primitive). A matriz de mundo (pai * local) e assada nos
-//     vertices (bakeTransform), entao o resultado independe da hierarquia do arquivo.
+//  3. Cada no do arquivo vira um ModelNode (pai + transformacao local). Cada primitive vira 1 ModelPart,
+//     presa ao no dela, com a malha no espaco local do no. A hierarquia e preservada para o editor.
 //  4. Material: pbrMetallicRoughness (baseColorFactor, metallicFactor, roughnessFactor). Texturas ainda nao.
 //
 // SEGURANCA: URIs externas so podem apontar para DENTRO da pasta do modelo (sem "..", sem caminho absoluto);
@@ -175,7 +175,7 @@ inline Material materialOf(const Doc& d, const tool::Json& prim) {
 }
 
 // Converte uma primitive em malha. Modos: 4 triangulos, 5 tira, 6 leque (0..3 pontos/linhas sao ignorados).
-inline bool primitiveToPart(Doc& d, const tool::Json& prim, const Mat4& world, const std::string& name) {
+inline bool primitiveToPart(Doc& d, const tool::Json& prim, int node, const std::string& name) {
   const int mode = static_cast<int>(prim["mode"].asNumber(4));
   if (mode < 4 || mode > 6) { d.model->warnings.push_back("'" + name + "': primitive com modo " + std::to_string(mode) + " (nao e triangulo) ignorada"); return true; }
   const tool::Json& attrs = prim["attributes"];
@@ -219,33 +219,42 @@ inline bool primitiveToPart(Doc& d, const tool::Json& prim, const Mat4& world, c
   const bool hadNormals = m.normal.size() == m.pos.size();
   if (!finalizeMesh(m, d.model->warnings, name, /*smooth=*/true)) { d.model->warnings.push_back("'" + name + "': malha vazia ignorada"); return true; }
   if (!hadNormals) d.model->warnings.push_back("'" + name + "': sem normais no arquivo; calculadas automaticamente");
-  bakeTransform(m, world);
+  // A malha fica no espaco local do no (a matriz do no e aplicada pela hierarquia, nao aqui).
   ModelPart part;
   part.name = name;
   part.mesh = std::move(m);
   part.material = materialOf(d, prim);
+  part.node = node;
+  d.model->nodes[static_cast<size_t>(node)].parts.push_back(static_cast<int>(d.model->parts.size()));
   d.model->parts.push_back(std::move(part));
   return true;
 }
 
-// Percorre a hierarquia acumulando a matriz de mundo. `depth` evita ciclos (um no que e filho de si mesmo).
-inline bool visitNode(Doc& d, size_t idx, const Mat4& parent, size_t depth) {
+// Percorre a hierarquia preservando-a: cada no do glTF vira um ModelNode (pai, transformacao local, partes).
+// `depth` evita ciclos (um no que e filho de si mesmo).
+inline bool visitNode(Doc& d, size_t idx, int parent, size_t depth) {
   if (depth > d.opt->limits.maxDepth) { d.error = "hierarquia de nos profunda demais (ciclo?)"; return false; }
   if (++d.nodesVisited > d.opt->limits.maxNodes) { d.error = "nos demais"; return false; }
   const tool::Json& node = d.json["nodes"].items().at(idx);
-  const Mat4 world = parent * nodeMatrix(node);
   size_t mi;
-  if (indexOk(node["mesh"], d.json["meshes"].items().size(), mi)) {
+  const bool hasMesh = indexOk(node["mesh"], d.json["meshes"].items().size(), mi);
+  ModelNode mn;
+  mn.name = !node["name"].asString().empty() ? node["name"].asString() : "no" + std::to_string(idx);
+  mn.parent = parent;
+  mn.local = nodeMatrix(node);
+  const int self = static_cast<int>(d.model->nodes.size());
+  d.model->nodes.push_back(std::move(mn));
+  if (hasMesh) {
     const tool::Json& mesh = d.json["meshes"].items()[mi];
     const std::string base = !node["name"].asString().empty() ? node["name"].asString() : !mesh["name"].asString().empty() ? mesh["name"].asString() : "mesh" + std::to_string(mi);
     const auto& prims = mesh["primitives"].items();
     for (size_t p = 0; p < prims.size(); ++p)
-      if (!primitiveToPart(d, prims[p], world, prims.size() > 1 ? base + "." + std::to_string(p) : base)) return false;
+      if (!primitiveToPart(d, prims[p], self, prims.size() > 1 ? base + "." + std::to_string(p) : base)) return false;
   }
   for (const tool::Json& c : node["children"].items()) {
     size_t ci;
     if (!indexOk(c, d.json["nodes"].items().size(), ci)) { d.error = "filho de no invalido"; return false; }
-    if (!visitNode(d, ci, world, depth + 1)) return false;
+    if (!visitNode(d, ci, self, depth + 1)) return false;
   }
   return true;
 }
@@ -325,8 +334,9 @@ inline ImportResult importGltf(const std::vector<u8>& bytes, const std::string& 
     for (const auto& n : d.json["nodes"].items()) for (const auto& c : n["children"].items()) { size_t ci; if (indexOk(c, total, ci)) isChild[ci] = true; }
     for (size_t i = 0; i < total; ++i) if (!isChild[i]) roots.push_back(i);
   }
-  for (size_t r : roots) if (!visitNode(d, r, Mat4{}, 0)) return failure(d.error);
+  for (size_t r : roots) if (!visitNode(d, r, -1, 0)) return failure(d.error);
   if (res.model.parts.empty()) return failure("o arquivo nao tem malhas de triangulos");
+  normalizeNodes(res.model);
 
   if (!d.json["animations"].items().empty()) res.model.warnings.push_back("animacoes ignoradas (ainda nao suportadas)");
   if (!d.json["skins"].items().empty()) res.model.warnings.push_back("skins/ossos ignorados");

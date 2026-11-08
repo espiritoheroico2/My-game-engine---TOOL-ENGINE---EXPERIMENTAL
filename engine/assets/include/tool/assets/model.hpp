@@ -3,10 +3,12 @@
 // VISAO GERAL DO PIPELINE DE IMPORTACAO
 //   arquivo (.glb/.gltf/.fbx) --> parser do formato --> ModelData (lista de ModelPart) --> editor/jogo
 //
-//  * Cada ModelPart = uma malha (tool::Mesh) + um material (cor/metalico/rugosidade) + nome.
-//  * A hierarquia de nos do arquivo e ACHATADA: a matriz de mundo de cada no e "assada" (baked) nos vertices.
-//    Vantagem: o resultado e independente do formato; desvantagem: nao ha hierarquia/animacao por enquanto
-//    (ficam para a janela de modelagem e o sistema de animacao).
+//  * Cada ModelPart = uma malha (tool::Mesh) + um material (cor/metalico/rugosidade) + nome + no dono.
+//  * A HIERARQUIA do arquivo e preservada (ModelData::nodes): cada no tem o pai, a transformacao local e as
+//    partes que desenha. As malhas ficam no espaco local do proprio no (nao sao "assadas" pela matriz de mundo).
+//    Um no cuja matriz nao e TRS puro (espelhada ou com cisalhamento) e assado no normalizeNodes(): a
+//    transformacao vai para as malhas dele e para a transformacao dos filhos, mantendo a aparencia.
+//  * Uma malha de um arquivo pode ter varias partes com materiais diferentes (uma por primitive/material).
 //  * Convencoes de saida (iguais as do resto da engine): mao direita, Y para cima, metros, triangulos
 //    anti-horarios, UV com origem no canto superior esquerdo.
 //  * Entrada NAO CONFIAVEL: todo importador valida limites (ImportLimits), indices e tamanhos, e devolve
@@ -50,26 +52,50 @@ struct ImportOptions {
 
 struct ModelPart {
   std::string name;
-  Mesh mesh;
+  Mesh mesh;             // no espaco local do no dono
   Material material;
+  int node = 0;          // indice em ModelData::nodes
+};
+
+// No da hierarquia do arquivo. O pai sempre tem indice menor que o filho (ordem de visita).
+struct ModelNode {
+  std::string name;
+  int parent = -1;       // -1 = raiz
+  Mat4 local;            // transformacao relativa ao pai (identidade por padrao)
+  std::vector<int> parts; // indices em ModelData::parts desenhados por este no
 };
 
 struct ModelData {
   std::string format;                 // "glTF", "GLB", "FBX"
   std::vector<ModelPart> parts;
+  std::vector<ModelNode> nodes;       // hierarquia; vazia = modelo sem nos (so partes, no espaco do mundo)
   std::vector<std::string> warnings;  // recursos ignorados (texturas, animacao...)
+
+  // Matriz de mundo de cada no (pai * local, na ordem da lista).
+  std::vector<Mat4> worldMatrices() const {
+    std::vector<Mat4> w(nodes.size());
+    for (size_t n = 0; n < nodes.size(); ++n) {
+      const int p = nodes[n].parent;
+      w[n] = (p >= 0 && static_cast<size_t>(p) < n) ? w[static_cast<size_t>(p)] * nodes[n].local : nodes[n].local;
+    }
+    return w;
+  }
 
   size_t vertexCount() const { size_t n = 0; for (auto& p : parts) n += p.mesh.pos.size(); return n; }
   size_t triangleCount() const { size_t n = 0; for (auto& p : parts) n += p.mesh.idx.size() / 3; return n; }
-  // Caixa envolvente de todas as partes (para enquadrar a camera / escalar na importacao).
+  // Caixa envolvente de todas as partes, em coordenadas de mundo (para enquadrar a camera / escalar).
   bool bounds(Vec3& mn, Vec3& mx) const {
     bool any = false;
-    for (auto& p : parts)
-      for (auto& v : p.mesh.pos) {
+    const std::vector<Mat4> world = worldMatrices();
+    for (auto& p : parts) {
+      const Mat4 w = nodes.empty() ? Mat4{} : world[static_cast<size_t>(p.node)];
+      for (auto& lv : p.mesh.pos) {
+        const Vec3 v = nodes.empty() ? lv : w.transformPoint(lv);
         if (!any) { mn = mx = v; any = true; continue; }
         mn = {std::min(mn.x, v.x), std::min(mn.y, v.y), std::min(mn.z, v.z)};
         mx = {std::max(mx.x, v.x), std::max(mx.y, v.y), std::max(mx.z, v.z)};
       }
+    }
     return any;
   }
 };
@@ -149,6 +175,30 @@ inline void bakeTransform(Mesh& mesh, const Mat4& w) {
     n = normalize(Vec3{C[0][0] * n.x + C[0][1] * n.y + C[0][2] * n.z, C[1][0] * n.x + C[1][1] * n.y + C[1][2] * n.z, C[2][0] * n.x + C[2][1] * n.y + C[2][2] * n.z} * sgn);
   if (d < 0)
     for (size_t i = 0; i + 2 < mesh.idx.size(); i += 3) std::swap(mesh.idx[i + 1], mesh.idx[i + 2]);
+}
+
+// Um no e "TRS puro" quando a parte 3x3 tem colunas perpendiculares (sem cisalhamento) e det > 0 (sem espelho).
+// Esses nos cabem em Transform (posicao/rotacao/escala) do editor e mantem o sentido dos triangulos.
+inline bool isPlainTRS(const Mat4& m) {
+  Vec3 c[3];
+  for (int i = 0; i < 3; ++i) c[i] = {m.m[i][0], m.m[i][1], m.m[i][2]};
+  for (int i = 0; i < 3; ++i) if (length(c[i]) < 1e-8f) return false;
+  for (int i = 0; i < 3; ++i)
+    for (int j = i + 1; j < 3; ++j)
+      if (std::fabs(dot(c[i], c[j])) > 1e-4f * length(c[i]) * length(c[j])) return false;
+  return det3(m) > 0.f;
+}
+
+// Garante que todo no seja TRS puro: um no fora disso e assado nas malhas dele e os filhos recebem a matriz.
+inline void normalizeNodes(ModelData& md) {
+  for (size_t n = 0; n < md.nodes.size(); ++n) {
+    if (isPlainTRS(md.nodes[n].local)) continue;
+    const Mat4 M = md.nodes[n].local;
+    for (int p : md.nodes[n].parts) bakeTransform(md.parts[static_cast<size_t>(p)].mesh, M);
+    for (size_t c = n + 1; c < md.nodes.size(); ++c)
+      if (md.nodes[c].parent == static_cast<int>(n)) md.nodes[c].local = M * md.nodes[c].local;
+    md.nodes[n].local = Mat4{};
+  }
 }
 
 // Confere a malha ao final da importacao: normais/UV com o tamanho certo, indices dentro do intervalo.

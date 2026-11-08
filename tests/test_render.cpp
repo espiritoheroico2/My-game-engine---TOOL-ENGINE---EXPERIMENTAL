@@ -1,6 +1,10 @@
 #include "test.hpp"
 #include "tool/render/lighting.hpp"
+#include "tool/render/occlusion.hpp"
+#include "LightPrism/Rt/Bvh.hpp"
+#include "LightPrism/Rt/RtEffects.hpp"
 #include "tool/render/postfx.hpp"
+#include "tool/render/bloom.hpp"
 #include "tool/rhi/null_device.hpp"
 
 using namespace tool;
@@ -401,4 +405,186 @@ TEST(texture_soft_renderer_plane_takes_the_texel_colours_by_uv) {
   u8 R = 0, G = 0, B = 0;
   px(r, 24, 32, R, G, B); CHECK(R > B);   // lado esquerdo: u perto de 0 -> vermelho
   px(r, 40, 32, R, G, B); CHECK(B > R);   // lado direito: u perto de 1 -> azul
+}
+
+// ---- oclusao (tool/render/occlusion.hpp) ----------------------------------------------------------------
+namespace {
+// 8 cantos da caixa envolvente dos vertices de uma malha colocada no mundo por `m`.
+void worldCorners(const Mesh& mesh, const Mat4& m, Vec3 out[8]) {
+  Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+  for (const Vec3& v : mesh.pos) {
+    const Vec3 p = m.transformPoint(v);
+    lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+    hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+  }
+  int i = 0;
+  for (f32 x : {lo.x, hi.x}) for (f32 y : {lo.y, hi.y}) for (f32 z : {lo.z, hi.z}) out[i++] = {x, y, z};
+}
+void boxCorners(Vec3 c, f32 h, Vec3 out[8]) {
+  int i = 0;
+  for (f32 x : {-h, h}) for (f32 y : {-h, h}) for (f32 z : {-h, h}) out[i++] = c + Vec3{x, y, z};
+}
+Mat4 viewProj(const Camera& cam, int w, int h) { return cam.projection(static_cast<f32>(w), static_cast<f32>(h)) * Mat4::lookAt(cam.eye, cam.target, cam.up); }
+}
+
+TEST(occlusion_buffer_hides_box_behind_wall) {
+  Camera cam; cam.eye = {0, 0, 0}; cam.target = {0, 0, -1};
+  render::OcclusionBuffer ob; ob.begin(320, 180, viewProj(cam, 320, 180));
+  ob.addTriangle({-1, -1, -5}, {1, -1, -5}, {1, 1, -5});       // parede 2 x 2 em z = -5
+  ob.addTriangle({-1, -1, -5}, {1, 1, -5}, {-1, 1, -5});
+  Vec3 c[8];
+  boxCorners({1.f, -0.8f, -10}, 0.5f, c); CHECK(ob.hidden(c));   // pequena, atras da parede e longe da diagonal: escondida
+  // Com dois triangulos, a diagonal entre eles passa pelo centro e nenhuma celula cortada e coberta inteira: conservador.
+  boxCorners({0, 0, -10}, 0.5f, c); CHECK(!ob.hidden(c));
+  boxCorners({0, 0, -10}, 3.f, c);  CHECK(!ob.hidden(c));       // maior que a parede na tela: aparece pelas bordas
+  boxCorners({0, 0, -2}, 0.5f, c);  CHECK(!ob.hidden(c));       // na frente da parede
+  boxCorners({0, 0, -4}, 2.f, c);   CHECK(!ob.hidden(c));       // atravessa a parede: um canto esta na frente
+  boxCorners({0, 0, 15}, 0.5f, c);  CHECK(!ob.hidden(c));       // atras da camera
+  boxCorners({40, 0, -10}, 0.5f, c); CHECK(!ob.hidden(c));      // fora da tela: quem decide e o recorte
+}
+
+TEST(occlusion_culling_does_not_change_the_image) {
+  // Mesma cena renderizada duas vezes: uma desenha tudo, a outra pula o que a oclusao esconde. Os pixels devem bater.
+  Camera cam; cam.eye = {0, 0, 0}; cam.target = {0, 0, -1};
+  const int W = 160, H = 90;
+  Light sun; sun.type = LightType::Directional; sun.direction = {0, 0, -1}; sun.intensity = 3.f;
+  const Mesh cube = Mesh::cube(1.f);
+  const Mat4 wallM = Mat4::translation({0, 0, -5}) * Mat4::scale({2.f, 2.f, 0.1f});
+  const Mat4 hiddenM = Mat4::translation({2.f, 0.f, -10}) * Mat4::scale({0.25f, 0.25f, 0.25f}); // longe da diagonal da parede (ocupa quase a tela)
+  const Mat4 visibleM = Mat4::translation({1.2f, 0.3f, -4.f}) * Mat4::scale({0.6f, 0.6f, 0.6f});
+  auto render = [&](bool cull, bool& hiddenDecision) {
+    SoftRenderer r(W, H); r.begin(cam);
+    LightRig rig; lightFrame(rig, {sun}, {}, cam, W, H); r.setLighting(rig.frame());
+    render::OcclusionBuffer ob;
+    hiddenDecision = false;
+    if (cull) {
+      ob.begin(W, H, viewProj(cam, W, H));
+      // mesmo caminho do editor: pares de triangulos de uma face viram quad
+      for (size_t i = 0; i + 2 < cube.idx.size(); i += 3) {
+        const auto P = [&](size_t k) { return wallM.transformPoint(cube.pos[cube.idx[k]]); };
+        if (i + 5 < cube.idx.size() && cube.idx[i + 3] == cube.idx[i] && cube.idx[i + 4] == cube.idx[i + 2]) { ob.addQuad(P(i), P(i + 1), P(i + 2), P(i + 5)); i += 3; continue; }
+        ob.addTriangle(P(i), P(i + 1), P(i + 2));
+      }
+      Vec3 c[8]; worldCorners(cube, hiddenM, c); hiddenDecision = ob.hidden(c);
+    }
+    r.draw(cube, wallM, Material{{0.8f, 0.2f, 0.2f}, 0.8f, 0.f});
+    if (!hiddenDecision) r.draw(cube, hiddenM, Material{{0.2f, 0.9f, 0.2f}, 0.8f, 0.f});
+    r.draw(cube, visibleM, Material{{0.2f, 0.2f, 0.9f}, 0.8f, 0.f});
+    return std::vector<u8>(r.pixels(), r.pixels() + static_cast<size_t>(W) * H * 4);
+  };
+  bool dummy = false, decided = false;
+  const std::vector<u8> all = render(false, dummy);
+  const std::vector<u8> culled = render(true, decided);
+  CHECK(decided);                       // a caixa verde esta de fato escondida (o teste nao e trivial)
+  CHECK(all == culled);                 // e pular o que esta escondido nao muda nenhum pixel
+}
+
+TEST(rt_ambient_occlusion_darkens_plane_next_to_a_wall) {
+  // Camera do alto; parede entre x=0.3 e 0.4 (y 0..1). Pixel do chao perto da parede escurece; longe nao.
+  Camera cam; cam.eye = {0, 4, 0}; cam.target = {0, 0, 0}; cam.up = {0, 0, -1};
+  const Mesh wall = Mesh::cube(1.f);
+  const Mat4 wallM = Mat4::translation({0.35f, 0.5f, 0.f}) * Mat4::scale({0.05f, 0.5f, 0.5f});
+  std::vector<LightPrism::Rt::Triangle> tris;
+  for (size_t i = 0; i + 2 < wall.idx.size(); i += 3) {
+    const Vec3 a = wallM.transformPoint(wall.pos[wall.idx[i]]), b = wallM.transformPoint(wall.pos[wall.idx[i + 1]]), c = wallM.transformPoint(wall.pos[wall.idx[i + 2]]);
+    tris.push_back({{a.x, a.y, a.z}, {b.x, b.y, b.z}, {c.x, c.y, c.z}});
+  }
+  LightPrism::Rt::Bvh bvh; bvh.Build(tris);
+  LightPrism::Rt::RtAoConfig cfg; cfg.rays = 32; cfg.radius = 0.6f;
+  auto brightness = [&](bool rt, int col) {
+    SoftRenderer r(64, 64); r.begin(cam, {0, 0, 0}, 1.f);
+    LightRig rig; lightFrame(rig, {}, {0.3f, 0.3f, 0.3f}, cam, 64, 64); r.setLighting(rig.frame());
+    r.draw(Mesh::plane(1.f), Mat4{}, Material{{1, 1, 1}, 0.9f, 0.f, false, false});
+    if (rt) r.setRayTracedAo(&bvh, cfg);
+    u8 R = 0, G = 0, B = 0; px(r, col, 32, R, G, B);
+    return static_cast<int>(R);
+  };
+  const int near = brightness(true, 36);   // ~0.06 m da parede: muitos raios batem nela
+  const int far = brightness(true, 19);    // ~1.1 m da parede: fora do raio de 0.6 m
+  CHECK(far > 0);
+  CHECK(near < far * 0.9f);             // medido: 141 perto contra 177 longe
+}
+
+TEST(occlusion_quad_covers_cells_crossed_by_the_diagonal) {
+  // O mesmo quadrado do teste anterior, agora como quad plano: a caixa no centro (cortada pela diagonal) e escondida.
+  Camera cam; cam.eye = {0, 0, 0}; cam.target = {0, 0, -1};
+  render::OcclusionBuffer ob; ob.begin(320, 180, viewProj(cam, 320, 180));
+  ob.addQuad({-1, -1, -5}, {1, -1, -5}, {1, 1, -5}, {-1, 1, -5});
+  Vec3 c[8];
+  boxCorners({0, 0, -10}, 0.5f, c); CHECK(ob.hidden(c));
+  boxCorners({0, 0, -2}, 0.5f, c);  CHECK(!ob.hidden(c));      // na frente do quad
+  // Quad nao plano: cai nos dois triangulos (a caixa do centro nao e escondida, por seguranca).
+  render::OcclusionBuffer bent; bent.begin(320, 180, viewProj(cam, 320, 180));
+  bent.addQuad({-1, -1, -5}, {1, -1, -5}, {1, 1, -4}, {-1, 1, -5});
+  boxCorners({0, 0, -10}, 0.5f, c); CHECK(!bent.hidden(c));
+}
+
+TEST(point_shadow_maps_reused_when_only_the_camera_moves_give_the_same_image) {
+  // Luz pontual com sombra e uma caixa que projeta sombra num chao. So a camera muda entre os quadros: reaproveitar
+  // os mapas de face da luz (que nao dependem da camera) tem de dar exatamente a mesma imagem que renderizar do zero.
+  Light pl; pl.type = LightType::Point; pl.position = {0, 2, 0}; pl.range = 10; pl.intensity = 5; pl.castShadow = true;
+  Camera c1; c1.eye = {0, 1, 3}; c1.target = {0, 0.5f, -2}; c1.up = {0, 1, 0};
+  Camera c2; c2.eye = {1.5f, 1.2f, 3}; c2.target = {0, 0.5f, -2}; c2.up = {0, 1, 0};
+  const Mat4 boxM = Mat4::translation({0, 0.5f, -2});
+  const Mesh box = Mesh::cube(0.5f);
+  const Material boxMat{{0.8f, 0.4f, 0.2f}, 0.9f, 0.f, true, true};
+  const Material floorMat{{0.7f, 0.7f, 0.7f}, 0.9f, 0.f, false, true};
+  auto draw = [&](SoftRenderer& r) { r.draw(Mesh::plane(3.f), Mat4{}, floorMat); r.draw(box, boxM, boxMat); };
+
+  SoftRenderer shared(96, 72);
+  LightRig rigA; lightFrame(rigA, {pl}, {0.1f, 0.1f, 0.1f}, c1, 96, 72);
+  shared.begin(c1, {0, 0, 0}, 1.f); shared.setLighting(rigA.frame(), false, false); draw(shared); (void)shared.pixels();
+
+  LightRig rigB; lightFrame(rigB, {pl}, {0.1f, 0.1f, 0.1f}, c2, 96, 72);
+  shared.begin(c2, {0, 0, 0}, 1.f); shared.setLighting(rigB.frame(), false, true); draw(shared);
+  CHECK(shared.pointShadowPassSkipped());
+  const std::vector<u8> reused(shared.pixels(), shared.pixels() + 96 * 72 * 4);
+
+  SoftRenderer fresh(96, 72);
+  fresh.begin(c2, {0, 0, 0}, 1.f); fresh.setLighting(rigB.frame(), false, false); draw(fresh);
+  const std::vector<u8> full(fresh.pixels(), fresh.pixels() + 96 * 72 * 4);
+  CHECK(reused == full);
+}
+
+TEST(light_rig_keeps_point_lights_registered_and_follows_changes) {
+  // A lista de luzes e registrada so quando muda: parada, o quadro sai igual; movida, a nova posicao entra; removida, some.
+  Camera cam; cam.eye = {0, 1, 3}; cam.target = {0, 0, 0}; cam.up = {0, 1, 0};
+  Light pl; pl.type = LightType::Point; pl.position = {0, 2, 0}; pl.range = 6; pl.intensity = 3;
+  LightRig rig;
+  lightFrame(rig, {pl}, {}, cam, 64, 64);
+  CHECK(rig.frame().points.size() == 1);
+  const auto p1 = rig.frame().points.empty() ? LightPrism::PointLightGPU{} : rig.frame().points[0];
+  lightFrame(rig, {pl}, {}, cam, 64, 64);                        // parada: mesmo resultado
+  CHECK(rig.frame().points.size() == 1);
+  CHECK(!rig.frame().points.empty() && rig.frame().points[0].position.x == p1.position.x && rig.frame().points[0].position.y == p1.position.y);
+  Light moved = pl; moved.position = {3, 2, 0};
+  lightFrame(rig, {moved}, {}, cam, 64, 64);                     // movida: a nova posicao entra
+  CHECK(rig.frame().points.size() == 1 && std::fabs(rig.frame().points[0].position.x - 3.f) < 1e-4f);
+  lightFrame(rig, {}, {}, cam, 64, 64);                          // removida: nao sobra nada
+  CHECK(rig.frame().points.empty());
+}
+
+
+// Bloom (CPU): um pixel branco no centro espalha luz para os vizinhos, sem mudar o alfa nem o canto distante.
+TEST(bloom_cpu_spreads_a_bright_pixel_and_keeps_alpha) {
+  const unsigned W = 32, H = 32;
+  std::vector<std::uint8_t> px(W * H * 4, 0);
+  for (std::size_t i = 3; i < px.size(); i += 4) px[i] = 255;
+  px[(16 * W + 16) * 4 + 0] = px[(16 * W + 16) * 4 + 1] = px[(16 * W + 16) * 4 + 2] = 255;
+  tool::applyBloomRgba8(px.data(), W, H, 0.5f, 1.0f);
+  auto red = [&](unsigned x, unsigned y) { return px[(y * W + x) * 4]; };
+  CHECK(red(20, 16) > 0);     // vizinho proximo recebe halo
+  CHECK(red(0, 0) == 0);      // canto longe continua preto
+  bool alphaKept = true;
+  for (std::size_t i = 3; i < px.size(); i += 4) alphaKept = alphaKept && px[i] == 255;
+  CHECK(alphaKept);
+}
+
+// Imagem escura (abaixo do limiar) nao muda com o bloom ligado.
+TEST(bloom_cpu_leaves_dark_image_unchanged) {
+  const unsigned W = 16, H = 16;
+  std::vector<std::uint8_t> px(W * H * 4, 60);
+  const auto before = px;
+  tool::applyBloomRgba8(px.data(), W, H, 0.75f, 0.8f);
+  CHECK(px == before);
 }

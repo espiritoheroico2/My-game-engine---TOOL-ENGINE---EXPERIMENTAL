@@ -17,7 +17,7 @@
 #include "editor_state.hpp"
 #include "extra_ui.hpp"
 #include "i18n.hpp"
-#include "script_kit.hpp"
+#include "script_complete.hpp"
 
 #include "imgui.h"
 
@@ -216,7 +216,7 @@ inline void refreshEntries(Editor& ed, const fs::path& base) {
   ed.project.ensure();
   // Arquivos de apoio do VS Code (typings, jsconfig, snippets): uma vez por raiz de projeto.
   static fs::path kitRoot;
-  if (kitRoot != ed.project.root) { kitRoot = ed.project.root; ensureScriptKit(kitRoot); }
+  if (kitRoot != ed.project.root) { kitRoot = ed.project.root; ensureScriptKit(kitRoot); writeVsCodeSnippets(kitRoot); }
   std::error_code ec;
   for (auto& e : fs::directory_iterator(base, fs::directory_options::skip_permission_denied, ec)) {
     AssetEntry en;

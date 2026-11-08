@@ -8,6 +8,8 @@
 
 #include "LightPrism/Reference/Brdf.hpp"
 #include "LightPrism/Reference/Tonemap.hpp"
+#include "LightPrism/Rt/Bvh.hpp"
+#include "LightPrism/Rt/RtEffects.hpp"
 #include "LightPrism/Ibl/Ibl.hpp"
 #include "LightPrism/Shadow/Csm.hpp"
 
@@ -186,7 +188,8 @@ struct Mesh {
 };
 
 // castShadow / receiveShadow: por objeto, independentes (ver lighting.hpp).
-struct Material { Vec3 albedo{0.8f, 0.8f, 0.8f}; f32 roughness = 0.5f; f32 metallic = 0.f; bool castShadow = true, receiveShadow = true; const Texture* albedoMap = nullptr; };
+// emissive: radiancia linear emitida pelo objeto (cor x intensidade); nao e iluminada, so soma na cor (e o bloom usa o brilho).
+struct Material { Vec3 albedo{0.8f, 0.8f, 0.8f}; f32 roughness = 0.5f; f32 metallic = 0.f; bool castShadow = true, receiveShadow = true; const Texture* albedoMap = nullptr; Vec3 emissive{0.f, 0.f, 0.f}; };
 
 struct Camera {
   Vec3 eye{0, 2, 6}, target{0, 0.5f, 0}, up{0, 1, 0};
@@ -206,7 +209,14 @@ class SoftRenderer {
 public:
   SoftRenderer(u32 w = 320, u32 h = 180) { resize(w, h); }
 
-  void resize(u32 w, u32 h) { w_ = std::max(1u, w); h_ = std::max(1u, h); color_.assign(static_cast<size_t>(w_) * h_ * 4, 0); depth_.assign(static_cast<size_t>(w_) * h_, 1.f); }
+  void resize(u32 w, u32 h) {
+    w_ = std::max(1u, w); h_ = std::max(1u, h);
+    const size_t n = static_cast<size_t>(w_) * h_;
+    color_.assign(n * 4, 0); depth_.assign(n, 1.f);
+    direct_.assign(n, Vec3{}); amb_.assign(n, Vec3{}); covered_.assign(n, 0);
+    depthV_.assign(n, 0.f); nrmV_.assign(n, LightPrism::Vec3{}); ao_.assign(n, 1.f);
+    posW_.assign(n, LightPrism::Vec3{}); nrmW_.assign(n, LightPrism::Vec3{});
+  }
   u32 width() const { return w_; }
   u32 height() const { return h_; }
   const u8* pixels() const { flush(); return color_.data(); } // RGBA8 (conclui o desenho pendente)
@@ -221,6 +231,10 @@ public:
     view_ = Mat4::lookAt(cam.eye, cam.target, cam.up);
     viewProj_ = cam.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * view_;
     std::fill(depth_.begin(), depth_.end(), 1.f);
+    std::fill(covered_.begin(), covered_.end(), u8{0});
+    std::fill(depthV_.begin(), depthV_.end(), 0.f); // 0 = sem geometria (entrada do SSAO)
+    proj00_ = cam.projection(static_cast<f32>(w_), static_cast<f32>(h_)).m[0][0];
+    proj11_ = cam.projection(static_cast<f32>(w_), static_cast<f32>(h_)).m[1][1];
     // Fundo: a cor de limpeza e sRGB direto (como o alvo sRGB da GPU), sem a curva ACES usada nos objetos.
     auto toSrgb = [](f32 c) { c = std::clamp(c, 0.f, 1.f); return c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f; };
     color_[0] = toByte(toSrgb(clearColor.x)); color_[1] = toByte(toSrgb(clearColor.y)); color_[2] = toByte(toSrgb(clearColor.z));
@@ -235,7 +249,13 @@ public:
   // Iluminacao do quadro (LightFrame, vindo de LightRig::build). Chamar depois de begin() e ANTES dos draw().
   // reuse = true: nada que projeta sombra nem a luz mudou ("sleeper"): mantem os mapas do quadro anterior e nao
   // rasteriza os casters. Sem cascatas (csm.cascadeCount == 0) nao ha passe de sombra e o custo e zero.
-  void setLighting(const LightFrame& f, bool reuse = false) {
+  // Ray tracing (CPU): com `bvh` (triangulos do mundo), a oclusao ambiente vem de raios reais no lugar do SSAO.
+  // O BVH precisa viver ate pixels(). nullptr = volta ao SSAO. Defina antes de ler os pixels de cada quadro.
+  void setRayTracedAo(const LightPrism::Rt::Bvh* bvh, const LightPrism::Rt::RtAoConfig& cfg) { rtBvh_ = bvh; rtAo_ = cfg; }
+
+  // pointReuse = true: luzes pontuais/spot e casters iguais ao quadro anterior (a camera nao entra aqui): os mapas de
+  // face sao mantidos e nada e rasterizado de novo. O chamador garante a igualdade (assinatura).
+  void setLighting(const LightFrame& f, bool reuse = false, bool pointReuse = false) {
     lf_ = f;
     const bool on = lf_.shadows();
     const u32 count = on ? std::min<u32>(lf_.csm.gpu.cascadeCount, LightPrism::kMaxCsmCascades) : 0u;
@@ -253,14 +273,23 @@ public:
     // Sombras de luzes pontuais/spot: um mapa por face (slot = luz * 6 + face), sempre refeito a cada quadro.
     pointOn_ = !lf_.shadowLights.empty();
     pointRes_ = std::clamp(static_cast<int>(lf_.pointShadowResolution), 64, 2048);
-    const size_t pn = static_cast<size_t>(pointRes_) * static_cast<size_t>(pointRes_);
-    for (size_t i = 0; i < lf_.shadowLights.size(); ++i)
-      for (u32 f = 0; f < lf_.shadowLights[i].faces; ++f) {
-        const size_t slot = i * kMaxPointShadowFaces + f;
-        faceMap_[slot].assign(pn, 1e30f); // profundidade em metros: "infinito" = nada na frente (1.0 seria 1 m)
-        faceTris_[slot].clear();
-      }
+    if (!pointOn_) pointValid_ = false;
+    const bool sameFaces = pointRes_ == pointResBuilt_ && lf_.shadowLights.size() == pointLightsBuilt_;
+    pointSkip_ = pointOn_ && pointReuse && pointValid_ && sameFaces;
+    if (pointOn_ && !pointSkip_) {
+      const size_t pn = static_cast<size_t>(pointRes_) * static_cast<size_t>(pointRes_);
+      pointValid_ = false;
+      for (size_t i = 0; i < lf_.shadowLights.size(); ++i)
+        for (u32 f = 0; f < lf_.shadowLights[i].faces; ++f) {
+          const size_t slot = i * kMaxPointShadowFaces + f;
+          faceMap_[slot].assign(pn, 1e30f); // profundidade em metros: "infinito" = nada na frente (1.0 seria 1 m)
+          faceTris_[slot].clear();
+        }
+    }
+    pointResBuilt_ = pointRes_; pointLightsBuilt_ = lf_.shadowLights.size();
   }
+  // Sombras de luzes pontuais/spot foram reaproveitadas neste quadro (nenhuma face rasterizada de novo).
+  bool pointShadowPassSkipped() const { return pointSkip_; }
   // Luzes pontuais/spot com sombra neste quadro (ShadowLight) e quantas faces tem cada uma.
   size_t pointShadowLights() const { return lf_.shadowLights.size(); }
   bool shadowPassSkipped() const { return shadowSkip_; }
@@ -302,13 +331,32 @@ public:
         }
       }
     }
-    if (pointOn_ && mat.castShadow) { // luzes pontuais/spot: cada face de cada luz com sombra recebe os triangulos
+    if (pointOn_ && !pointSkip_ && mat.castShadow) { // luzes pontuais/spot: cada face de cada luz com sombra recebe os triangulos
       for (size_t i = 0; i < lf_.shadowLights.size(); ++i)
         for (u32 f = 0; f < lf_.shadowLights[i].faces; ++f) addFaceCaster(m, world, lf_.shadowLights[i], f, i * kMaxPointShadowFaces + f);
     }
+    // Recorte no plano near (Sutherland-Hodgman em clip space): triangulos que cruzam o near sao cortados, nao descartados.
+    // Antes um triangulo com um vertice atras da camera sumia inteiro (ex.: o chao com a camera dentro do seu alcance).
+    std::vector<V> tris;
+    tris.reserve(m.idx.size());
     for (size_t t = 0; t + 2 < m.idx.size(); t += 3) {
-      const V& a = v[m.idx[t]]; const V& b = v[m.idx[t + 1]]; const V& c = v[m.idx[t + 2]];
-      if (!cam_.ortho && (a.w <= cam_.nearZ || b.w <= cam_.nearZ || c.w <= cam_.nearZ)) continue; // sem recorte no plano near (alpha)
+      V in[3] = {v[m.idx[t]], v[m.idx[t + 1]], v[m.idx[t + 2]]};
+      if (cam_.ortho) { tris.push_back(in[0]); tris.push_back(in[1]); tris.push_back(in[2]); continue; }
+      auto mix = [](const V& p, const V& q, f32 k) {
+        return V{p.x + (q.x - p.x) * k, p.y + (q.y - p.y) * k, p.z + (q.z - p.z) * k, p.w + (q.w - p.w) * k,
+                 p.wp + (q.wp - p.wp) * k, p.n + (q.n - p.n) * k, p.u + (q.u - p.u) * k, p.v + (q.v - p.v) * k};
+      };
+      V poly[4]; int np = 0;
+      for (int i = 0; i < 3; ++i) {
+        const V& p = in[i]; const V& q = in[(i + 1) % 3];
+        const f32 dp = p.w - cam_.nearZ, dq = q.w - cam_.nearZ;
+        if (dp >= 0.f) poly[np++] = p;
+        if ((dp >= 0.f) != (dq >= 0.f)) poly[np++] = mix(p, q, dp / (dp - dq));
+      }
+      for (int k = 1; k + 1 < np; ++k) { tris.push_back(poly[0]); tris.push_back(poly[k]); tris.push_back(poly[k + 1]); }
+    }
+    for (size_t t = 0; t + 2 < tris.size(); t += 3) {
+      const V& a = tris[t]; const V& b = tris[t + 1]; const V& c = tris[t + 2];
       auto sx = [&](const V& p) { return (p.x / p.w * 0.5f + 0.5f) * static_cast<f32>(w_); };
       auto sy = [&](const V& p) { return (1.f - (p.y / p.w * 0.5f + 0.5f)) * static_cast<f32>(h_); };
       Tri r;
@@ -351,6 +399,7 @@ public:
       for (auto& t : th) t.join();
     }
     for (u64 c : shadedPer) shaded_ += c;
+    resolve();
     pending_.clear();
   }
 
@@ -387,6 +436,7 @@ public:
   // interpolacao correta em perspectiva (1/w linear na tela).
   void flushFaces() const {
     const int R = pointRes_;
+    if (pointSkip_) { for (auto& t : faceTris_) t.clear(); pointValid_ = pointOn_; return; }
     for (size_t slot = 0; slot < kMaxPointShadowLights * kMaxPointShadowFaces; ++slot) {
       if (faceTris_[slot].empty()) continue;
       std::vector<f32>& map = faceMap_[slot];
@@ -408,6 +458,7 @@ public:
       }
       faceTris_[slot].clear();
     }
+    pointValid_ = pointOn_;
   }
 
   // Visibilidade (0..1) de um ponto pela face de uma luz pontual/spot: 3x3 PCF sobre o mapa da face. Viés em distancia
@@ -526,21 +577,41 @@ private:
           const f32 uu = (t.uv[0][0] * p0 + t.uv[1][0] * p1 + t.uv[2][0] * p2) * inv, vv = (t.uv[0][1] * p0 + t.uv[1][1] * p1 + t.uv[2][1] * p2) * inv;
           u8 tx[4]; mat.albedoMap->texel(uu, vv, tx);
           Material mm = mat; mm.albedo = {mat.albedo.x * tx[0] / 255.f, mat.albedo.y * tx[1] / 255.f, mat.albedo.z * tx[2] / 255.f};
-          put(di, shade(wp, n, mm));
-        } else put(di, shade(wp, n, mat));
+          store(di, shade(wp, n, mm), wp, n);
+        } else store(di, shade(wp, n, mat), wp, n);
         ++count;
       }
   }
 
   // Sombreamento: BRDF PBR da LightPrism (Reference::EvaluateBRDF) para cada luz do quadro, sombra do sol por cascatas
   // (Reference::CsmVisibility) e luz ambiente como irradiancia SH9 (Ibl::EvalSh). O tonemap fica em put().
-  Vec3 shade(Vec3 p, Vec3 n, const Material& m) const {
+  struct Lit { Vec3 direct, amb; };
+  Lit shade(Vec3 p, Vec3 n, const Material& m) const {
     namespace R = LightPrism::Reference;
     const Vec3 V = normalize(cam_.eye - p);
     R::SurfaceData s;
     s.N = LightRig::lp(n); s.V = LightRig::lp(V); s.albedo = LightRig::lp(m.albedo); s.metallic = m.metallic; s.roughness = m.roughness;
     const LightPrism::Vec3 P = LightRig::lp(p);
-    LightPrism::Vec3 col = LightPrism::Ibl::EvalSh(lf_.ambient, s.N) * (1.f - m.metallic) * s.albedo;
+    // Luz ambiente = IBL da LightPrism, igual ao pbr.hlsl: difuso (kD) + especular split-sum (LUT da BRDF).
+    // Ambiente uniforme: a radiancia refletida e a irradiancia SH de R. Multiplicada pelo SSAO depois.
+    const LightPrism::Vec3 Nl = s.N, Vl = s.V, alb = s.albedo;
+    const float rawNoV = Nl.x * Vl.x + Nl.y * Vl.y + Nl.z * Vl.z;
+    const float NoV = std::max(rawNoV, 1e-4f);
+    const float rough = std::max(m.roughness, 0.045f);   // LP_MIN_ROUGHNESS (PBR.hlsli)
+    const LightPrism::Vec3 F0{0.04f + (alb.x - 0.04f) * m.metallic, 0.04f + (alb.y - 0.04f) * m.metallic, 0.04f + (alb.z - 0.04f) * m.metallic};
+    float A = 0.f, B = 0.f;
+    LightPrism::Ibl::SampleBrdfLut(sharedBrdfLut(), NoV, rough, A, B);
+    const LightPrism::Vec3 Fss{F0.x * A + B, F0.y * A + B, F0.z * A + B};
+    const LightPrism::Vec3 kD{(1.f - std::min(Fss.x, 1.f)) * (1.f - m.metallic), (1.f - std::min(Fss.y, 1.f)) * (1.f - m.metallic), (1.f - std::min(Fss.z, 1.f)) * (1.f - m.metallic)};
+    const float dirF = LightPrism::Ibl::DominantDirFactor(rough);
+    const LightPrism::Vec3 Rm{Nl.x * 2.f * rawNoV - Vl.x, Nl.y * 2.f * rawNoV - Vl.y, Nl.z * 2.f * rawNoV - Vl.z};
+    LightPrism::Vec3 Rd{Nl.x + (Rm.x - Nl.x) * dirF, Nl.y + (Rm.y - Nl.y) * dirF, Nl.z + (Rm.z - Nl.z) * dirF};
+    const float rl = std::sqrt(Rd.x * Rd.x + Rd.y * Rd.y + Rd.z * Rd.z);
+    if (rl > 1e-12f) Rd = {Rd.x / rl, Rd.y / rl, Rd.z / rl};
+    const LightPrism::Vec3 dif = LightPrism::Ibl::EvalSh(lf_.ambient, Nl);
+    const LightPrism::Vec3 spc = LightPrism::Ibl::EvalSh(lf_.ambient, Rd);
+    const LightPrism::Vec3 amb{kD.x * alb.x * dif.x + Fss.x * spc.x, kD.y * alb.y * dif.y + Fss.y * spc.y, kD.z * alb.z * dif.z + Fss.z * spc.z};
+    LightPrism::Vec3 col{0.f, 0.f, 0.f};                                                                       // luz direta
     // Luzes pontuais/spot: a BRDF e a janela da LightPrism; a sombra (quando a luz projeta) multiplica a contribuicao.
     for (const auto& l : lf_.points) col = col + R::EvaluatePointLight(l, s, P) * (m.receiveShadow ? pointShadowFor(LightType::Point, l.position, p, n) : 1.f);
     for (const auto& l : lf_.spots) col = col + R::EvaluateSpotLight(l, s, P) * (m.receiveShadow ? pointShadowFor(LightType::Spot, l.position, p, n) : 1.f);
@@ -554,7 +625,54 @@ private:
       }
       col = col + R::EvaluateDirectionalLight(lf_.sun, s) * vis;
     }
-    return {col.x, col.y, col.z};
+    col = col + LightPrism::Vec3{m.emissive.x, m.emissive.y, m.emissive.z};   // emissao do proprio objeto (sem sombra nem AO)
+    return {{col.x, col.y, col.z}, {amb.x, amb.y, amb.z}};
+  }
+  // Guarda o pixel vencedor: luz direta, luz ambiente, distancia de view e normal de view (para o SSAO).
+  void store(size_t i, Lit c, Vec3 wp, Vec3 n) const {
+    direct_[i] = c.direct; amb_[i] = c.amb; covered_[i] = 1;
+    posW_[i] = {wp.x, wp.y, wp.z}; nrmW_[i] = {n.x, n.y, n.z};
+    const Vec4 vp = view_.mul({wp.x, wp.y, wp.z, 1});
+    depthV_[i] = -vp.z;
+    const Vec4 nv = view_.mul({n.x, n.y, n.z, 0});
+    nrmV_[i] = {nv.x, nv.y, nv.z};
+  }
+  // Depois de rasterizar: SSAO da Light Prism (ComputeSsao) sobre a cena inteira e cor final = direta + ambiente * AO.
+  // Roda fn(begin, end) sobre [0, n) em faixas, em varias threads (ate 8). Cada faixa escreve so os seus indices.
+  template <class F> static void parallelRange(size_t n, F&& fn) {
+    const unsigned nT = std::min(std::max(1u, std::thread::hardware_concurrency()), 8u);
+    if (nT <= 1 || n < 4096) { fn(size_t{0}, n); return; }
+    const size_t chunk = (n + nT - 1) / nT;
+    std::vector<std::thread> th;
+    for (unsigned t = 1; t < nT; ++t) {
+      const size_t b = t * chunk, e = std::min(n, b + chunk);
+      if (b < e) th.emplace_back([&fn, b, e] { fn(b, e); });
+    }
+    fn(size_t{0}, std::min(n, chunk));
+    for (auto& x : th) x.join();
+  }
+
+  void resolve() const {
+    const size_t n = static_cast<size_t>(w_) * h_;
+    if (rtBvh_) {
+      // Oclusao ambiente por raios: cada pixel coberto lanca raios a partir do ponto da superficie (BVH da LightPrism).
+      // A funcao e pura (so le o BVH) e o raio depende so do indice do pixel: o resultado nao muda com as threads.
+      parallelRange(n, [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i)
+          ao_[i] = covered_[i] ? LightPrism::Rt::RtAmbientOcclusion(*rtBvh_, posW_[i], nrmW_[i], rtAo_, static_cast<uint32_t>(i)) : 1.f;
+      });
+    } else if (lf_.ssaoOn) {
+      LightPrism::Ssao::SsaoInput in;
+      in.width = w_; in.height = h_; in.viewDepth = depthV_.data(); in.viewNormal = nrmV_.data();
+      in.proj00 = proj00_; in.proj11 = proj11_;
+      LightPrism::Ssao::ComputeSsao(lf_.ssao, in, ao_);
+    } else ao_.assign(n, 1.f);
+    parallelRange(n, [&](size_t b, size_t e) {
+      for (size_t i = b; i < e; ++i) {
+        if (!covered_[i]) continue;
+        put(i, direct_[i] + amb_[i] * ao_[i]);
+      }
+    });
   }
   // Tonemap ACES + sRGB exato (Reference::TonemapToSRGB, o mesmo do HLSL). A exposicao ja esta nas intensidades.
   void put(size_t i, Vec3 c) const {
@@ -579,8 +697,19 @@ private:
   Mat4 cascadeVp_[LightPrism::kMaxCsmCascades];
   mutable std::vector<f32> shadowMap_[LightPrism::kMaxCsmCascades];
   mutable std::vector<ShadowTri> shadowTris_[LightPrism::kMaxCsmCascades];
+  // Buffers do pixel vencedor (ver store/resolve): luz direta e ambiente em linear, profundidade e normal de view.
+  mutable std::vector<Vec3> direct_, amb_;
+  mutable std::vector<u8> covered_;
+  mutable std::vector<f32> depthV_, ao_;
+  mutable std::vector<LightPrism::Vec3> posW_, nrmW_; // posicao e normal de mundo do pixel vencedor (para o RT)
+  const LightPrism::Rt::Bvh* rtBvh_ = nullptr; LightPrism::Rt::RtAoConfig rtAo_{};
+  mutable std::vector<LightPrism::Vec3> nrmV_;
+  f32 proj00_ = 1.f, proj11_ = 1.f;
   // sombras de luzes pontuais/spot: slot = luz * 6 + face (ver setLighting)
   bool pointOn_ = false; int pointRes_ = 512;
+  bool pointSkip_ = false;                 // este quadro reaproveita os mapas de face
+  mutable bool pointValid_ = false;        // os mapas de face ja foram rasterizados para a configuracao atual
+  int pointResBuilt_ = 0; size_t pointLightsBuilt_ = 0;
   mutable std::vector<f32> faceMap_[kMaxPointShadowLights * kMaxPointShadowFaces];
   mutable std::vector<FaceTri> faceTris_[kMaxPointShadowLights * kMaxPointShadowFaces];
 };

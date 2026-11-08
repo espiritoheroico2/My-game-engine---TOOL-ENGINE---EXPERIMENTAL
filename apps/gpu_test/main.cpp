@@ -1,7 +1,9 @@
+#include <memory>
 // Teste de fumaca das APIs graficas reais: renderiza a mesma cena na GPU (via RHI/Diligent) e no
 // SoftRenderer, le o resultado de volta e compara a cobertura (silhueta) dos objetos.
 // Uso: gpu_test <vulkan|opengl|d3d12> [saida.ppm]
 #include "tool/render/gpu_renderer.hpp"
+#include "tool/render/bloom.hpp"
 #include "tool/rhi/diligent_device.hpp"
 
 #include "LightPrism/Backends/DiligentDevice.hpp"
@@ -201,7 +203,93 @@ int main(int argc, char** argv) {
     texOk = gpuOk && cpuOk;
     if (std::string(rhi::toString(dev->backend())) == "gles") { texOk = true; std::printf("textura: OpenGL/GLES ainda nao amostra texturas (pendente), teste pulado\n"); }
   }
-  const bool ok = shadowOk && pointOk && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
+  // SSAO (Light Prism): caixa sobre o chao, so luz ambiente. Com AO a base da caixa e o chao ao redor escurecem.
+  // GPU e CPU precisam escurecer quantidades parecidas de pixels (tolerancia de 40%).
+  Camera ac; ac.eye = {2.2f, 1.8f, 2.6f}; ac.target = {0, 0.2f, 0};
+  const Mesh aoBox = Mesh::cube(0.5f);
+  const Material aoMat{{0.8f, 0.8f, 0.8f}, 0.9f, 0.f};
+  const std::vector<Obj> aoObjs = {{&ground, Mat4::translation({0, 0, 0}), aoMat}, {&aoBox, Mat4::translation({0, 0.5f, 0}), aoMat}};
+  const Vec3 aoAmb{0.6f, 0.6f, 0.6f};
+  auto aoRigFor = [&](bool on) {
+    LightingSettings as; as.ssao = on; as.ssaoRadius = 0.6f; as.ssaoBias = 0.02f; as.ssaoKernel = 16;
+    auto r = std::make_unique<LightRig>(); r->configure(as);
+    const Mat4 v = Mat4::lookAt(ac.eye, ac.target, ac.up), p = ac.projection(320, 180);
+    r->build({}, aoAmb, ac.eye, v, p.m[0][0], p.m[1][1], ac.nearZ, ac.farZ);
+    return r;
+  };
+  auto gpuAo = [&](bool on, std::vector<u8>& out) {
+    auto r = aoRigFor(on);
+    const Mat4 v = Mat4::lookAt(ac.eye, ac.target, ac.up), p = ac.projection(320, 180);
+    gpu.begin(ac, {0.02f, 0.025f, 0.035f});
+    if (!gpu.setLighting(*r, v, p)) return false;
+    for (auto& o : aoObjs) gpu.draw(*o.m, o.w, o.mat);
+    gpu.end(); dev->present();
+    u32 aw = 0, ah = 0; gpu.readback(out, aw, ah);
+    return true;
+  };
+  auto cpuAo = [&](bool on) {
+    auto r = aoRigFor(on);
+    SoftRenderer s(320, 180);
+    s.begin(ac, {0.02f, 0.025f, 0.035f}); s.setLighting(r->frame());
+    for (auto& o : aoObjs) s.draw(*o.m, o.w, o.mat);
+    return std::vector<u8>(s.pixels(), s.pixels() + 320 * 180 * 4);
+  };
+  std::vector<u8> aoOnG, aoOffG;
+  const bool aoRan = gpuAo(true, aoOnG) && gpuAo(false, aoOffG);
+  const std::vector<u8> aoOnC = cpuAo(true), aoOffC = cpuAo(false);
+  // AO e sutil (luz so ambiente): conta pixels que perderam mais de 6 niveis (o limiar de 25 e das sombras diretas).
+  auto countAo = [](const std::vector<u8>& off, const std::vector<u8>& on) {
+    size_t n = 0;
+    for (size_t i = 0; i + 3 < on.size() && i < off.size(); i += 4) n += (static_cast<int>(off[i]) - static_cast<int>(on[i]) > 6);
+    return n;
+  };
+  const size_t gpuAoDark = aoRan ? countAo(aoOffG, aoOnG) : 0, cpuAoDark = countAo(aoOffC, aoOnC);
+  if (out && aoRan) { writePpm((std::string(out) + ".ao_gpu_on.ppm").c_str(), aoOnG.data(), 320, 180); writePpm((std::string(out) + ".ao_gpu_off.ppm").c_str(), aoOffG.data(), 320, 180); writePpm((std::string(out) + ".ao_cpu_on.ppm").c_str(), aoOnC.data(), 320, 180); writePpm((std::string(out) + ".ao_cpu_off.ppm").c_str(), aoOffC.data(), 320, 180); }
+  const bool aoOk = aoRan && gpuAoDark > 300 && cpuAoDark > 300 &&
+                    std::abs(static_cast<double>(gpuAoDark) - static_cast<double>(cpuAoDark)) <= 0.4 * static_cast<double>(std::max(gpuAoDark, cpuAoDark));
+  std::printf("ssao: pixels escurecidos pelo AO gpu=%zu cpu=%zu\n", gpuAoDark, cpuAoDark);
+  // Emissao + bloom (GPU e CPU): um cubo emissivo sobre fundo escuro. Com o bloom ligado, o brilho vira um halo ao redor
+  // (pixels que ficam pelo menos 4 niveis mais claros). GPU e CPU precisam achar halos de tamanho parecido.
+  Material emMat{{0.05f, 0.05f, 0.05f}, 0.9f, 0.f};
+  emMat.emissive = Vec3{4.f, 4.f, 4.f};
+  const Mesh emBox = Mesh::cube(0.5f);
+  const Mat4 emWorld = Mat4::translation({0, 0.5f, 0});
+  const Vec3 emBg{0.02f, 0.025f, 0.035f};
+  auto gpuEm = [&](bool bloomOn, std::vector<u8>& out) {
+    auto r = aoRigFor(false);
+    const Mat4 v = Mat4::lookAt(ac.eye, ac.target, ac.up), p = ac.projection(320, 180);
+    gpu.setBloom(bloomOn, 0.75f, 0.8f);
+    gpu.begin(ac, emBg);
+    if (!gpu.setLighting(*r, v, p)) return false;
+    gpu.draw(emBox, emWorld, emMat);
+    gpu.end(); dev->present();
+    u32 ew = 0, eh = 0; gpu.readback(out, ew, eh);
+    gpu.setBloom(false, 0.75f, 0.8f);
+    return true;
+  };
+  auto cpuEm = [&](bool bloomOn) {
+    auto r = aoRigFor(false);
+    SoftRenderer s(320, 180);
+    s.begin(ac, emBg); s.setLighting(r->frame());
+    s.draw(emBox, emWorld, emMat);
+    std::vector<u8> px(s.pixels(), s.pixels() + 320 * 180 * 4);
+    if (bloomOn) applyBloomRgba8(px.data(), 320, 180, 0.75f, 0.8f);
+    return px;
+  };
+  std::vector<u8> emOnG, emOffG;
+  const bool emRan = gpuEm(true, emOnG) && gpuEm(false, emOffG);
+  const std::vector<u8> emOnC = cpuEm(true), emOffC = cpuEm(false);
+  auto countHalo = [](const std::vector<u8>& off, const std::vector<u8>& on) {
+    size_t n = 0;
+    for (size_t i = 0; i + 3 < on.size() && i < off.size(); i += 4) n += (static_cast<int>(on[i]) - static_cast<int>(off[i]) >= 4);
+    return n;
+  };
+  const size_t gpuHalo = emRan ? countHalo(emOffG, emOnG) : 0, cpuHalo = countHalo(emOffC, emOnC);
+  if (out && emRan) { writePpm((std::string(out) + ".bloom_gpu_on.ppm").c_str(), emOnG.data(), 320, 180); writePpm((std::string(out) + ".bloom_cpu_on.ppm").c_str(), emOnC.data(), 320, 180); }
+  const bool emOk = emRan && gpuHalo > 150 && cpuHalo > 150 &&
+                    std::abs(static_cast<double>(gpuHalo) - static_cast<double>(cpuHalo)) <= 0.4 * static_cast<double>(std::max(gpuHalo, cpuHalo));
+  std::printf("bloom: pixels com halo gpu=%zu cpu=%zu\n", gpuHalo, cpuHalo);
+  const bool ok = shadowOk && pointOk && aoOk && emOk && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
   std::printf(ok ? "OK\n" : "FALHA: imagem da GPU diverge do esperado\n");
   gpu.shutdown(); // libera recursos antes de destruir o dispositivo
   dev.reset();

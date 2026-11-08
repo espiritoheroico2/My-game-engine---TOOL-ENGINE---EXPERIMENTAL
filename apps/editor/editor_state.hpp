@@ -24,7 +24,9 @@
 #include "tool/audio/decode.hpp"
 #include "tool/audio/miniaudio_device.hpp"
 #include "tool/render/gpu_renderer.hpp"
+#include "tool/render/occlusion.hpp"
 #include "tool/render/postfx.hpp"
+#include "tool/render/bloom.hpp"
 #include "tool/render/upscale.hpp"
 #include "tool/render/lighting.hpp"
 #include "tool/render/soft_renderer.hpp"
@@ -119,6 +121,19 @@ struct Editor {
     scene.world().add<VoxelChunk>(e, vc);
     return e;
   }
+  // Mapa de teste: side x side chunks de terreno (16x16x16 blocos cada), centrado na origem. Substitui os chunks que
+  // ja existem. Cada chunk e uma entidade: o custo cresce com side^2. Use a Draw distance para ver so o que esta perto.
+  int generateChunkMap(int side) {
+    side = std::clamp(side, 1, 256);
+    std::vector<tool::Entity> old;
+    scene.world().each<VoxelChunk>([&](tool::Entity e, VoxelChunk&) { old.push_back(e); });
+    for (tool::Entity e : old) scene.world().destroy(e);
+    selected = {};
+    const int half = side / 2;
+    for (int z = 0; z < side; ++z)
+      for (int x = 0; x < side; ++x) makeVoxel("Chunk", x - half, z - half, true);
+    return side * side;
+  }
   static constexpr float kSphereFarDistance = 25.f;   // metros; alem disso a esfera usa a malha simples
 
   tool::Mesh cylinder = tool::Mesh::cylinder(0.5f, 1.f), cone = tool::Mesh::cone(0.5f, 1.f), capsule = tool::Mesh::capsule(0.35f, 1.f),
@@ -168,6 +183,10 @@ struct Editor {
   struct Bounds { tool::Vec3 center{}; float radius = 0.f; };
   struct BoundsEntry { size_t n = 0; const void* data = nullptr; Bounds b; };
   std::unordered_map<const tool::Mesh*, BoundsEntry> boundsCache_;   // esfera de cada malha (para o frustum culling)
+  std::unique_ptr<LightPrism::Rt::Bvh> rtBvh_;                         // BVH da cena para o RT AO (CPU); refeito so se a cena mudou
+  std::uint64_t rtSig_ = 0; bool rtHave_ = false;
+  std::uint64_t psigCpu = 0; bool psigCpuValid = false;   // assinatura das sombras de pontual/spot (CPU)
+  std::uint64_t psigGpu = 0; bool psigGpuValid = false;   // a mesma, para a GPU
  std::vector<std::string> uiEvents;
   struct Particle { tool::Vec3 p, v; float age = 0.f, life = 1.f; float phase = 0.f; tool::Vec3 jit{}; };  // jit: deslocamento do nascimento (local)
   struct ParticleSim { std::vector<Particle> list; float acc = 0.f; uint32_t seed = 12345u; uint32_t touched = 0; };
@@ -198,7 +217,8 @@ struct Editor {
   tool::VoiceId previewVoice{};
 
   // API grafica: 0 = Software (CPU); 1 = Vulkan; 2 = OpenGL; 3 = D3D12 (so Windows)
-  int apiChoice = 0, apiActive = 0;
+  int apiChoice = 0, apiActive = 0;   // apiActive: API em uso; apiChoice: o que esta ativo agora (0 = CPU)
+  int apiRequested = 0;               // o que o usuario escolheu (radio e projeto); sobrevive a uma falha de inicializacao
   float renderScale = 0.5f;
   bool renderScaleSet = false; // o usuario mexeu na escala: nao sobrescrever ao trocar de API
   // Upscaling e antialiasing POR SOFTWARE (CPU, tool/render/upscale.hpp), aplicados no tamanho da janela.
@@ -265,6 +285,7 @@ struct Editor {
   // Troca a API grafica em execucao; se falhar, volta para o renderizador em CPU e mostra o motivo.
   void applyApi(int choice) {
     shutdownGpu();
+    apiRequested = choice;
     apiChoice = choice;
     if (choice == 0) { apiStatus = "Software (CPU)"; if (!renderScaleSet) renderScale = 0.5f; return; }
 #ifdef TOOL_EDITOR_GPU
@@ -368,7 +389,7 @@ struct Editor {
   tool::Entity makeGlobalLight() { tool::Entity e = make("Global Light"); scene.world().get<Transform>(e)->pos[1] = 6.f; scene.world().add<GlobalLight>(e); return e; }
   tool::Entity makePointLight() {
     tool::Entity e = make("Point Light"); scene.world().get<Transform>(e)->pos[1] = 2.5f;
-    tool::Light l; l.type = tool::LightType::Point; l.range = 12.f; l.intensity = 18.f; l.color = {1.f, 0.7f, 0.4f}; scene.world().add<LightComp>(e, LightComp{l});
+    tool::Light l; l.type = tool::LightType::Point; l.range = 12.f; l.intensity = 18.f; l.color = {1.f, 0.7f, 0.4f}; l.castShadow = true; scene.world().add<LightComp>(e, LightComp{l});
     return e;
   }
   tool::Entity makeAudio(const std::string& clipRel) {
@@ -377,15 +398,8 @@ struct Editor {
     if (!clipRel.empty()) ser::copyStr(scene.world().get<Name>(e)->text, sizeof(Name::text), fs::path(clipRel).stem().string());
     return e;
   }
-  tool::Entity makeModel(const std::string& rel) {
-    tool::Vec3 tint{0.8f, 0.8f, 0.8f};
-    tool::Entity e = make(fs::path(rel).stem().string().c_str());
-    MeshRenderer m; m.shape = 3; ser::copyStr(m.model, sizeof m.model, rel);
-    if (lib.mesh(rel, &tint)) { m.color[0] = tint.x; m.color[1] = tint.y; m.color[2] = tint.z; }
-    scene.world().add<MeshRenderer>(e, m);
-    assignAsset(rel);
-    return e;
-  }
+  // Modelo importado: um objeto "pai" e um objeto por no do arquivo, ligados por Parent (editor_hier.hpp).
+  tool::Entity makeModel(const std::string& rel);
   void assignAsset(const std::string& rel) { if (std::find(sceneInfo.assets.begin(), sceneInfo.assets.end(), rel) == sceneInfo.assets.end()) sceneInfo.assets.push_back(rel); }
   tool::Entity duplicate(tool::Entity e) {
     // A copia fica no MESMO pai (o save/load nao leva a ligacao de pai). keepWorld=false: a posicao local e a copiada.
@@ -402,6 +416,8 @@ struct Editor {
   tool::Entity parentOf(tool::Entity e);            // pai valido ou {}
   tool::Mat4 worldMat(tool::Entity e);              // matriz de mundo (compoe os pais; sem pai = a propria)
   tool::Vec3 worldPos(tool::Entity e);
+  bool findNamed(const std::string& name, tool::Entity& out);  // primeiro objeto com esse nome (Name)
+  tool::Vec3 lightDir(tool::Entity le, const LightComp& lc);   // direcao efetiva: sincronizada com o Transform ou a propria
   bool isDescendant(tool::Entity e, tool::Entity anc);
   bool setParent(tool::Entity child, tool::Entity parent, bool keepWorld = true); // parent invalido = solta (raiz)
   void bakeWorld(tool::Entity e);                   // grava o transform de mundo no local e solta do pai
@@ -610,10 +626,10 @@ struct Editor {
       if (sunIdx) *sunIdx = static_cast<int>(lights.size());
       lights.push_back(l); ambient = {g.ambient[0], g.ambient[1], g.ambient[2]};
     });
-    scene.world().each<LightComp, Transform>([&](tool::Entity le, LightComp& lc, Transform&) { if (scene.world().has<Inactive>(le)) return; tool::Light l = lc.light; l.position = worldPos(le); l.castShadow = false; lights.push_back(l); });
+    scene.world().each<LightComp, Transform>([&](tool::Entity le, LightComp& lc, Transform&) { if (scene.world().has<Inactive>(le)) return; tool::Light l = lc.light; l.position = worldPos(le); if (lc.syncRot) l.direction = lightDir(le, lc); lights.push_back(l); }); // castShadow vem do inspector: as N luzes mais proximas recebem sombra (LightRig)
   }
   const tool::Mesh* meshOf(const MeshRenderer& mr, tool::Vec3* tint = nullptr) {
-    if (mr.shape == 3) return lib.mesh(mr.model, tint);
+    if (mr.shape == 3) return mr.node >= 0 ? lib.nodeMesh(mr.model, mr.node) : lib.mesh(mr.model, tint);
     switch (mr.shape) {
       case 1: return &sphere;
       case 2: return &plane;
@@ -637,6 +653,21 @@ struct Editor {
     return meshOf(mr);
   }
 
+  // Assinatura da geometria que o RT enxerga: objetos visiveis, malhas e transformacoes (muda = BVH refeito).
+  std::uint64_t rtSignature() {
+    std::uint64_t hs = 1469598103934665603ull;
+    auto mixu = [&](std::uint64_t v) { hs ^= v; hs *= 1099511628211ull; };
+    auto mixf = [&](float f) { std::uint32_t b; std::memcpy(&b, &f, 4); mixu(b); };
+    scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+      if (scene.world().has<Inactive>(e)) return;
+      const tool::Mesh* m = meshOf(mr); if (!m) return;
+      mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m)); mixu(m->idx.size());
+      const tool::Mat4 wm = worldMat(e);
+      for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(wm.m[c][r]);
+    });
+    return hs;
+  }
+
   // Assinatura do que define o mapa de sombras: sol, objetos que projetam, camera e ajustes da Light Prism.
   // Igual ao quadro anterior = os mapas de sombra sao reaproveitados (ver renderScene).
   std::uint64_t shadowSignature(const tool::Camera& cam, int w, int h, const std::vector<tool::Light>& lights) {
@@ -652,6 +683,13 @@ struct Editor {
     for (const tool::Vec3* v : {&cam.eye, &cam.target, &cam.up}) { mixf(v->x); mixf(v->y); mixf(v->z); }
     mixf(cam.fovY); mixf(cam.nearZ); mixf(cam.farZ); mixu(cam.ortho ? 1u : 0u); mixf(cam.orthoHeight);
     mixu(static_cast<std::uint64_t>(w)); mixu(static_cast<std::uint64_t>(h));
+    hashCasters(cam, mixu, mixf);
+    return hs;
+  }
+
+  // Quem projeta sombra (objetos com castShadow e chunks de bloco), com a malha de LOD deste quadro e a transformacao.
+  template <class MU, class MF>
+  void hashCasters(const tool::Camera& cam, MU&& mixu, MF&& mixf) {
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
       if (!mr.castShadow) return;
       const tool::Mesh* m = lodMeshOf(e, mr, cam); if (!m) return;
@@ -663,6 +701,20 @@ struct Editor {
       if (scene.world().has<Inactive>(ce)) return;
       mixu(ce.index); mixu(ce.generation); mixu(vc.revision); mixf(vc.cell);
     });
+  }
+
+  // Assinatura dos mapas de face das luzes pontuais/spot. NAO inclui a camera: so as luzes escolhidas (vp de cada
+  // face), a resolucao e os casters. Assim, mover a camera nao refaz essas sombras.
+  std::uint64_t pointShadowSignature(const tool::Camera& cam, const tool::LightFrame& lf) {
+    std::uint64_t hs = 1469598103934665603ull;
+    auto mixu = [&](std::uint64_t v) { hs ^= v; hs *= 1099511628211ull; };
+    auto mixf = [&](float f) { std::uint32_t b; std::memcpy(&b, &f, 4); mixu(b); };
+    mixu(lf.pointShadowResolution); mixu(lf.shadowLights.size());
+    for (const tool::ShadowLight& sl : lf.shadowLights) {
+      mixu(static_cast<std::uint64_t>(sl.type)); mixu(sl.faces); mixf(sl.range); mixf(sl.nearZ);
+      for (tool::u32 f = 0; f < sl.faces; ++f) for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(sl.vp[f].m[c][r]);
+    }
+    hashCasters(cam, mixu, mixf);
     return hs;
   }
 
@@ -680,6 +732,14 @@ struct Editor {
       SkyTextures skyTex{};
       for (size_t i = 0; i < 6; ++i) if (sceneInfo.sky.face[i][0]) skyTex[i] = lib.texture(sceneInfo.sky.face[i]); // cache no AssetLib
       applySkybox(px, w, h, cam, sceneInfo.sky, skyTex);
+      out = px;
+    }
+    // Bloom da CPU (o da GPU roda dentro do GpuRenderer, em end()). Depois do ceu e antes do pos-processamento.
+    if (out && sceneInfo.render.lighting.bloom && !(apiActive != 0 && out == gpuPixels.data())) {
+      ZoneTimer zt(prof, Zone::PostFx);
+      const tool::LightingSettings& L = sceneInfo.render.lighting;
+      tool::u8* px = renderer.pixelsMutable();
+      tool::applyBloomRgba8(px, static_cast<unsigned>(w), static_cast<unsigned>(h), L.bloomThreshold, L.bloomStrength);
       out = px;
     }
     if (out && fx && fx->active()) {
@@ -707,22 +767,79 @@ private:
     // "Sleeper" de sombras: se a assinatura do shadow map e igual a do quadro anterior, o renderizador reaproveita os mapas.
     const std::uint64_t sigNow = shadows ? shadowSignature(cam, w, h, lights) : 0;
     if (!shadows) sigGpuValid = sigCpuValid = false;
+    // Sombras de pontual/spot: assinatura sem a camera (ver pointShadowSignature). Igual para a GPU e a CPU.
+    const bool pointShadows = !lf.shadowLights.empty();
+    const std::uint64_t psigNow = pointShadows ? pointShadowSignature(cam, lf) : 0;
+    if (!pointShadows) psigGpuValid = psigCpuValid = false;
     tool::u64 tris = 0; unsigned draws = 0, casters = 0;
+    // Emissao do objeto: cor x intensidade (linear). Vale para todas as partes de um modelo.
+    auto emissionOf = [](const MeshRenderer& mr) { return tool::Vec3{mr.emissive[0] * mr.emissiveIntensity, mr.emissive[1] * mr.emissiveIntensity, mr.emissive[2] * mr.emissiveIntensity}; };
     auto material = [&](tool::Entity e, const MeshRenderer& mr) {
       tool::Material m{{mr.color[0], mr.color[1], mr.color[2]}, mr.roughness, mr.metallic, mr.castShadow, mr.receiveShadow};
+      m.emissive = emissionOf(mr);
       if (mr.texture[0]) m.albedoMap = lib.texture(mr.texture);
       if (highlight && e == selected) m.albedo = m.albedo * 1.25f;
       return m;
     };
-    // Frustum culling: pula objetos fora da visao. Objeto que projeta sombra nunca e pulado (a sombra dele pode cair na tela).
+    // Pedacos desenhados por um objeto: um por parte (no de modelo, cada parte com o seu material; a cor editada
+    // no inspector sobrepoe o material do arquivo) ou o objeto inteiro (formas e modelos antigos).
+    auto pieces = [&](tool::Entity e, const MeshRenderer& mr, auto&& fn) {
+      if (mr.shape == 3 && mr.node >= 0) {
+        const auto* lm = lib.model(mr.model); if (!lm) return;
+        if (static_cast<size_t>(mr.node) >= lm->data.nodes.size()) return;
+        const PartOverrides* po = scene.world().get<PartOverrides>(e);
+        for (int pi : lm->data.nodes[static_cast<size_t>(mr.node)].parts) {
+          const tool::assets::ModelPart& part = lm->data.parts[static_cast<size_t>(pi)];
+          tool::Material m = part.material;
+          m.castShadow = mr.castShadow; m.receiveShadow = mr.receiveShadow;
+          m.emissive = emissionOf(mr);
+          if (po) for (const PartOverride& ov : po->items) if (ov.part == pi) { m.albedo = {ov.color[0], ov.color[1], ov.color[2]}; m.roughness = ov.roughness; m.metallic = ov.metallic; }
+          if (mr.texture[0]) m.albedoMap = lib.texture(mr.texture);
+          if (highlight && e == selected) m.albedo = m.albedo * 1.25f;
+          fn(part.mesh, m);
+        }
+        return;
+      }
+      if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) fn(*m, material(e, mr));
+    };
+    // Frustum culling: pula objetos fora da visao. Oclusao: pula objetos inteiramente atras de objetos grandes
+    // (so camera em perspectiva; ver tool/render/occlusion.hpp). Objeto que projeta sombra nunca e pulado.
     const bool doCull = sceneInfo.render.frustumCull;
     const std::array<tool::Vec4, 6> planes = doCull ? framePlanes(cam, w, h) : std::array<tool::Vec4, 6>{};
+    tool::render::OcclusionBuffer occ;
+    if (sceneInfo.render.occlusionCull && !cam.ortho) {
+      // Oclusores: triangulos de todos os objetos visiveis. Malhas muito densas ficam de fora (custo por quadro).
+      constexpr size_t kOccluderMaxTris = 2048;
+      occ.begin(static_cast<tool::u32>(w), static_cast<tool::u32>(h), proj * view);
+      scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+        if (scene.world().has<Inactive>(e)) return;
+        const tool::Mesh* m = lodMeshOf(e, mr, cam);
+        if (!m || m->idx.size() / 3 > kOccluderMaxTris) return;
+        const tool::Mat4 wm = worldMat(e);
+        for (size_t i = 0; i + 2 < m->idx.size(); i += 3) {
+          // Dois triangulos de uma face (a,b,c)+(a,c,d), como em Mesh::cube e Mesh::plane, viram um quad.
+          if (i + 5 < m->idx.size() && m->idx[i + 3] == m->idx[i] && m->idx[i + 4] == m->idx[i + 2]) {
+            occ.addQuad(wm.transformPoint(m->pos[m->idx[i]]), wm.transformPoint(m->pos[m->idx[i + 1]]), wm.transformPoint(m->pos[m->idx[i + 2]]), wm.transformPoint(m->pos[m->idx[i + 5]]));
+            i += 3;
+            continue;
+          }
+          occ.addTriangle(wm.transformPoint(m->pos[m->idx[i]]), wm.transformPoint(m->pos[m->idx[i + 1]]), wm.transformPoint(m->pos[m->idx[i + 2]]));
+        }
+      });
+    }
     auto skipCulled = [&](tool::Entity e, const tool::Mesh& m, const MeshRenderer& mr) -> bool {
-      if (!doCull || (shadows && mr.castShadow)) return false;
+      // Quem projeta sombra nunca e pulado: vale para o sol (shadows) e para as sombras de pontual/spot.
+      if (!(doCull || occ.active()) || ((shadows || !lf.shadowLights.empty()) && mr.castShadow)) return false;
       const Bounds b = meshBounds(m); const tool::Mat4 wm = worldMat(e);
       const float sc = std::max({std::hypot(wm.m[0][0], wm.m[0][1], wm.m[0][2]), std::hypot(wm.m[1][0], wm.m[1][1], wm.m[1][2]), std::hypot(wm.m[2][0], wm.m[2][1], wm.m[2][2])});
       const tool::Vec3 c = wm.transformPoint(b.center); const float r = b.radius * sc;
-      for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) { ++prof.counters.culled; return true; }
+      if (doCull) for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) { ++prof.counters.culled; return true; }
+      if (occ.active()) {
+        // Caixa do tamanho da esfera (contem a esfera, entao "escondida" aqui vale para o objeto inteiro).
+        tool::Vec3 box[8]; int k = 0;
+        for (float x : {-r, r}) for (float y : {-r, r}) for (float z : {-r, r}) box[k++] = c + tool::Vec3{x, y, z};
+        if (occ.hidden(box)) { ++prof.counters.culled; return true; }
+      }
       return false;
     };
     auto count = [&](const tool::Mesh& m, const tool::Material& mat) { tris += m.idx.size() / 3; ++draws; if (shadows && mat.castShadow) ++casters; };
@@ -768,17 +885,20 @@ private:
       gpu.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
       gpu.begin(cam, {0.02f, 0.025f, 0.035f}, bgAlpha);
       const bool reGpu = shadows && sigGpuValid && sigGpu == sigNow;
-      if (!gpu.setLighting(lightRig, view, proj, reGpu)) {
+      const bool rePointGpu = pointShadows && psigGpuValid && psigGpu == psigNow;
+      if (!gpu.setLighting(lightRig, view, proj, reGpu, rePointGpu)) {
         // Light Prism nao conseguiu montar a iluminacao na GPU: a CPU desenha este quadro e os seguintes.
         const std::string why = gpu.lastError();
         applyApi(0); apiStatus = "Software (CPU) - " + why;
       } else {
         if (shadows) { sigGpu = sigNow; sigGpuValid = true; if (gpu.shadowPassSkipped()) ++prof.counters.shadowReused; }
+        if (pointShadows) { psigGpu = psigNow; psigGpuValid = true; }
         scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
           if (scene.world().has<Inactive>(e)) return;
-          if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); gpu.draw(*m, worldMat(e), mat); }
+          pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); gpu.draw(m, worldMat(e), mat); });
         });
         drawChunks(gpu);
+        gpu.setBloom(sceneInfo.render.lighting.bloom, sceneInfo.render.lighting.bloomThreshold, sceneInfo.render.lighting.bloomStrength);
         gpu.end();
         gpuDev->present();
         tool::u32 rw = 0, rh = 0;
@@ -801,13 +921,40 @@ private:
     if (static_cast<int>(renderer.width()) != w || static_cast<int>(renderer.height()) != h) renderer.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
     renderer.begin(cam, {0.08f, 0.09f, 0.11f}, bgAlpha);
     const bool reCpu = shadows && sigCpuValid && sigCpu == sigNow;
-    renderer.setLighting(lf, reCpu);
+    const bool rePoint = pointShadows && psigCpuValid && psigCpu == psigNow;
+    renderer.setLighting(lf, reCpu, rePoint);
     if (shadows) { sigCpu = sigNow; sigCpuValid = true; if (renderer.shadowPassSkipped()) ++prof.counters.shadowReused; }
+    if (pointShadows) { psigCpu = psigNow; psigCpuValid = true; } else psigCpuValid = false;
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
       if (scene.world().has<Inactive>(e)) return;
-      if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); renderer.draw(*m, worldMat(e), mat); }
+      pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); renderer.draw(m, worldMat(e), mat); });
     });
     drawChunks(renderer);
+    // Ray tracing (CPU): BVH da LightPrism com os triangulos dos objetos visiveis (voxels de fora, por enquanto).
+    // Vive ate o pixels() abaixo, que conclui o desenho e aplica a oclusao.
+    const tool::LightingSettings& lset = sceneInfo.render.lighting;
+    if (lset.rtAo) {
+      const std::uint64_t sig = rtSignature();
+      if (!rtBvh_ || sig != rtSig_) {
+        std::vector<LightPrism::Rt::Triangle> rtTris;
+        scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+          if (scene.world().has<Inactive>(e)) return;
+          const tool::Mesh* m = meshOf(mr);
+          if (!m) return;
+          const tool::Mat4 wm = worldMat(e);
+          for (size_t i = 0; i + 2 < m->idx.size(); i += 3) {
+            const tool::Vec3 a = wm.transformPoint(m->pos[m->idx[i]]), b = wm.transformPoint(m->pos[m->idx[i + 1]]), c = wm.transformPoint(m->pos[m->idx[i + 2]]);
+            rtTris.push_back({{a.x, a.y, a.z}, {b.x, b.y, b.z}, {c.x, c.y, c.z}});
+          }
+        });
+        rtBvh_ = std::make_unique<LightPrism::Rt::Bvh>();
+        rtHave_ = !rtTris.empty();
+        if (rtHave_) rtBvh_->Build(rtTris);
+        rtSig_ = sig;
+      }
+    } else { rtBvh_.reset(); rtHave_ = false; rtSig_ = 0; }
+    LightPrism::Rt::RtAoConfig rtCfg; rtCfg.rays = lset.rtAoRays; rtCfg.radius = lset.rtAoRadius;
+    renderer.setRayTracedAo(rtHave_ ? rtBvh_.get() : nullptr, rtCfg);
     prof.counters.tris += tris; prof.counters.draws += draws; prof.counters.shadowCasters += casters; prof.counters.shadowTris += renderer.shadowTriangles();
     return renderer.pixels();
   }

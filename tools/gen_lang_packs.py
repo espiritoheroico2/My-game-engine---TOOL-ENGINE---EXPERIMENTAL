@@ -542,7 +542,18 @@ Sharp pixels when enlarging (no smoothing)	Pixels nítidos ao ampliar (sem suavi
 Frame rate limit	Limite de FPS	Límite de FPS
 Unlimited	Sem limite	Sin límite
 Game renders at %d x %d.	O jogo é desenhado em %d x %d.	El juego se dibuja a %d x %d.
-Volume	Volume	Volumen"""
+Volume	Volume	Volumen
+Sync rotation with Transform	Sincronizar rotação com o Transform	Sincronizar rotación con el Transform
+The light points along the object's -Y axis after its rotation (or the object named below).	A luz aponta pelo eixo -Y do objeto depois da rotação (ou do objeto com o nome abaixo).	La luz apunta por el eje -Y del objeto tras su rotación (o del objeto con el nombre de abajo).
+Object name to follow	Nome do objeto a seguir	Nombre del objeto a seguir
+No object with this name: uses this object.	Nenhum objeto com este nome: usa este objeto.	Ningún objeto con este nombre: usa este objeto.
+Emission color	Cor da emissão	Color de emisión
+Emission intensity	Intensidade da emissão	Intensidad de emisión
+Makes this object emit light. With Settings > Lighting > Bloom on, the bright part glows around it. 0 = does not emit.	Faz este objeto emitir luz. Com Configurações > Iluminação > Bloom ligado, a parte clara brilha ao redor dele. 0 = não emite.	Hace que este objeto emita luz. Con Configuración > Iluminación > Bloom activado, la parte brillante resplandece a su alrededor. 0 = no emite.
+Bloom (glow of bright and emissive objects)	Bloom (brilho de objetos claros e emissivos)	Bloom (resplandor de objetos brillantes y emisivos)
+Bright areas glow into their surroundings. Emissive objects: Inspector > Emission. GPU and software renderer.	As áreas claras brilham ao redor. Objetos emissivos: Inspetor > Emissão. Renderizador GPU e por software.	Las áreas brillantes resplandecen a su alrededor. Objetos emisivos: Inspector > Emisión. Renderizador GPU y por software.
+Bloom threshold	Limiar do bloom	Umbral del bloom
+Bloom strength	Força do bloom	Intensidad del bloom"""
 tab = [r.split("\t") for r in ROWS.split("\n")]
 assert all(len(r) == 3 for r in tab), [r for r in tab if len(r) != 3][:2]
 out = root / "assets/lang"; out.mkdir(parents=True, exist_ok=True)

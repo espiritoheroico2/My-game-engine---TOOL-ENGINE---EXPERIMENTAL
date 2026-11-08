@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.7.18-beta (em andamento) — editor de script, oclusao e ray tracing
+
+**Ultimas mudancas: Vulkan, luz e IBL**
+- Correcao (Vulkan): o pipeline PBR falhava com "dynamic uniform buffers (10) excede o limite do dispositivo (8)" (`TOOL-E150`/`TOOL-E153`) em GPUs que aceitam so 8 buffers uniformes dinamicos. O Vulkan conta cada cbuffer por estagio, e o PBR tinha `FrameBuffer` e `ObjectBuffer` nos dois (VS e PS). Agora o pixel shader nao le esses dois: o vertex shader calcula o que o PS precisa e passa por interpolacao (valores por objeto com `nointerpolation`). Total: 8.
+- Teste: `gpu_test` (Vulkan/llvmpipe) passa com os mesmos numeros de antes, e `ctest` 4/4. Teste em GPU real ainda pendente.
+- Nao usar `MUTABLE` nesses recursos: a tentativa quebrou sombras e texturas no `gpu_test`.
+- Correcao (editor, API grafica): quando a inicializacao de Vulkan/OpenGL falhava, o editor tentava de novo a cada quadro e gravava a API como CPU no projeto. Agora a escolha do usuario fica em `apiRequested` (radio e projeto), e a falha so troca a renderizacao para CPU.
+- OpenGL: aviso `TOOL-W141` (antes erro `TOOL-E141`): a iluminacao Light Prism ainda nao tem shaders GLSL, entao o OpenGL usa o renderizador CPU.
+- Avisos de validacao do driver (`TOOL-I201` Vulkan, `TOOL-I202` OpenGL, `TOOL-I203` D3D12) viraram informativos.
+- Luz pontual/spot: "Sync rotation with Transform" faz a direcao seguir o eixo -Y do objeto (ou do objeto com o nome digitado em "Object name to follow"; vazio = o proprio objeto). Aviso quando o nome nao existe. Salvo no projeto (`syncRot`, `target`) e coberto pelo selftest do editor.
+- IBL especular: `pbr.hlsl` agora calcula o ambiente como `Ibl::IblEvaluate` da Light Prism (difuso com `kD` + especular split-sum). A LUT da BRDF e gerada uma vez (`sharedBrdfLut()`, 32x32) e enviada como textura (slot 10 do PBR); o renderizador CPU usa a mesma tabela.
+- Limitacao: o ambiente da engine ainda e uniforme (cor em SH9). Com ambiente uniforme o especular e exato; com mapa de ambiente sera preciso o cubemap pre-filtrado, que ainda nao existe.
+- Efeito nos numeros do `gpu_test`: SSAO passou de 1344 (GPU) x 1339 (CPU) para 1308 x 1288 pixels escurecidos, por causa do `kD`. Sombra pontual e texturas continuam iguais na GPU e na CPU.
+- Traducoes: 4 frases novas em pt-BR e es (`tools/gen_lang_packs.py`).
+- Emissivos: qualquer objeto 3D com `MeshRenderer` pode emitir luz. Cor de emissao e intensidade (0 a 50) no inspector. O emissivo entra na cor final do pixel (GPU e CPU), sem iluminar o entorno.
+- Bloom (Settings > Lighting): desligado por padrao. Limiar (0 a 1) e forca (0 a 4). Passa so o que esta acima do limiar, em meia resolucao, com blur gaussiano de 9 taps. No GPU sai em passes fullscreen (`bloom.hlsl`); no CPU, `tool::applyBloomRgba8`. Projeto salva `bloom`, `bloomThreshold` e `bloomStrength`.
+- Correcao (bloom GPU): a composicao escrevia no mesmo alvo que lia a cena, o que escurecia a imagem. Agora tem alvo proprio (`outFull_`).
+- Teste: `gpu_test` mede o halo ao redor de um cubo emissivo: GPU 1867 x CPU 1878 pixels, dentro de 40%. `tests/test_render.cpp` tem 2 testes de bloom no CPU (halo espalha e imagem escura nao muda).
+- Limitacoes: o skybox nao entra no bloom do caminho GPU (o CPU aplica depois do skybox). Emissivo nao ilumina objetos vizinhos (so o brilho). Testado so em llvmpipe; visual no editor e em GPU real ainda pendentes.
+
+**Mapa de teste de chunks (view distance)**
+- Menu Criar > "Test map of chunks...": gera um mapa quadrado de chunks de terreno (1 a 256 por lado, 16x16x16 blocos cada), centrado na origem. Substitui os chunks que ja existem.
+- Linha de comando: `--map N` (com `--project`). O `--voxel N` continua sendo o benchmark de quadros.
+- Teste: `chunk map: ...` no selftest do editor (espacamento, centro e contagem).
+- Limitacao: cada chunk e uma entidade. O custo cresce com o quadrado do lado: use Draw distance (Settings > Render) para ver so o perto.
+
+**Iluminacao: otimizacoes (sem mudar os 4 perfis de qualidade)**
+- Sombras de luzes pontuais e spot nao dependem mais da camera: quando so a camera anda, os mapas de face sao reaproveitados (CPU e GPU). Teste: `point_shadow_maps_reused_when_only_the_camera_moves_give_the_same_image` (imagem identica a renderizar do zero).
+- Luzes pontuais/spot so sao removidas e readicionadas na LightPrism quando a lista muda. Teste: `light_rig_keeps_point_lights_registered_and_follows_changes`.
+- Oclusao ambiente por raios (RT AO) e a conversao final de cor agora rodam em varias threads (faixas de pixels). O resultado e o mesmo, porque cada raio depende so do indice do pixel.
+- Correcao: objetos que projetam sombra de luz pontual nao eram protegidos do culling quando o sol estava desligado. Agora sao sempre desenhados.
+- Medicao (renderizador CPU, 640x360, Release, maquina de 2 nucleos): perfil 0 ~65-75 ms, perfil 1 ~65-75 ms, perfil 2 ~80-90 ms, perfil 3 ~130-145 ms por quadro. RT AO com 24 raios ~230-300 ms. Com a camera andando, o reuso das sombras pontuais economiza ~5-15%. Mais nucleos reduzem o RT AO.
+
+**Janela de edicao de script**
+- "Edit script" no Inspector abre uma janela propria (`apps/editor/script_window.hpp`), com editor multilinha, Ctrl+S para salvar e Ctrl+Espaco para a lista completa.
+- Autocomplete da API lido do `toolengine.d.ts` (a mesma fonte do VS Code): funcoes, metodos e propriedades. Aparece ao digitar 2 letras; clique aceita.
+- Snippets: os exemplos do Help (aba "script_examples") viram o menu "Snippets" e o arquivo `.vscode/toolengine.code-snippets`, gerado a partir do Help (nao pode sair de sincronia).
+- Verificador de scripts na propria janela (erros e avisos com a linha).
+- Limitacao: a interacao do ImGui (callback do campo, clique para completar) foi verificada so por compilacao e pelo selftest da logica; precisa de teste manual na janela.
+
+**Help: exemplos de script**
+- 40 exemplos novos (numeros 14 a 53) em portugues e ingles, rodados pelo selftest do editor (59 blocos sem erro).
+- Exemplos 1 a 13: comentarios do bloco em ingles traduzidos. Exemplos que exigem objetos com nome certo (Porta, Alvo, Jogador, Inimigo 3, tag inimigo) dizem isso no texto.
+
+**Oclusao (occlusion culling)**
+- `engine/render/include/tool/render/occlusion.hpp`: buffer de profundidade grosso (1/8 da resolucao) com os triangulos dos objetos. Um objeto so e pulado se a caixa dele estiver inteira atras de uma superficie grande que cobre as celulas por inteiro.
+- Conservadora: na duvida, desenha. Um par de triangulos planos e convexos (face de cubo, plano) conta como quad: a celula e coberta inteira, mesmo com a diagonal passando por ela. Triangulos soltos, nao planos ou nao convexos ainda caem na limitacao da diagonal.
+- Editor: pass de oclusores a cada quadro (malhas com ate 2048 triangulos), so em camera de perspectiva. Objetos que projetam sombra nunca sao pulados. Ativa por "Occlusion culling" em Settings (`render.occlusionCull`, padrao ligado).
+- Teste: `occlusion_buffer_hides_box_behind_wall` e `occlusion_culling_does_not_change_the_image` (a imagem e identica com e sem a oclusao).
+
+**Ray tracing (CPU)**
+- Settings > Lighting: "Ray-traced ambient occlusion (CPU)", com raios por pixel (1 a 64) e raio em metros. Substitui o SSAO quando ligado.
+- Usa o BVH da Light Prism (`LightPrism::Rt`) sobre os triangulos dos objetos visiveis. O BVH e refeito so quando a cena muda (malhas e transformacoes).
+- Limitacoes: so o renderizador de software (a GPU segue com SSAO); sombras do sol e voxels nao sao ray traced; a primeira montagem do BVH pesa em cenas grandes.
+- Teste: `rt_ambient_occlusion_darkens_plane_next_to_a_wall`. Settings de oclusao e RT tem checagem de ida e volta no selftest do editor.
+
+## 0.7.17-beta — AO (SSAO), hierarquia e multi-material na importacao, projeto mais enxuto
+
+**Correcao: sombras de luzes pontuais e spot no editor**
+- Antes, o editor zerava `castShadow` de toda luz pontual/spot ao montar a iluminacao, e nao havia controle no inspector. Logo, as sombras de 0.7.16 nunca apareciam no editor (so funcionavam em testes diretos).
+- Agora cada luz pontual/spot tem "Projeta sombra" no inspector e o flag e salvo no projeto. Luzes criadas pelo editor nascem com ele ligado; cenas antigas (sem o campo) precisam marcar a caixa.
+- Continua valendo o limite de Settings > Lighting (ate 4, as mais proximas da camera).
+- Teste: `point light castShadow survives save and load` no selftest do editor.
+
+**Ambient occlusion (SSAO), CPU e GPU**
+- Porta do `LightPrism::Ssao` (`Post/Ssao`): AO bruto por kernel + desfoque bilateral. `LightingSettings`: `ssao` (liga/desliga), `ssaoKernel` (1 a 32), `ssaoRadius`, `ssaoBias`, `ssaoPower`. Aparece em Settings > Lighting e e salvo no projeto.
+- CPU: `SoftRenderer` guarda cor direta e ambiente separados, profundidade e normal por pixel; a AO e aplicada so ao ambiente (convencao da Light Prism).
+- GPU: prepasse que grava normal e profundidade (RGBA16F), dois passes de tela cheia (`assets/shaders/ssao.hlsl`) e o `AoMap` multiplicando o ambiente no `pbr.hlsl`.
+- Correcao no caminho da CPU: triangulos com vertice atras do plano near eram descartados, o que sumia com o chao em alguns angulos. Agora sao recortados contra o near.
+- Teste: `gpu_test` compara a AO na GPU e na CPU (1344 x 1339 pixels escurecidos, Vulkan/lavapipe).
+- Limitacoes: a SSAO da CPU usa o `ComputeSsao` single-thread da Light Prism (nao medido em resolucoes altas); sem meia resolucao exposta; D3D12 nao compilado neste ambiente.
+
+**Hierarquia de modelos importados**
+- Antes: o importador achatava a cena e assava a matriz de mundo nos vertices, e o editor criava um objeto so. Agora cada no do arquivo vira um objeto filho, com a transformacao local (TRS) e o link `Parent` do editor.
+- `ModelData::nodes` (pai, matriz local, partes) em glTF e FBX. Nos com escala espelhada ou cisalhamento sao assados pelo `normalizeNodes()`, que passa a transformacao para os filhos.
+- O objeto "pai" leva o nome do arquivo. Modelos antigos (sem `node` no `.scene.json`) continuam carregando como antes.
+
+**Multi-material**
+- Cada parte (primitive no glTF, material por poligono no FBX) desenha com o seu material. FBX: antes so o primeiro material era usado; agora a malha e separada por `LayerElementMaterial`.
+- Inspector: em um no de modelo, cada parte mostra o material do arquivo e um interruptor "Sobrepor material" (cor, rugosidade, metalico), salvo como `partMaterials` (componente `PartOverrides`).
+- Limitacao: a textura (`Texture`) do objeto ainda vale para todas as partes, nao por parte.
+
+**Projeto mais enxuto (medido)**
+- Repositorio sem build/ e .git: 263 MB -> 223 MB (fontes e vendorizados; as remocoes abaixo).
+- Removidos: `third_party/DiligentCore/ThirdParty/Vulkan-Headers/registry` (12 MB, so para instalar os headers), `third_party/DiligentCore/BuildTools/FormatValidation` (6,4 MB, so para validar formatacao, desligada neste build), `out/` e `build_log.txt` (gerados), e 6 capturas de `third_party/LightPrism/docs/images` que nenhum `.md` cita (cópias em scratchpad da sessao; a LightPrism as regenera com as ferramentas dela).
+- Imagens da LightPrism recomprimidas sem perda (PNG otimizado, pixels conferidos iguais): 24,6 MB -> 1,5 MB.
+- Executavel Linux (Release): 24,2 MB -> 20,7 MB com `strip`. Nao aplicado ao build; no Windows medir o .exe final.
+- Nao removido por ser usado ou por exigir mudar CMake de terceiros: glslang (45 MB, compila shaders), SPIRV-Tools/Cross, SDL3, glew (backend OpenGL), `DiligentCore/Tests` e googletest (~10 MB, referenciados pelo CMake do Diligent mesmo desligados).
+- Pre-compilar shaders/empacotar recursos: ganho pequeno (os shaders ja somam poucos KB); o peso esta nas bibliotecas.
+
+**Testes**
+- `import_gltf_keeps_node_hierarchy_and_per_part_materials`: hierarquia, transformacao herdada, materiais por parte e no espelhado.
+- tool_tests: 132 testes, 0 falhas. Editor ctest: 4/4 (inclui o selftest, que cria o modelo com hierarquia).
+
 ## 0.7.16-beta — sombras de luzes pontuais e spot (CPU e GPU)
 
 **Por que luzes pontuais nao projetavam sombra**

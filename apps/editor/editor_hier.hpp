@@ -63,6 +63,20 @@ inline tool::Vec3 Editor::worldPos(tool::Entity e) {
   const tool::Mat4 m = worldMat(e); return {m.m[3][0], m.m[3][1], m.m[3][2]};
 }
 
+inline bool Editor::findNamed(const std::string& name, tool::Entity& out) {
+  bool found = false;
+  scene.world().each<Name>([&](tool::Entity e, Name& n) { if (!found && name == n.text) { out = e; found = true; } });
+  return found;
+}
+// Direcao da luz sincronizada: o eixo -Y local (direcao padrao da luz) girado pelo Transform do alvo (ou deste objeto).
+inline tool::Vec3 Editor::lightDir(tool::Entity le, const LightComp& lc) {
+  tool::Entity src = le;
+  if (lc.target[0]) { tool::Entity f = le; if (findNamed(lc.target, f)) src = f; }
+  const tool::Vec4 d = worldMat(src).mul(tool::Vec4{0.f, -1.f, 0.f, 0.f});
+  const tool::Vec3 v{d.x, d.y, d.z};
+  return (v.x * v.x + v.y * v.y + v.z * v.z) > 1e-12f ? tool::normalize(v) : tool::Vec3{0.f, -1.f, 0.f};
+}
+
 inline bool Editor::isDescendant(tool::Entity e, tool::Entity anc) {
   tool::Entity cur = e;
   for (int i = 0; i < 64 && scene.world().alive(cur); ++i) { if (cur == anc) return true; cur = parentOf(cur); }
@@ -82,6 +96,43 @@ inline bool Editor::setParent(tool::Entity child, tool::Entity parent, bool keep
     decomposeTRS(local, t->pos, t->rot, t->scale);
   }
   return true;
+}
+
+// Modelo com hierarquia: o objeto "pai" leva o nome do arquivo; cada no do arquivo vira um objeto com a
+// transformacao local dele (TRS) e, se tiver partes, um MeshRenderer que desenha essas partes (node = indice do no).
+// Modelo sem nos (ou que nao carregou) vira um objeto so, como antes.
+inline tool::Entity Editor::makeModel(const std::string& rel) {
+  const auto* lm = lib.model(rel);
+  if (!lm || lm->data.nodes.empty()) {
+    tool::Vec3 tint{0.8f, 0.8f, 0.8f};
+    tool::Entity e = make(fs::path(rel).stem().string().c_str());
+    MeshRenderer m; m.shape = 3; ser::copyStr(m.model, sizeof m.model, rel);
+    if (lib.mesh(rel, &tint)) { m.color[0] = tint.x; m.color[1] = tint.y; m.color[2] = tint.z; }
+    scene.world().add<MeshRenderer>(e, m);
+    assignAsset(rel);
+    return e;
+  }
+  tool::Entity root = make(fs::path(rel).stem().string().c_str());
+  const auto& nodes = lm->data.nodes;
+  std::vector<tool::Entity> ents;
+  ents.reserve(nodes.size());
+  for (size_t n = 0; n < nodes.size(); ++n) {
+    tool::Entity e = make(nodes[n].name.empty() ? "node" : nodes[n].name.c_str());
+    if (auto* t = scene.world().get<Transform>(e)) decomposeTRS(nodes[n].local, t->pos, t->rot, t->scale);
+    if (!nodes[n].parts.empty()) {
+      MeshRenderer m; m.shape = 3; m.node = static_cast<int>(n); ser::copyStr(m.model, sizeof m.model, rel);
+      const tool::Vec3& a = lm->data.parts[static_cast<size_t>(nodes[n].parts[0])].material.albedo;
+      m.color[0] = a.x; m.color[1] = a.y; m.color[2] = a.z;
+      scene.world().add<MeshRenderer>(e, m);
+    }
+    ents.push_back(e);
+  }
+  for (size_t n = 0; n < nodes.size(); ++n) { // o pai do arquivo ja foi criado (indice menor)
+    const int p = nodes[n].parent;
+    setParent(ents[n], (p >= 0 && static_cast<size_t>(p) < n) ? ents[static_cast<size_t>(p)] : root, false);
+  }
+  assignAsset(rel);
+  return root;
 }
 
 inline void Editor::bakeWorld(tool::Entity e) {

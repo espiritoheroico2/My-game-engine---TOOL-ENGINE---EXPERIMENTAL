@@ -27,6 +27,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <vector>
 
 namespace editor {
 
@@ -45,10 +46,21 @@ struct MeshRenderer {
   char texture[160] = "";     // textura de albedo (PNG/JPG/BMP/TGA em Assets); vazio = sem textura
   // Sombras, independentes entre si: um objeto pode projetar sem receber (ex.: um tronco) ou receber sem projetar (ex.: chao).
   bool castShadow = true, receiveShadow = true;
+  // Modelo com hierarquia: node >= 0 e o no do arquivo que este objeto desenha (cada parte com o proprio material).
+  // node = -1 e o modelo antigo, achatado num objeto so.
+  int node = -1;
+  // Emissao (qualquer objeto 3D pode emitir): cor x intensidade. Intensidade 0 = nao emite. Com o bloom ligado
+  // (Settings > Lighting), o brilho acima do limiar vira um halo ao redor do objeto.
+  float emissive[3] = {1.f, 1.f, 1.f};
+  float emissiveIntensity = 0.f;
 };
+// Material editado por parte de um modelo (sobrepoe o material que veio do arquivo). `part` = indice em ModelData::parts.
+struct PartOverride { int part = 0; float color[3] = {0.8f, 0.8f, 0.8f}; float roughness = 0.5f, metallic = 0.f; };
+struct PartOverrides { std::vector<PartOverride> items; };
 // Hierarquia: o Transform de um objeto com Parent e LOCAL (relativo ao pai). Sem Parent, e o mundo. Ver editor_hier.hpp.
 struct Parent { tool::Entity e; };
-struct LightComp { tool::Light light; };
+// syncRot: a direcao da luz segue a rotacao (eixo -Y local) do objeto de nome `target`; target vazio = este objeto.
+struct LightComp { tool::Light light; bool syncRot = false; char target[40] = ""; };
 
 // Luz global (sol). direcao = (azimute, elevacao) em graus: elevacao 90 = sol a pino, 0 = horizonte.
 // Se `dynamic`, durante o Play o azimute gira `speed` graus/segundo e a intensidade cai quando o sol
@@ -271,12 +283,21 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
   if (auto* mr = w.get<MeshRenderer>(e)) {
     Json o = Json::object(); o.set("shape", mr->shape); o.set("color", ser::vec(mr->color, 3)); o.set("roughness", static_cast<double>(mr->roughness));
     o.set("metallic", static_cast<double>(mr->metallic)); o.set("model", std::string(mr->model)); o.set("texture", std::string(mr->texture));
-    o.set("castShadow", mr->castShadow); o.set("receiveShadow", mr->receiveShadow); j.set("mesh", o);
+    o.set("castShadow", mr->castShadow); o.set("receiveShadow", mr->receiveShadow); o.set("node", mr->node);
+    o.set("emissive", ser::vec(mr->emissive, 3)); o.set("emissiveIntensity", static_cast<double>(mr->emissiveIntensity)); j.set("mesh", o);
+  }
+  if (auto* po = w.get<PartOverrides>(e)) {
+    Json arr = Json::array();
+    for (const PartOverride& it : po->items) {
+      Json o = Json::object(); o.set("part", it.part); o.set("color", ser::vec(it.color, 3));
+      o.set("roughness", static_cast<double>(it.roughness)); o.set("metallic", static_cast<double>(it.metallic)); arr.push(o);
+    }
+    j.set("partMaterials", arr);
   }
   if (auto* lc = w.get<LightComp>(e)) {
     Json o = Json::object(); const tool::Light& l = lc->light;
     o.set("type", static_cast<int>(l.type)); o.set("color", ser::vec(&l.color.x, 3)); o.set("intensity", static_cast<double>(l.intensity)); o.set("range", static_cast<double>(l.range));
-    o.set("direction", ser::vec(&l.direction.x, 3)); j.set("light", o);
+    o.set("direction", ser::vec(&l.direction.x, 3)); o.set("castShadow", l.castShadow); o.set("syncRot", lc->syncRot); o.set("target", std::string(lc->target)); j.set("light", o);
   }
   if (auto* g = w.get<GlobalLight>(e)) {
     Json o = Json::object(); o.set("color", ser::vec(g->color, 3)); o.set("intensity", static_cast<double>(g->intensity)); o.set("azimuth", static_cast<double>(g->azimuth));
@@ -347,13 +368,25 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     MeshRenderer m; const auto& o = j["mesh"]; m.shape = static_cast<int>(o["shape"].asNumber(0)); ser::readVec(o["color"], m.color, 3);
     m.roughness = ser::num(o, "roughness", 0.5f); m.metallic = ser::num(o, "metallic", 0.f); ser::copyStr(m.model, sizeof m.model, o["model"].asString()); ser::copyStr(m.texture, sizeof m.texture, o["texture"].asString());
     m.castShadow = ser::flag(o, "castShadow", true); m.receiveShadow = ser::flag(o, "receiveShadow", true);
+    m.node = static_cast<int>(o["node"].asNumber(-1));
+    ser::readVec(o["emissive"], m.emissive, 3); m.emissiveIntensity = ser::num(o, "emissiveIntensity", 0.f);
     if (m.shape < 0 || m.shape > 9) m.shape = 0;
     w.add<MeshRenderer>(e, m);
   }
+  if (j.has("partMaterials")) {
+    PartOverrides po;
+    for (const auto& o : j["partMaterials"].items()) {
+      PartOverride it; it.part = static_cast<int>(o["part"].asNumber(0));
+      ser::readVec(o["color"], it.color, 3); it.roughness = ser::num(o, "roughness", 0.5f); it.metallic = ser::num(o, "metallic", 0.f);
+      po.items.push_back(it);
+    }
+    w.add<PartOverrides>(e, po);
+  }
   if (j.has("light")) {
     tool::Light l; const auto& o = j["light"]; const int ty = static_cast<int>(o["type"].asNumber(1)); l.type = static_cast<tool::LightType>(ty < 0 || ty > 2 ? 1 : ty);
-    ser::readVec(o["color"], &l.color.x, 3); l.intensity = ser::num(o, "intensity", 1.f); l.range = ser::num(o, "range", 10.f); ser::readVec(o["direction"], &l.direction.x, 3);
-    w.add<LightComp>(e, LightComp{l});
+    ser::readVec(o["color"], &l.color.x, 3); l.intensity = ser::num(o, "intensity", 1.f); l.range = ser::num(o, "range", 10.f); ser::readVec(o["direction"], &l.direction.x, 3); l.castShadow = ser::flag(o, "castShadow", false);
+    LightComp lcomp{l}; lcomp.syncRot = ser::flag(o, "syncRot", false); ser::copyStr(lcomp.target, sizeof lcomp.target, o["target"].asString());
+    w.add<LightComp>(e, lcomp);
   }
   if (j.has("globalLight")) {
     GlobalLight g; const auto& o = j["globalLight"]; ser::readVec(o["color"], g.color, 3); g.intensity = ser::num(o, "intensity", g.intensity);

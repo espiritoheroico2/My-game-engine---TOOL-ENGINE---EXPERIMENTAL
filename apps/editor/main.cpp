@@ -23,6 +23,7 @@
 #include "project_dialog.hpp"
 #include "selftest.hpp"
 #include "viewport_tools.hpp"
+#include "script_window.hpp"
 
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_sdlrenderer3.h"
@@ -169,50 +170,9 @@ void scriptUi(Editor& ed) {
   ImGui::Checkbox(T("Script enabled"), &sc->enabled);
   ImGui::TextDisabled("%s", sc->path[0] ? sc->path : T("(no file)"));
   if (sc->path[0]) { ImGui::SameLine(); if (ImGui::SmallButton(T("Edit external"))) editor::openInExternalEditor(ed, sc->path); if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Opens the file in your code editor (Settings > Project).")); }
-  static tool::Entity editing; static std::string text; static bool loaded = false, dirty = false; static std::string msg;
-  // Verificador em tempo real: roda 0,4 s depois da ultima tecla (e logo ao abrir o script).
-  static std::vector<ScriptIssue> issues; static double dirtyAt = -10.0; static bool checkPending = false;
-  if (editing != ed.selected) { editing = ed.selected; loaded = false; dirty = false; msg.clear(); issues.clear(); checkPending = false; }
-  if (!loaded && ImGui::Button(T("Edit script"))) {
-    if (!sc->path[0]) { const std::string rel = ed_::createScriptFile(ed.project, w.get<ed_::Name>(ed.selected)->text); if (!rel.empty()) ed_::ser::copyStr(sc->path, sizeof sc->path, rel); }
-    loaded = ed_::readScript(ed.project, sc->path, text); msg = loaded ? "" : T("Could not read the script file."); dirty = false;
-    checkPending = loaded; dirtyAt = -10.0;
-  }
-  if (loaded) {
-    if (ImGui::InputTextMultiline("##script", &text[0], text.capacity() + 1, ImVec2(-1, 220), ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_AllowTabInput,
-        [](ImGuiInputTextCallbackData* d) { if (d->EventFlag == ImGuiInputTextFlags_CallbackResize) { auto* t = static_cast<std::string*>(d->UserData); t->resize(static_cast<size_t>(d->BufTextLen)); d->Buf = &(*t)[0]; } return 0; }, &text)) {
-      dirty = true; checkPending = true; dirtyAt = ImGui::GetTime();
-    }
-    if (checkPending && ImGui::GetTime() - dirtyAt >= 0.4) { issues = checkScriptSource(text, sc->path); checkPending = false; }
-    if (ImGui::Button(T("Save script"))) {
-      msg = ed_::writeScript(ed.project, sc->path, text) ? T("Script saved.") : T("Could not save the script."); dirty = false;
-      // Ao salvar, o resultado tambem vai para o Console (com o objeto e a linha).
-      issues = checkScriptSource(text, sc->path); checkPending = false;
-      const std::string who = w.get<ed_::Name>(ed.selected)->text;
-      for (const ScriptIssue& is : issues) {
-        tool::debug().report(is.code.c_str(), is.sev, "[" + who + "] line " + std::to_string(is.line) + ": " + is.msg, "", is.line);
-      }
-      tool::logInfo("[" + who + "] saved: " + issueSummary(issues));
-    }
-    ImGui::SameLine(); if (ImGui::Button(T("Close"))) loaded = false;
-    if (dirty) { ImGui::SameLine(); ImGui::TextDisabled("%s", T("(unsaved)")); }
-    // Resultado da verificacao: OK, ou a lista de erros e avisos com a linha de cada um.
-    bool anyError = false;
-    for (const ScriptIssue& is : issues) if (is.sev == tool::Severity::Error) anyError = true;
-    if (issues.empty()) ImGui::TextColored({.5f, 1.f, .5f, 1.f}, "%s", T("Check: OK (no problems found)"));
-    else ImGui::TextColored(anyError ? ImVec4(1, .4f, .4f, 1) : ImVec4(1, .85f, .3f, 1), "%s", (std::string(T("Check")) + ": " + issueSummary(issues)).c_str());
-    ImGui::BeginChild("##scriptissues", ImVec2(-1, 120), true);
-    const std::vector<std::string> src = [&] { std::vector<std::string> v; size_t p = 0; while (p <= text.size()) { size_t e = text.find('\n', p); if (e == std::string::npos) e = text.size(); v.push_back(text.substr(p, e - p)); p = e + 1; } return v; }();
-    for (size_t i = 0; i < issues.size() && i < 60; ++i) {
-      const ScriptIssue& is = issues[i];
-      const ImVec4 c = is.sev == tool::Severity::Error ? ImVec4(1, .4f, .4f, 1) : ImVec4(1, .85f, .3f, 1);
-      ImGui::TextColored(c, "%s", ("line " + std::to_string(is.line) + "  " + is.code + "  " + is.msg).c_str());
-      if (is.line >= 1 && static_cast<size_t>(is.line) <= src.size()) ImGui::TextDisabled("    %s", src[static_cast<size_t>(is.line) - 1].c_str());
-    }
-    if (issues.size() > 60) ImGui::TextDisabled("%s", ("... " + std::to_string(issues.size() - 60) + " more (see Console: Check scripts)").c_str());
-    ImGui::EndChild();
-  }
-  if (!msg.empty()) ImGui::TextDisabled("%s", msg.c_str());
+  // A edicao fica numa janela propria (autocomplete, snippets e verificador): este botao so a abre.
+  if (ImGui::Button(T("Edit script"))) ed_::openScriptWindow(ed);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Opens the script in its own window (autocomplete, snippets and checks)."));
   // Estado do script durante o Play (QuickJS). Fora do Play, o script so e guardado e editado.
   if (ed.playing) {
     const std::string st = ed.scriptHost.statusOf(ed.selected.index, ed.selected.generation);
@@ -285,6 +245,7 @@ void drawHierarchy(Editor& ed) {
     if (ImGui::MenuItem(T("Audio Source"))) ed.selected = ed.makeAudio("");
     ImGui::Separator();
     if (ImGui::MenuItem(T("Voxel chunk (blocks)"))) ed.selected = ed.makeVoxel("Chunk", 0, 0, true);
+    if (ImGui::MenuItem(T("Test map of chunks..."))) ed_::openTestMap();
     if (ImGui::MenuItem(T("Particle System"))) { ed.selected = ed.make("Particles"); w.add<ed_::ParticleComp>(ed.selected); w.get<ed_::Transform>(ed.selected)->pos[1] = 1.f; }
     if (ImGui::MenuItem(T("Game UI (canvas)"))) { ed.selected = ed.make("UI"); ed_::UiCanvas u; ed_::UiElem& el = u.items[u.count++]; ed_::ser::copyStr(el.text, sizeof el.text, "Score: {score}"); w.add<ed_::UiCanvas>(ed.selected, u); }
     ImGui::EndPopup();
@@ -463,8 +424,45 @@ void drawInspector(Editor& ed) {
     if (mr->shape == 3 && !mr->model[0]) ImGui::TextDisabled("%s", T("Import a .glb/.gltf/.fbx in Assets and pick it here."));
     if (assetField(ed, T("Texture"), mr->texture, sizeof mr->texture, ed_::AssetKind::Image)) ed.lib.invalidate(mr->texture);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Image in Assets (PNG, JPG, BMP, TGA) used as the colour of the object. Multiplies the Color."));
+    if (mr->shape == 3 && mr->node >= 0) { // no de modelo: cada parte tem o seu material (do arquivo ou sobreposto aqui)
+      ImGui::TextDisabled("%s", T("Imported node. Each part keeps its file material unless you override it below."));
+      if (const auto* lm = ed.lib.model(mr->model); lm && static_cast<size_t>(mr->node) < lm->data.nodes.size()) {
+        for (int pi : lm->data.nodes[static_cast<size_t>(mr->node)].parts) {
+          const auto& part = lm->data.parts[static_cast<size_t>(pi)];
+          ImGui::PushID(pi);
+          auto* po = w.get<ed_::PartOverrides>(ed.selected);
+          auto findOv = [&]() -> ed_::PartOverride* { if (po) for (auto& it : po->items) if (it.part == pi) return &it; return nullptr; };
+          bool on = findOv() != nullptr;
+          ImGui::Separator();
+          ImGui::Text("%s", part.name.empty() ? T("Part") : part.name.c_str());
+          if (ImGui::Checkbox(T("Override material"), &on)) {
+            if (on && !findOv()) {
+              if (!po) { w.add<ed_::PartOverrides>(ed.selected, ed_::PartOverrides{}); po = w.get<ed_::PartOverrides>(ed.selected); }
+              ed_::PartOverride ov; ov.part = pi;
+              ov.color[0] = part.material.albedo.x; ov.color[1] = part.material.albedo.y; ov.color[2] = part.material.albedo.z;
+              ov.roughness = part.material.roughness; ov.metallic = part.material.metallic;
+              po->items.push_back(ov);
+            } else if (!on && po) {
+              po->items.erase(std::remove_if(po->items.begin(), po->items.end(), [&](const ed_::PartOverride& it) { return it.part == pi; }), po->items.end());
+            }
+          }
+          if (ed_::PartOverride* ov = findOv()) {
+            ImGui::ColorEdit3(T("Color"), ov->color);
+            ImGui::SliderFloat(T("Roughness"), &ov->roughness, 0.05f, 1.f); ImGui::SliderFloat(T("Metallic"), &ov->metallic, 0.f, 1.f);
+          } else {
+            ImGui::TextDisabled("%s", T("File material"));
+          }
+          ImGui::PopID();
+        }
+      }
+    } else {
     ImGui::ColorEdit3(T("Color"), mr->color);
     ImGui::SliderFloat(T("Roughness"), &mr->roughness, 0.05f, 1.f); ImGui::SliderFloat(T("Metallic"), &mr->metallic, 0.f, 1.f);
+    }
+    // Emissao: qualquer objeto 3D pode emitir. Com o bloom ligado (Settings > Lighting), o brilho vira halo.
+    ImGui::ColorEdit3(T("Emission color"), mr->emissive);
+    ImGui::SliderFloat(T("Emission intensity"), &mr->emissiveIntensity, 0.f, 50.f, "%.1f");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Makes this object emit light. With Settings > Lighting > Bloom on, the bright part glows around it. 0 = does not emit."));
     ImGui::Checkbox(T("Cast shadow"), &mr->castShadow); ImGui::SameLine(); ImGui::Checkbox(T("Receive shadow"), &mr->receiveShadow);
     }
   }
@@ -473,7 +471,18 @@ void drawInspector(Editor& ed) {
     const std::string types = std::string(T("Directional")) + '\0' + T("Point") + '\0' + "Spot" + '\0';
     int ty = static_cast<int>(lc->light.type); if (ImGui::Combo(T("Type"), &ty, types.c_str())) lc->light.type = static_cast<tool::LightType>(ty);
     ImGui::ColorEdit3(T("Light color"), &lc->light.color.x); ImGui::DragFloat(T("Intensity"), &lc->light.intensity, 0.1f, 0.f, 200.f); ImGui::DragFloat(T("Range"), &lc->light.range, 0.1f, 0.1f, 200.f);
+    // Sincronia com o Transform: a direcao segue a rotacao do objeto (ou do objeto com o nome digitado).
+    ImGui::Checkbox(T("Sync rotation with Transform"), &lc->syncRot);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("The light points along the object's -Y axis after its rotation (or the object named below)."));
+    ImGui::InputText(T("Object name to follow"), lc->target, sizeof lc->target);
+    if (lc->target[0]) { tool::Entity found = ed.selected; if (!ed.findNamed(lc->target, found))ImGui::TextColored(ImVec4(1.f, 0.6f, 0.3f, 1.f), "%s", T("No object with this name: uses this object.")); }
+    ImGui::BeginDisabled(lc->syncRot);
     ImGui::DragFloat3(T("Direction"), &lc->light.direction.x, 0.02f);
+    ImGui::EndDisabled();
+    if (lc->light.type != tool::LightType::Directional) {
+      ImGui::Checkbox(T("Cast shadow"), &lc->light.castShadow);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Point and spot lights with this on get shadows. Settings > Lighting sets how many (the nearest to the camera)."));
+    }
     }
   }
   if (auto* g = w.get<ed_::GlobalLight>(ed.selected)) {
@@ -788,7 +797,7 @@ void drawGizmos(Editor& ed, ImDrawList* dl, const ViewXf& v) {
   w.each<ed_::LightComp, ed_::Transform>([&](tool::Entity e, ed_::LightComp& lc, ed_::Transform& t) {
     const tool::Vec3 p{t.pos[0], t.pos[1], t.pos[2]}; const ImU32 col = colorFor(e, IM_COL32(255, 190, 120, 255));
     for (tool::Vec3 a : {tool::Vec3{.25f, 0, 0}, tool::Vec3{0, .25f, 0}, tool::Vec3{0, 0, .25f}}) line3(dl, v, p - a, p + a, col);
-    if (lc.light.type != tool::LightType::Point) line3(dl, v, p, p + tool::normalize(lc.light.direction) * 1.5f, col, 1.5f);
+    if (lc.light.type != tool::LightType::Point) line3(dl, v, p, p + ed.lightDir(e, lc) * 1.5f, col, 1.5f);
     if (e == ed.selected && lc.light.type == tool::LightType::Point) circleXZ(dl, v, p, lc.light.range, IM_COL32(255, 190, 120, 90));
   });
   w.each<ed_::AudioSource, ed_::Transform>([&](tool::Entity e, ed_::AudioSource& a, ed_::Transform& t) {
@@ -1039,7 +1048,7 @@ void drawGameView(Editor& ed, SDL_Renderer* sdl, bool player = false) {
 void drawGraphicsTab(Editor& ed) {
   ImGui::Text("%s", F("Active API: %s", ed.apiStatus.c_str()).c_str());
   ImGui::SeparatorText(T("Graphics API"));
-  int pick = ed.apiChoice;
+  int pick = ed.apiRequested;
   ImGui::RadioButton("Software (CPU)", &pick, 0);
 #ifdef TOOL_EDITOR_GPU
   for (auto b : tool::rhi::compiledBackends()) {
@@ -1050,7 +1059,7 @@ void drawGraphicsTab(Editor& ed) {
 #else
   ImGui::TextDisabled("%s", T("GPU backends are not available in this build (use the 'beta' preset)."));
 #endif
-  if (pick != ed.apiChoice) { ed.applyApi(pick); ed.settingsDirty = true; }
+  if (pick != ed.apiRequested) { ed.applyApi(pick); ed.settingsDirty = true; }   // so quando o usuario muda o radio (nao a cada quadro)
   ImGui::SeparatorText(T("Quality"));
   bool c = false;
   ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
@@ -1233,6 +1242,8 @@ void drawLightingTab(Editor& ed) {
     c |= ImGui::ColorEdit3(T("Ambient light"), g->ambient); c |= ImGui::Checkbox(T("Sun casts shadows"), &g->castShadow);
   } else ImGui::TextDisabled("%s", T("No Global Light in this scene (Hierarchy > + Create > Global Light)."));
   c |= ImGui::Checkbox(T("Frustum culling (skip objects outside the camera view)"), &r.frustumCull);
+  c |= ImGui::Checkbox(T("Occlusion culling (skip objects hidden behind big objects)"), &r.occlusionCull);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Objects completely behind a large object from the camera are not drawn. Works with perspective cameras. Objects that cast shadows are always drawn."));
   c |= ImGui::DragFloat(T("Draw distance (0 = each camera's Far)"), &r.drawDistance, 1.f, 0.f, 20000.f, "%.0f");
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Objects farther than this are not drawn in the Scene and Game views. 0 = use the Far value of each camera. Very large values make distant objects flicker (depth precision)."));
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Objects outside the camera view are not drawn. Objects that cast shadows are always drawn."));
@@ -1291,12 +1302,34 @@ void drawLightingTab(Editor& ed) {
     if (ImGui::Combo(T("Point/spot shadow resolution (per face)"), &pi, pres.c_str())) { L.pointShadowResolution = 128u << pi; c = true; }
   }
   ImGui::TextDisabled("%s", T("Point and spot shadows: CPU and GPU (Vulkan, D3D12). OpenGL uses the CPU renderer."));
+  // SSAO (Light Prism Post/Ssao): escurece a luz ambiente nas quinas e na base dos objetos.
+  c |= ImGui::Checkbox(T("Ambient occlusion (SSAO)"), &L.ssao);
+  ImGui::BeginDisabled(!L.ssao);
+  c |= sliderU(T("AO kernel samples"), L.ssaoKernel, 1, 32);
+  c |= ImGui::SliderFloat(T("AO radius (m)"), &L.ssaoRadius, 0.05f, 3.f, "%.2f");
+  c |= ImGui::SliderFloat(T("AO bias (m)"), &L.ssaoBias, 0.f, 0.2f, "%.3f");
+  c |= ImGui::SliderFloat(T("AO power (contrast)"), &L.ssaoPower, 0.1f, 4.f, "%.2f");
+  ImGui::EndDisabled();
+  // Ray tracing (CPU): a oclusao ambiente passa a ser por raios reais e substitui o SSAO.
+  c |= ImGui::Checkbox(T("Ray-traced ambient occlusion (CPU)"), &L.rtAo);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Casts real rays from each visible surface to find occluders. Replaces the SSAO above. Software renderer only (the GPU keeps the SSAO); sun shadows and voxels are not ray traced yet."));
+  ImGui::BeginDisabled(!L.rtAo);
+  c |= sliderU(T("RT AO rays per pixel"), L.rtAoRays, 1, 64);
+  c |= ImGui::SliderFloat(T("RT AO radius (m)"), &L.rtAoRadius, 0.05f, 5.f, "%.2f");
+  ImGui::EndDisabled();
+  // Bloom: o brilho acima do limiar (objetos emissivos e superficies muito claras) vira um halo.
+  c |= ImGui::Checkbox(T("Bloom (glow of bright and emissive objects)"), &L.bloom);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Bright areas glow into their surroundings. Emissive objects: Inspector > Emission. GPU and software renderer."));
+  ImGui::BeginDisabled(!L.bloom);
+  c |= ImGui::SliderFloat(T("Bloom threshold"), &L.bloomThreshold, 0.f, 1.f, "%.2f");
+  c |= ImGui::SliderFloat(T("Bloom strength"), &L.bloomStrength, 0.f, 4.f, "%.2f");
+  ImGui::EndDisabled();
 
   // ---- Ambiente e exposicao ----
   ImGui::SeparatorText(T("Ambient and exposure"));
   c |= ImGui::SliderFloat(T("Ambient intensity"), &L.ambientIntensity, 0.f, 4.f, "%.2f");
   c |= ImGui::SliderFloat(T("Pre-exposure"), &L.preExposure, 0.1f, 4.f, "%.2f");
-  ImGui::TextDisabled("%s", T("Each object chooses Cast shadow / Receive shadow in the Inspector. Only the sun casts shadows. Lower quality = more FPS."));
+  ImGui::TextDisabled("%s", T("Each object chooses Cast shadow / Receive shadow in the Inspector. The sun and the nearest point/spot lights that have Cast shadow on cast shadows. Lower quality = more FPS."));
 
   ImGui::SeparatorText(T("Global post-processing"));
   c |= postFxUi(r.post, false);
@@ -1521,7 +1554,7 @@ void saveSettings(Editor& ed) {
   tool::Json j = tool::Json::object();
   j.set("language", editor::I18n::get().code());
   j.set("showGridScene", ed.showGridScene); j.set("showGridGame", ed.showGridGame); j.set("showGizmos", ed.showGizmos);
-  j.set("graphicsApi", ed.apiChoice);
+  j.set("graphicsApi", ed.apiRequested);
   j.set("resMode", ed.resMode); j.set("customW", ed.customW); j.set("customH", ed.customH); j.set("pixelFilter", ed.pixelFilter); j.set("fpsMode", ed.fpsMode);
   j.set("upscaleMode", ed.upscaleMode); j.set("aaMode", ed.aaMode);
   j.set("lockInterface", ed.lockInterface); j.set("dockWithShift", ed.dockWithShift);
@@ -1595,13 +1628,15 @@ int main(int argc, char** argv) {
   int maxFrames = 0; int startApi = -1; bool startPlaying = false, selfTest = false, playerMode = false;
   long long ecsCount = 0;   // --ecs N: benchmark de N esferas (ver abaixo)
   long long voxelCount = 0; // --voxel N: benchmark de N chunks de terreno (16x16x16 blocos cada)
+  int mapSide = 0;          // --map N: mapa de N x N chunks de terreno, centrado na origem (ver Criar > Test map of chunks)
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--map") == 0) mapSide = std::atoi(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--frames") == 0) maxFrames = std::atoi(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--ecs") == 0) ecsCount = std::atoll(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--voxel") == 0) voxelCount = std::atoll(argv[i + 1]);
   const bool headless = maxFrames > 0 || ecsCount > 0 || voxelCount > 0;   // sem dialogo de projeto, sem gravar cena/configuracoes
   std::string projectArg;   // --project <pasta>: abre esse projeto direto, sem a janela de inicio
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--project") == 0) projectArg = argv[i + 1];
-  if ((ecsCount > 0 || voxelCount > 0) && projectArg.empty()) { std::fprintf(stderr, "--ecs/--voxel precisam de --project <pasta de teste> (nao grava o projeto)\n"); return 1; }
+  if ((ecsCount > 0 || voxelCount > 0 || mapSide > 0) && projectArg.empty()) { std::fprintf(stderr, "--ecs/--voxel precisam de --project <pasta de teste> (nao grava o projeto)\n"); return 1; }
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--api") == 0) startApi = std::strcmp(argv[i + 1], "vulkan") == 0 ? 1 : std::strcmp(argv[i + 1], "opengl") == 0 ? 2 : std::strcmp(argv[i + 1], "d3d12") == 0 ? 3 : 0;
   for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--play") == 0) startPlaying = true; if (std::strcmp(argv[i], "--selftest") == 0) selfTest = true; if (std::strcmp(argv[i], "--player") == 0) playerMode = true; }
   std::string startLang, startTheme, startScene, focusWin, selectName; int startTab = -1; bool showInputMapAtStart = false; std::string narrativeFile;
@@ -1725,6 +1760,7 @@ int main(int argc, char** argv) {
   // --ecs N: benchmark sem vsync. Cria N esferas (como "test ECS: N"), mede o tempo de cada quadro depois do nascimento
   // e imprime media, p50, p95 e maximo. Sai sozinho ao fim de 300 quadros medidos.
   if (ecsCount > 0) ed.startEcsTest(ecsCount);
+  if (mapSide > 0) ed.generateChunkMap(mapSide);
   if (voxelCount > 0) {   // chunks em grade quadrada, todos com terreno
     const long long side = static_cast<long long>(std::ceil(std::sqrt(static_cast<double>(voxelCount))));
     for (long long i = 0; i < voxelCount; ++i) ed.makeVoxel("Chunk", static_cast<int>(i % side), static_cast<int>(i / side), true);
@@ -1808,6 +1844,8 @@ int main(int argc, char** argv) {
       if (ed.showHierarchy) drawHierarchy(ed);
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showInspector) drawInspector(ed);
+      ed_::scriptWindowUi(ed); // janela de edicao de script (fora do Inspector)
+      ed_::testMapWindow(ed);  // mapa de teste de chunks (menu Criar)
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showScene) drawSceneView(ed, renderer);
       if (ed.showGame) drawGameView(ed, renderer);

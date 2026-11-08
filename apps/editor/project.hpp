@@ -109,30 +109,71 @@ public:
   explicit AssetLib(const Project* p) : proj_(p) {}
   std::function<void(const tool::Mesh*)> onMeshForget; // o renderizador de GPU precisa saber quando uma malha some
 
-  // Malha unica (todas as partes do modelo juntas) + cor media do primeiro material.
-  const tool::Mesh* mesh(const std::string& rel, tool::Vec3* tint = nullptr) {
-    if (auto it = meshes_.find(rel); it != meshes_.end()) { if (tint) *tint = tint_[rel]; return it->second.get(); }
+  // Modelo importado com hierarquia. As partes ficam no espaco local do no delas; `whole` junta tudo no mundo
+  // (enquadramento e modelos antigos sem hierarquia); `nodeMeshes` junta as partes de um no no espaco do no.
+  struct LoadedModel {
+    tool::assets::ModelData data;
+    std::vector<tool::Mat4> worlds;
+    std::unique_ptr<tool::Mesh> whole;
+    std::map<int, std::unique_ptr<tool::Mesh>> nodeMeshes;
+  };
+
+  // Carrega (ou pega do cache) o modelo; falha fica em cache.
+  LoadedModel* model(const std::string& rel) {
+    if (auto it = models_.find(rel); it != models_.end()) return it->second.get();
     if (failed_.count(rel)) return nullptr;
     const fs::path path = proj_->resolve(rel);
     if (path.empty()) { fail(rel, "invalid model path"); return nullptr; }
     tool::assets::ImportResult r = tool::assets::importModelFile(path.string());
     if (!r.ok) { fail(rel, r.error); return nullptr; }
-    auto m = std::make_unique<tool::Mesh>();
+    auto lm = std::make_unique<LoadedModel>();
+    lm->data = std::move(r.model);
+    if (lm->data.parts.empty()) { fail(rel, "model has no triangles"); return nullptr; }
+    lm->worlds = lm->data.worldMatrices();
+    auto whole = std::make_unique<tool::Mesh>();
     bool hasUv = true;
-    for (auto& p : r.model.parts) hasUv = hasUv && (p.mesh.uv.size() == p.mesh.pos.size() * 2);
-    for (auto& p : r.model.parts) {
-      const tool::u32 base = static_cast<tool::u32>(m->pos.size());
-      m->pos.insert(m->pos.end(), p.mesh.pos.begin(), p.mesh.pos.end());
-      m->normal.insert(m->normal.end(), p.mesh.normal.begin(), p.mesh.normal.end());
-      if (hasUv) m->uv.insert(m->uv.end(), p.mesh.uv.begin(), p.mesh.uv.end());
-      for (auto i : p.mesh.idx) m->idx.push_back(base + i);
+    for (auto& p : lm->data.parts) hasUv = hasUv && (p.mesh.uv.size() == p.mesh.pos.size() * 2);
+    for (auto& p : lm->data.parts) {
+      tool::Mesh c = p.mesh; // copia: a malha do no fica intacta, a copia vai para o mundo
+      if (!lm->worlds.empty()) tool::assets::bakeTransform(c, lm->worlds[static_cast<size_t>(p.node)]);
+      const tool::u32 base = static_cast<tool::u32>(whole->pos.size());
+      whole->pos.insert(whole->pos.end(), c.pos.begin(), c.pos.end());
+      whole->normal.insert(whole->normal.end(), c.normal.begin(), c.normal.end());
+      if (hasUv) whole->uv.insert(whole->uv.end(), c.uv.begin(), c.uv.end());
+      for (auto i : c.idx) whole->idx.push_back(base + i);
     }
-    if (m->pos.empty() || m->idx.empty()) { fail(rel, "model has no triangles"); return nullptr; }
-    tint_[rel] = r.model.parts.empty() ? tool::Vec3{0.8f, 0.8f, 0.8f} : r.model.parts[0].material.albedo;
-    for (auto& w : r.model.warnings) tool::logWarn(rel + ": " + w);
-    const tool::Mesh* raw = m.get();
-    meshes_[rel] = std::move(m);
+    if (whole->pos.empty() || whole->idx.empty()) { fail(rel, "model has no triangles"); return nullptr; }
+    lm->whole = std::move(whole);
+    tint_[rel] = lm->data.parts[0].material.albedo;
+    for (auto& w : lm->data.warnings) tool::logWarn(rel + ": " + w);
+    LoadedModel* raw = lm.get();
+    models_[rel] = std::move(lm);
+    return raw;
+  }
+
+  // Malha unica (todas as partes no mundo) + cor media do primeiro material.
+  const tool::Mesh* mesh(const std::string& rel, tool::Vec3* tint = nullptr) {
+    LoadedModel* lm = model(rel);
+    if (!lm) return nullptr;
     if (tint) *tint = tint_[rel];
+    return lm->whole.get();
+  }
+  // Malha de um no: as partes dele juntas, no espaco do no (caixa envolvente e selecao). Null se o no nao tem partes.
+  const tool::Mesh* nodeMesh(const std::string& rel, int node) {
+    LoadedModel* lm = model(rel);
+    if (!lm || node < 0 || static_cast<size_t>(node) >= lm->data.nodes.size()) return nullptr;
+    if (auto it = lm->nodeMeshes.find(node); it != lm->nodeMeshes.end()) return it->second.get(); // cache: criada uma vez
+    auto m = std::make_unique<tool::Mesh>();
+    for (int pi : lm->data.nodes[static_cast<size_t>(node)].parts) {
+      const tool::Mesh& c = lm->data.parts[static_cast<size_t>(pi)].mesh;
+      const tool::u32 base = static_cast<tool::u32>(m->pos.size());
+      m->pos.insert(m->pos.end(), c.pos.begin(), c.pos.end());
+      m->normal.insert(m->normal.end(), c.normal.begin(), c.normal.end());
+      for (auto i : c.idx) m->idx.push_back(base + i);
+    }
+    if (m->pos.empty() || m->idx.empty()) return nullptr;
+    const tool::Mesh* raw = m.get();
+    lm->nodeMeshes[node] = std::move(m);
     return raw;
   }
   tool::SoundPtr sound(const std::string& rel) {
@@ -147,11 +188,11 @@ public:
   }
   // Descarta o cache (ex.: o arquivo foi renomeado/editado) para recarregar na proxima vez.
   void invalidate(const std::string& rel) {
-    if (auto it = meshes_.find(rel); it != meshes_.end()) { if (onMeshForget) onMeshForget(it->second.get()); meshes_.erase(it); }
+    if (auto it = models_.find(rel); it != models_.end()) { forget(*it->second); models_.erase(it); }
     sounds_.erase(rel); failed_.erase(rel); tint_.erase(rel);
     textures_.erase(rel); failedTex_.erase(rel);
   }
-  void clear() { for (auto& [k, m] : meshes_) if (onMeshForget) onMeshForget(m.get()); meshes_.clear(); sounds_.clear(); failed_.clear(); tint_.clear(); textures_.clear(); failedTex_.clear(); }
+  void clear() { for (auto& [k, m] : models_) forget(*m); models_.clear(); sounds_.clear(); failed_.clear(); tint_.clear(); textures_.clear(); failedTex_.clear(); }
 
   // Textura de albedo (PNG, JPG, BMP, TGA) do projeto. Falha fica em cache para nao repetir a cada quadro.
   const tool::Texture* texture(const std::string& rel) {
@@ -165,13 +206,20 @@ public:
     textures_[rel] = std::move(t);
     return out;
   }
-  size_t meshCount() const { return meshes_.size(); }
+  size_t meshCount() const { return models_.size(); }
   size_t soundCount() const { return sounds_.size(); }
 
 private:
+  // Avisa o renderizador de GPU de cada malha do modelo que vai sumir.
+  void forget(LoadedModel& m) {
+    if (!onMeshForget) return;
+    onMeshForget(m.whole.get());
+    for (auto& [k, v] : m.nodeMeshes) onMeshForget(v.get());
+    for (auto& p : m.data.parts) onMeshForget(&p.mesh);
+  }
   void fail(const std::string& rel, const std::string& why) { failed_.insert(rel); tool::logError("could not load '" + rel + "': " + why); }
   const Project* proj_;
-  std::map<std::string, std::unique_ptr<tool::Mesh>> meshes_;
+  std::map<std::string, std::unique_ptr<LoadedModel>> models_;
   std::map<std::string, tool::Vec3> tint_;
   std::map<std::string, tool::SoundPtr> sounds_;
   std::set<std::string> failed_;
@@ -185,6 +233,7 @@ private:
 struct RenderSettings {
   tool::LightingSettings lighting; // Light Prism: qualidade, orcamento de luzes, sombras em cascata, ambiente
   bool frustumCull = true;         // pula objetos fora da visao da camera (sombras continuam corretas)
+  bool occlusionCull = true;       // pula objetos inteiramente escondidos atras de objetos grandes (perspectiva; sombras continuam corretas)
   float drawDistance = 0.f;        // distancia de desenho (0 = usa o Far de cada camera); vale para Scene e Game
   tool::PostFx post;               // vale para todas as cameras; cada camera pode somar/substituir com o seu (postfx.hpp)
 };
@@ -238,6 +287,10 @@ inline tool::Json saveLightingSettings(const tool::LightingSettings& s) {
   o.set("casterExtension", static_cast<double>(s.casterExtension)); o.set("depthBias", static_cast<double>(s.depthBias));
   o.set("normalBias", static_cast<double>(s.normalBias)); o.set("snapToTexels", s.snapToTexels);
   o.set("pointShadowLights", static_cast<double>(s.pointShadowLights)); o.set("pointShadowResolution", static_cast<double>(s.pointShadowResolution));
+  o.set("ssao", s.ssao); o.set("ssaoKernel", static_cast<double>(s.ssaoKernel)); o.set("ssaoRadius", static_cast<double>(s.ssaoRadius));
+  o.set("ssaoBias", static_cast<double>(s.ssaoBias)); o.set("ssaoPower", static_cast<double>(s.ssaoPower));
+  o.set("rtAo", s.rtAo); o.set("rtAoRays", static_cast<double>(s.rtAoRays)); o.set("rtAoRadius", static_cast<double>(s.rtAoRadius));
+  o.set("bloom", s.bloom); o.set("bloomThreshold", static_cast<double>(s.bloomThreshold)); o.set("bloomStrength", static_cast<double>(s.bloomStrength));
   o.set("ambientIntensity", static_cast<double>(s.ambientIntensity)); o.set("preExposure", static_cast<double>(s.preExposure));
   return o;
 }
@@ -256,6 +309,17 @@ inline tool::LightingSettings loadLightingSettings(const tool::Json& o) {
   s.pcfTaps = (pcf <= 1) ? 1u : (pcf <= 4 ? 4u : 9u);
   s.pointShadowLights = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "pointShadowLights", 2.f)), 0, 4));
   s.pointShadowResolution = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "pointShadowResolution", 512.f)), 64, 1024));
+  s.ssao = ser::flag(o, "ssao", true);
+  s.ssaoKernel = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "ssaoKernel", 16.f)), 1, 32));
+  s.ssaoRadius = ser::clampNum(o, "ssaoRadius", 0.5f, 0.01f, 5.f);
+  s.ssaoBias = ser::clampNum(o, "ssaoBias", 0.025f, 0.f, 0.5f);
+  s.ssaoPower = ser::clampNum(o, "ssaoPower", 1.f, 0.1f, 4.f);
+  s.rtAo = ser::flag(o, "rtAo", false);
+  s.rtAoRays = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "rtAoRays", 16.f)), 1, 64));
+  s.rtAoRadius = ser::clampNum(o, "rtAoRadius", 0.6f, 0.05f, 5.f);
+  s.bloom = ser::flag(o, "bloom", false);
+  s.bloomThreshold = ser::clampNum(o, "bloomThreshold", 0.75f, 0.f, 1.f);
+  s.bloomStrength = ser::clampNum(o, "bloomStrength", 0.8f, 0.f, 4.f);
   s.splitLambda = ser::clampNum(o, "splitLambda", 0.7f, 0.f, 1.f);
   s.shadowDistance = ser::clampNum(o, "shadowDistance", 0.f, 0.f, 5000.f);
   s.blendFraction = ser::clampNum(o, "blendFraction", 0.1f, 0.f, 0.5f);
@@ -271,7 +335,7 @@ inline tool::LightingSettings loadLightingSettings(const tool::Json& o) {
 inline tool::Json saveRenderSettings(const RenderSettings& r) {
   tool::Json o = tool::Json::object();
   o.set("lighting", saveLightingSettings(r.lighting)); o.set("post", ser::postFx(r.post));
-  o.set("frustumCull", r.frustumCull); o.set("drawDistance", static_cast<double>(r.drawDistance));
+  o.set("frustumCull", r.frustumCull); o.set("occlusionCull", r.occlusionCull); o.set("drawDistance", static_cast<double>(r.drawDistance));
   return o;
 }
 // Todo valor lido do arquivo e limitado a uma faixa segura (um .scene.json editado a mao nao pode travar o render).
@@ -287,7 +351,7 @@ inline RenderSettings loadRenderSettings(const tool::Json& o) {
     r.lighting.pcfTaps = pcf <= 0 ? 1u : (pcf == 1 ? 4u : 9u);
   }
   if (o.has("post")) r.post = ser::readPostFx(o["post"]);
-  r.frustumCull = ser::flag(o, "frustumCull", true); r.drawDistance = ser::clampNum(o, "drawDistance", 0.f, 0.f, 20000.f);
+  r.frustumCull = ser::flag(o, "frustumCull", true); r.occlusionCull = ser::flag(o, "occlusionCull", true); r.drawDistance = ser::clampNum(o, "drawDistance", 0.f, 0.f, 20000.f);
   return r;
 }
 

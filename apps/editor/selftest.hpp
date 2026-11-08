@@ -13,7 +13,7 @@
 #include "skybox.hpp"
 #include "image_io.hpp"
 #include "help_content.hpp"
-#include "script_kit.hpp"
+#include "script_complete.hpp"
 #include "narrative_panel.hpp"
 #include "export.hpp"
 #include <algorithm>
@@ -127,7 +127,8 @@ inline int runSelfTest(const std::string& samplesDir) {
   processImports(ed);
   check(fs::exists(tmp / "Assets" / "cubo.glb") && fs::exists(tmp / "Assets" / "tom.mp3"), "import copies files into Project/Assets");
   tool::Entity m = ed.makeModel("Assets/cubo.glb");
-  check(ed.lib.mesh("Assets/cubo.glb") != nullptr && ed.scene.world().get<MeshRenderer>(m)->shape == 3, "glb model loads and becomes a mesh object");
+  int drawable = 0; ed.scene.world().each<MeshRenderer>([&](tool::Entity, MeshRenderer& mr) { if (mr.shape == 3 && std::string(mr.model) == "Assets/cubo.glb") ++drawable; });
+  check(ed.lib.mesh("Assets/cubo.glb") != nullptr && drawable >= 1 && ed.scene.world().alive(m), "glb model loads and becomes mesh objects (hierarchy)");
   check(ed.lib.mesh("Assets/caixa.fbx") != nullptr && ed.lib.mesh("Assets/piramide.gltf") != nullptr, "fbx and gltf models load");
   check(std::find(ed.sceneInfo.assets.begin(), ed.sceneInfo.assets.end(), "Assets/cubo.glb") != ed.sceneInfo.assets.end(), "model is assigned to the scene");
   check(ed.lib.mesh("../outside.glb") == nullptr, "path traversal is rejected");
@@ -144,9 +145,21 @@ inline int runSelfTest(const std::string& samplesDir) {
   tool::Entity a = ed.makeAudio("Assets/bip.wav");
   ed.saveScene();
   check(renameAsset(ed, "Assets/cubo.glb", "caixa_azul.glb").empty(), "rename an asset");
-  check(std::string(ed.scene.world().get<MeshRenderer>(m)->model) == "Assets/caixa_azul.glb", "rename updates object references");
+  int renamed = 0, stale = 0; ed.scene.world().each<MeshRenderer>([&](tool::Entity, MeshRenderer& mr) { if (std::string(mr.model) == "Assets/caixa_azul.glb") ++renamed; if (std::string(mr.model) == "Assets/cubo.glb") ++stale; });
+  check(renamed >= 1 && stale == 0, "rename updates object references (every part of the hierarchy)");
   check(ed.lib.mesh("Assets/caixa_azul.glb") != nullptr && !fs::exists(tmp / "Assets" / "cubo.glb"), "renamed model loads from the new path");
   check(!renameAsset(ed, "Assets/caixa_azul.glb", "bad/name").empty(), "invalid new name is rejected");
+  { // luz pontual com sombra: o flag tem que sobreviver ao salvar/carregar (antes o editor o zerava)
+    tool::Entity le = ed.make("ShadowLightTest", true);
+    tool::Light lt; lt.type = tool::LightType::Point; lt.castShadow = true; ed.scene.world().add<LightComp>(le, LightComp{lt});
+    tool::Entity back = loadEntity(ed.scene, saveEntity(ed.scene, le));
+    check(ed.scene.world().get<LightComp>(back) && ed.scene.world().get<LightComp>(back)->light.castShadow, "point light castShadow survives save and load");
+    // Sincronia com o Transform: o interruptor e o nome do alvo sobrevivem ao salvar e carregar.
+    if (auto* lcs = ed.scene.world().get<LightComp>(le)) { lcs->syncRot = true; std::snprintf(lcs->target, sizeof lcs->target, "%s", "Cubo do sol"); }
+    tool::Entity back2 = loadEntity(ed.scene, saveEntity(ed.scene, le));
+    const LightComp* lb = ed.scene.world().get<LightComp>(back2);
+    check(lb && lb->syncRot && std::string(lb->target) == "Cubo do sol", "light sync rotation and target name survive save and load");
+  }
   check(!renameAsset(ed, "../x", "y").empty(), "rename outside Assets is rejected");
   check(deleteAsset(ed, "Assets/piramide.gltf").empty() && !fs::exists(tmp / "Assets" / "piramide.gltf"), "delete an asset");
   check(!deleteAsset(ed, "Scenes/Main.scene.json").empty() && fs::exists(tmp / "Scenes" / "Main.scene.json"), "delete cannot leave Assets");
@@ -389,11 +402,35 @@ inline int runSelfTest(const std::string& samplesDir) {
       check(allDeclared, ("typings: every script function is declared in toolengine.d.ts" + (missing.empty() ? std::string() : " (missing:" + missing + ")")).c_str());
       check(dts.find("declare const input") != std::string::npos && dts.find("declare const time") != std::string::npos &&
             dts.find("declare const debug") != std::string::npos, "typings: input, time and debug are declared");
-      const std::string snip = editor::scriptkit_detail::kSnippets;
+      const std::string snip = editor::snippetsJson();
       size_t snipCount = 0;
       for (size_t p = snip.find("\"prefix\""); p != std::string::npos; p = snip.find("\"prefix\"", p + 1)) ++snipCount;
       check(snipCount >= 12 && snip.find("export function update") != std::string::npos && snip.find("input.down(") != std::string::npos,
             ("snippets: " + std::to_string(snipCount) + " snippets from the tested examples").c_str());
+      { // editor de script: autocomplete (palavra, sugestoes, troca) e snippets vindos dos exemplos do Help
+        using namespace editor;
+        check(completionWord("let a = input.do", 16) == "input.do" && completionWord("x = 1", 3).empty() && completionWord("abc", 1) == "a",
+              "autocomplete: the word before the cursor (dots included)");
+        const auto sg = completionsFor("input.do");
+        bool hasDown = false; for (const ApiItem& it : sg) if (it.name == "input.down") hasDown = true;
+        check(hasDown && completionsFor("").empty() && completionsFor("", true).size() > 10, "autocomplete: suggestions by prefix; empty word shows nothing unless asked");
+        const auto sp = completionsFor("setPo");
+        bool setPos = false; for (const ApiItem& it : sp) if (it.name == "setPosition" && it.ins == "setPosition(" && it.kind == "function") setPos = true;
+        check(setPos, "autocomplete: a function is inserted with its '(' and kind function");
+        const TextEdit ed1 = applyCompletion("  setPo", 7, "setPosition(");
+        check(ed1.text == "  setPosition(" && ed1.cursor == 14, "autocomplete: accepting replaces the typed word and moves the cursor");
+        const TextEdit ed2 = applyCompletion("if (input.do", 12, "input.down(");
+        check(ed2.text == "if (input.down(" && ed2.cursor == 15, "autocomplete: a method replaces 'input.do' (dots kept in the word)");
+        const TextEdit ins = insertAt("ab", 1, "X");
+        check(ins.text == "aXb" && ins.cursor == 2, "snippets: inserted at the cursor");
+        const auto snips = scriptSnippets();
+        check(snips.size() >= 50 && snips.front().n == 1 && !snips.front().title.empty(), ("snippets: " + std::to_string(snips.size()) + " from the Help examples (numbered, titled)").c_str());
+        bool allHaveFn = true; for (const Snippet& sn : snips) if (sn.code.find("function") == std::string::npos) allHaveFn = false;
+        check(allHaveFn, "snippets: every one contains a script function");
+        const std::string js = snippetsJson();
+        check(js.front() == '{' && js.find("\"prefix\": \"tool53\"") != std::string::npos && js.find("\\n") == std::string::npos,
+              "snippets: the VS Code JSON has every example with its prefix (no raw newlines inside strings)");
+      }
     }
     { // verificador de scripts: regras de uso, sintaxe com linha, e erros de execucao com linha / try-catch / avisos
       using editor::checkScriptSource;
@@ -713,6 +750,28 @@ inline int runSelfTest(const std::string& samplesDir) {
       for (tool::Entity g : grid) ed.scene.world().destroy(g);
     }
     ed.scene.world().destroy(mv); ed.scene.world().destroy(ve); if (ed.scene.world().alive(back)) ed.scene.world().destroy(back);
+  }
+
+  { // mapa de teste: side x side chunks, centrados na origem, sem costura (cada chunk na sua celula da grade)
+    const int made = ed.generateChunkMap(3);
+    int count = 0; float minX = 1e9f, maxX = -1e9f, minZ = 1e9f, maxZ = -1e9f;
+    ed.scene.world().each<VoxelChunk>([&](tool::Entity e, VoxelChunk&) {
+      ++count; const Transform* t = ed.scene.world().get<Transform>(e);
+      minX = std::min(minX, t->pos[0]); maxX = std::max(maxX, t->pos[0]); minZ = std::min(minZ, t->pos[2]); maxZ = std::max(maxZ, t->pos[2]);
+    });
+    const float span = VoxelChunk{}.cell * kChunkSize;
+    check(made == 9 && count == 9, "chunk map: 3 x 3 chunks are created (old chunks are replaced)");
+    check(std::fabs((maxX - minX) - 2 * span) < 1e-3f && std::fabs((maxZ - minZ) - 2 * span) < 1e-3f, "chunk map: the chunks are spaced one span apart, with no gaps");
+    check(std::fabs(minX + span) < 1e-3f && std::fabs(maxX - span) < 1e-3f, "chunk map: the map is centered on the origin");
+    ed.generateChunkMap(1);
+  }
+  { // configuracoes de oclusao e ray tracing: ida e volta pelo project.json (render.occlusionCull, render.lighting.rtAo*)
+    RenderSettings r; r.occlusionCull = false; r.lighting.rtAo = true; r.lighting.rtAoRays = 24; r.lighting.rtAoRadius = 1.25f;
+    const RenderSettings back = loadRenderSettings(saveRenderSettings(r));
+    check(!back.occlusionCull, "render settings: occlusion culling survives save and load");
+    check(back.lighting.rtAo && back.lighting.rtAoRays == 24 && std::fabs(back.lighting.rtAoRadius - 1.25f) < 1e-4f, "render settings: ray-traced AO survives save and load");
+    const RenderSettings def = loadRenderSettings(saveRenderSettings(RenderSettings{}));
+    check(def.occlusionCull && !def.lighting.rtAo, "render settings: occlusion on and ray tracing off by default");
   }
 
   fs::remove_all(tmp, ec);

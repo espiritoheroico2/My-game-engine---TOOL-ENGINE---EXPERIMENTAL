@@ -162,6 +162,9 @@ public:
     gp.InputLayout.LayoutElements = elems.data();
     gp.InputLayout.NumElements = static_cast<dl::Uint32>(elems.size());
     pci.pVS = vs; pci.pPS = ps;
+    // DYNAMIC em todos os recursos. O Vulkan conta cada cbuffer por estagio, e algumas GPUs aceitam so 8 buffers
+    // uniformes dinamicos. O PBR respeita isso porque o PS nao le FrameBuffer/ObjectBuffer (ver assets/shaders/pbr.hlsl).
+    // Trocar o tipo para MUTABLE quebrou sombras e texturas no gpu_test_vulkan: nao use essa via.
     pci.PSODesc.ResourceLayout.DefaultVariableType = dl::SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC;
     dl::RefCntAutoPtr<dl::IPipelineState> pso;
     device->CreateGraphicsPipelineState(pci, &pso);
@@ -439,7 +442,7 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
     ci.DynamicHeapSize = info.dynamicHeapMB << 20; // o padrao do Diligent e 8 MB; "Space in dynamic heap is exhausted" acontecia aqui
     ci.DynamicHeapPageSize = 1u << 20;
     ci.EnableValidation = info.validation;          // se as camadas nao estiverem instaladas, o Diligent avisa e segue sem elas
-    if (!info.validation) debug().report("TOOL-W201", Severity::Warning, "Vulkan sem validacao: erros do driver podem passar sem aviso (ligue em Configuracoes > Graficos)");
+    if (!info.validation) debug().report("TOOL-I201", Severity::Info, "Vulkan sem validacao: erros do driver podem passar sem aviso (ligue em Configuracoes > Graficos)");
     dl::IDeviceContext* ctxs[1] = {};
     f->CreateDeviceAndContextsVk(ci, &dev->device, ctxs);
     if (!dev->device || !ctxs[0]) return fail("Vulkan: falha ao criar o dispositivo (driver/GPU Vulkan ausente?)");
@@ -457,7 +460,7 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
     ci.ZeroToOneNDZ = true; // projecoes com z de clip em 0..1, iguais ao D3D/Vulkan
     // O Diligent nao expoe tamanho de dynamic heap no OpenGL (dynamicHeapMB vale so para Vulkan).
     ci.EnableValidation = info.validation; // depuracao do OpenGL (glDebugMessageCallback) quando solicitado
-    if (!info.validation) debug().report("TOOL-W202", Severity::Warning, "OpenGL sem validacao: erros do driver podem passar sem aviso");
+    if (!info.validation) debug().report("TOOL-I202", Severity::Info, "OpenGL sem validacao: erros do driver podem passar sem aviso");
     dl::IDeviceContext* ctx = nullptr;
     f->CreateDeviceAndSwapChainGL(ci, &dev->device, &ctx, scd, &dev->swapchain);
     if (!dev->device || !ctx) return fail("OpenGL: falha ao criar o contexto (driver sem GL 4.3+?)");
@@ -470,7 +473,7 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
     auto* f = dl::GetEngineFactoryD3D12();
     dl::EngineD3D12CreateInfo ci;
     ci.EnableValidation = info.validation;   // o Diligent nao expoe tamanho total do heap dinamico no D3D12 (so o de pagina)
-    if (!info.validation) debug().report("TOOL-W203", Severity::Warning, "D3D12 sem validacao: erros do driver podem passar sem aviso");
+    if (!info.validation) debug().report("TOOL-I203", Severity::Info, "D3D12 sem validacao: erros do driver podem passar sem aviso");
     dl::IDeviceContext* ctxs[1] = {};
     f->CreateDeviceAndContextsD3D12(ci, &dev->device, ctxs);
     if (!dev->device || !ctxs[0]) return fail("D3D12: falha ao criar o dispositivo");

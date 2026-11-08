@@ -383,7 +383,7 @@ inline void addResourceUi(Editor& ed) {
     }
   ImGui::SeparatorText(T("Rendering and world"));
   if (!w.has<MeshRenderer>(sel) && ImGui::MenuItem(T("Mesh (cube)"))) w.add<MeshRenderer>(sel, MeshRenderer{});
-  if (!w.has<LightComp>(sel) && ImGui::MenuItem(T("Point Light"))) { tool::Light l; l.type = tool::LightType::Point; l.range = 12.f; l.intensity = 18.f; l.color = {1.f, 0.7f, 0.4f}; w.add<LightComp>(sel, LightComp{l}); }
+  if (!w.has<LightComp>(sel) && ImGui::MenuItem(T("Point Light"))) { tool::Light l; l.type = tool::LightType::Point; l.range = 12.f; l.intensity = 18.f; l.color = {1.f, 0.7f, 0.4f}; l.castShadow = true; w.add<LightComp>(sel, LightComp{l}); }
   if (!w.has<CameraComp>(sel) && ImGui::MenuItem(T("Camera"))) w.add<CameraComp>(sel);
   if (!w.has<AudioSource>(sel) && ImGui::MenuItem(T("Audio Source"))) w.add<AudioSource>(sel);
   if (!w.has<ParticleComp>(sel) && ImGui::MenuItem(T("Particle System"))) w.add<ParticleComp>(sel);
@@ -579,6 +579,31 @@ inline void drawInputMap(Editor& ed, bool* open) {
   if (listenScheme >= 0 && ImGui::IsKeyPressed(ImGuiKey_Escape)) listenScheme = -1;
   if (changed) { ed.applyInputMap(); dirty = true; }
   if (dirty && !ImGui::IsAnyItemActive()) { ed.inputMap.save(ed.project); dirty = false; }
+  ImGui::End();
+}
+
+// Janela "Test map of chunks": gera um mapa gigante de chunks de terreno para testar a Draw distance e a oclusao.
+struct TestMapState { bool open = false; int side = 32; };
+inline TestMapState& testMapState() { static TestMapState s; return s; }
+inline void openTestMap() { testMapState().open = true; }
+
+inline void testMapWindow(Editor& ed) {
+  auto& S = testMapState();
+  if (!S.open) return;
+  ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin(T("Test map of chunks"), &S.open, ImGuiWindowFlags_AlwaysAutoResize)) { ImGui::End(); return; }
+  ImGui::TextWrapped("%s", T("Creates a square map of terrain chunks (16 x 16 x 16 blocks each) centered at the origin. It replaces the chunks already in the scene. Each chunk is one object, so the cost grows with the square of the side: use Settings > Render > Draw distance to see only what is near the camera."));
+  ImGui::Spacing();
+  ImGui::SliderInt(T("Chunks per side"), &S.side, 1, 256);
+  const long long chunks = static_cast<long long>(S.side) * S.side;
+  const long long blocks = static_cast<long long>(S.side) * 16;
+  ImGui::Text("%s: %lld   |   %s: %lld x %lld", T("Chunks"), chunks, T("Size in blocks"), blocks, blocks);
+  if (chunks > 4096) ImGui::TextColored({1.f, .8f, .3f, 1.f}, "%s", T("Large map: expect a slow generation and a heavy scene."));
+  ImGui::Spacing();
+  if (ImGui::Button(T("Generate map"), ImVec2(160, 0))) {
+    const int made = ed.generateChunkMap(S.side);
+    tool::logInfo("Test map: " + std::to_string(made) + " chunks");
+  }
   ImGui::End();
 }
 

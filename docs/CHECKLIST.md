@@ -4,6 +4,17 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 
 ## Feito
 
+### 0.7.17-beta (AO, hierarquia e multi-material, projeto enxuto)
+- [x] SSAO (Light Prism `Post/Ssao`) na CPU e na GPU; AO so no ambiente; gpu_test compara GPU x CPU (Vulkan)
+- [x] Importacao de glTF e FBX preserva a hierarquia de nos (pai, TRS local) e cria objetos filhos no editor
+- [x] Multi-material: cada parte com o proprio material (glTF por primitive, FBX por LayerElementMaterial)
+- [x] Inspector: sobrepor material por parte (PartOverrides), salvo no projeto
+- [x] Limpeza medida: registry do Vulkan, FormatValidation, capturas nao citadas e recompressao PNG sem perda
+- [ ] Textura por parte (hoje a textura do objeto vale para todas as partes)
+- [ ] Animacao e skins (ainda ignorados no importador)
+- [ ] D3D12: compilar e testar na maquina Windows (nao verificado neste ambiente Linux)
+- [ ] SSAO: meia resolucao exposta e medida de custo da CPU em resolucoes altas
+
 ### 0.7.16-beta (sombras de luzes pontuais e spot, CPU e GPU)
 - [x] Sombra de point light (cubo de 6 faces) e de spot (1 face) no SoftRenderer, ate 4 luzes por distancia da camera
 - [x] Settings > Lighting: luzes com sombra (0 a 4) e resolucao por face; salvas no project
@@ -12,7 +23,7 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 - [x] Sombras de pontual/spot na GPU (faixa R x 6R por luz, viewport por face, PointShadow.hlsli); CPU e GPU batem no teste (Vulkan/lavapipe)
 - [x] Sol respeita receiveShadow na GPU (paridade com a CPU)
 - [ ] D3D12: compilar e testar na maquina Windows (nao verificado neste ambiente Linux)
-- [ ] SSAO: pipeline com profundidade e normais, Light Prism `Post/Ssao`, AO no ambiente (CPU e GPU)
+- [x] SSAO: feito na 0.7.17-beta
 - [ ] Ray tracing: Light Prism `Rt/Bvh` e `RtEffects` (sombra de contato, AO), CPU primeiro; GPU depois
 - [ ] Demais recursos da Light Prism: VSM, SDF, fog volumetrico, probes, PRT, SSR, VPL emissivo, planar shadows, CascadeCache, MemoryBudget
 - [ ] Pagina de ajuda do Light Prism no editor (help_content.hpp) e textos pt-BR/es
