@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.7.16-beta — sombras de luzes pontuais e spot (CPU e GPU)
+
+**Por que luzes pontuais nao projetavam sombra**
+- A Light Prism so tem sombras do sol (CSM, direcional). Pontuais e spots nao tinham sombra em lugar nenhum: a biblioteca documenta isso em `docs/SHADOWS.md` ("point/spot shadows not implemented") e a engine nao criava esse caminho.
+
+**Sombras de luzes pontuais e spot (CPU e GPU)**
+- Luz com `castShadow` ganha um mapa de profundidade por face: 6 faces (cubo, 90 graus) para pontual e 1 face (cone do spot) para spot.
+- Ate 4 luzes com sombra por quadro, as mais proximas da camera (`LightingSettings::pointShadowLights`, 0 desliga). Resolucao por face: 64 a 2048 (`pointShadowResolution`).
+- Profundidade em distancia ao longo do eixo da face, interpolada com correcao de perspectiva (1/w na tela). O teste compara distancias lineares, com viés na normal e constante.
+- Filtro 3x3 (PCF). Objeto sem `castShadow` nao projeta; chao sem `receiveShadow` nao recebe.
+- `LightRig::build` monta `LightFrame::shadowLights` (`ShadowLight`: tipo, posicao, faces e matrizes `vp[6]`). A visibilidade e aplicada em `SoftRenderer::shade()` pela posicao da luz (a LightPrism guarda a mesma posicao).
+
+**Settings > Lighting**
+- "Luzes pontuais e spot com sombra" (0 a 4) e "Resolucao da sombra pontual/spot (por face)" (256, 512, 1024, 2048). Salvas em `render.lighting` no `.scene.json`.
+
+**Limitacoes (honestas)**
+- Na GPU: uma faixa R x 6R por luz (ate 4), cada face com `setViewport` (novo no RHI, implementado no Diligent e no backend nulo). Shader `shadow_point.hlsl` grava distancia; `lightprism/Common/PointShadow.hlsli` faz o PCF. Testado em Vulkan (lavapipe). D3D12 nao foi compilado neste ambiente.
+- Correcao de paridade: o sol na GPU agora respeita `receiveShadow` (antes ignorava o flag, a CPU nao).
+- Triangulos com vertice atras do near da face (0,05 m) sao descartados: sombra incompleta so muito perto da luz.
+- Sem reuso de mapas de pontual: refeitos a cada quadro.
+
+**Testes**
+- `point_light_shadow_darkens_ground_behind_blocker`: o cubo sombreia o chao atras dele; sem castShadow nao sombreia.
+- `point_and_spot_shadow_plan_respects_budget_and_faces`: orcamento, ordem por distancia e numero de faces (6 e 1).
+- tool_tests: 131 testes, 0 falhas. Editor ctest: 4/4.
+
+**Nao feito nesta versao (fila)**
+- SSAO (Light Prism `Post/Ssao`) ligado no pipeline; ray tracing (Light Prism `Rt/Bvh`, `RtEffects`); VSM, SDF, fog volumetrico, probes, PRT, SSR, VPL emissivo, planar shadows; pagina de ajuda do Light Prism no editor.
+
+## 0.7.15-beta — iluminacao pela Light Prism (CPU e GPU)
+
+**Iluminacao substituida**
+- A iluminacao da engine e calculada pela biblioteca Light Prism (`third_party/LightPrism`): luzes pontuais, spot e sol, clusters, sombras em cascata (CSM) e luz ambiente em SH9, com BRDF e tone map ACES da propria biblioteca.
+- Renderizador CPU (`SoftRenderer`) e GPU (`GpuRenderer`, Diligent) usam o mesmo quadro de iluminacao (`LightRig`). A GPU calcula os clusters com o `ClusterSystem` da Light Prism no mesmo dispositivo e contexto do RHI.
+- Sombras: as cascatas do sol substituem o antigo `shadow.hpp`. Cada cascata e um mapa R32F; ate 4 cascatas.
+- Fundo do CPU: a cor de limpeza e codificada em sRGB direto (como o alvo sRGB da GPU), sem a curva ACES.
+
+**Settings > Lighting (por cena)**
+- Preset de qualidade: Mobile, Baixa, Media, Alta. Opcao "Valores personalizados" substitui o preset.
+- Personalizado: cascatas (1-4), resolucao do mapa por cascata (512-4096), suavidade PCF (1, 4 ou 9 amostras), luzes e indices por cluster, corte automatico do raio.
+- Orcamento: maximo de luzes pontuais e de spots (luzes alem do orcamento sao descartadas e contadas).
+- Sombras do sol: distancia maxima, divisao das cascatas (lambda), mistura, extensao de quem projeta, viés de profundidade e da normal, alinhamento aos texels.
+- Ambiente: intensidade da luz ambiente e pre-exposicao.
+- Profiler > Rendering mostra as sombras ativas e as luzes descartadas pelo orcamento.
+
+**Cenas e formato**
+- Novo bloco `render.lighting` no `.scene.json`. Cenas antigas com `render.shadow` sao convertidas ao abrir (habilitar, resolucao e PCF).
+
+**Engine**
+- RHI: `ICommandList::setStorage` (StructuredBuffer somente leitura, `PipelineDesc::storageNames`), `IDevice::importBuffer`, `nativeDevice()`/`nativeContext()`.
+- `GpuRenderer` reescrito: `init` recebe o dispositivo da Light Prism; `setLighting(LightRig&, view, proj, reuse)` por quadro.
+- `loadHlsl` resolve `#include` relativo ao arquivo que o contem e inclui cada arquivo uma vez (como `#pragma once`).
+- Matrizes: a engine guarda por coluna e a Light Prism por linha. A conversao (`LightRig::toLp`, `toTool`) transpoe.
+- Removidos: `engine/render/include/tool/render/shadow.hpp`, `assets/shaders/lighting.hlsli` e o modelo antigo de clusters e atenuacao.
+
+**Limitacoes desta versao**
+- OpenGL ainda nao tem a iluminacao em GLSL: o editor cai para a CPU e mostra o motivo (`TOOL-E141`). Vulkan e D3D12 primeiro.
+- O caminho GPU foi testado so em Vulkan por software (lavapipe). D3D12 nao foi testado.
+- Os objetos Point Light e Global Light continuam sendo componentes do editor, agora alimentados pela Light Prism (nao foram criados tipos novos).
+
+**Testes**
+- `tool_tests`: 129 testes ok (novos testes do `LightRig`: mapeamento, orcamento, sombra do sol, presets).
+- `gpu_test vulkan`: a imagem da GPU bate com a CPU (IoU 1.0), a textura confere e ha sombra no chao.
+- `editor_selftest`: ok.
+
 ## 0.7.14-beta — desempenho com muitos objetos (benchmark, chunks de blocos opcionais, LOD da esfera, hierarquia achatada)
 
 **Desempenho**

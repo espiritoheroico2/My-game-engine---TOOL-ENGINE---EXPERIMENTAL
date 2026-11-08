@@ -67,6 +67,7 @@ private:
     void setIndexBuffer(BufferId b) override { if (check()) ib_ = d_.valid(b, Kind::Buffer); if (open_ && !ib_) d_.err("index buffer invalido"); }
     void setUniform(u32, BufferId b) override { if (check() && !d_.valid(b, Kind::Buffer)) d_.err("uniform buffer invalido"); }
     void setTexture(u32, TextureId t) override { if (check() && !d_.valid(t, Kind::Texture)) d_.err("textura invalida"); }
+    void setViewport(u32, u32, u32, u32) override { check(); }
     void drawIndexed(u32 n, u32 inst) override {
       if (!check()) return;
       if (!pipeline_ || !vb_ || !ib_) { d_.err("draw sem pipeline/vertex/index buffer"); return; }

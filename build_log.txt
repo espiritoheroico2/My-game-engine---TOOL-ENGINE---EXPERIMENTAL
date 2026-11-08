@@ -52,7 +52,7 @@
 -- Platform: Windows-10.0.26300
 -- 64-bit:   TRUE
 -- Compiler: C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
--- Revision: SDL3-3.2.8-8e018e1
+-- Revision: SDL3-3.2.8-5558d3f
 -- Vendor:   
 -- 
 -- Subsystems:
@@ -531,8 +531,8 @@ suppress it.
 -- Looking for pthread_create in pthread
 -- Looking for pthread_create in pthread - not found
 -- Found Threads: TRUE
--- Configuring done (178.9s)
--- Generating done (19.1s)
+-- Configuring done (201.6s)
+-- Generating done (10.6s)
 -- Build files have been written to: C:/Users/espir/Downloads/actToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/out
 Versão do MSBuild 18.11.1-1.26513.3+940033be3 para .NET Framework
 
@@ -852,6 +852,8 @@ Versão do MSBuild 18.11.1-1.26513.3+940033be3 para .NET Framework
   set_spec_constant_default_value_pass.cpp
   simplification_pass.cpp
   spread_volatile_semantics.cpp
+  ssa_rewrite_pass.cpp
+  strength_reduction_pass.cpp
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\DiligentCore\ThirdParty\SPIRV-Tools\source\util\small_vector.h(188,16): warning C5232: no C++20, essa comparação chama 'bool spvtools::utils::operator ==(const std::vector<uint32_t,std::allocator<uint32_t>> &,const spvtools::utils::SmallVector<uint32_t,2> &)' recursivamente [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\diligentcore-build\ThirdParty\SPIRV-Tools\source\opt\SPIRV-Tools-opt.vcxproj]
   (compilando o arquivo fonte '../../../../../../../third_party/DiligentCore/ThirdParty/SPIRV-Tools/source/opt/set_spec_constant_default_value_pass.cpp')
       C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\DiligentCore\ThirdParty\SPIRV-Tools\source\util\small_vector.h(188,16):
@@ -865,8 +867,6 @@ C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXP
               C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\DiligentCore\ThirdParty\SPIRV-Tools\source\opt\set_spec_constant_default_value_pass.cpp(304,9):
               veja a primeira referência a 'spvtools::utils::operator !=' em 'spvtools::opt::SetSpecConstantDefaultValuePass::Process'
   
-  ssa_rewrite_pass.cpp
-  strength_reduction_pass.cpp
   strip_debug_info_pass.cpp
   strip_nonsemantic_info_pass.cpp
   struct_cfg_analysis.cpp
@@ -1132,6 +1132,43 @@ C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXP
   TextureUploaderD3D12_Vk.cpp
   TextureUploaderGL.cpp
   Diligent-GraphicsTools.vcxproj -> C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\diligentcore-build\Graphics\GraphicsTools\Release\Diligent-GraphicsTools.lib
+  Building Custom Rule C:/Users/espir/Downloads/actToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/third_party/LightPrism/CMakeLists.txt
+  LightingSystem.cpp
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\LightPrism\include\LightPrism\LightingSystem.hpp(42,25): warning C4324: 'LightPrism::FrameLightView': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\third_party\LightPrism\LightPrism.vcxproj]
+  (compilando o arquivo fonte '../../../third_party/LightPrism/src/Core/LightingSystem.cpp')
+  
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\LightPrism\src\Core\LightingSystem.cpp(17,33): warning C4324: 'LightPrism::`anonymous-namespace'::Ranked<LightPrism::PointLightGPU>': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\third_party\LightPrism\LightPrism.vcxproj]
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\LightPrism\src\Core\LightingSystem.cpp(17,33):
+      o contexto de instanciação do modelo (o mais antigo primeiro) é
+          C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\LightPrism\src\Core\LightingSystem.cpp(165,34):
+          consulte a referência à instanciação 'LightPrism::`anonymous-namespace'::Ranked<LightPrism::PointLightGPU>' do modelo da classe que está sendo compilada
+  
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\LightPrism\src\Core\LightingSystem.cpp(17,33): warning C4324: 'LightPrism::`anonymous-namespace'::Ranked<LightPrism::SpotLightGPU>': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\third_party\LightPrism\LightPrism.vcxproj]
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\LightPrism\src\Core\LightingSystem.cpp(17,33):
+      o contexto de instanciação do modelo (o mais antigo primeiro) é
+          C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\LightPrism\src\Core\LightingSystem.cpp(169,33):
+          consulte a referência à instanciação 'LightPrism::`anonymous-namespace'::Ranked<LightPrism::SpotLightGPU>' do modelo da classe que está sendo compilada
+  
+  ClusterCulling.cpp
+  ClusterSystem.cpp
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\LightPrism\include\LightPrism\LightingSystem.hpp(42,25): warning C4324: 'LightPrism::FrameLightView': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\third_party\LightPrism\LightPrism.vcxproj]
+  (compilando o arquivo fonte '../../../third_party/LightPrism/src/Cluster/ClusterSystem.cpp')
+  
+  Csm.cpp
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\LightPrism\include\LightPrism\LightingSystem.hpp(42,25): warning C4324: 'LightPrism::FrameLightView': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\third_party\LightPrism\LightPrism.vcxproj]
+  (compilando o arquivo fonte '../../../third_party/LightPrism/src/Shadow/Csm.cpp')
+  
+  Ibl.cpp
+  Ssao.cpp
+  Bvh.cpp
+  Transfer.cpp
+  ProbeGrid.cpp
+  NullDevice.cpp
+  Gerando Código...
+  LightPrism.vcxproj -> C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\third_party\LightPrism\Release\LightPrism.lib
+  Building Custom Rule C:/Users/espir/Downloads/actToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/third_party/LightPrism/src/Backends/Diligent/CMakeLists.txt
+  DiligentDevice.cpp
+  LightPrismDiligent.vcxproj -> C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\third_party\LightPrism\src\Backends\Diligent\Release\LightPrismDiligent.lib
   Building Custom Rule C:/Users/espir/Downloads/actToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/third_party/SDL3/CMakeLists.txt
   e_atan2.c
   e_exp.c
@@ -1458,10 +1495,10 @@ C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXP
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\quickjs-ng\quickjs.c(59973,33): warning C4334: '<<': resultado de 32-bit shift convertido implicitamente para 64 bits (64-bit shift era pretendido?) [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\quickjs-build\qjs.vcxproj]
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\quickjs-ng\quickjs.c(61493,22): warning C4334: '<<': resultado de 32-bit shift convertido implicitamente para 64 bits (64-bit shift era pretendido?) [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\quickjs-build\qjs.vcxproj]
   Gerando Código...
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\quickjs-ng\quickjs.c(3429,1): warning C4702: código inacessível [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\quickjs-build\qjs.vcxproj]
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\quickjs-ng\quickjs.c(741,1): warning C4702: código inacessível [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\quickjs-build\qjs.vcxproj]
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\quickjs-ng\quickjs.c(53487,1): warning C4702: código inacessível [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\quickjs-build\qjs.vcxproj]
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\quickjs-ng\quickjs.c(24240,1): warning C4702: código inacessível [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\quickjs-build\qjs.vcxproj]
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\quickjs-ng\quickjs.c(3429,1): warning C4702: código inacessível [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\quickjs-build\qjs.vcxproj]
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\quickjs-ng\quickjs.c(11499,1): warning C4702: código inacessível [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\quickjs-build\qjs.vcxproj]
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\quickjs-ng\quickjs.c(13929,1): warning C4701: variável local possivelmente não inicializada 'buf' usada [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\quickjs-build\qjs.vcxproj]
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\quickjs-ng\quickjs.c(13929,1): warning C4703: variável de ponteiro local potencialmente não inicializada 'buf' usada [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\quickjs-build\qjs.vcxproj]
@@ -1479,12 +1516,25 @@ C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXP
   tool_audio_miniaudio.vcxproj -> C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\engine\Release\tool_audio_miniaudio.lib
   Building Custom Rule C:/Users/espir/Downloads/actToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/engine/CMakeLists.txt
   diligent_device.cpp
+  lightprism_bridge.cpp
+  Gerando Código...
   tool_rhi_diligent.vcxproj -> C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\engine\Release\tool_rhi_diligent.lib
   Building Custom Rule C:/Users/espir/Downloads/actToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/apps/editor/CMakeLists.txt
   main.cpp
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\components.hpp(405,17): warning C4456: a declaração de 'n' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\LightPrism\include\LightPrism\LightingSystem.hpp(42,25): warning C4324: 'LightPrism::FrameLightView': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
-      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\components.hpp(342,8):
+  
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\render\include\tool\render\lighting.hpp(124,33): warning C4324: 'tool::LightFrame': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+  (compilando o arquivo fonte '../../../apps/editor/main.cpp')
+  
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\render\include\tool\render\soft_renderer.hpp(258,16): warning C4457: a declaração de 'f' oculta um parâmetro de função [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+  (compilando o arquivo fonte '../../../apps/editor/main.cpp')
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\render\include\tool\render\soft_renderer.hpp(238,38):
+      consulte a declaração de 'f'
+  
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\components.hpp(406,17): warning C4456: a declaração de 'n' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+  (compilando o arquivo fonte '../../../apps/editor/main.cpp')
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\components.hpp(343,8):
       consulte a declaração de 'n'
   
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_math.hpp(21,1): warning C4324: 'Newtoon::Vec3': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
@@ -1588,7 +1638,7 @@ C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
       C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\algorithm(4248,24):
       o contexto de instanciação do modelo (o mais antigo primeiro) é
-          C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\main.cpp(1157,50):
+          C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\main.cpp(1173,50):
           consulte a referência à instanciação '_OutIt std::transform<std::_String_iterator<std::_String_val<std::_Simple_types<_Elem>>>,std::_String_iterator<std::_String_val<std::_Simple_types<_Elem>>>,int(__cdecl *)(int)>(const _InIt,const _InIt,_OutIt,_Fn)' do modelo que está sendo compilada
           with
           [

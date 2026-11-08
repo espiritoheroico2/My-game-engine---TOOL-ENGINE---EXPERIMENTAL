@@ -1,3 +1,8 @@
+// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo e regras em ui_contract.hpp (secao 2.13).
+// Elementos: IsKeyPressed/IsKeyDown para movimento no modo Play (teclas do mapa de entrada), GetIO e
+//   GetCurrentContext para saber se ha campo de texto ativo (WantTextInput).
+// Dados: mapa de entrada (input_map.hpp), nao da UI.
+// Troca SpriteUI: a leitura de teclas passa a vir da camada de entrada da SpriteUI, com a mesma regra de foco.
 // editor_scripts.hpp - Ligacao dos scripts ToolObject (QuickJS) com o Editor. Roda so durante o Play.
 //
 // Ordem de cada quadro (tick): Narrative -> scripts (start/update, Transform copiado para o JS e de volta)

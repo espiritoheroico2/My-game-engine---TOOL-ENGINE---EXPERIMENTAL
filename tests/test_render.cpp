@@ -1,7 +1,6 @@
 #include "test.hpp"
 #include "tool/render/lighting.hpp"
 #include "tool/render/postfx.hpp"
-#include "tool/render/shadow.hpp"
 #include "tool/rhi/null_device.hpp"
 
 using namespace tool;
@@ -36,62 +35,45 @@ TEST(math_frustum_culling) {
   CHECK(f.intersectsAABB(in) && !f.intersectsAABB(out));
 }
 
-TEST(light_attenuation_window) {
-  CHECK(attenuation(10.f, 10.f) == 0.f);
-  CHECK(attenuation(1.f, 10.f) > attenuation(2.f, 10.f));
-  CHECK(attenuation(9.9f, 10.f) < 1e-3f); // chega a zero suavemente
+TEST(lightrig_maps_point_and_spot_lights_into_lightprism) {
+  LightRig rig;
+  Light p; p.type = LightType::Point; p.position = {0, 2, 0}; p.range = 8.f; p.intensity = 4.f;
+  Light sp; sp.type = LightType::Spot; sp.position = {0, 3, 0}; sp.direction = {0, -1, 0}; sp.range = 10.f; sp.intensity = 6.f;
+  const Mat4 v = Mat4::lookAt({0, 2, 5}, {0, 0, 0}, {0, 1, 0});
+  rig.build({p, sp}, {0, 0, 0}, {0, 2, 5}, v, 1.f, 1.f, 0.1f, 100.f);
+  CHECK(rig.frame().points.size() == 1 && rig.frame().spots.size() == 1);
+  CHECK(!rig.frame().hasSun && !rig.frame().shadows() && rig.frame().droppedLights == 0);
 }
 
-TEST(light_spot_cone) {
-  const f32 inner = std::cos(0.3f), outer = std::cos(0.6f);
-  CHECK(spotFactor({0, -1, 0}, {0, -1, 0}, inner, outer) == 1.f);
-  CHECK(spotFactor({0, -1, 0}, {1, 0, 0}, inner, outer) == 0.f);
-  const f32 mid = spotFactor({0, -1, 0}, {std::sin(0.45f), -std::cos(0.45f), 0}, inner, outer);
-  CHECK(mid > 0.f && mid < 1.f);
+TEST(lightrig_budget_drops_the_lights_beyond_the_limit) {
+  LightRig rig;
+  LightingSettings s; s.maxPointLights = 2; rig.configure(s);
+  std::vector<Light> ls(5); for (Light& l : ls) { l.type = LightType::Point; l.range = 5.f; }
+  const Mat4 v = Mat4::lookAt({0, 2, 5}, {0, 0, 0}, {0, 1, 0});
+  rig.build(ls, {0, 0, 0}, {0, 2, 5}, v, 1.f, 1.f, 0.1f, 100.f);
+  CHECK(rig.frame().points.size() == 2 && rig.frame().droppedLights == 3);
 }
 
-TEST(light_gpu_layout_and_conversion) {
-  Light l; l.type = LightType::Spot; l.position = {1, 2, 3}; l.direction = {0, -2, 0}; l.range = 7.f;
-  GpuLight g = toGpu(l, 3);
-  CHECK(g.type == 2 && g.shadowIndex == 3 && g.range == 7.f && g.direction[1] == -1.f);
-  CHECK(g.spotCos < g.spotInnerCos);
+TEST(lightrig_sun_casts_cascades_only_when_enabled) {
+  const Mat4 v = Mat4::lookAt({0, 2, 5}, {0, 0, 0}, {0, 1, 0});
+  Light sun; sun.type = LightType::Directional; sun.direction = {-0.4f, -1.f, -0.3f}; sun.intensity = 3.f; sun.castShadow = true;
+  LightRig rig;
+  rig.build({sun}, {0, 0, 0}, {0, 2, 5}, v, 1.f, 1.f, 0.1f, 100.f);
+  CHECK(rig.frame().hasSun && rig.frame().shadows());
+  LightingSettings off; off.shadows = false; rig.configure(off);
+  rig.build({sun}, {0, 0, 0}, {0, 2, 5}, v, 1.f, 1.f, 0.1f, 100.f);
+  CHECK(rig.frame().hasSun && !rig.frame().shadows());   // sol continua, sem sombra
 }
 
-TEST(shadow_cascade_splits_monotonic) {
-  auto s = cascadeSplits(0.1f, 200.f, 4);
-  CHECK(s.size() == 5 && s.front() == 0.1f && s.back() == 200.f);
-  for (size_t i = 1; i < s.size(); ++i) CHECK(s[i] > s[i - 1]);
-  CHECK(s[1] < 200.f / 4); // cascata proxima e curta
-}
-
-TEST(cluster_slice_log_distribution) {
-  CHECK(clusterSlice(0.05f, 0.1f, 100.f, 24) == 0);
-  CHECK(clusterSlice(100.f, 0.1f, 100.f, 24) == 23);
-  CHECK(clusterSlice(1.f, 0.1f, 100.f, 24) < clusterSlice(10.f, 0.1f, 100.f, 24));
-}
-
-TEST(cluster_assignment_matches_bruteforce_sphere_test) {
-  ClusterGrid g{8, 4, 12};
-  Mat4 view = Mat4::lookAt({0, 0, 0}, {0, 0, -1}, {0, 1, 0});
-  std::vector<Light> ls(3);
-  ls[0].position = {0, 0, -10}; ls[0].range = 2.f;
-  ls[1].position = {0, 0, 10};  ls[1].range = 2.f;   // atras da camera: em nenhum cluster
-  ls[2].type = LightType::Directional;                // fora dos clusters
-  auto a = assignLights(g, view, 1.0f, 16.f / 9.f, 0.1f, 100.f, ls);
-  size_t withLight0 = 0;
-  for (u32 c = 0; c < g.count(); ++c)
-    for (u32 k = 0; k < a.counts[c]; ++k) {
-      u32 li = a.indices[a.offsets[c] + k];
-      CHECK(li == 0);
-      ++withLight0;
-    }
-  CHECK(withLight0 > 0);
-  // o cluster central na profundidade da luz deve conte-la
-  u32 iz = clusterSlice(10.f, 0.1f, 100.f, g.z);
-  u32 center = (iz * g.y + 2) * g.x + 4;
-  bool found = false;
-  for (u32 k = 0; k < a.counts[center]; ++k) found |= a.indices[a.offsets[center] + k] == 0;
-  CHECK(found);
+TEST(lightrig_presets_and_custom_values) {
+  LightingSettings lo, hi; lo.tier = 0; hi.tier = 3;
+  CHECK(makeQuality(hi).shadowMapResolution >= makeQuality(lo).shadowMapResolution);
+  LightingSettings cu; cu.custom = true; cu.csmCascades = 2; cu.shadowMapResolution = 1024; cu.pcfTaps = 9;
+  const LightPrism::QualitySettings q = makeQuality(cu);
+  CHECK(q.csmCascades == 2 && q.shadowMapResolution == 1024 && q.pcfTaps == 9);
+  LightingSettings mid; mid.tier = 2;
+  cu.custom = false;   // sem custom, o preset manda (os valores de custom sao ignorados)
+  CHECK(makeQuality(cu).shadowMapResolution == makeQuality(mid).shadowMapResolution);
 }
 
 TEST(rhi_backend_priority_and_fallback) {
@@ -138,6 +120,14 @@ TEST(rhi_null_device_draw_and_validation) {
 #include "tool/render/soft_renderer.hpp"
 
 namespace {
+// Monta o quadro da Light Prism para a camera e as luzes dadas (o editor faz o mesmo a cada quadro).
+void lightFrame(LightRig& rig, const std::vector<Light>& ls, Vec3 amb, const Camera& cam, u32 w, u32 h) {
+  const Mat4 v = Mat4::lookAt(cam.eye, cam.target, cam.up), p = cam.projection(static_cast<f32>(w), static_cast<f32>(h));
+  rig.build(ls, amb, cam.eye, v, p.m[0][0], p.m[1][1], cam.nearZ, cam.farZ);
+}
+}
+
+namespace {
 bool px(const SoftRenderer& r, int x, int y, u8& R, u8& G, u8& B) { if (x < 0 || y < 0 || x >= static_cast<int>(r.width()) || y >= static_cast<int>(r.height())) return false; const u8* p = r.pixels() + (static_cast<size_t>(y) * r.width() + static_cast<size_t>(x)) * 4; R = p[0]; G = p[1]; B = p[2]; return true; }
 }
 
@@ -146,7 +136,7 @@ TEST(soft_renderer_draws_lit_cube_in_center) {
   Camera cam; cam.eye = {0, 0, 4}; cam.target = {0, 0, 0};
   r.begin(cam);
   Light l; l.type = LightType::Point; l.position = {2, 2, 3}; l.range = 20.f; l.intensity = 30.f;
-  r.setLights({l});
+  LightRig rig; lightFrame(rig, {l}, {}, cam, 160, 90); r.setLighting(rig.frame());
   r.draw(Mesh::cube(0.5f), Mat4(), Material{{0.9f, 0.2f, 0.2f}, 0.6f, 0.f});
   u8 R = 0, G = 0, B = 0;
   CHECK(px(r, 80, 45, R, G, B) && R > G + 30);      // cubo vermelho iluminado no centro
@@ -157,7 +147,8 @@ TEST(soft_renderer_draws_lit_cube_in_center) {
 TEST(soft_renderer_depth_test_front_occludes_back) {
   SoftRenderer r(100, 100);
   Camera cam; cam.eye = {0, 0, 6}; cam.target = {0, 0, 0}; r.begin(cam);
-  Light sun; sun.type = LightType::Directional; sun.direction = {0, 0, -1}; sun.intensity = 3.f; r.setLights({sun});
+  Light sun; sun.type = LightType::Directional; sun.direction = {0, 0, -1}; sun.intensity = 3.f;
+  LightRig rig; lightFrame(rig, {sun}, {}, cam, 100, 100); r.setLighting(rig.frame());
   r.draw(Mesh::cube(1.f), Mat4::translation({0, 0, -2}), Material{{0, 0, 1}, 0.8f, 0.f});   // atras, azul
   r.draw(Mesh::cube(0.5f), Mat4(), Material{{1, 0, 0}, 0.8f, 0.f});                         // na frente, vermelho
   u8 R = 0, G = 0, B = 0; px(r, 50, 50, R, G, B);
@@ -188,30 +179,14 @@ TEST(soft_renderer_project_point) {
 #define TOOL_SOURCE_DIR "."
 #endif
 
-TEST(gpu_renderer_on_null_device_draws_and_caches_meshes) {
-  Quiet q; auto dev = rhi::createNullDevice();
-  GpuRenderer gr; CHECK(gr.init(*dev, std::string(TOOL_SOURCE_DIR) + "/assets/shaders", 320, 180));
-  Mesh cube = Mesh::cube(), sph = Mesh::sphere();
-  Light l; l.type = LightType::Point; l.position = {2, 3, 2}; l.intensity = 10;
-  for (int f = 0; f < 3; ++f) {
-    gr.begin(Camera{}, {l});
-    gr.draw(cube, Mat4(), Material{}); gr.draw(sph, Mat4::translation({1, 0, 0}), Material{});
-    gr.end(); dev->present();
-  }
-  CHECK(gr.cachedMeshes() == 2 && gr.draws() == 2);
-  CHECK(dev->frameStats().draws == 2 && dev->frameStats().triangles == 12 + static_cast<u32>(sph.idx.size() / 3));
-  CHECK(debug().count(Severity::Error) == 0);
-  gr.resize(640, 360); CHECK(gr.width() == 640);
-}
-
-TEST(gpu_renderer_reports_missing_shaders) {
+TEST(gpu_renderer_needs_a_lightprism_device) {
   Quiet q; auto dev = rhi::createNullDevice(); GpuRenderer gr;
-  CHECK(!gr.init(*dev, "/nao/existe", 64, 64) && debug().hasCode("TOOL-E140"));
+  CHECK(!gr.init(*dev, nullptr, std::string(TOOL_SOURCE_DIR) + "/assets/shaders", 320, 180) && debug().hasCode("TOOL-E142"));
 }
 
 TEST(hlsl_include_resolution) {
   std::string src; CHECK(loadHlsl(std::string(TOOL_SOURCE_DIR) + "/assets/shaders", "pbr.hlsl", src));
-  CHECK(src.find("DistributionGGX") != std::string::npos && src.find("#include") == std::string::npos);
+  CHECK(src.find("#include") == std::string::npos && src.find("EvaluateClusteredLights") != std::string::npos);
 }
 
 // ---------- v0.4: sombras em tempo real e pos-processamento ----------
@@ -222,9 +197,9 @@ double shadowSceneLuma(bool shadows, bool casterCasts, bool groundReceives) {
   Light sun; sun.type = LightType::Directional; sun.direction = {-0.4f, -1.f, -0.3f}; sun.intensity = 3.f; sun.castShadow = true;
   Camera cam; cam.eye = {0, 9, 0.01f}; cam.target = {0, 0, 0};
   SoftRenderer r(160, 160);
-  r.begin(cam, {0.02f, 0.02f, 0.03f}); r.setLights({sun});
-  ShadowSettings st; st.enabled = shadows; st.resolution = 512;
-  r.setShadow(st, makeSunShadow(sun.direction, {0, 0, 0}, 8.f, st.resolution));
+  r.begin(cam, {0.02f, 0.02f, 0.03f});
+  LightingSettings st; st.shadows = shadows; st.shadowMapResolution = 512;
+  LightRig rig; rig.configure(st); lightFrame(rig, {sun}, {}, cam, 160, 160); r.setLighting(rig.frame());
   Material g; g.receiveShadow = groundReceives; g.castShadow = false;
   Material c; c.castShadow = casterCasts; c.receiveShadow = false;
   r.draw(ground, Mat4(), g); r.draw(cube, Mat4::translation({0, 3.0f, 0}), c);
@@ -238,13 +213,6 @@ TEST(shadows_darken_receivers_only_when_enabled_and_cast) {
   CHECK(on < off * 0.998);                                   // sombra escurece o chao
   CHECK(std::abs(shadowSceneLuma(true, false, true) - off) < off * 1e-3);   // objeto sem castShadow nao projeta
   CHECK(std::abs(shadowSceneLuma(true, true, false) - off) < off * 1e-3);   // chao sem receiveShadow nao recebe
-}
-
-TEST(shadow_frustum_is_valid_and_texel_snapped) {
-  CHECK(!makeSunShadow({0, 0, 0}, {0, 0, 0}, 10.f, 1024).valid);          // direcao nula
-  const auto a = makeSunShadow({-0.3f, -1.f, 0.2f}, {0.001f, 0, 0}, 10.f, 1024), b = makeSunShadow({-0.3f, -1.f, 0.2f}, {0.002f, 0, 0}, 10.f, 1024);
-  CHECK(a.valid && std::abs(a.texelWorld - 20.f / 1024.f) < 1e-6f);
-  for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) CHECK(std::abs(a.viewProj.m[c][r] - b.viewProj.m[c][r]) < 1e-4f); // pequenos movimentos nao mexem a matriz
 }
 
 TEST(postfx_identity_is_free_and_exposure_brightens) {
@@ -287,11 +255,11 @@ TEST(shadow_map_is_reused_when_nothing_changed_and_rebuilt_when_it_does) {
   const Mesh ground = Mesh::plane(5.f), cube = Mesh::cube(1.2f);
   Light sun; sun.type = LightType::Directional; sun.direction = {-0.4f, -1.f, -0.3f}; sun.intensity = 3.f; sun.castShadow = true;
   Camera cam; cam.eye = {0, 9, 0.01f}; cam.target = {0, 0, 0};
-  SoftRenderer r(96, 96); ShadowSettings st; st.enabled = true; st.resolution = 256;
-  const ShadowFrustum fr = makeSunShadow(sun.direction, {0, 0, 0}, 8.f, st.resolution);
+  SoftRenderer r(96, 96); LightingSettings st; st.shadowMapResolution = 256;
+  LightRig rig; rig.configure(st);
   Material g; g.castShadow = false; Material c; c.receiveShadow = false;
   auto frame = [&](bool reuse, float cubeX) {
-    r.begin(cam, {0.02f, 0.02f, 0.03f}); r.setLights({sun}); r.setShadow(st, fr, reuse);
+    r.begin(cam, {0.02f, 0.02f, 0.03f}); lightFrame(rig, {sun}, {}, cam, 96, 96); r.setLighting(rig.frame(), reuse);
     r.draw(ground, Mat4(), g); r.draw(cube, Mat4::translation({cubeX, 3.f, 0}), c);
     return std::vector<u8>(r.pixels(), r.pixels() + 96 * 96 * 4);
   };
@@ -300,6 +268,58 @@ TEST(shadow_map_is_reused_when_nothing_changed_and_rebuilt_when_it_does) {
   CHECK(a == b); CHECK(r.shadowPassSkipped() && r.shadowTriangles() == 0);   // reaproveitou: nenhum triangulo de sombra rasterizado
   const auto d = frame(false, 2.f);
   CHECK(d != a);                                                               // objeto mexeu e o chamador pediu rebuild: sombra mudou
+}
+
+// --- sombras de luzes pontuais (cubo de 6 faces) e spot (1 face), feitas pela engine (a LightPrism so tem CSM do sol)
+namespace {
+// Luma (R+G+B) do chao logo abaixo do cubo, com uma luz pontual acima. blockerCasts = o cubo projeta sombra.
+double pointShadowLuma(bool lightCasts, bool blockerCasts, u32 res = 512) {
+  SoftRenderer r(160, 160);
+  Camera cam; cam.eye = {0, 4, 4}; cam.target = {0, 0, 0};
+  LightingSettings st; st.pointShadowLights = 2; st.pointShadowResolution = res;
+  LightRig rig; rig.configure(st);
+  Light l; l.type = LightType::Point; l.position = {0, 2.5f, 0}; l.range = 20.f; l.intensity = 30.f; l.castShadow = lightCasts;
+  r.begin(cam, {0, 0, 0});
+  lightFrame(rig, {l}, {0.2f, 0.2f, 0.2f}, cam, 160, 160); r.setLighting(rig.frame()); // ambiente: a sombra fica mensuravel
+  Material blocker{{0.8f, 0.8f, 0.8f}, 0.8f, 0.f}; blocker.castShadow = blockerCasts;
+  Material ground{{0.8f, 0.8f, 0.8f}, 0.8f, 0.f}; ground.castShadow = false; ground.receiveShadow = true;
+  r.draw(Mesh::cube(0.4f), Mat4::translation({0, 1.f, 0}), blocker);
+  r.draw(Mesh::plane(5.f), Mat4(), ground);
+  f32 sx = 0, sy = 0; u8 R = 0, G = 0, B = 0;
+  const bool okp = r.project({0, 0, 0}, sx, sy);
+  if (!okp || !px(r, static_cast<int>(sx), static_cast<int>(sy), R, G, B)) return -1.0;
+  return R + G + B;
+}
+}
+
+TEST(point_light_shadow_darkens_ground_behind_blocker) {
+  const double on = pointShadowLuma(true, true), off = pointShadowLuma(false, true), noCast = pointShadowLuma(true, false);
+  CHECK(on > 0 && off > 0);
+  CHECK(on < off * 0.6);                                  // o cubo na frente da luz pontual sombreia o chao
+  CHECK(std::abs(noCast - off) < off * 1e-3 + 1.0);       // objeto sem castShadow nao projeta sombra
+  CHECK(std::abs(pointShadowLuma(true, true, 1024) - on) < on * 0.15); // mais resolucao nao muda o quadro muito
+}
+
+TEST(point_and_spot_shadow_plan_respects_budget_and_faces) {
+  Camera cam; cam.eye = {0, 0, 0}; cam.target = {0, 0, -1};
+  Light near; near.type = LightType::Point; near.position = {0, 0, -2}; near.castShadow = true;
+  Light far; far.type = LightType::Point; far.position = {0, 0, -9}; far.castShadow = true;
+  Light spot; spot.type = LightType::Spot; spot.position = {0, 0, -5}; spot.direction = {0, 0, -1}; spot.outerAngle = 0.5f; spot.castShadow = true;
+  LightingSettings st; st.pointShadowLights = 1; LightRig rig; rig.configure(st);
+  lightFrame(rig, {far, near, spot}, {}, cam, 64, 64);
+  CHECK(rig.frame().shadowLights.size() == 1);                     // orcamento 1: a mais proxima da camera
+  CHECK(rig.frame().shadowLights[0].faces == 6 && rig.frame().shadowLights[0].position.z == -2.f);
+
+  st.pointShadowLights = 3; rig.configure(st);
+  lightFrame(rig, {far, near, spot}, {}, cam, 64, 64);
+  CHECK(rig.frame().shadowLights.size() == 3);
+  // ordem por distancia a camera: near (2 m, ponto, 6 faces), spot (5 m, 1 face), far (9 m, ponto, 6 faces)
+  CHECK(rig.frame().shadowLights[1].type == LightType::Spot && rig.frame().shadowLights[1].faces == 1);
+  CHECK(rig.frame().shadowLights[2].type == LightType::Point && rig.frame().shadowLights[2].faces == 6);
+
+  st.pointShadowLights = 0; rig.configure(st);
+  lightFrame(rig, {far, near, spot}, {}, cam, 64, 64);
+  CHECK(rig.frame().shadowLights.empty());                         // orcamento 0 desliga
 }
 
 // --- upscaling e antialiasing por software (engine/render/include/tool/render/upscale.hpp)
@@ -375,7 +395,7 @@ TEST(texture_soft_renderer_plane_takes_the_texel_colours_by_uv) {
   SoftRenderer r(64, 64);
   Camera cam; cam.eye = {0, 5, 0}; cam.target = {0, 0, 0}; cam.up = {0, 0, -1};   // de cima: x cresce para a direita da tela
   r.begin(cam, {0, 0, 0});
-  r.setLights({}, {1, 1, 1});
+  { LightRig rig; lightFrame(rig, {}, {1, 1, 1}, cam, 64, 64); r.setLighting(rig.frame()); }
   Material mat{{1, 1, 1}, 0.9f, 0.f, false, false}; mat.albedoMap = &t;
   r.draw(Mesh::plane(1.f), Mat4{}, mat);
   u8 R = 0, G = 0, B = 0;

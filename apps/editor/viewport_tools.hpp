@@ -1,3 +1,7 @@
+// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo, padroes e regras em ui_contract.hpp (secao 2.13).
+// Elementos: entrada de mouse do viewport (IsMouseClicked, IsMouseDown) e GetIO para posicao.
+// Dados: raio de selecao calculado a partir da camera (pickByRay); nao desenha widgets.
+// Troca SpriteUI: a entrada de mouse vira um evento da SpriteUI ou continua lendo a entrada da plataforma.
 // ToolEngine Editor - ferramentas da janela Scene: projecao 3D->tela e gizmo de transformacao (mover/girar/escalar).
 //
 // GIZMO: setas coloridas (X vermelho, Y verde, Z azul) no objeto selecionado, com tamanho constante na tela.

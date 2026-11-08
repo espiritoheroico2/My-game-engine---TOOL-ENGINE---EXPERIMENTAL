@@ -218,6 +218,7 @@ inline tool::Light sunLight(const GlobalLight& g, float runtimeDeg) {
   l.direction = sunDirection(az, el);
   l.color = {g.color[0], g.color[1], g.color[2]};
   l.intensity = g.intensity * k;
+  l.castShadow = g.castShadow;   // o sol projeta sombras em cascatas (LightPrism CSM) quando ligado
   return l;
 }
 

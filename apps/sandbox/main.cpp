@@ -39,7 +39,10 @@ int main(int argc, char** argv) {
   r.begin(cam);
   Light sun; sun.type = LightType::Directional; sun.direction = {-0.5f, -1.f, -0.4f}; sun.intensity = 2.f; sun.color = {1.f, 0.95f, 0.85f};
   Light lamp; lamp.type = LightType::Point; lamp.position = {-1.5f, 2.5f, 1.5f}; lamp.range = 14.f; lamp.intensity = 16.f; lamp.color = {1.f, 0.65f, 0.35f};
-  r.setLights({sun, lamp});
+  LightRig rig;   // Light Prism: o mesmo quadro de iluminacao que o editor usa
+  const Mat4 view = Mat4::lookAt(cam.eye, cam.target, cam.up), proj = cam.projection(640.f, 360.f);
+  rig.build({sun, lamp}, {0.03f, 0.03f, 0.04f}, cam.eye, view, proj.m[0][0], proj.m[1][1], cam.nearZ, cam.farZ);
+  r.setLighting(rig.frame());
   const Mesh cube = Mesh::cube(0.5f), sphere = Mesh::sphere(0.5f), plane = Mesh::plane(0.5f);
   r.draw(plane, Mat4::scale({14, 1, 14}), Material{{0.5f, 0.52f, 0.55f}, 0.9f, 0.f});
   scene.world().each<Transform, Visual>([&](Entity, Transform& t, Visual& v) {

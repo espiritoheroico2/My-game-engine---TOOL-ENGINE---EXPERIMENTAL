@@ -1,12 +1,18 @@
-// ToolEngine - GpuRenderer: desenha a cena 3D iluminada (PBR) sobre qualquer backend do RHI.
-// Mesmo modelo de camera/luz do SoftRenderer; os shaders sao os HLSL de assets/shaders.
+// ToolEngine - GpuRenderer: desenha a cena 3D iluminada (PBR) sobre o RHI (Diligent: Vulkan / D3D12).
+// A iluminacao vem da Light Prism: luzes e clusters sao calculados pelo backend Diligent da propria biblioteca
+// (ClusterSystem), no mesmo dispositivo e contexto do RHI. As cascatas do sol sao calculadas em CPU (ComputeCsm) e
+// cada uma tem o seu mapa de profundidade. Shaders: assets/shaders/pbr.hlsl + assets/shaders/lightprism/.
 #pragma once
-#include "tool/render/shadow.hpp"
+#include "tool/render/lighting.hpp"
 #include "tool/render/soft_renderer.hpp"
 #include "tool/rhi/rhi.hpp"
 
-#include <iterator>
+#include "LightPrism/Backends/DiligentDevice.hpp"
+#include "LightPrism/Cluster/ClusterSystem.hpp"
+
 #include <cstring>
+#include <filesystem>
+#include <set>
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -15,36 +21,60 @@
 
 namespace tool {
 
-// Le um .hlsl resolvendo `#include "arquivo"` relativo a pasta (sem recursao infinita).
-inline bool loadHlsl(const std::string& dir, const std::string& file, std::string& out, int depth = 0) {
-  if (depth > 8) return false;
-  std::ifstream f(dir + "/" + file, std::ios::binary);
+// Le um .hlsl resolvendo `#include "arquivo"`. Como o compilador HLSL, o include e relativo ao ARQUIVO que o contem
+// (ex.: Common/ClusterLighting.hlsli inclui "PBR.hlsli" e acha Common/PBR.hlsli). `file` e relativo a `dir`.
+// Cada arquivo entra uma vez so (como #pragma once): os headers da Light Prism se incluem entre si por caminhos diferentes.
+inline bool loadHlslRec(const std::string& dir, const std::string& file, std::string& out, std::set<std::string>& seen, int depth) {
+  if (depth > 12) return false;
+  std::error_code ec;
+  const std::filesystem::path full = std::filesystem::path(dir) / file;
+  const std::string key = std::filesystem::weakly_canonical(full, ec).string();
+  if (!ec && !seen.insert(key).second) return true;   // ja incluido: pula
+  std::ifstream f(full, std::ios::binary);
   if (!f) return false;
+  const size_t slash = file.find_last_of('/');
+  const std::string sub = slash == std::string::npos ? std::string() : file.substr(0, slash + 1);
   std::string line;
   while (std::getline(f, line)) {
     const size_t p = line.find("#include");
     if (p != std::string::npos && line.find('"', p) != std::string::npos) {
       const size_t a = line.find('"', p) + 1, b = line.find('"', a);
       if (b == std::string::npos) return false;
-      std::string inc;
-      if (!loadHlsl(dir, line.substr(a, b - a), inc, depth + 1)) return false;
-      out += inc + "\n";
+      if (!loadHlslRec(dir, sub + line.substr(a, b - a), out, seen, depth + 1)) return false;
     } else out += line + "\n";
   }
   return true;
 }
+inline bool loadHlsl(const std::string& dir, const std::string& file, std::string& out) {
+  std::set<std::string> seen;
+  return loadHlslRec(dir, file, out, seen, 0);
+}
 
-// Layouts identicos aos cbuffers de pbr.hlsl / lighting.hlsli / shadow.hlsl (mudou aqui? mude la, e nos .glsl de assets/shaders/glsl).
-struct FrameCB { Mat4 viewProj; f32 camera[3]; f32 pad = 0; };
-struct LightCB {
-  GpuLight lights[64]; f32 ambient[4]; u32 count; u32 pad[3];
-  Mat4 lightViewProj;     // sol: mundo -> clip da luz
-  f32 shadowParams[4];    // bias, 1/resolucao, forca (0 = sem sombra), normal bias em metros
-  f32 shadowInfo[4];      // resolucao, raio PCF, 0, 0
-};
+// Layouts identicos aos cbuffers de pbr.hlsl e shadow.hlsl. Os da Light Prism (Globals, sol, CSM, IBL, clusters) sao
+// os proprios structs da biblioteca (LightPrism::GlobalLightingGPU, CsmGPU, IblGPU, ClusterGridGPU), que ja batem com o HLSL.
+struct FrameCB { Mat4 viewProj; Mat4 view; f32 camera[3]; f32 pad = 0; };
 struct ObjectCB { Mat4 world; f32 color[4]; f32 metallic, roughness, receiveShadow, pad; f32 texInfo[4]; }; // texInfo: largura, altura, 1 = tem textura
 struct ShadowCB { Mat4 lightViewProj, world; };
-static_assert(sizeof(FrameCB) == 80 && sizeof(LightCB) == 4096 + 32 + 64 + 32 && sizeof(ObjectCB) == 112 && sizeof(ShadowCB) == 128, "layout de cbuffer");
+static_assert(sizeof(FrameCB) == 144 && sizeof(ObjectCB) == 112 && sizeof(ShadowCB) == 128, "layout de cbuffer");
+// Sombras de luzes pontuais/spot (espelho de PointShadowCB em lightprism/Common/PointShadow.hlsli).
+struct PointShadowLightGPU { f32 posType[4]; f32 params[4]; Mat4 vp[6]; };
+struct PointShadowGPU { u32 count; u32 pad[3]; PointShadowLightGPU lights[kMaxPointShadowLights]; };
+static_assert(sizeof(PointShadowLightGPU) == 416 && sizeof(PointShadowGPU) == 16 + 4 * 416, "layout de PointShadowCB");
+static_assert(sizeof(LightPrism::CsmGPU) == 352 && sizeof(LightPrism::Ibl::IblGPU) == 160, "layout dos cbuffers da Light Prism");
+
+// Nomes dos recursos no pbr.hlsl (ordem = slots do pipeline). Mudou no HLSL? Mude aqui tambem.
+inline const std::vector<std::string>& pbrUniformNames() {
+  static const std::vector<std::string> n = {"FrameBuffer", "ObjectBuffer", "GlobalLightCB", "SunLightCB", "CsmCB", "IblCB", "ClusterGridCB", "PointShadowCB"};
+  return n;
+}
+inline const std::vector<std::string>& pbrTextureNames() {
+  static const std::vector<std::string> n = {"AlbedoMap", "CsmMap0", "CsmMap1", "CsmMap2", "CsmMap3", "PointShadowMap0", "PointShadowMap1", "PointShadowMap2", "PointShadowMap3"};
+  return n;
+}
+inline const std::vector<std::string>& pbrStorageNames() {
+  static const std::vector<std::string> n = {"PointLightsBuffer", "SpotLightsBuffer", "LightGrid", "LightIndexList"};
+  return n;
+}
 
 class GpuRenderer {
 public:
@@ -55,60 +85,68 @@ public:
   // Libera tudo na GPU. Chamar ANTES de destruir o dispositivo.
   void shutdown() { release(); }
 
-  // shaderDir = pasta com pbr.hlsl e lighting.hlsli
-  bool init(rhi::IDevice& dev, const std::string& shaderDir, u32 w, u32 h) {
+  // shaderDir = pasta "assets/shaders" (pbr.hlsl + lightprism/). `lp` = dispositivo da Light Prism sobre o mesmo RHI
+  // (rhi::createLightPrismDevice). Sem ele, ou no OpenGL (ainda sem a versao GLSL da iluminacao), o init falha e o
+  // editor volta para o renderizador em CPU.
+  bool init(rhi::IDevice& dev, std::unique_ptr<LightPrism::IGraphicsDevice> lp, const std::string& shaderDir, u32 w, u32 h) {
     release();
-    dev_ = &dev;
-    std::string src;
-    rhi::ShaderDesc vs; vs.stage = rhi::ShaderStage::Vertex; vs.entry = "VSMain"; vs.name = "pbr.vs";
-    rhi::ShaderDesc ps; ps.stage = rhi::ShaderStage::Pixel; ps.entry = "PSMain"; ps.name = "pbr.ps";
-    std::string shadowVsSrc, shadowPsSrc;
     if (dev.backend() == rhi::Backend::GLES) {
-      // OpenGL: GLSL 430 em assets/shaders/glsl (pbr.* gerado do HLSL por tools/compile_shaders.py e depois ajustado
-      // a mao; shadow.* escrito a mao), pois o conversor HLSL->GLSL embutido nao aceita estes shaders.
-      // A fonte da verdade continua sendo o HLSL: mantenha os dois em sincronia.
-      auto slurp = [&](const std::string& f, std::string& out) { std::ifstream a(shaderDir + "/glsl/" + f, std::ios::binary); if (!a) return false; out.assign(std::istreambuf_iterator<char>(a), {}); return true; };
-      if (!slurp("pbr.vs.430.glsl", vs.source) || !slurp("pbr.ps.430.glsl", ps.source) || !slurp("shadow.vs.430.glsl", shadowVsSrc) || !slurp("shadow.ps.430.glsl", shadowPsSrc)) {
-        debug().report("TOOL-E140", Severity::Error, "nao achei os shaders GLSL em " + shaderDir + "/glsl"); return false;
-      }
-      vs.lang = ps.lang = rhi::ShaderLang::GLSL;
-    } else {
-      if (!loadHlsl(shaderDir, "pbr.hlsl", src)) { debug().report("TOOL-E140", Severity::Error, "nao achei os shaders HLSL em " + shaderDir); return false; }
-      vs.source = ps.source = src;
-      std::string sh; if (!loadHlsl(shaderDir, "shadow.hlsl", sh)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow.hlsl em " + shaderDir); return false; }
-      shadowVsSrc = shadowPsSrc = sh;
+      debug().report("TOOL-E141", Severity::Error, "a iluminacao Light Prism ainda nao tem shaders OpenGL (GLSL): use Vulkan ou Direct3D 12");
+      return false;
     }
+    if (!lp) { debug().report("TOOL-E142", Severity::Error, "dispositivo Light Prism indisponivel (backend sem Diligent)"); return false; }
+    dev_ = &dev; lp_ = std::move(lp);
+    LightPrism::ClusterSystemDesc cd;
+    cd.shaderDirectory = shaderDir + "/lightprism";
+    clusters_ = std::make_unique<LightPrism::ClusterSystem>(cd);
+
+    std::string src;
+    if (!loadHlsl(shaderDir, "pbr.hlsl", src)) { debug().report("TOOL-E140", Severity::Error, "nao achei pbr.hlsl em " + shaderDir); release(); return false; }
+    std::string sh;
+    if (!loadHlsl(shaderDir, "shadow.hlsl", sh)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow.hlsl em " + shaderDir); release(); return false; }
+    std::string shp;
+    if (!loadHlsl(shaderDir, "shadow_point.hlsl", shp)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow_point.hlsl em " + shaderDir); release(); return false; }
+
+    rhi::ShaderDesc vs; vs.stage = rhi::ShaderStage::Vertex; vs.entry = "VSMain"; vs.name = "pbr.vs"; vs.source = src;
+    rhi::ShaderDesc ps; ps.stage = rhi::ShaderStage::Pixel; ps.entry = "PSMain"; ps.name = "pbr.ps"; ps.source = src;
     vs_ = dev.createShader(vs); ps_ = dev.createShader(ps);
     rhi::PipelineDesc pd; pd.vs = vs_; pd.ps = ps_; pd.name = "pbr";
     pd.layout = {{3, 0}, {3, 12}, {2, 24}}; pd.vertexStride = 32;
-    pd.uniformNames = {"FrameBuffer", "LightBuffer", "ObjectBuffer"};
-    pd.textureNames = {"ShadowMap", "AlbedoMap"}; // slot 0: mapa de sombra; slot 1: textura do albedo (Load, sem sampler)
-    // Cor: Vulkan/D3D12 usam alvo sRGB (o hardware converte). No OpenGL o Diligent liga GL_FRAMEBUFFER_SRGB conforme o
-    // driver, entao usamos alvo UNORM e o proprio GLSL aplica o gamma: resultado igual em qualquer driver.
-    colorFmt_ = dev.backend() == rhi::Backend::GLES ? rhi::Format::RGBA8 : rhi::Format::RGBA8_SRGB;
+    pd.uniformNames = pbrUniformNames(); pd.textureNames = pbrTextureNames(); pd.storageNames = pbrStorageNames();
+    // Cor: Vulkan/D3D12 usam alvo sRGB (o hardware converte a saida linear do ACES).
+    colorFmt_ = rhi::Format::RGBA8_SRGB;
     pd.color = colorFmt_;
     pipe_ = dev.createPipeline(pd);
+
     // passe de sombra: so posicao, grava z da luz num alvo R32F, sem culling (as duas faces projetam sombra)
     rhi::ShaderDesc svs = vs, sps = ps;
-    svs.name = "shadow.vs"; sps.name = "shadow.ps"; svs.source = shadowVsSrc; sps.source = shadowPsSrc;
+    svs.name = "shadow.vs"; sps.name = "shadow.ps"; svs.source = sh; sps.source = sh;
     svs.entry = "VSMain"; sps.entry = "PSMain";
     shVs_ = dev.createShader(svs); shPs_ = dev.createShader(sps);
     rhi::PipelineDesc sd; sd.vs = shVs_; sd.ps = shPs_; sd.name = "shadow"; sd.color = rhi::Format::R32F; sd.cull = rhi::CullMode::None;
     sd.layout = {{3, 0}}; sd.vertexStride = 32; sd.uniformNames = {"ShadowBuffer"};
     shPipe_ = dev.createPipeline(sd);
+    // passe de sombra de pontuais/spot: grava a distancia (clip.w) numa faixa R x 6R por luz
+    rhi::ShaderDesc pvs = svs, pps = sps;
+    pvs.name = "shadowpoint.vs"; pps.name = "shadowpoint.ps"; pvs.source = shp; pps.source = shp;
+    ptVs_ = dev.createShader(pvs); ptPs_ = dev.createShader(pps);
+    rhi::PipelineDesc pd2 = sd; pd2.vs = ptVs_; pd2.ps = ptPs_; pd2.name = "shadowpoint";
+    ptPipe_ = dev.createPipeline(pd2);
     frameCb_ = dev.createBuffer({sizeof(FrameCB), rhi::BufferUsage::Uniform, true}, nullptr);
-    lightCb_ = dev.createBuffer({sizeof(LightCB), rhi::BufferUsage::Uniform, true}, nullptr);
     objCb_ = dev.createBuffer({sizeof(ObjectCB), rhi::BufferUsage::Uniform, true}, nullptr);
     shCb_ = dev.createBuffer({sizeof(ShadowCB), rhi::BufferUsage::Uniform, true}, nullptr);
-    if (pipe_.isNull() || shPipe_.isNull() || frameCb_.isNull() || lightCb_.isNull() || objCb_.isNull() || shCb_.isNull()) { release(); return false; }
-    ensureShadowTarget(1024); // alvo "vazio" para o shader sempre ter uma textura ligada
+    csmCb_ = dev.createBuffer({sizeof(LightPrism::CsmGPU), rhi::BufferUsage::Uniform, true}, nullptr);
+    iblCb_ = dev.createBuffer({sizeof(LightPrism::Ibl::IblGPU), rhi::BufferUsage::Uniform, true}, nullptr);
+    pointCb_ = dev.createBuffer({sizeof(PointShadowGPU), rhi::BufferUsage::Uniform, true}, nullptr);
+    if (pipe_.isNull() || shPipe_.isNull() || ptPipe_.isNull() || frameCb_.isNull() || objCb_.isNull() || shCb_.isNull() || csmCb_.isNull() || iblCb_.isNull() || pointCb_.isNull()) { release(); return false; }
+    ensureShadowTargets(1024); // alvos "vazios" para o shader sempre ter as 4 texturas ligadas
+    ensurePointTargets(64);    // idem para as sombras de pontuais/spot (4 faixas pequenas ate uma luz pedir a resolucao)
     resize(w, h);
     return !color_.isNull();
   }
 
   // Escolhe o alvo de desenho (cor+profundidade) para w*h. As janelas Scene e Game desenham com tamanhos
-  // diferentes no mesmo quadro; por isso guardamos um alvo por tamanho (antes, recriavamos as texturas a cada
-  // troca de janela, duas vezes por quadro). Alvos sem uso por 120 quadros sao liberados.
+  // diferentes no mesmo quadro; por isso guardamos um alvo por tamanho. Alvos sem uso por 120 quadros sao liberados.
   void resize(u32 w, u32 h) {
     if (!dev_) return;
     w_ = std::max(1u, w); h_ = std::max(1u, h);
@@ -128,25 +166,82 @@ public:
     }
   }
 
-  // Liga as sombras do sol neste quadro (chamar entre begin() e end()). fr = makeSunShadow(...).
-  // reuse = true: nada que projeta sombra nem a luz mudou ("sleeper"): reaproveita o shadow map do quadro anterior (pula o passe de sombra).
-  void setShadow(const ShadowSettings& st, const ShadowFrustum& fr, bool reuse = false) {
-    shadowSet_ = st; shadowFr_ = fr; shadowOn_ = st.enabled && fr.valid;
-    shadowSkip_ = shadowOn_ && reuse && shadowValid_ && shW_ == static_cast<u32>(std::clamp(st.resolution, 128, 4096));
+  // Iluminacao do quadro (chamar entre begin() e draw()). `rig` ja fez LightRig::build() com as MESMAS view/proj desta
+  // camera. Sobe as luzes e os clusters para a GPU (LightPrism), monta o ambiente e prepara as cascatas do sol.
+  // reuse = true: nada que projeta sombra nem a luz mudou: reaproveita os mapas do quadro anterior (sem passe de sombra).
+  // Retorna false se a Light Prism falhar (LastError() diz o motivo).
+  bool setLighting(LightRig& rig, const Mat4& view, const Mat4& proj, bool reuse = false) {
+    if (!dev_ || !lp_) return false;
+    const LightFrame& fr = rig.frame();
+    LightPrism::LightingSystem& sys = rig.system();
+    // 1) luzes na GPU (buffers da LightPrism) e 2) clusters (compute da LightPrism)
+    if (!sys.UploadToGPU(*lp_)) { lastError_ = "Light Prism: falha ao enviar as luzes para a GPU"; return false; }
+    LightPrism::ClusterCamera cam = LightPrism::MakeClusterCamera(LightRig::toLp(view), LightRig::toLp(proj), w_, h_, cam_zNear_, cam_zFar_);
+    if (!clusters_->Execute(*lp_, sys, rig.lastView(), cam)) { lastError_ = "Light Prism clusters: " + clusters_->LastError(); return false; }
+    // 3) importa os buffers da LightPrism para o RHI (nao sao donos: a LightPrism recria quando precisa)
+    releaseImports();
+    auto imp = [&](LightPrism::IGpuBuffer* b) -> rhi::BufferId {
+      if (!b || !b->NativeHandle()) return kNullHandle;
+      const rhi::BufferId h = dev_->importBuffer(b->NativeHandle());
+      if (!h.isNull()) imports_.push_back(h);
+      return h;
+    };
+    imp_.points = imp(sys.PointLightBuffer());
+    imp_.spots = imp(sys.SpotLightBuffer());
+    imp_.globals = imp(sys.GlobalsBuffer());
+    imp_.sun = imp(sys.SunBuffer());
+    imp_.grid = imp(clusters_->GridBuffer());
+    imp_.cells = imp(clusters_->LightGridBuffer());
+    imp_.indices = imp(clusters_->LightIndexBuffer());
+    if (imp_.points.isNull() || imp_.spots.isNull() || imp_.globals.isNull() || imp_.sun.isNull() || imp_.grid.isNull() || imp_.cells.isNull() || imp_.indices.isNull()) {
+      lastError_ = "Light Prism: buffers de luz indisponiveis"; return false;
+    }
+    // 4) cascatas e ambiente (CPU -> uniformes da engine)
+    const bool on = fr.shadows();
+    const u32 count = on ? std::min<u32>(fr.csm.gpu.cascadeCount, LightPrism::kMaxCsmCascades) : 0u;
+    const int res = on ? std::clamp(static_cast<int>(fr.csm.gpu.shadowMapSize), 128, 4096) : shRes_;
+    const bool sameLayout = on && res == static_cast<int>(shW_) && count == shadowCount_;
+    shadowOn_ = on; shadowCount_ = count;
+    shadowSkip_ = on && reuse && shadowValid_ && sameLayout;
+    if (on) ensureShadowTargets(static_cast<u32>(res));
+    for (u32 k = 0; k < count; ++k) cascadeVp_[k] = toTool(fr.csm.gpu.cascades[k].viewProj);
+    dev_->updateBuffer(csmCb_, &fr.csm.gpu, sizeof(LightPrism::CsmGPU));
+    // Sombras de pontuais/spot (engine): ate 4 luzes, uma faixa R x 6R por luz; sempre refeitas (sem reuso por enquanto).
+    pointCount_ = std::min<u32>(static_cast<u32>(fr.shadowLights.size()), kMaxPointShadowLights);
+    pointOn_ = pointCount_ > 0;
+    pointRes_ = std::clamp<u32>(fr.pointShadowResolution, 64u, 1024u);
+    if (pointOn_) ensurePointTargets(pointRes_);
+    PointShadowGPU pg{};
+    pg.count = pointCount_;
+    for (u32 i = 0; i < pointCount_; ++i) {
+      const ShadowLight& sl = fr.shadowLights[i];
+      PointShadowLightGPU& L = pg.lights[i];
+      L.posType[0] = sl.position.x; L.posType[1] = sl.position.y; L.posType[2] = sl.position.z;
+      L.posType[3] = sl.type == LightType::Spot ? 1.f : 0.f;
+      L.params[0] = sl.nearZ; L.params[1] = static_cast<f32>(sl.faces); L.params[2] = static_cast<f32>(pointRes_); L.params[3] = 0.f;
+      pointFaces_[i] = sl.faces;
+      for (u32 f = 0; f < kMaxPointShadowFaces; ++f) { pointVp_[i][f] = sl.vp[f]; L.vp[f] = sl.vp[f]; }
+    }
+    dev_->updateBuffer(pointCb_, &pg, sizeof pg);
+    const LightPrism::Ibl::IblGPU ibl = LightPrism::Ibl::MakeIblGPU(fr.ambient, 1.0f, 1);
+    dev_->updateBuffer(iblCb_, &ibl, sizeof(ibl));
+    lastError_.clear();
+    return true;
   }
+  const std::string& lastError() const { return lastError_; }
   bool shadowPassSkipped() const { return shadowSkip_; }
   bool shadowsActive() const { return shadowOn_; }
 
   // begin/draw/end: begin() so guarda os parametros e draw() so ANOTA os objetos; tudo e enviado a GPU em end(),
-  // na ordem certa: 1) passe de sombra (so objetos que projetam), 2) passe principal (agrupado por malha, o que
-  // reduz trocas de buffer). Assim o chamador nao precisa saber da ordem dos passes.
-  void begin(const Camera& cam, const std::vector<Light>& lights, Vec3 ambient = {0.03f, 0.03f, 0.04f}, Vec3 clear = {0.02f, 0.025f, 0.035f}, f32 clearAlpha = 1.f) {
+  // na ordem certa: 1) passe de sombra (uma passada por cascata), 2) passe principal (agrupado por malha).
+  void begin(const Camera& cam, Vec3 clear = {0.02f, 0.025f, 0.035f}, f32 clearAlpha = 1.f) {
     if (!dev_) return;
     ++frame_;
-    cam_ = cam; lights_ = lights; ambient_ = ambient; clear_ = clear; clearAlpha_ = clearAlpha;
+    cam_ = cam; clear_ = clear; clearAlpha_ = clearAlpha;
+    cam_zNear_ = cam.nearZ; cam_zFar_ = cam.farZ;
     draws_.clear(); shadowOn_ = false; shadowSkip_ = false; open_ = true;
-    // Remocao de malhas que nao aparecem ha 240 quadros (antes o cache so crescia: vazamento de buffers na GPU).
-    if (dev_ && (frame_ & 63) == 0) for (auto it = meshes_.begin(); it != meshes_.end();) {
+    // Remocao de malhas que nao aparecem ha 240 quadros (evita vazamento de buffers na GPU).
+    if ((frame_ & 63) == 0) for (auto it = meshes_.begin(); it != meshes_.end();) {
       if (frame_ - it->second.lastUse > 240) { freeMesh(it->second); it = meshes_.erase(it); } else ++it;
     }
   }
@@ -170,10 +265,6 @@ public:
   rhi::TextureId textureFor(const Texture* t, f32& tw, f32& th) {
     tw = th = 0.f;
     if (!dev_ || !t || !t->valid() || t->id == 0) return white_;
-    if (dev_->backend() == rhi::Backend::GLES) { // PENDENTE: no OpenGL/GLES a textura nao chega ao shader (ver docs/CHECKLIST.md); fica desligada
-      if (!glesTexWarned_) { glesTexWarned_ = true; debug().report("TOOL-W150", Severity::Warning, "texturas em MeshRenderer ainda nao funcionam no OpenGL/GLES: use Vulkan ou Direct3D 12"); }
-      return white_;
-    }
     tw = static_cast<f32>(t->w); th = static_cast<f32>(t->h);
     if (auto it = texs_.find(t->id); it != texs_.end()) return it->second;
     const rhi::TextureId id = dev_->createTexture({t->w, t->h, 1, rhi::Format::RGBA8, false}, t->rgba.data());
@@ -185,57 +276,81 @@ public:
   void end() {
     if (!open_ || !dev_) return;
     open_ = false;
-    // ---- 1) sombras ----
-    const bool sh = shadowOn_;
-    if (sh) ensureShadowTarget(static_cast<u32>(std::clamp(shadowSet_.resolution, 128, 4096)));
-    if (sh && !shadowSkip_) {
-      auto cl = dev_->beginCommands();
-      cl->begin(shColor_, shDepth_, 1.f, 1.f, 1.f, 1.f); // limpa para "longe" (z = 1)
-      cl->setPipeline(shPipe_);
-      for (const Draw& d : draws_) {
-        if (!d.mat.castShadow) continue;
-        ShadowCB sc{shadowFr_.viewProj, d.world};
-        dev_->updateBuffer(shCb_, &sc, sizeof sc);
-        cl->setUniform(0, shCb_);
-        cl->setVertexBuffer(d.mesh->vertex); cl->setIndexBuffer(d.mesh->index);
-        cl->drawIndexed(d.mesh->count, 1);
+    // ---- 1) sombras: um passe por cascata ----
+    if (shadowOn_ && !shadowSkip_) {
+      for (u32 k = 0; k < shadowCount_; ++k) {
+        auto cl = dev_->beginCommands();
+        cl->begin(shColor_[k], shDepth_, 1.f, 1.f, 1.f, 1.f); // limpa para "longe" (z = 1)
+        cl->setPipeline(shPipe_);
+        for (const Draw& d : draws_) {
+          if (!d.mat.castShadow) continue;
+          ShadowCB sc{cascadeVp_[k], d.world};
+          dev_->updateBuffer(shCb_, &sc, sizeof sc);
+          cl->setUniform(0, shCb_);
+          cl->setVertexBuffer(d.mesh->vertex); cl->setIndexBuffer(d.mesh->index);
+          cl->drawIndexed(d.mesh->count, 1);
+        }
+        cl->end(); dev_->submit(*cl);
       }
-      cl->end(); dev_->submit(*cl); shadowValid_ = true;
+      shadowValid_ = true;
+    }
+    // ---- 1b) sombras de pontuais/spot: uma faixa R x 6R por luz; cada face e um viewport da faixa ----
+    if (pointOn_) {
+      for (u32 i = 0; i < pointCount_; ++i) {
+        auto cl = dev_->beginCommands();
+        cl->begin(pointStrip_[i], pointDepth_, 1e30f, 1e30f, 1e30f, 1e30f); // "longe" em metros (distancia)
+        cl->setPipeline(ptPipe_);
+        for (u32 f = 0; f < pointFaces_[i]; ++f) {
+          cl->setViewport(0, f * pointRes_, pointRes_, pointRes_);
+          for (const Draw& d : draws_) {
+            if (!d.mat.castShadow) continue;
+            ShadowCB sc{pointVp_[i][f], d.world};
+            dev_->updateBuffer(shCb_, &sc, sizeof sc);
+            cl->setUniform(0, shCb_);
+            cl->setVertexBuffer(d.mesh->vertex); cl->setIndexBuffer(d.mesh->index);
+            cl->drawIndexed(d.mesh->count, 1);
+          }
+        }
+        cl->end(); dev_->submit(*cl);
+      }
     }
     // ---- 2) passe principal ----
-    const Mat4 vp = cam_.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * Mat4::lookAt(cam_.eye, cam_.target, cam_.up);
-    FrameCB fc; fc.viewProj = vp; fc.camera[0] = cam_.eye.x; fc.camera[1] = cam_.eye.y; fc.camera[2] = cam_.eye.z;
+    const Mat4 view = Mat4::lookAt(cam_.eye, cam_.target, cam_.up);
+    const Mat4 vp = cam_.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * view;
+    FrameCB fc; fc.viewProj = vp; fc.view = view; fc.camera[0] = cam_.eye.x; fc.camera[1] = cam_.eye.y; fc.camera[2] = cam_.eye.z;
     dev_->updateBuffer(frameCb_, &fc, sizeof fc);
-    LightCB lc{}; lc.count = static_cast<u32>(std::min<size_t>(lights_.size(), 64));
-    for (u32 i = 0; i < lc.count; ++i) lc.lights[i] = toGpu(lights_[i], (sh && lights_[i].castShadow) ? 0u : 0xFFFFFFFFu); // shadowIndex 0 = recebe a sombra do sol
-    lc.ambient[0] = ambient_.x; lc.ambient[1] = ambient_.y; lc.ambient[2] = ambient_.z;
-    if (sh) {
-      lc.lightViewProj = shadowFr_.viewProj;
-      lc.shadowParams[0] = shadowSet_.bias; lc.shadowParams[1] = 1.f / static_cast<f32>(shW_); lc.shadowParams[2] = shadowSet_.strength; lc.shadowParams[3] = shadowSet_.normalBias * shadowFr_.texelWorld;
-      lc.shadowInfo[0] = static_cast<f32>(shW_); lc.shadowInfo[1] = static_cast<f32>(std::clamp(shadowSet_.pcf, 0, 2));
-    }
-    dev_->updateBuffer(lightCb_, &lc, sizeof lc);
     std::stable_sort(draws_.begin(), draws_.end(), [](const Draw& a, const Draw& b) { return a.mesh->vertex.index < b.mesh->vertex.index; });
     cl_ = dev_->beginCommands();
-    // Alvo UNORM (OpenGL): o clear nao passa pelo hardware sRGB, entao convertemos aqui para bater com Vulkan/D3D12.
-    const bool lin2srgb = colorFmt_ == rhi::Format::RGBA8;
-    auto cv = [&](f32 v) { return lin2srgb ? std::pow(std::max(v, 0.f), 1.f / 2.2f) : v; };
-    cl_->begin(color_, depth_, cv(clear_.x), cv(clear_.y), cv(clear_.z), clearAlpha_);
+    // Alvo UNORM (OpenGL): nao usamos (o OpenGL ainda nao tem iluminacao); mantemos o clear em linear para Vulkan/D3D12.
+    cl_->begin(color_, depth_, clear_.x, clear_.y, clear_.z, clearAlpha_);
     cl_->setPipeline(pipe_);
-    cl_->setUniform(0, frameCb_); cl_->setUniform(1, lightCb_);
-    cl_->setTexture(0, shColor_);
+    cl_->setUniform(0, frameCb_);
+    cl_->setUniform(2, imp_.globals);
+    cl_->setUniform(3, imp_.sun);
+    cl_->setUniform(4, csmCb_);
+    cl_->setUniform(5, iblCb_);
+    cl_->setUniform(6, imp_.grid);
+    cl_->setUniform(7, pointCb_);
+    cl_->setStorage(0, imp_.points);
+    cl_->setStorage(1, imp_.spots);
+    cl_->setStorage(2, imp_.cells);
+    cl_->setStorage(3, imp_.indices);
+    // Mapas de sombra: as cascatas que nao existem apontam para o primeiro mapa (o shader so le as validas).
+    for (u32 k = 0; k < 4; ++k) cl_->setTexture(1 + k, shColor_[k < shadowCount_ ? k : 0]);
+    for (u32 i = 0; i < 4; ++i) cl_->setTexture(5 + i, pointStrip_[i < pointCount_ ? i : 0]);
     const GpuMesh* last = nullptr;
     for (const Draw& d : draws_) {
       ObjectCB oc{}; oc.world = d.world; oc.color[0] = d.mat.albedo.x; oc.color[1] = d.mat.albedo.y; oc.color[2] = d.mat.albedo.z; oc.color[3] = 1.f;
-      oc.metallic = d.mat.metallic; oc.roughness = d.mat.roughness; oc.receiveShadow = d.mat.receiveShadow ? 1.f : 0.f;
+      oc.metallic = d.mat.metallic; oc.roughness = d.mat.roughness; oc.receiveShadow = d.mat.receiveShadow ? 1.f : 0.f; // o shader decide: sol (cascatas) e pontuais/spot
       oc.texInfo[0] = d.tw; oc.texInfo[1] = d.th; oc.texInfo[2] = d.tw > 0.f ? 1.f : 0.f;
       dev_->updateBuffer(objCb_, &oc, sizeof oc);
-      cl_->setUniform(2, objCb_);
-      cl_->setTexture(1, d.tex.isNull() ? white_ : d.tex);
+      cl_->setUniform(1, objCb_);
+      cl_->setTexture(0, d.tex.isNull() ? white_ : d.tex);
       if (d.mesh != last) { cl_->setVertexBuffer(d.mesh->vertex); cl_->setIndexBuffer(d.mesh->index); last = d.mesh; }
       cl_->drawIndexed(d.mesh->count, 1);
     }
     cl_->end(); dev_->submit(*cl_); cl_.reset();
+    releaseImports();
     drawCount_ = static_cast<u32>(draws_.size());
   }
 
@@ -245,6 +360,8 @@ public:
   u32 height() const { return h_; }
   u32 draws() const { return drawCount_; }
   size_t cachedMeshes() const { return meshes_.size(); }
+  // Estatisticas da Light Prism do ultimo quadro (clusters em uso e memoria).
+  const LightPrism::ClusterSystem* clusters() const { return clusters_.get(); }
 
   // Libera a copia na GPU de uma malha (chamar se a malha for destruida/alterada).
   void forget(const Mesh& m) {
@@ -258,6 +375,10 @@ private:
   struct GpuMesh { rhi::BufferId vertex, index; u32 count = 0; const void* posKey = nullptr; size_t nVert = 0, nIdx = 0, vCap = 0, iCap = 0; u64 lastUse = 0; u32 rev = 0; };
   struct Draw { const GpuMesh* mesh; Mat4 world; Material mat; rhi::TextureId tex; f32 tw, th; };
   struct Target { rhi::TextureId color, depth; u64 lastUse = 0; };
+  // Buffers da Light Prism importados neste quadro (validos ate releaseImports()).
+  struct Imports { rhi::BufferId points, spots, globals, sun, grid, cells, indices; };
+
+  static Mat4 toTool(const LightPrism::Mat4& m) { Mat4 r; for (int c = 0; c < 4; ++c) for (int k = 0; k < 4; ++k) r.m[c][k] = m.m[k][c]; return r; } // linha -> coluna
 
   // Layout de vertice fixo (stride 32): POSITION f3 @0, NORMAL f3 @12, TEXCOORD0 f2 @24 (0 se a malha nao tem UV).
   static void packVertices(const Mesh& m, std::vector<f32>& v) {
@@ -270,8 +391,11 @@ private:
     if (!g.index.isNull()) dev_->destroy(g.index);
     const u64 lu = g.lastUse; g = GpuMesh{}; g.lastUse = lu;   // preserva o uso: a remocao por inatividade depende dele
   }
+  void releaseImports() {
+    for (auto h : imports_) if (dev_) dev_->destroy(h);
+    imports_.clear(); imp_ = Imports{};
+  }
   // Cache de malhas estaticas. Reenvia se o endereco OU o tamanho mudou (um ponteiro reaproveitado nao vira malha antiga).
-  // Refaz os buffers DENTRO do mesmo no (o endereco do GpuMesh nao muda: desenhos ja enfileirados continuam validos).
   GpuMesh& upload(const Mesh& m) {
     GpuMesh& g = meshes_[&m];
     g.lastUse = frame_;
@@ -286,7 +410,6 @@ private:
     return g;
   }
   // Malha DINAMICA (ex.: particulas): mesmo slot = mesmos buffers, atualizados com updateBuffer.
-  // Os buffers so sao recriados quando a malha cresce alem da capacidade (com folga de 1,5x).
   GpuMesh& dynamicSlot(u32 slot, const Mesh& m) {
     GpuMesh& g = dyn_[slot];
     g.lastUse = frame_;
@@ -308,17 +431,29 @@ private:
     return g;
   }
 
-  void ensureShadowTarget(u32 res) {
-    if (shW_ == res && !shColor_.isNull()) return;
-    if (!shColor_.isNull()) dev_->destroy(shColor_);
+  // Um mapa R32F por cascata + uma profundidade compartilhada (cada passe limpa a sua).
+  void ensureShadowTargets(u32 res) {
+    if (shW_ == res && !shColor_[0].isNull()) return;
+    for (auto& t : shColor_) if (!t.isNull()) dev_->destroy(t);
     if (!shDepth_.isNull()) dev_->destroy(shDepth_);
-    shColor_ = dev_->createTexture({res, res, 1, rhi::Format::R32F, true}, nullptr);
+    for (u32 k = 0; k < LightPrism::kMaxCsmCascades; ++k) shColor_[k] = dev_->createTexture({res, res, 1, rhi::Format::R32F, true}, nullptr);
     shDepth_ = dev_->createTexture({res, res, 1, rhi::Format::D32F, true}, nullptr);
-    shW_ = res; shadowValid_ = false;
+    shW_ = res; shRes_ = static_cast<int>(res); shadowValid_ = false;
+  }
+
+  // Uma faixa R32F R x 6R por luz com sombra (4 no maximo) e uma profundidade R x 6R compartilhada (cada luz limpa a sua).
+  void ensurePointTargets(u32 res) {
+    if (pointW_ == res && !pointStrip_[0].isNull()) return;
+    for (auto& t : pointStrip_) if (!t.isNull()) dev_->destroy(t);
+    if (!pointDepth_.isNull()) dev_->destroy(pointDepth_);
+    for (auto& t : pointStrip_) t = dev_->createTexture({res, 6 * res, 1, rhi::Format::R32F, true}, nullptr);
+    pointDepth_ = dev_->createTexture({res, 6 * res, 1, rhi::Format::D32F, true}, nullptr);
+    pointW_ = res;
   }
 
   void release() {
     if (!dev_) return;
+    releaseImports();
     for (auto& [k, g] : meshes_) freeMesh(g);
     meshes_.clear();
     for (auto& [k, g] : dyn_) freeMesh(g);
@@ -328,17 +463,29 @@ private:
     for (auto& [k, t] : texs_) dev_->destroy(t);
     texs_.clear();
     if (!white_.isNull()) { dev_->destroy(white_); white_ = kNullHandle; }
-    for (auto* h : {&frameCb_, &lightCb_, &objCb_, &shCb_, &shColor_, &shDepth_, &pipe_, &shPipe_, &vs_, &ps_, &shVs_, &shPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
-    shW_ = 0; draws_.clear(); dev_ = nullptr;
+    for (auto* h : {&frameCb_, &objCb_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &vs_, &ps_, &shVs_, &shPs_, &ptVs_, &ptPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
+    for (auto& t : shColor_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
+    for (auto& t : pointStrip_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
+    pointW_ = 0; pointOn_ = false; pointCount_ = 0;
+    clusters_.reset(); lp_.reset();
+    shW_ = 0; shRes_ = 0; shadowCount_ = 0; shadowValid_ = false; draws_.clear(); dev_ = nullptr;
   }
 
   rhi::IDevice* dev_ = nullptr;
-  rhi::ShaderId vs_, ps_, shVs_, shPs_;
-  rhi::PipelineId pipe_, shPipe_;
-  rhi::BufferId frameCb_, lightCb_, objCb_, shCb_;
+  std::unique_ptr<LightPrism::IGraphicsDevice> lp_;
+  std::unique_ptr<LightPrism::ClusterSystem> clusters_;
+  rhi::ShaderId vs_, ps_, shVs_, shPs_, ptVs_, ptPs_;
+  rhi::PipelineId pipe_, shPipe_, ptPipe_;
+  rhi::BufferId frameCb_, objCb_, shCb_, csmCb_, iblCb_, pointCb_;
+  rhi::TextureId pointStrip_[kMaxPointShadowLights], pointDepth_;
+  u32 pointW_ = 0, pointCount_ = 0, pointRes_ = 512;
+  bool pointOn_ = false;
+  u32 pointFaces_[kMaxPointShadowLights] = {};
+  Mat4 pointVp_[kMaxPointShadowLights][kMaxPointShadowFaces];
+  std::vector<rhi::BufferId> imports_;   // handles importados neste quadro (liberados em releaseImports)
+  Imports imp_{};
   std::unordered_map<u64, rhi::TextureId> texs_;   // texturas de albedo (por Texture::id)
   rhi::TextureId white_;                           // 1x1 branca: textura padrao
-  bool glesTexWarned_ = false;
   rhi::TextureId makeWhite() { const u8 px[4] = {255, 255, 255, 255}; return dev_->createTexture({1, 1, 1, rhi::Format::RGBA8, false}, px); }
   Draw makeDraw(const GpuMesh* g, const Mat4& world, const Material& mat) {
     f32 tw = 0, th = 0;
@@ -346,9 +493,12 @@ private:
     const rhi::TextureId tex = textureFor(mat.albedoMap, tw, th);
     return Draw{g, world, mat, tex, tw, th};
   }
-  rhi::TextureId shColor_, shDepth_; u32 shW_ = 0;   // mapa de sombra (R32F) + profundidade para o teste do passe de sombra
-  ShadowSettings shadowSet_; ShadowFrustum shadowFr_; bool shadowOn_ = false, open_ = false, shadowSkip_ = false, shadowValid_ = false;
-  Camera cam_; std::vector<Light> lights_; Vec3 ambient_, clear_; f32 clearAlpha_ = 1.f;
+  rhi::TextureId shColor_[LightPrism::kMaxCsmCascades], shDepth_; u32 shW_ = 0; int shRes_ = 0;
+  u32 shadowCount_ = 0;
+  bool shadowOn_ = false, open_ = false, shadowSkip_ = false, shadowValid_ = false;
+  Mat4 cascadeVp_[LightPrism::kMaxCsmCascades];
+  std::string lastError_;
+  Camera cam_; Vec3 clear_; f32 clearAlpha_ = 1.f; f32 cam_zNear_ = 0.1f, cam_zFar_ = 100.f;
   std::vector<Draw> draws_;
   rhi::TextureId color_, depth_;
   rhi::Format colorFmt_ = rhi::Format::RGBA8_SRGB;

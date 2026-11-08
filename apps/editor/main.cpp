@@ -1,3 +1,13 @@
+// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo, padroes e regras em ui_contract.hpp (secoes 2, 3 e 4).
+// Elementos: barra de menus e menus (File, Interface, Help), docking (DockSpaceOverViewport, DockBuilder, travamento),
+//   Hierarquia (TreeNodeEx, arrastar "HIER_ENTITY", popups, lista achatada com ImGuiListClipper acima de 300 objetos),
+//   Inspetor (Transform com DragFloat, Mesh e cores), Console (InputTextWithHint com historico, BeginChild),
+//   Settings (BeginTabBar, Combo, ColorEdit, SliderFloat), Profiler (PlotLines, ProgressBar, tabela),
+//   viewport (ImGui::Image do SDL_Texture, InvisibleButton, grade e gizmos com ImDrawList), janela Game e modo --player,
+//   barra de status (BeginViewportSideBar) e atalhos (IsKeyChordPressed Ctrl+S/Z/Y).
+// Dados: estado do Editor (ed.selected, showX, lockInterface, dockWithShift), buffers "static char" (cmdBuf, renBuf).
+// Troca SpriteUI: o loop de quadro (NewFrame/Render/RenderDrawData), os backends SDL3 e SDLRenderer3, o docking e
+//   a hierarquia. A cena 3D e a imagem (ViewTex) continuam como estao; so o desenho sobre elas muda.
 // ToolEngine Editor - janelas ancoraveis estilo Unity (ImGui docking) + SDL3.
 // Janelas: Hierarchy, Inspector, Scene, Game, Assets, Scenes, Console, Profiler, Narrative Controller, Settings.
 // O estado esta em editor_state.hpp; Assets/Scenes em assets_panel.hpp; componentes em components.hpp.
@@ -649,7 +659,13 @@ void drawProfiler(Editor& ed) {
     ImGui::Text("%s", F("API: %s", ed.apiStatus.c_str()).c_str());
     ImGui::Text("%s", F("views: %u   pixels: %.2f M   objects drawn: %u", c.views, static_cast<double>(c.pixels) / 1e6, c.draws).c_str());
     ImGui::Text("%s", F("triangles: %llu   shadow casters: %u   shadow triangles (CPU): %llu   shadow map reused: %u   culled: %u", c.tris, c.shadowCasters, c.shadowTris, c.shadowReused, c.culled).c_str());
-    ImGui::Text("%s", F("shadows: %s   map %d px   post-processing: %s", ed.sceneInfo.render.shadow.enabled ? "on" : "off", ed.sceneInfo.render.shadow.resolution, ed.sceneInfo.render.post.active() ? "on" : "off").c_str());
+    {
+      const auto q = tool::makeQuality(ed.sceneInfo.render.lighting);
+      const auto& lf = ed.lightRig.frame();
+      ImGui::Text("%s", F("Light Prism: shadows %s (%u cascades x %u px)   lights dropped by budget: %u   post-processing: %s",
+                          lf.shadows() ? "on" : "off", static_cast<unsigned>(q.csmCascades), static_cast<unsigned>(q.shadowMapResolution),
+                          static_cast<unsigned>(lf.droppedLights), ed.sceneInfo.render.post.active() ? "on" : "off").c_str());
+    }
     if (ed.gpuDev) { const auto g = ed.gpuDev->frameStats(); ImGui::Text("%s", F("GPU: %u draws, %u triangles, %u uploads, %u pipeline switches", g.draws, g.triangles, g.bufferUploads, g.pipelineSwitches).c_str()); }
   }
   if (ImGui::CollapsingHeader(T("System: CPU, RAM, VRAM and cache"), ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1065,11 +1081,11 @@ void drawGraphicsTab(Editor& ed) {
   if (c) ed.settingsDirty = true;
   ImGui::SeparatorText(T("GPU details"));
   { // ajustes rapidos de sombra tambem aqui (mesmos valores de Settings > Lighting, salvos na cena)
-    auto& sh = ed.sceneInfo.render.shadow; bool sc = false;
-    sc |= ImGui::Checkbox(T("Enable shadows"), &sh.enabled);
+    auto& L = ed.sceneInfo.render.lighting; bool sc = false;
+    sc |= ImGui::Checkbox(T("Enable shadows"), &L.shadows);
     const std::string q = std::string(T("Low (512)")) + '\0' + T("Medium (1024)") + '\0' + T("High (2048)") + '\0' + T("Ultra (4096)") + '\0';
-    int qi = sh.resolution <= 512 ? 0 : sh.resolution <= 1024 ? 1 : sh.resolution <= 2048 ? 2 : 3;
-    if (ImGui::Combo(T("Shadow quality"), &qi, q.c_str())) { sh.resolution = 512 << qi; sc = true; }
+    int qi = L.shadowMapResolution <= 512 ? 0 : L.shadowMapResolution <= 1024 ? 1 : L.shadowMapResolution <= 2048 ? 2 : 3;
+    if (ImGui::Combo(T("Shadow quality"), &qi, q.c_str())) { L.shadowMapResolution = 512u << qi; L.custom = true; sc = true; } // trocar a resolucao sai do preset
     if (sc) ed.settingsDirty = true;
   }
   ImGui::Text("%s", F("Adapter: %s", ed.gpuDev ? ed.gpuDev->deviceName().c_str() : "(software renderer)").c_str());
@@ -1200,7 +1216,13 @@ void drawLanguageTab(Editor& ed) {
 
 // --- Configuracoes > Lighting (iluminacao e sombras da CENA + pos-processamento global) -------------------------
 void drawLightingTab(Editor& ed) {
-  auto& r = ed.sceneInfo.render; bool c = false;
+  auto& r = ed.sceneInfo.render; auto& L = r.lighting; bool c = false;
+  // Inteiro de 0..n com slider (os campos da Light Prism sao u32).
+  auto sliderU = [&](const char* label, tool::u32& v, tool::u32 lo, tool::u32 hi) -> bool {
+    int t = static_cast<int>(v);
+    if (ImGui::SliderInt(label, &t, static_cast<int>(lo), static_cast<int>(hi))) { v = static_cast<tool::u32>(t); return true; }
+    return false;
+  };
   ImGui::TextDisabled("%s", F("These settings belong to the scene '%s' and are saved with it.", ed.sceneInfo.name.c_str()).c_str());
   ImGui::SeparatorText(T("Sun (Global Light)"));
   tool::Entity sun; ed.scene.world().each<ed_::GlobalLight>([&](tool::Entity e, ed_::GlobalLight&) { if (!ed.scene.world().alive(sun)) sun = e; });
@@ -1214,19 +1236,68 @@ void drawLightingTab(Editor& ed) {
   c |= ImGui::DragFloat(T("Draw distance (0 = each camera's Far)"), &r.drawDistance, 1.f, 0.f, 20000.f, "%.0f");
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Objects farther than this are not drawn in the Scene and Game views. 0 = use the Far value of each camera. Very large values make distant objects flicker (depth precision)."));
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Objects outside the camera view are not drawn. Objects that cast shadows are always drawn."));
-  ImGui::SeparatorText(T("Real-time shadows"));
-  c |= ImGui::Checkbox(T("Enable shadows"), &r.shadow.enabled);
-  ImGui::BeginDisabled(!r.shadow.enabled);
-  const std::string q = std::string(T("Low (512)")) + '\0' + T("Medium (1024)") + '\0' + T("High (2048)") + '\0' + T("Ultra (4096)") + '\0';
-  int qi = r.shadow.resolution <= 512 ? 0 : r.shadow.resolution <= 1024 ? 1 : r.shadow.resolution <= 2048 ? 2 : 3;
-  if (ImGui::Combo(T("Shadow quality"), &qi, q.c_str())) { r.shadow.resolution = 512 << qi; c = true; }
-  c |= ImGui::SliderFloat(T("Max distance (m)"), &r.shadow.distance, 5.f, 200.f, "%.0f");
-  const std::string pcf = std::string(T("Hard edges")) + '\0' + T("Soft 3x3") + '\0' + T("Softer 5x5") + '\0';
-  c |= ImGui::Combo(T("Edge softness"), &r.shadow.pcf, pcf.c_str());
-  c |= ImGui::SliderFloat(T("Shadow strength"), &r.shadow.strength, 0.f, 1.f, "%.2f");
-  c |= ImGui::SliderFloat(T("Bias"), &r.shadow.bias, 0.f, 0.02f, "%.4f"); c |= ImGui::SliderFloat(T("Normal bias (texels)"), &r.shadow.normalBias, 0.f, 4.f, "%.2f");
+
+  // ---- Light Prism: qualidade (preset ou custom) ----
+  ImGui::SeparatorText(T("Light Prism: quality"));
+  ImGui::TextDisabled("%s", T("The lighting of the engine (lights, clusters, shadows and ambient) is computed by the Light Prism library, on the CPU and on the GPU."));
+  const std::string tiers = std::string(T("Mobile")) + '\0' + T("Low") + '\0' + T("Medium") + '\0' + T("High") + '\0';
+  c |= ImGui::Combo(T("Quality preset"), &L.tier, tiers.c_str());
+  c |= ImGui::Checkbox(T("Custom values (override the preset)"), &L.custom);
+  if (!L.custom) { // mostra o que o preset escolhido significa
+    const auto q = tool::makeQuality(L);
+    ImGui::TextDisabled("%s", F("Preset: %u shadow cascades, %u px per cascade, %u PCF taps, %u lights per cluster",
+                                static_cast<unsigned>(q.csmCascades), static_cast<unsigned>(q.shadowMapResolution), static_cast<unsigned>(q.pcfTaps), static_cast<unsigned>(q.maxLightsPerCluster)).c_str());
+  }
+  ImGui::BeginDisabled(!L.custom);
+  c |= sliderU(T("Shadow cascades"), L.csmCascades, 1, 4);
+  {
+    const std::string res = std::string(T("Low (512)")) + '\0' + T("Medium (1024)") + '\0' + T("High (2048)") + '\0' + T("Ultra (4096)") + '\0';
+    int qi = L.shadowMapResolution <= 512 ? 0 : L.shadowMapResolution <= 1024 ? 1 : L.shadowMapResolution <= 2048 ? 2 : 3;
+    if (ImGui::Combo(T("Shadow map resolution (per cascade)"), &qi, res.c_str())) { L.shadowMapResolution = 512u << qi; c = true; }
+  }
+  {
+    const std::string pcf = std::string(T("Hard edges (1 tap)")) + '\0' + T("Soft 2x2 (4 taps)") + '\0' + T("Softer 3x3 (9 taps)") + '\0';
+    int pi = L.pcfTaps <= 1 ? 0 : (L.pcfTaps <= 4 ? 1 : 2);
+    if (ImGui::Combo(T("Edge softness (PCF)"), &pi, pcf.c_str())) { L.pcfTaps = pi == 0 ? 1u : (pi == 1 ? 4u : 9u); c = true; }
+  }
+  c |= sliderU(T("Max lights per cluster"), L.maxLightsPerCluster, 1, 256);
+  c |= sliderU(T("Light indices per cluster"), L.indicesPerCluster, 1, 64);
+  c |= ImGui::SliderFloat(T("Auto radius cutoff"), &L.autoRadiusCutoff, 0.f, 0.2f, "%.3f");
   ImGui::EndDisabled();
+
+  // ---- Orcamento de luzes (sempre editavel) ----
+  ImGui::SeparatorText(T("Light budget"));
+  c |= sliderU(T("Max point lights"), L.maxPointLights, 1, 16384);
+  c |= sliderU(T("Max spot lights"), L.maxSpotLights, 1, 4096);
+  ImGui::TextDisabled("%s", T("Lights beyond the budget are dropped (the scene reports how many in Profiler > Rendering)."));
+
+  // ---- Sombras do sol (cascatas) ----
+  ImGui::SeparatorText(T("Shadows (sun cascades)"));
+  c |= ImGui::Checkbox(T("Enable shadows"), &L.shadows);
+  ImGui::BeginDisabled(!L.shadows);
+  c |= ImGui::SliderFloat(T("Max shadow distance (m, 0 = camera far)"), &L.shadowDistance, 0.f, 500.f, "%.0f");
+  c |= ImGui::SliderFloat(T("Cascade split (0 uniform - 1 logarithmic)"), &L.splitLambda, 0.f, 1.f, "%.2f");
+  c |= ImGui::SliderFloat(T("Cascade blend"), &L.blendFraction, 0.f, 0.5f, "%.2f");
+  c |= ImGui::SliderFloat(T("Caster extension (m)"), &L.casterExtension, 0.f, 200.f, "%.0f");
+  c |= ImGui::SliderFloat(T("Depth bias (m)"), &L.depthBias, 0.f, 0.5f, "%.3f");
+  c |= ImGui::SliderFloat(T("Normal bias (texels)"), &L.normalBias, 0.f, 4.f, "%.2f");
+  c |= ImGui::Checkbox(T("Snap to texels (stable shadows, no shimmer)"), &L.snapToTexels);
+  ImGui::EndDisabled();
+  // Sombras de luzes pontuais/spot: feitas pela engine (a Light Prism so tem CSM do sol). Independentes do interruptor do sol.
+  c |= sliderU(T("Point and spot shadow lights"), L.pointShadowLights, 0, 4);
+  {
+    const std::string pres = std::string("128") + '\0' + "256" + '\0' + "512" + '\0' + "1024" + '\0';
+    int pi = L.pointShadowResolution <= 128 ? 0 : L.pointShadowResolution <= 256 ? 1 : L.pointShadowResolution <= 512 ? 2 : 3;
+    if (ImGui::Combo(T("Point/spot shadow resolution (per face)"), &pi, pres.c_str())) { L.pointShadowResolution = 128u << pi; c = true; }
+  }
+  ImGui::TextDisabled("%s", T("Point and spot shadows: CPU and GPU (Vulkan, D3D12). OpenGL uses the CPU renderer."));
+
+  // ---- Ambiente e exposicao ----
+  ImGui::SeparatorText(T("Ambient and exposure"));
+  c |= ImGui::SliderFloat(T("Ambient intensity"), &L.ambientIntensity, 0.f, 4.f, "%.2f");
+  c |= ImGui::SliderFloat(T("Pre-exposure"), &L.preExposure, 0.1f, 4.f, "%.2f");
   ImGui::TextDisabled("%s", T("Each object chooses Cast shadow / Receive shadow in the Inspector. Only the sun casts shadows. Lower quality = more FPS."));
+
   ImGui::SeparatorText(T("Global post-processing"));
   c |= postFxUi(r.post, false);
   ImGui::TextDisabled("%s", T("Applies to every camera. A camera can add to it or replace it (Inspector > Camera)."));

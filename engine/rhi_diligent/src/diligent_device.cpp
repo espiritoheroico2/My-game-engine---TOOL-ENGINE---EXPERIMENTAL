@@ -170,7 +170,7 @@ public:
     put(h.index, Kind::Pipeline, pso, 0);
     PipelineData pd;
     pso->CreateShaderResourceBinding(&pd.srb, true);
-    pd.uniformNames = d.uniformNames; pd.textureNames = d.textureNames;
+    pd.uniformNames = d.uniformNames; pd.textureNames = d.textureNames; pd.storageNames = d.storageNames;
     pipelines_[h.index] = std::move(pd);
     return h;
   }
@@ -201,6 +201,17 @@ public:
 
   std::unique_ptr<ICommandList> beginCommands() override;
   void submit(ICommandList&) override { ctx->Flush(); }
+
+  // Buffer criado fora (LightPrism): o handle guarda uma referencia a mais; destruir o handle nao apaga o buffer original.
+  BufferId importBuffer(void* native) override {
+    auto* b = static_cast<dl::IBuffer*>(native);
+    if (!b) return kNullHandle;
+    Handle h = ids_.create();
+    put(h.index, Kind::Buffer, b, b->GetDesc().Size);
+    return h;
+  }
+  void* nativeDevice() const override { return device.RawPtr(); }
+  void* nativeContext() const override { return ctx.RawPtr(); }
 
   // Fim de quadro. FinishFrame() e OBRIGATORIO: e ele que devolve a memoria dinamica (buffers uniformes com
   // MAP_FLAG_DISCARD) de quadros ja concluidos. Sem ele o "dynamic heap" enche e o log mostra
@@ -265,7 +276,7 @@ public:
     auto it = objs_.find(h.index);
     return it == objs_.end() ? nullptr : static_cast<T*>(it->second.RawPtr());
   }
-  struct PipelineData { dl::RefCntAutoPtr<dl::IShaderResourceBinding> srb; std::vector<std::string> uniformNames, textureNames; };
+  struct PipelineData { dl::RefCntAutoPtr<dl::IShaderResourceBinding> srb; std::vector<std::string> uniformNames, textureNames, storageNames; };
   PipelineData* pipelineData(Handle h) { auto it = pipelines_.find(h.index); return it == pipelines_.end() ? nullptr : &it->second; }
   bool isBackbuffer(Handle h) const { return swapchain && h == backbufferHandle_ && !h.isNull(); }
   void err(const char* m) { debug().report("TOOL-E135", Severity::Error, std::string("RHI: ") + m); }
@@ -303,6 +314,7 @@ public:
       dl::Viewport vp; vp.Width = static_cast<float>(td.Width); vp.Height = static_cast<float>(td.Height);
       d_.ctx->SetViewports(1, &vp, td.Width, td.Height);
     }
+    targetW_ = static_cast<u32>(rtv->GetTexture()->GetDesc().Width); targetH_ = static_cast<u32>(rtv->GetTexture()->GetDesc().Height);
     const float clear[4] = {r, g, b, a};
     d_.ctx->ClearRenderTarget(rtv, clear, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     if (dsv) d_.ctx->ClearDepthStencil(dsv, dl::CLEAR_DEPTH_FLAG, 1.f, 0, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -345,6 +357,20 @@ public:
     if (!pipe_ || slot >= pipe_->textureNames.size()) { d_.err("setTexture: slot sem nome (defina PipelineDesc::textureNames e chame setPipeline antes)"); return; }
     if (auto* var = pipe_->srb->GetVariableByName(dl::SHADER_TYPE_PIXEL, pipe_->textureNames[slot].c_str())) var->Set(tex->GetDefaultView(dl::TEXTURE_VIEW_SHADER_RESOURCE));
   }
+  void setStorage(u32 slot, BufferId b) override {
+    if (!check()) return;
+    auto* buf = d_.obj<dl::IBuffer>(b, DiligentDevice::Kind::Buffer);
+    if (!buf) { d_.err("storage buffer invalido"); return; }
+    if (!pipe_ || slot >= pipe_->storageNames.size()) { d_.err("setStorage: slot sem nome (defina PipelineDesc::storageNames e chame setPipeline antes)"); return; }
+    if (auto* var = pipe_->srb->GetVariableByName(dl::SHADER_TYPE_PIXEL, pipe_->storageNames[slot].c_str())) var->Set(buf->GetDefaultView(dl::BUFFER_VIEW_SHADER_RESOURCE));
+  }
+  void setViewport(u32 x, u32 y, u32 w, u32 h) override {
+    if (!check()) return;
+    if (w == 0 || h == 0 || x + w > targetW_ || y + h > targetH_) { d_.err("setViewport fora do alvo"); return; }
+    dl::Viewport vp; vp.TopLeftX = static_cast<float>(x); vp.TopLeftY = static_cast<float>(y);
+    vp.Width = static_cast<float>(w); vp.Height = static_cast<float>(h); vp.MinDepth = 0.f; vp.MaxDepth = 1.f;
+    d_.ctx->SetViewports(1, &vp, targetW_, targetH_); // scissor padrao = alvo inteiro
+  }
   void drawIndexed(u32 n, u32 inst) override {
     if (!check()) return;
     if (!pipe_ || !vb_ || !ib_) { d_.err("draw sem pipeline/vertex/index buffer"); return; }
@@ -359,6 +385,7 @@ private:
   bool check() { if (!open_) d_.err("comando fora de begin()/end()"); return open_; }
   DiligentDevice& d_;
   bool open_ = false, vb_ = false, ib_ = false;
+  u32 targetW_ = 0, targetH_ = 0; // tamanho do alvo do begin() atual
   DiligentDevice::PipelineData* pipe_ = nullptr;
 };
 

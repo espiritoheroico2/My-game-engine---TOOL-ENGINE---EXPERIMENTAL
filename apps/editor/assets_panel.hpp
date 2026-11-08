@@ -1,3 +1,10 @@
+// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo, padroes e regras em ui_contract.hpp (secoes 2, 3 e 4).
+// Elementos: painel de Assets com pastas e arquivos (Selectable, SmallButton), arrastar "ASSET_PATH" para a cena,
+//   dialogos BeginPopupModal (novo arquivo, nova pasta, renomear, apagar, nova cena), InputText com buffers,
+//   previa de som (botao play/stop) e GetTime para cliques.
+// Dados: struct u (buffers renameBuf, newFolderBuf, newFileBuf, newSceneBuf, sceneRenameBuf), preenchidos so ao
+//   abrir cada menu ou ao apertar F2. Lista de arquivos vem do projeto (project.hpp).
+// Troca SpriteUI: dialogos, lista e arrastar. Manter o payload "ASSET_PATH" com o caminho relativo.
 // ToolEngine Editor - janelas "Assets" (navegador de arquivos do projeto) e "Scenes" (cenas separadas).
 //
 // ASSETS: mostra Project/Assets como pastas e arquivos, em LISTA ou ICONES. Permite renomear (atualizando as

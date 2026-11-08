@@ -1,3 +1,8 @@
+// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo, padroes e regras em ui_contract.hpp (secoes 2 e 3).
+// Elementos: dialogo de projeto (criar ou abrir), BeginTable com TableSetupColumn/TableNextRow para projetos recentes,
+//   InputText para nome e pasta, Button para criar, abrir e escolher pasta, TextColored para erros.
+// Dados: struct ProjectDialog (buffers location, name; lastProject; result). Mostrado antes do editor abrir.
+// Troca SpriteUI: a tabela de projetos e os campos de texto.
 // ToolEngine Editor - janela de INICIO: pede o nome do projeto, o autor e a pasta onde ele vai ser salvo.
 //
 // Aparece antes do editor abrir (main.cpp), a menos que o editor seja iniciado com --project <pasta> ou em modo

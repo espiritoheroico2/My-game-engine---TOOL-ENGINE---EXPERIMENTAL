@@ -4,6 +4,8 @@
 #include "tool/render/gpu_renderer.hpp"
 #include "tool/rhi/diligent_device.hpp"
 
+#include "LightPrism/Backends/DiligentDevice.hpp"
+
 #include <SDL3/SDL.h>
 
 #include <array>
@@ -58,8 +60,23 @@ int main(int argc, char** argv) {
   if (!dev) { std::fprintf(stderr, "FALHA ao criar %s: %s\n", which.c_str(), err.c_str()); return 1; }
   std::printf("backend=%s adaptador=%s\n", rhi::toString(dev->backend()), dev->deviceName().c_str());
 
+  if (dev->backend() == rhi::Backend::GLES) { // a iluminacao Light Prism ainda nao tem GLSL: o editor usa a CPU nesse caso
+    std::printf("PULADO: OpenGL sem iluminacao Light Prism (GLSL pendente); o editor cai para a CPU\n");
+    dev.reset(); if (win) { SDL_DestroyWindow(win); SDL_Quit(); }
+    return 0;
+  }
   GpuRenderer gpu;
-  if (!gpu.init(*dev, std::string(TOOL_SOURCE_DIR) + "/assets/shaders", 320, 180)) { std::fprintf(stderr, "FALHA: init do renderizador GPU\n"); return 1; }
+  // Dispositivo da Light Prism sobre o mesmo RHI (clusters e buffers de luz rodam nele).
+  if (!gpu.init(*dev, rhi::createLightPrismDevice(*dev), std::string(TOOL_SOURCE_DIR) + "/assets/shaders", 320, 180)) {
+    std::fprintf(stderr, "FALHA: init do renderizador GPU\n"); return 1;
+  }
+  // Monta o quadro de iluminacao (LightRig) com a mesma camera para GPU e CPU.
+  LightRig rig;
+  auto frame = [&](const std::vector<Light>& ls, Vec3 amb, const Camera& c, u32 W, u32 H) {
+    const Mat4 v = Mat4::lookAt(c.eye, c.target, c.up), p = c.projection(static_cast<f32>(W), static_cast<f32>(H));
+    rig.build(ls, amb, c.eye, v, p.m[0][0], p.m[1][1], c.nearZ, c.farZ);
+    return std::pair<Mat4, Mat4>{v, p};
+  };
 
   // Mesma cena nos dois renderizadores.
   Camera cam; cam.eye = {3.5f, 2.5f, 5.5f}; cam.target = {0, 0.4f, 0};
@@ -73,11 +90,11 @@ int main(int argc, char** argv) {
                                  {&ground, Mat4::translation({0, 0, 0}), {{0.7f, 0.7f, 0.7f}, 0.9f, 0.f}},
                                  {&cube, Mat4::translation({1.4f, 0.5f, -0.4f}) * Mat4::rotationY(0.6f), {{0.3f, 0.8f, 0.3f}, 0.7f, 0.f}}};
 
-  ShadowSettings shSet; shSet.resolution = 1024;
-  const ShadowFrustum shFr = makeSunShadow(sun.direction, {0, 0, 0}, 8.f, shSet.resolution);
-  for (int frame = 0; frame < 3; ++frame) { // varios quadros: exercita buffers dinamicos e cache de malhas
-    gpu.begin(cam, lights);
-    gpu.setShadow(shSet, shFr);
+  const Vec3 ambient{0.03f, 0.03f, 0.04f};
+  for (int fr = 0; fr < 3; ++fr) { // varios quadros: exercita buffers dinamicos, clusters e cache de malhas
+    const auto [view, proj] = frame(lights, ambient, cam, 320, 180);
+    gpu.begin(cam, {0.02f, 0.025f, 0.035f});
+    if (!gpu.setLighting(rig, view, proj)) { std::fprintf(stderr, "FALHA: luz da GPU: %s\n", gpu.lastError().c_str()); return 1; }
     for (auto& o : objs) gpu.draw(*o.m, o.w, o.mat);
     gpu.end();
     dev->present();
@@ -87,8 +104,11 @@ int main(int argc, char** argv) {
   if (out) writePpm(out, pix.data(), w, h);
 
   SoftRenderer soft(w, h);
-  soft.begin(cam, {0.02f, 0.025f, 0.035f}); soft.setLights(lights); soft.setShadow(shSet, shFr);
-  for (auto& o : objs) soft.draw(*o.m, o.w, o.mat);
+  {
+    const auto [view, proj] = frame(lights, ambient, cam, w, h);
+    soft.begin(cam, {0.02f, 0.025f, 0.035f}); soft.setLighting(rig.frame());
+    for (auto& o : objs) soft.draw(*o.m, o.w, o.mat);
+  }
 
   // Cobertura: pixel "do objeto" = diferente da cor de fundo do respectivo renderizador.
   auto bg = [&](const u8* p0) { return std::array<int, 3>{p0[0], p0[1], p0[2]}; };
@@ -104,8 +124,15 @@ int main(int argc, char** argv) {
   // Sombra: so o sol (a lampada de ponto domina e esconderia o efeito). Com sombras o quadro precisa ser mais escuro.
   const std::vector<Light> sunOnly = {sun};
   std::vector<u8> sunSh, sunNo; u32 w2 = 0, h2 = 0;
-  gpu.begin(cam, sunOnly); gpu.setShadow(shSet, shFr); for (auto& o : objs) gpu.draw(*o.m, o.w, o.mat); gpu.end(); dev->present(); gpu.readback(sunSh, w2, h2);
-  gpu.begin(cam, sunOnly); for (auto& o : objs) gpu.draw(*o.m, o.w, o.mat); gpu.end(); dev->present(); gpu.readback(sunNo, w2, h2);
+  {
+    auto [view, proj] = frame(sunOnly, ambient, cam, 320, 180);
+    gpu.begin(cam, {0.02f, 0.025f, 0.035f}); gpu.setLighting(rig, view, proj); for (auto& o : objs) gpu.draw(*o.m, o.w, o.mat); gpu.end(); dev->present(); gpu.readback(sunSh, w2, h2);
+  }
+  {   // sem sombra: sol com a luz do sol desligada de sombras
+    std::vector<Light> sunNoShadow = sunOnly; sunNoShadow[0].castShadow = false;
+    auto [view, proj] = frame(sunNoShadow, ambient, cam, 320, 180);
+    gpu.begin(cam, {0.02f, 0.025f, 0.035f}); gpu.setLighting(rig, view, proj); for (auto& o : objs) gpu.draw(*o.m, o.w, o.mat); gpu.end(); dev->present(); gpu.readback(sunNo, w2, h2);
+  }
   auto lum = [&](const std::vector<u8>& v) { double a = 0; for (size_t i = 0; i < v.size(); i += 4) a += v[i] + v[i + 1] + v[i + 2]; return a; };
   const double lumSh = lum(sunSh), lumNo = lum(sunNo);
   size_t darker = 0; // pixels que ficaram bem mais escuros com sombra (sombras no chao)
@@ -113,6 +140,38 @@ int main(int argc, char** argv) {
   std::printf("luminancia (so sol) com sombra=%.0f sem sombra=%.0f (razao %.3f) pixels sombreados=%zu\n", lumSh, lumNo, lumNo > 0 ? lumSh / lumNo : 0.0, darker);
   if (out) { writePpm((std::string(out) + ".sun_sh.ppm").c_str(), sunSh.data(), w2, h2); writePpm((std::string(out) + ".sun_no.ppm").c_str(), sunNo.data(), w2, h2); }
   const bool shadowOk = darker > 150; // cena de teste: ~3 sombras de ~100+ pixels
+  // Sombra de luz PONTUAL (faixa de 6 faces na GPU, espelho do SoftRenderer): so a lampada, com e sem castShadow.
+  // A GPU e a CPU precisam escurecer a mesma quantidade de pixels (tolerancia de 40%).
+  auto gpuLamp = [&](bool cast, std::vector<u8>& out) {
+    Light l = lamp; l.castShadow = cast;
+    auto [pv, pp] = frame({l}, ambient, cam, 320, 180);
+    gpu.begin(cam, {0.02f, 0.025f, 0.035f});
+    if (!gpu.setLighting(rig, pv, pp)) return false;
+    for (auto& o : objs) gpu.draw(*o.m, o.w, o.mat);
+    gpu.end(); dev->present();
+    u32 pw = 0, ph = 0; gpu.readback(out, pw, ph);
+    return true;
+  };
+  auto cpuLamp = [&](bool cast) {
+    Light l = lamp; l.castShadow = cast;
+    frame({l}, ambient, cam, 320, 180);
+    SoftRenderer s(320, 180);
+    s.begin(cam, {0.02f, 0.025f, 0.035f}); s.setLighting(rig.frame());
+    for (auto& o : objs) s.draw(*o.m, o.w, o.mat);
+    return std::vector<u8>(s.pixels(), s.pixels() + 320 * 180 * 4);
+  };
+  std::vector<u8> ptSh, ptNo;
+  const bool ptRan = gpuLamp(true, ptSh) && gpuLamp(false, ptNo);
+  const std::vector<u8> cpuSh = cpuLamp(true), cpuNo = cpuLamp(false);
+  auto countDarker = [](const std::vector<u8>& off, const std::vector<u8>& on) {
+    size_t n = 0;
+    for (size_t i = 0; i + 3 < on.size() && i < off.size(); i += 4) n += (off[i] > on[i] + 25);
+    return n;
+  };
+  const size_t gpuPt = ptRan ? countDarker(ptNo, ptSh) : 0, cpuPt = countDarker(cpuNo, cpuSh);
+  const bool pointOk = ptRan && gpuPt > 60 && cpuPt > 60 &&
+                       std::abs(static_cast<double>(gpuPt) - static_cast<double>(cpuPt)) <= 0.4 * static_cast<double>(std::max(gpuPt, cpuPt));
+  std::printf("sombra pontual: pixels escurecidos gpu=%zu cpu=%zu\n", gpuPt, cpuPt);
   // Textura: plano xadrez vermelho/azul visto de cima. GPU e CPU devem dar a mesma dominancia de cor nos dois lados.
   bool texOk = false;
   {
@@ -122,14 +181,16 @@ int main(int argc, char** argv) {
     const Mesh pl = Mesh::plane(1.f);
     Light down; down.type = LightType::Directional; down.direction = {0, -1, 0}; down.intensity = 2.f;
     const std::vector<Light> none = {down};
-    gpu.begin(top, none, {0.3f, 0.3f, 0.3f}, {0, 0, 0});
+    auto [tv, tp4] = frame(none, {0.3f, 0.3f, 0.3f}, top, 320, 180);
+    gpu.begin(top, {0, 0, 0});
+    if (!gpu.setLighting(rig, tv, tp4)) { std::fprintf(stderr, "FALHA: luz da GPU (textura): %s\n", gpu.lastError().c_str()); return 1; }
     gpu.draw(pl, Mat4{}, tm);
     gpu.end();
     dev->present();
     std::vector<u8> tp; u32 tw = 0, th = 0;
     gpu.readback(tp, tw, th);
     SoftRenderer sr(tw, th);
-    sr.begin(top, {0, 0, 0}); sr.setLights(none, {0.3f, 0.3f, 0.3f}); sr.draw(pl, Mat4{}, tm);
+    sr.begin(top, {0, 0, 0}); sr.setLighting(rig.frame()); sr.draw(pl, Mat4{}, tm);
     const u32 yy = th / 2, xl = 141, xr = 178;   // dentro do plano (|x| < 1), um de cada lado do centro
     auto at = [&](const u8* p, u32 x) { return p + (static_cast<size_t>(yy) * tw + x) * 4; };
     const u8* g = tp.data(); const u8* c = sr.pixels();
@@ -140,7 +201,7 @@ int main(int argc, char** argv) {
     texOk = gpuOk && cpuOk;
     if (std::string(rhi::toString(dev->backend())) == "gles") { texOk = true; std::printf("textura: OpenGL/GLES ainda nao amostra texturas (pendente), teste pulado\n"); }
   }
-  const bool ok = shadowOk && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
+  const bool ok = shadowOk && pointOk && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
   std::printf(ok ? "OK\n" : "FALHA: imagem da GPU diverge do esperado\n");
   gpu.shutdown(); // libera recursos antes de destruir o dispositivo
   dev.reset();

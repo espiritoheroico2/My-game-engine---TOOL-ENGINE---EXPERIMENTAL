@@ -1,3 +1,10 @@
+// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo, padroes e regras em ui_contract.hpp (secoes 2, 3 e 4).
+// Elementos: Inspetor inteiro: CollapsingHeader por componente, DragFloat/SliderFloat/Checkbox/Combo para campos,
+//   ColorEdit3/4, Selectable e SmallButton para listas (ferramentas, UI do jogo, particulas), popups "remres"/"addres"
+//   (Remover e Adicionar recurso), SetClipboardText em "Copy code" dos erros de script.
+// Dados: os campos vem direto dos componentes (components.hpp: Transform, MeshRenderer, PhysicsComp, ToolsComp,
+//   UiCanvas, ParticleComp, ScriptComp, VoxelChunk). Cada edicao sobe o estado do componente e marca a cena como suja.
+// Troca SpriteUI: todos os campos e cards. O contrato de dados (componente -> campo) deve ficar igual.
 // ToolEngine Editor - janelas e paineis novos da v0.5: Help ("?"), Physics (Inspector + Settings), Tools, Input Map,
 // desenho dos colliders na Scene e "Edit external" (editor de codigo externo).
 // Tudo aqui e interface: os dados vivem em components.hpp / input_map.hpp / editor_state.hpp.

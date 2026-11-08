@@ -37,7 +37,7 @@ docs/           notas de construção
 ```
 Dependências apontam sempre para baixo: scene → events/ecs → debug → core.
 
-Status: **0.7.14-beta** - veja `docs/CHANGELOG.md`, `docs/UI_SPRITE_PLAN.md`, `docs/SCRIPT_ERRORS.md`, `docs/LIGHTING_REVIEW.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/NEXT_STEPS.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`.
+Status: **0.7.16-beta** - veja `docs/CHANGELOG.md`, `docs/LIGHT_PRISM.md`, `docs/UI_SPRITE_PLAN.md`, `docs/SCRIPT_ERRORS.md`, `docs/LIGHTING_REVIEW.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/NEXT_STEPS.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`.
 
 **Novidades da 0.7.9-beta (erros de script):** verificador de scripts enquanto voce digita (linha e trecho), erros de execucao com linha, try/catch, avisos para objeto inexistente e NaN, e filtros no Console. Codigos em `docs/SCRIPT_ERRORS.md`.
 

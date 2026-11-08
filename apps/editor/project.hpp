@@ -14,7 +14,7 @@
 #include "tool/assets/import.hpp"
 #include "tool/audio/decode.hpp"
 #include "tool/render/postfx.hpp"
-#include "tool/render/shadow.hpp"
+#include "tool/render/lighting.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -180,10 +180,10 @@ private:
 };
 
 // --- Arquivo de cena -------------------------------------------------------------------------------------------
-// { "version":1, "name":"Main", "splitVertical":true, "assets":["Assets/a.glb",...], "render":{"shadow":{...},"post":{...}}, "entities":[ ... ] }
-// Configuracao de iluminacao/render DA CENA (Settings > Lighting): sombras em tempo real e pos-processamento GLOBAL.
+// { "version":1, "name":"Main", "splitVertical":true, "assets":["Assets/a.glb",...], "render":{"lighting":{...},"post":{...}}, "entities":[ ... ] }
+// Configuracao de iluminacao/render DA CENA (Settings > Lighting): Light Prism (luzes, clusters, CSM) e pos-processamento GLOBAL.
 struct RenderSettings {
-  tool::ShadowSettings shadow;
+  tool::LightingSettings lighting; // Light Prism: qualidade, orcamento de luzes, sombras em cascata, ambiente
   bool frustumCull = true;         // pula objetos fora da visao da camera (sombras continuam corretas)
   float drawDistance = 0.f;        // distancia de desenho (0 = usa o Far de cada camera); vale para Scene e Game
   tool::PostFx post;               // vale para todas as cameras; cada camera pode somar/substituir com o seu (postfx.hpp)
@@ -224,22 +224,68 @@ inline PhysicsSettings loadPhysicsSettings(const tool::Json& o) {
   return p;
 }
 
+// Light Prism (Settings > Lighting). Cada campo e um parametro direto da biblioteca; os limites evitam valores absurdos
+// num .scene.json editado a mao.
+inline tool::Json saveLightingSettings(const tool::LightingSettings& s) {
+  tool::Json o = tool::Json::object();
+  o.set("tier", s.tier); o.set("custom", s.custom); o.set("shadows", s.shadows);
+  o.set("maxPointLights", static_cast<double>(s.maxPointLights)); o.set("maxSpotLights", static_cast<double>(s.maxSpotLights));
+  o.set("autoRadiusCutoff", static_cast<double>(s.autoRadiusCutoff));
+  o.set("maxLightsPerCluster", static_cast<double>(s.maxLightsPerCluster)); o.set("indicesPerCluster", static_cast<double>(s.indicesPerCluster));
+  o.set("csmCascades", static_cast<double>(s.csmCascades)); o.set("shadowMapResolution", static_cast<double>(s.shadowMapResolution));
+  o.set("pcfTaps", static_cast<double>(s.pcfTaps)); o.set("splitLambda", static_cast<double>(s.splitLambda));
+  o.set("shadowDistance", static_cast<double>(s.shadowDistance)); o.set("blendFraction", static_cast<double>(s.blendFraction));
+  o.set("casterExtension", static_cast<double>(s.casterExtension)); o.set("depthBias", static_cast<double>(s.depthBias));
+  o.set("normalBias", static_cast<double>(s.normalBias)); o.set("snapToTexels", s.snapToTexels);
+  o.set("pointShadowLights", static_cast<double>(s.pointShadowLights)); o.set("pointShadowResolution", static_cast<double>(s.pointShadowResolution));
+  o.set("ambientIntensity", static_cast<double>(s.ambientIntensity)); o.set("preExposure", static_cast<double>(s.preExposure));
+  return o;
+}
+inline tool::LightingSettings loadLightingSettings(const tool::Json& o) {
+  tool::LightingSettings s;
+  s.tier = std::clamp(static_cast<int>(ser::num(o, "tier", 2.f)), 0, 3);
+  s.custom = ser::flag(o, "custom", false); s.shadows = ser::flag(o, "shadows", true);
+  s.maxPointLights = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "maxPointLights", 4096.f)), 1, 65536));
+  s.maxSpotLights = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "maxSpotLights", 1024.f)), 1, 65536));
+  s.autoRadiusCutoff = ser::clampNum(o, "autoRadiusCutoff", 0.02f, 0.f, 1.f);
+  s.maxLightsPerCluster = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "maxLightsPerCluster", 64.f)), 1, 1024));
+  s.indicesPerCluster = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "indicesPerCluster", 8.f)), 1, 64));
+  s.csmCascades = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "csmCascades", 3.f)), 1, 4));
+  s.shadowMapResolution = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "shadowMapResolution", 2048.f)), 256, 4096));
+  const int pcf = static_cast<int>(ser::num(o, "pcfTaps", 4.f));
+  s.pcfTaps = (pcf <= 1) ? 1u : (pcf <= 4 ? 4u : 9u);
+  s.pointShadowLights = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "pointShadowLights", 2.f)), 0, 4));
+  s.pointShadowResolution = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "pointShadowResolution", 512.f)), 64, 1024));
+  s.splitLambda = ser::clampNum(o, "splitLambda", 0.7f, 0.f, 1.f);
+  s.shadowDistance = ser::clampNum(o, "shadowDistance", 0.f, 0.f, 5000.f);
+  s.blendFraction = ser::clampNum(o, "blendFraction", 0.1f, 0.f, 0.5f);
+  s.casterExtension = ser::clampNum(o, "casterExtension", 60.f, 0.f, 1000.f);
+  s.depthBias = ser::clampNum(o, "depthBias", 0.05f, 0.f, 5.f);
+  s.normalBias = ser::clampNum(o, "normalBias", 1.5f, 0.f, 8.f);
+  s.snapToTexels = ser::flag(o, "snapToTexels", true);
+  s.ambientIntensity = ser::clampNum(o, "ambientIntensity", 1.f, 0.f, 10.f);
+  s.preExposure = ser::clampNum(o, "preExposure", 1.f, 0.01f, 16.f);
+  return s;
+}
+
 inline tool::Json saveRenderSettings(const RenderSettings& r) {
-  tool::Json o = tool::Json::object(), s = tool::Json::object();
-  s.set("enabled", r.shadow.enabled); s.set("resolution", r.shadow.resolution); s.set("distance", static_cast<double>(r.shadow.distance));
-  s.set("bias", static_cast<double>(r.shadow.bias)); s.set("normalBias", static_cast<double>(r.shadow.normalBias)); s.set("pcf", r.shadow.pcf);
-  s.set("strength", static_cast<double>(r.shadow.strength));
-  o.set("shadow", s); o.set("post", ser::postFx(r.post)); o.set("frustumCull", r.frustumCull); o.set("drawDistance", static_cast<double>(r.drawDistance));
+  tool::Json o = tool::Json::object();
+  o.set("lighting", saveLightingSettings(r.lighting)); o.set("post", ser::postFx(r.post));
+  o.set("frustumCull", r.frustumCull); o.set("drawDistance", static_cast<double>(r.drawDistance));
   return o;
 }
 // Todo valor lido do arquivo e limitado a uma faixa segura (um .scene.json editado a mao nao pode travar o render).
+// Cenas antigas (versao 0.7.14 e anteriores) tinham "shadow": essas chaves viram as correspondentes da Light Prism.
 inline RenderSettings loadRenderSettings(const tool::Json& o) {
-  RenderSettings r; const auto& s = o["shadow"];
-  r.shadow.enabled = ser::flag(s, "enabled", true);
-  r.shadow.resolution = std::clamp(static_cast<int>(ser::num(s, "resolution", 1024.f)), 256, 4096);
-  r.shadow.distance = ser::clampNum(s, "distance", 40.f, 2.f, 500.f); r.shadow.bias = ser::clampNum(s, "bias", 0.0025f, 0.f, 0.05f);
-  r.shadow.normalBias = ser::clampNum(s, "normalBias", 1.5f, 0.f, 8.f); r.shadow.pcf = std::clamp(static_cast<int>(ser::num(s, "pcf", 1.f)), 0, 2);
-  r.shadow.strength = ser::clampNum(s, "strength", 0.85f, 0.f, 1.f);
+  RenderSettings r;
+  if (o.has("lighting")) r.lighting = loadLightingSettings(o["lighting"]);
+  else if (o.has("shadow")) {
+    const auto& s = o["shadow"];
+    r.lighting.shadows = ser::flag(s, "enabled", true);
+    r.lighting.shadowMapResolution = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(s, "resolution", 2048.f)), 256, 4096));
+    const int pcf = static_cast<int>(ser::num(s, "pcf", 1.f));
+    r.lighting.pcfTaps = pcf <= 0 ? 1u : (pcf == 1 ? 4u : 9u);
+  }
   if (o.has("post")) r.post = ser::readPostFx(o["post"]);
   r.frustumCull = ser::flag(o, "frustumCull", true); r.drawDistance = ser::clampNum(o, "drawDistance", 0.f, 0.f, 20000.f);
   return r;

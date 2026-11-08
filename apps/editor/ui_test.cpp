@@ -1,3 +1,6 @@
+// UI-CONTRATO: teste sem janela de idiomas e temas. Usa ImGui so para criar e destruir o contexto
+// (CreateContext, GetStyle, DestroyContext). Ao trocar o ImGui pela SpriteUI, este teste deve ser mantido
+// com a parte de idiomas e temas (ver ui_contract.hpp, secao 3.3 e 2.14).
 // Teste dos sistemas de UI do editor: pacotes de idioma e temas (sem abrir janela).
 #include "i18n.hpp"
 #include "theme.hpp"

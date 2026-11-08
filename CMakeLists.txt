@@ -31,6 +31,12 @@ if(WIN32)
   # windows.h defines min/max macros that break std::min/std::max; also keep it lean.
   add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 endif()
+# Light Prism (third_party/LightPrism): iluminacao, clusters, cascatas de sombra e BRDF. So o nucleo entra aqui
+# (sem os testes e sem o renderizador de referencia da propria biblioteca). O backend Diligent e ligado por TOOL_WITH_DILIGENT.
+set(LP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LP_BUILD_SOFT OFF CACHE BOOL "" FORCE)
+set(LP_ENABLE_DILIGENT ${TOOL_WITH_DILIGENT} CACHE BOOL "" FORCE)
+add_subdirectory(third_party/LightPrism)
 add_subdirectory(engine)
 option(TOOL_BUILD_FUZZ "Alvos libFuzzer (clang)" OFF)
 if(TOOL_BUILD_FUZZ)

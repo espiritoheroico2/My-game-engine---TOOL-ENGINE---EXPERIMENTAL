@@ -64,6 +64,7 @@ struct PipelineDesc {
   std::vector<VertexAttrib> layout; u32 vertexStride = 0;
   std::vector<std::string> uniformNames; // slot i -> nome do cbuffer no HLSL
   std::vector<std::string> textureNames; // slot i -> nome da textura (Texture2D) no shader de pixel; lida com Load/texelFetch (sem sampler)
+  std::vector<std::string> storageNames; // slot i -> nome de um StructuredBuffer somente leitura (SRV) no shader de pixel (setStorage)
   std::string name;
 };
 
@@ -84,6 +85,11 @@ public:
   virtual void setIndexBuffer(BufferId b) = 0;
   virtual void setUniform(u32 slot, BufferId b) = 0;
   virtual void setTexture(u32 slot, TextureId t) = 0; // textura criada com renderTarget=true pode ser lida no shader (ex.: mapa de sombra)
+  // Viewport (e scissor) dentro do alvo atual, em pixels. begin() ja define o alvo inteiro; use isto para desenhar
+  // varias faces num alvo empilhado (mapa de sombra de cubo em uma textura R x 6R). Chamar depois de begin().
+  virtual void setViewport(u32 x, u32 y, u32 w, u32 h) = 0;
+  // Buffer estruturado somente leitura (StructuredBuffer) no slot de PipelineDesc::storageNames. Padrao: nada (backends sem suporte ignoram).
+  virtual void setStorage(u32 /*slot*/, BufferId /*b*/) {}
   virtual void drawIndexed(u32 indexCount, u32 instances) = 0;
   virtual void end() = 0;
 };
@@ -106,6 +112,12 @@ public:
   virtual bool resizeSwapchain(u32, u32) { return false; }
   virtual bool readTexture(TextureId, std::vector<u8>&, u32&, u32&) { return false; }
   virtual std::string deviceName() const { return "null"; }
+  // Importa um buffer criado por outra biblioteca na mesma GPU (ex.: IBuffer do Diligent da Light Prism). O handle NAO
+  // e dono do recurso: o chamador continua responsavel pelo buffer original. Nulo se o backend nao suporta.
+  virtual BufferId importBuffer(void* /*nativeBuffer*/) { return kNullHandle; }
+  // Dispositivo e contexto imediato nativos (Diligent: IRenderDevice* e IDeviceContext*), para bibliotecas que falam com a API direto.
+  virtual void* nativeDevice() const { return nullptr; }
+  virtual void* nativeContext() const { return nullptr; }
   virtual DrawStats frameStats() const = 0;
 };
 

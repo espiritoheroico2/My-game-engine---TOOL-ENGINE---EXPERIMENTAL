@@ -26,7 +26,7 @@
 #include "tool/render/gpu_renderer.hpp"
 #include "tool/render/postfx.hpp"
 #include "tool/render/upscale.hpp"
-#include "tool/render/shadow.hpp"
+#include "tool/render/lighting.hpp"
 #include "tool/render/soft_renderer.hpp"
 #ifdef TOOL_EDITOR_GPU
 #include "tool/rhi/diligent_device.hpp"
@@ -93,6 +93,7 @@ struct Editor {
 
   // visualizacao
   tool::SoftRenderer renderer{640, 360};
+  tool::LightRig lightRig;       // Light Prism: luzes, clusters, cascatas e ambiente (um quadro para CPU e GPU)
   tool::Mesh cube = tool::Mesh::cube(0.5f), sphere = tool::Mesh::sphere(0.5f), plane = tool::Mesh::plane(0.5f);
   // Nivel de detalhe: esfera de baixa resolucao (8x5 = ~80 triangulos contra ~576) para objetos longe da camera.
   tool::Mesh sphereFar = tool::Mesh::sphere(0.5f, 8, 5);
@@ -300,7 +301,7 @@ struct Editor {
     }
     std::string err;
     gpuDev = tool::rhi::createDiligentDevice(info, &err);
-    if (!gpuDev || !gpu.init(*gpuDev, "assets/shaders", 640, 360)) {
+    if (!gpuDev || !gpu.init(*gpuDev, tool::rhi::createLightPrismDevice(*gpuDev), "assets/shaders", 640, 360)) {
       apiStatus = "FAILED (" + (err.empty() ? std::string("shaders/pipeline") : err) + "): using CPU";
       shutdownGpu(); apiChoice = 0; return;
     }
@@ -605,7 +606,7 @@ struct Editor {
     scene.world().each<GlobalLight>([&](tool::Entity ge, GlobalLight& g) {
       if (haveSun || scene.world().has<Inactive>(ge)) return; // so a primeira Global Light vale
       haveSun = true;
-      tool::Light l = sunLight(g, sunRuntime); l.castShadow = g.castShadow && sceneInfo.render.shadow.enabled;
+      tool::Light l = sunLight(g, sunRuntime); l.castShadow = g.castShadow && sceneInfo.render.lighting.shadows;
       if (sunIdx) *sunIdx = static_cast<int>(lights.size());
       lights.push_back(l); ambient = {g.ambient[0], g.ambient[1], g.ambient[2]};
     });
@@ -636,33 +637,33 @@ struct Editor {
     return meshOf(mr);
   }
 
-  // Esfera que envolve todos os objetos que PROJETAM sombra (planos grandes, como o chao, ficam de fora: so recebem).
-  // O mapa de sombra cobre so essa regiao -> mais nitidez por texel e zero custo se ninguem projeta sombra.
-  // Retorna false se nao ha nenhum projetor.
-  bool shadowCasterBounds(tool::Vec3& center, float& radius) {
-    tool::Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f}; int n = 0;
-    scene.world().each<MeshRenderer, Transform>([&](tool::Entity me, MeshRenderer& mr, Transform& t) {
-      if (!mr.castShadow || mr.shape == 2) return;
-      const tool::Mat4 wm = worldMat(me); const tool::Vec3 p{wm.m[3][0], wm.m[3][1], wm.m[3][2]};
-      float sc = 0.f; for (int c = 0; c < 3; ++c) sc = std::max(sc, std::sqrt(wm.m[c][0] * wm.m[c][0] + wm.m[c][1] * wm.m[c][1] + wm.m[c][2] * wm.m[c][2]));
-      (void)t; const float r = sc * 0.9f; // 0.87 = meia diagonal do cubo unitario
-      lo = {std::min(lo.x, p.x - r), std::min(lo.y, p.y - r), std::min(lo.z, p.z - r)};
-      hi = {std::max(hi.x, p.x + r), std::max(hi.y, p.y + r), std::max(hi.z, p.z + r)};
-      ++n;
+  // Assinatura do que define o mapa de sombras: sol, objetos que projetam, camera e ajustes da Light Prism.
+  // Igual ao quadro anterior = os mapas de sombra sao reaproveitados (ver renderScene).
+  std::uint64_t shadowSignature(const tool::Camera& cam, int w, int h, const std::vector<tool::Light>& lights) {
+    std::uint64_t hs = 1469598103934665603ull;
+    auto mixu = [&](std::uint64_t v) { hs ^= v; hs *= 1099511628211ull; };
+    auto mixf = [&](float f) { std::uint32_t b; std::memcpy(&b, &f, 4); mixu(b); };
+    const tool::LightingSettings& st = sceneInfo.render.lighting;
+    mixu(st.csmCascades); mixu(st.shadowMapResolution); mixu(st.pcfTaps); mixu(st.snapToTexels ? 1u : 0u);
+    mixf(st.splitLambda); mixf(st.shadowDistance); mixf(st.blendFraction); mixf(st.casterExtension); mixf(st.depthBias); mixf(st.normalBias);
+    for (const tool::Light& l : lights) if (l.type == tool::LightType::Directional) {
+      mixf(l.direction.x); mixf(l.direction.y); mixf(l.direction.z); mixf(l.intensity); mixu(l.castShadow ? 1u : 0u);
+    }
+    for (const tool::Vec3* v : {&cam.eye, &cam.target, &cam.up}) { mixf(v->x); mixf(v->y); mixf(v->z); }
+    mixf(cam.fovY); mixf(cam.nearZ); mixf(cam.farZ); mixu(cam.ortho ? 1u : 0u); mixf(cam.orthoHeight);
+    mixu(static_cast<std::uint64_t>(w)); mixu(static_cast<std::uint64_t>(h));
+    scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+      if (!mr.castShadow) return;
+      const tool::Mesh* m = lodMeshOf(e, mr, cam); if (!m) return;
+      mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m));
+      const tool::Mat4 wm = worldMat(e);
+      for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(wm.m[c][r]);
     });
     scene.world().each<VoxelChunk, Transform>([&](tool::Entity ce, VoxelChunk& vc, Transform&) {
       if (scene.world().has<Inactive>(ce)) return;
-      const tool::Mat4 wm = worldMat(ce); const tool::Vec3 p{wm.m[3][0], wm.m[3][1], wm.m[3][2]};
-      const float span = vc.cell * kChunkSize;
-      const tool::Vec3 a{p.x, p.y, p.z}, b{p.x + span, p.y + span, p.z + span};
-      lo = {std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z)};
-      hi = {std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z)};
-      ++n;
+      mixu(ce.index); mixu(ce.generation); mixu(vc.revision); mixf(vc.cell);
     });
-    if (n == 0) return false;
-    center = (lo + hi) * 0.5f;
-    radius = std::clamp(tool::length(hi - lo) * 0.5f + 3.f, 4.f, sceneInfo.render.shadow.distance); // +3 m de folga: sombras longas nao cortam na borda
-    return true;
+    return hs;
   }
 
   // Renderiza a cena para um buffer RGBA w*h. `highlight` realca o objeto selecionado (so na janela Scene).
@@ -696,33 +697,16 @@ private:
     // Com skybox ligado, o fundo sai com alfa 0 (o skybox e pintado depois, em renderView). 2D nao usa skybox.
     const float bgAlpha = (sceneInfo.sky.enabled && !cam.ortho) ? 0.f : 1.f;
     collectLights(lights, ambient, &sunIdx);
-    // sombras do sol: so se o sol projeta E existe pelo menos um objeto que projeta
-    tool::ShadowFrustum fr; bool shadows = false;
-    if (sunIdx >= 0 && lights[static_cast<size_t>(sunIdx)].castShadow) {
-      tool::Vec3 c; float r = 0;
-      if (shadowCasterBounds(c, r)) { fr = tool::makeSunShadow(lights[static_cast<size_t>(sunIdx)].direction, c, r, sceneInfo.render.shadow.resolution); shadows = fr.valid; }
-    }
-    if (!shadows) for (auto& l : lights) l.castShadow = false;
-    // "Sleeper" de sombras: se luz e todos os objetos que projetam sombra estao IGUAIS ao quadro anterior, reaproveita o shadow map.
-    std::uint64_t sigNow = 0;
-    if (shadows) {
-      std::uint64_t hs = 1469598103934665603ull;
-      auto mixu = [&](std::uint64_t v) { hs ^= v; hs *= 1099511628211ull; };
-      auto mixf = [&](float f) { std::uint32_t b; std::memcpy(&b, &f, 4); mixu(b); };
-      for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(fr.viewProj.m[c][r]);
-      mixu(static_cast<std::uint64_t>(sceneInfo.render.shadow.resolution));
-      scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-        if (!mr.castShadow) return;
-        const tool::Mesh* m = lodMeshOf(e, mr, cam); if (!m) return;
-        mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m)); const tool::Mat4 wm = worldMat(e);
-        for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(wm.m[c][r]);
-      });
-      scene.world().each<VoxelChunk, Transform>([&](tool::Entity ce, VoxelChunk& vc, Transform&) {
-        if (scene.world().has<Inactive>(ce)) return;
-        mixu(ce.index); mixu(ce.generation); mixu(vc.revision); mixf(vc.cell);
-      });
-      sigNow = hs;
-    } else { sigGpuValid = sigCpuValid = false; }
+    // Light Prism: um unico quadro de iluminacao (luzes, ambiente e cascatas de sombra do sol) para CPU e GPU.
+    // As cascatas usam a mesma view/projecao da camera que os renderizadores.
+    lightRig.configure(sceneInfo.render.lighting);
+    const tool::Mat4 view = tool::Mat4::lookAt(cam.eye, cam.target, cam.up);
+    const tool::Mat4 proj = cam.projection(static_cast<tool::f32>(w), static_cast<tool::f32>(h));
+    const tool::LightFrame& lf = lightRig.build(lights, ambient, cam.eye, view, proj.m[0][0], proj.m[1][1], cam.nearZ, cam.farZ);
+    const bool shadows = lf.shadows();
+    // "Sleeper" de sombras: se a assinatura do shadow map e igual a do quadro anterior, o renderizador reaproveita os mapas.
+    const std::uint64_t sigNow = shadows ? shadowSignature(cam, w, h, lights) : 0;
+    if (!shadows) sigGpuValid = sigCpuValid = false;
     tool::u64 tris = 0; unsigned draws = 0, casters = 0;
     auto material = [&](tool::Entity e, const MeshRenderer& mr) {
       tool::Material m{{mr.color[0], mr.color[1], mr.color[2]}, mr.roughness, mr.metallic, mr.castShadow, mr.receiveShadow};
@@ -782,38 +766,46 @@ private:
       if (glCtx) SDL_GL_MakeCurrent(gpuWin, glCtx);
       struct Release { Editor& e; ~Release() { if (e.glCtx && e.gpuWin) SDL_GL_MakeCurrent(e.gpuWin, nullptr); } } release{*this};
       gpu.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
-      gpu.begin(cam, lights, ambient, {0.02f, 0.025f, 0.035f}, bgAlpha);
-      if (shadows) { const bool re = sigGpuValid && sigGpu == sigNow; gpu.setShadow(sceneInfo.render.shadow, fr, re); sigGpu = sigNow; sigGpuValid = true; if (re) ++prof.counters.shadowReused; }
-      scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-        if (scene.world().has<Inactive>(e)) return;
-        if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); gpu.draw(*m, worldMat(e), mat); }
-      });
-      drawChunks(gpu);
-      gpu.end();
-      gpuDev->present();
-      tool::u32 rw = 0, rh = 0;
-      const bool readOk = gpu.readback(gpuPixels, rw, rh);
-      if (tool::debug().count(tool::Severity::Error) > errBefore) {
-        if (++gpuBadFrames >= 5) { applyApi(0); apiStatus = "Software (CPU) - the GPU reported errors in several frames in a row (see Console)"; gpuBadFrames = 0; }
-      } else gpuBadFrames = 0;
-      if (apiActive != 0 && readOk && static_cast<int>(rw) == w && static_cast<int>(rh) == h) {
-        if (std::getenv("TOOL_DUMP")) { // depuracao: media de brilho do quadro (para comparar APIs sem olhar a tela)
-          unsigned long long sum = 0; for (size_t i = 0; i < gpuPixels.size(); i += 4) sum += gpuPixels[i] + gpuPixels[i + 1] + gpuPixels[i + 2];
-          std::fprintf(stderr, "GPU frame mean brightness: %.1f\n", static_cast<double>(sum) / (static_cast<double>(gpuPixels.size()) / 4.0 * 3.0));
+      gpu.begin(cam, {0.02f, 0.025f, 0.035f}, bgAlpha);
+      const bool reGpu = shadows && sigGpuValid && sigGpu == sigNow;
+      if (!gpu.setLighting(lightRig, view, proj, reGpu)) {
+        // Light Prism nao conseguiu montar a iluminacao na GPU: a CPU desenha este quadro e os seguintes.
+        const std::string why = gpu.lastError();
+        applyApi(0); apiStatus = "Software (CPU) - " + why;
+      } else {
+        if (shadows) { sigGpu = sigNow; sigGpuValid = true; if (gpu.shadowPassSkipped()) ++prof.counters.shadowReused; }
+        scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+          if (scene.world().has<Inactive>(e)) return;
+          if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); gpu.draw(*m, worldMat(e), mat); }
+        });
+        drawChunks(gpu);
+        gpu.end();
+        gpuDev->present();
+        tool::u32 rw = 0, rh = 0;
+        const bool readOk = gpu.readback(gpuPixels, rw, rh);
+        if (tool::debug().count(tool::Severity::Error) > errBefore) {
+          if (++gpuBadFrames >= 5) { applyApi(0); apiStatus = "Software (CPU) - the GPU reported errors in several frames in a row (see Console)"; gpuBadFrames = 0; }
+        } else gpuBadFrames = 0;
+        if (apiActive != 0 && readOk && static_cast<int>(rw) == w && static_cast<int>(rh) == h) {
+          if (std::getenv("TOOL_DUMP")) { // depuracao: media de brilho do quadro (para comparar APIs sem olhar a tela)
+            unsigned long long sum = 0; for (size_t i = 0; i < gpuPixels.size(); i += 4) sum += gpuPixels[i] + gpuPixels[i + 1] + gpuPixels[i + 2];
+            std::fprintf(stderr, "GPU frame mean brightness: %.1f\n", static_cast<double>(sum) / (static_cast<double>(gpuPixels.size()) / 4.0 * 3.0));
+          }
+          prof.counters.tris += tris; prof.counters.draws += draws; prof.counters.shadowCasters += casters;
+          return gpuPixels.data();
         }
-        prof.counters.tris += tris; prof.counters.draws += draws; prof.counters.shadowCasters += casters;
-        return gpuPixels.data();
+        if (apiActive != 0) { applyApi(0); apiStatus = "Software (CPU) - GPU readback failed"; }
       }
-      if (apiActive != 0) { applyApi(0); apiStatus = "Software (CPU) - GPU readback failed"; }
       tris = 0; draws = 0; casters = 0; // a CPU vai contar de novo
     }
     if (static_cast<int>(renderer.width()) != w || static_cast<int>(renderer.height()) != h) renderer.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
     renderer.begin(cam, {0.08f, 0.09f, 0.11f}, bgAlpha);
-    renderer.setLights(lights, ambient);
-    if (shadows) { const bool re = sigCpuValid && sigCpu == sigNow; renderer.setShadow(sceneInfo.render.shadow, fr, re); sigCpu = sigNow; sigCpuValid = true; if (re) ++prof.counters.shadowReused; }
+    const bool reCpu = shadows && sigCpuValid && sigCpu == sigNow;
+    renderer.setLighting(lf, reCpu);
+    if (shadows) { sigCpu = sigNow; sigCpuValid = true; if (renderer.shadowPassSkipped()) ++prof.counters.shadowReused; }
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
       if (scene.world().has<Inactive>(e)) return;
-        if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); renderer.draw(*m, worldMat(e), mat); }
+      if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) { if (skipCulled(e, *m, mr)) return; const tool::Material mat = material(e, mr); count(*m, mat); renderer.draw(*m, worldMat(e), mat); }
     });
     drawChunks(renderer);
     prof.counters.tris += tris; prof.counters.draws += draws; prof.counters.shadowCasters += casters; prof.counters.shadowTris += renderer.shadowTriangles();

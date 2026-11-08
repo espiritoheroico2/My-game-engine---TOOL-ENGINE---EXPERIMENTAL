@@ -1,3 +1,10 @@
+// UI-CONTRATO: este arquivo usa Dear ImGui e ImNodes. Catalogo, padroes e regras em ui_contract.hpp (secoes 2.16 e 4).
+// Elementos: editor de grafo (ImNodes: BeginNodeEditor, BeginNode, title bar, entradas e saidas, Link, selecao),
+//   campos de texto dos nos (InputText, InputDouble para duracao), botoes de passo e de Play/Stop, EndChild para o log.
+// Dados: grafo do Narrative (narrative.hpp) com um id inteiro por no; posicoes em espaco de grade (SetNodeGridSpacePos).
+//   O bloco "Cena: <nome>" e fixo e indestrutivel (Delete nao o apaga).
+// Troca SpriteUI: o grafo precisa de um equivalente de "node editor" (nos arrastaveis, cabos, selecao) ou a
+//   biblioteca de nos deve ser mantida como modulo separado.
 // Painel do Controlador Narrativo: editor visual de grafo (imnodes) sobre o mesmo .json que o jogo carrega.
 #pragma once
 #include "i18n.hpp"

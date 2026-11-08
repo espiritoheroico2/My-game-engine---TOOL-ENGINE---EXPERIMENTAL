@@ -4,6 +4,33 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 
 ## Feito
 
+### 0.7.16-beta (sombras de luzes pontuais e spot, CPU e GPU)
+- [x] Sombra de point light (cubo de 6 faces) e de spot (1 face) no SoftRenderer, ate 4 luzes por distancia da camera
+- [x] Settings > Lighting: luzes com sombra (0 a 4) e resolucao por face; salvas no project
+- [x] Testes: sombra atras do bloco, orcamento e numero de faces (tool_tests: 131, 0 falhas)
+- [x] gpu_test: sombra pontual GPU x CPU (1586 x 1584 pixels escurecidos), Vulkan OK
+- [x] Sombras de pontual/spot na GPU (faixa R x 6R por luz, viewport por face, PointShadow.hlsli); CPU e GPU batem no teste (Vulkan/lavapipe)
+- [x] Sol respeita receiveShadow na GPU (paridade com a CPU)
+- [ ] D3D12: compilar e testar na maquina Windows (nao verificado neste ambiente Linux)
+- [ ] SSAO: pipeline com profundidade e normais, Light Prism `Post/Ssao`, AO no ambiente (CPU e GPU)
+- [ ] Ray tracing: Light Prism `Rt/Bvh` e `RtEffects` (sombra de contato, AO), CPU primeiro; GPU depois
+- [ ] Demais recursos da Light Prism: VSM, SDF, fog volumetrico, probes, PRT, SSR, VPL emissivo, planar shadows, CascadeCache, MemoryBudget
+- [ ] Pagina de ajuda do Light Prism no editor (help_content.hpp) e textos pt-BR/es
+- [ ] Um so caminho de iluminacao para CPU e GPU (hoje a fachada e o LightRig, mas o AO/RT ainda nao passam por ela)
+
+### 0.7.15-beta (iluminacao pela Light Prism)
+- [x] Light Prism integrada (third_party/LightPrism) como unica iluminacao da engine
+- [x] CPU (SoftRenderer) com BRDF, sombras CSM e ambiente SH9 da Light Prism
+- [x] GPU (Diligent, Vulkan) com clusters da Light Prism no mesmo dispositivo do RHI
+- [x] Settings > Lighting: presets, personalizado, orcamento de luzes, sombras do sol, ambiente
+- [x] Cenas antigas (`render.shadow`) convertidas ao abrir
+- [x] Profiler mostra cascatas ativas e luzes descartadas
+- [x] Textos da interface em pt-BR e es
+- [x] Testes: tool_tests (129), gpu_test vulkan, editor_selftest
+- [ ] OpenGL: iluminacao em GLSL (hoje cai para a CPU)
+- [ ] D3D12: teste na GPU real (so Vulkan/lavapipe foi testado)
+- [ ] Point Light e Global Light como tipos proprios (hoje sao componentes do editor sobre a Light Prism)
+
 ### 0.7.14-beta (desempenho com muitos objetos e chunks opcionais)
 - [x] Benchmark headless: `--ecs N` e `--voxel N` (exige `--project` de teste)
 - [x] Esfera com nivel de detalhe acima de 25 m (sombra e culling coerentes)

@@ -1,3 +1,9 @@
+// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo, padroes e regras em ui_contract.hpp (secoes 2 e 3).
+// Elementos: janela Editor info (formulario com InputText e SeparatorText), janela Export (Combo de plataforma com
+//   BeginDisabled para as indisponiveis, Button "Export game", TextWrapped com avisos), SetTooltip.
+// Dados: buffers static Draft preenchidos a partir de ProjectSettings; "Save info" grava project.json.
+//   O botao de exportar salva a cena, grava o projeto e chama xp::exportGame (export.hpp).
+// Troca SpriteUI: formularios e a lista de plataformas.
 // ToolEngine Editor - janelas "Editor info" (dados do estudio e do jogo) e "Export game" (exportar a pasta).
 // O "Editor info" trabalha com um rascunho: so grava quando clicar em "Save info", assim um campo pela metade nao vai para o projeto.
 #pragma once

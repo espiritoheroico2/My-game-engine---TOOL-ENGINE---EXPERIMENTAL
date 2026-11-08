@@ -1,3 +1,9 @@
+// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo, padroes e regras em ui_contract.hpp (secoes 2.10 e 3.6).
+// Elementos: overlays com ImDrawList (GetWindowDrawList): particulas (AddCircleFilled, AddTriangleFilled, AddLine para
+//   trajetoria), UI do jogo (drawUiOverlay: PushClipRect, AddText, AddRect, barras e botoes), GetFont/GetFontSize para
+//   medir texto, InvisibleButton para os botoes do jogo (so reagem no Play), ColorConvert para cores.
+// Dados: UiCanvas e ParticleComp dos componentes; cores float 0..1.
+// Troca SpriteUI: TODO o desenho de UI do jogo (drawUiOverlay) e o desenho de sprites das particulas viram SpriteUI.
 // fx.hpp - Particulas (CPU, integrador simples com gravidade/quique da fisica Newtoon da cena) e UI de jogo (overlay ImGui por camera).
 // Particulas e UI sao DESENHADAS por cima da imagem (ImDrawList): sem teste de profundidade contra a cena (limite conhecido; ver docs/UI_FX.md).
 #pragma once

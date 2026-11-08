@@ -1,10 +1,15 @@
 // ToolEngine - SoftRenderer: rasterizador em CPU (alpha). Desenha a cena 3D iluminada sem GPU:
 // serve de viewport do editor, de renderizador de referencia/teste e de fallback sem backend grafico.
-// Usa o mesmo modelo de luz de lighting.hpp (atenuacao fisica, spot, direcional).
+// Iluminacao pela Light Prism (lighting.hpp): BRDF PBR, luzes pontuais/spot/sol, cascatas de sombra (CSM) e luz
+// ambiente em SH9. O tonemap e ACES + sRGB, igual ao caminho GPU.
 #pragma once
 #include "tool/render/lighting.hpp"
 #include "tool/render/texture.hpp"
-#include "tool/render/shadow.hpp"
+
+#include "LightPrism/Reference/Brdf.hpp"
+#include "LightPrism/Reference/Tonemap.hpp"
+#include "LightPrism/Ibl/Ibl.hpp"
+#include "LightPrism/Shadow/Csm.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -180,7 +185,7 @@ struct Mesh {
   }
 };
 
-// castShadow / receiveShadow: por objeto, independentes (ver shadow.hpp).
+// castShadow / receiveShadow: por objeto, independentes (ver lighting.hpp).
 struct Material { Vec3 albedo{0.8f, 0.8f, 0.8f}; f32 roughness = 0.5f; f32 metallic = 0.f; bool castShadow = true, receiveShadow = true; const Texture* albedoMap = nullptr; };
 
 struct Camera {
@@ -216,30 +221,51 @@ public:
     view_ = Mat4::lookAt(cam.eye, cam.target, cam.up);
     viewProj_ = cam.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * view_;
     std::fill(depth_.begin(), depth_.end(), 1.f);
-    put(0, clearColor);
+    // Fundo: a cor de limpeza e sRGB direto (como o alvo sRGB da GPU), sem a curva ACES usada nos objetos.
+    auto toSrgb = [](f32 c) { c = std::clamp(c, 0.f, 1.f); return c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f; };
+    color_[0] = toByte(toSrgb(clearColor.x)); color_[1] = toByte(toSrgb(clearColor.y)); color_[2] = toByte(toSrgb(clearColor.z));
     color_[3] = clearAlpha < 0.5f ? 0 : 255;
     for (size_t i = 1; i < static_cast<size_t>(w_) * h_; ++i) std::memcpy(&color_[i * 4], &color_[0], 4); // cor de fundo: calcula 1 vez e copia
     pending_.clear(); mats_.clear();
-    shadowOn_ = false; shadowSkip_ = false; shadowTris_.clear(); // sombras: o chamador liga de novo com setShadow() a cada quadro
+    shadowOn_ = false; shadowSkip_ = false; for (auto& t : shadowTris_) t.clear(); // sombras: o chamador liga de novo com setLighting() a cada quadro
+    pointOn_ = false; for (auto& t : faceTris_) t.clear();
     tris_ = shaded_ = 0;
   }
 
-  void setLights(const std::vector<Light>& l, Vec3 ambient = {0.03f, 0.03f, 0.04f}) { lights_ = l; ambient_ = ambient; }
-
-  // Liga as sombras do sol (a luz com castShadow = true). Chamar depois de begin() e ANTES dos draw().
-  // `fr` vem de makeSunShadow(); com enabled=false (ou fr invalido) nada e gerado e o custo e zero.
-  // reuse = true: nada que projeta sombra nem a luz mudou ("sleeper"): mantem o mapa do quadro anterior e nao rasteriza os casters.
-  void setShadow(const ShadowSettings& st, const ShadowFrustum& fr, bool reuse = false) {
-    shadowOn_ = st.enabled && fr.valid; shadowSet_ = st; shadowFr_ = fr;
-    const int res = std::clamp(st.resolution, 128, 4096);
+  // Iluminacao do quadro (LightFrame, vindo de LightRig::build). Chamar depois de begin() e ANTES dos draw().
+  // reuse = true: nada que projeta sombra nem a luz mudou ("sleeper"): mantem os mapas do quadro anterior e nao
+  // rasteriza os casters. Sem cascatas (csm.cascadeCount == 0) nao ha passe de sombra e o custo e zero.
+  void setLighting(const LightFrame& f, bool reuse = false) {
+    lf_ = f;
+    const bool on = lf_.shadows();
+    const u32 count = on ? std::min<u32>(lf_.csm.gpu.cascadeCount, LightPrism::kMaxCsmCascades) : 0u;
+    const int res = on ? std::clamp(static_cast<int>(lf_.csm.gpu.shadowMapSize), 128, 4096) : shadowRes_;
     const size_t n = static_cast<size_t>(res) * static_cast<size_t>(res);
-    shadowSkip_ = shadowOn_ && reuse && shadowValid_ && res == shadowRes_ && shadowMap_.size() == n;
-    shadowRes_ = res;
-    if (shadowOn_ && !shadowSkip_) { shadowMap_.assign(n, 1.f); shadowValid_ = false; }
-    shadowTris_.clear();
+    const bool sameLayout = on && res == shadowRes_ && count == shadowCount_ && shadowMap_[0].size() == n;
+    shadowOn_ = on; shadowCount_ = count; shadowRes_ = res;
+    shadowSkip_ = on && reuse && shadowValid_ && sameLayout;
+    for (u32 k = 0; k < count; ++k) {
+      cascadeVp_[k] = toTool(lf_.csm.gpu.cascades[k].viewProj);
+      if (!shadowSkip_) shadowMap_[k].assign(n, 1.f);
+      shadowTris_[k].clear();
+    }
+    if (on && !shadowSkip_) shadowValid_ = false;
+    // Sombras de luzes pontuais/spot: um mapa por face (slot = luz * 6 + face), sempre refeito a cada quadro.
+    pointOn_ = !lf_.shadowLights.empty();
+    pointRes_ = std::clamp(static_cast<int>(lf_.pointShadowResolution), 64, 2048);
+    const size_t pn = static_cast<size_t>(pointRes_) * static_cast<size_t>(pointRes_);
+    for (size_t i = 0; i < lf_.shadowLights.size(); ++i)
+      for (u32 f = 0; f < lf_.shadowLights[i].faces; ++f) {
+        const size_t slot = i * kMaxPointShadowFaces + f;
+        faceMap_[slot].assign(pn, 1e30f); // profundidade em metros: "infinito" = nada na frente (1.0 seria 1 m)
+        faceTris_[slot].clear();
+      }
   }
+  // Luzes pontuais/spot com sombra neste quadro (ShadowLight) e quantas faces tem cada uma.
+  size_t pointShadowLights() const { return lf_.shadowLights.size(); }
   bool shadowPassSkipped() const { return shadowSkip_; }
-  u64 shadowTriangles() const { return shadowTris_.size(); }
+  bool shadowsActive() const { return shadowOn_; }
+  u64 shadowTriangles() const { u64 n = 0; for (const auto& t : shadowTris_) n += t.size(); return n; }
 
   // draw() so PREPARA os triangulos (transforma vertices, descarta fora da tela/costas); o desenho dos pixels
   // acontece em flush(), dividido em faixas de linhas processadas por varias threads. Cada faixa percorre os
@@ -256,23 +282,29 @@ public:
     }
     const u32 matIdx = static_cast<u32>(mats_.size());
     mats_.push_back(mat);
-    if (shadowOn_ && !shadowSkip_ && mat.castShadow) { // triangulos vistos do sol (sem culling: sombra vale para as duas faces)
+    if (shadowOn_ && !shadowSkip_ && mat.castShadow) { // triangulos vistos do sol, uma lista por cascata (sem culling: sombra vale para as duas faces)
       const f32 R = static_cast<f32>(shadowRes_);
-      std::vector<Vec3> ls(m.pos.size()); // x,y em texels, z em 0..1
-      for (size_t i = 0; i < m.pos.size(); ++i) {
-        const Vec3 wp = world.transformPoint(m.pos[i]); const Vec4 c = shadowFr_.viewProj.mul({wp.x, wp.y, wp.z, 1});
-        ls[i] = {(c.x * 0.5f + 0.5f) * R, (1.f - (c.y * 0.5f + 0.5f)) * R, c.z};
+      for (u32 k = 0; k < shadowCount_; ++k) {
+        std::vector<Vec3> ls(m.pos.size()); // x,y em texels, z em 0..1 (convencao da LightPrism: y cresce para baixo)
+        for (size_t i = 0; i < m.pos.size(); ++i) {
+          const Vec3 wp = world.transformPoint(m.pos[i]); const Vec4 c = cascadeVp_[k].mul({wp.x, wp.y, wp.z, 1});
+          ls[i] = {(c.x * 0.5f + 0.5f) * R, (0.5f - c.y * 0.5f) * R, c.z};
+        }
+        for (size_t t = 0; t + 2 < m.idx.size(); t += 3) {
+          ShadowTri st; const Vec3* q[3] = {&ls[m.idx[t]], &ls[m.idx[t + 1]], &ls[m.idx[t + 2]]};
+          for (int j = 0; j < 3; ++j) { st.x[j] = q[j]->x; st.y[j] = q[j]->y; st.z[j] = q[j]->z; }
+          st.area = (st.x[1] - st.x[0]) * (st.y[2] - st.y[0]) - (st.y[1] - st.y[0]) * (st.x[2] - st.x[0]);
+          if (std::abs(st.area) < 1e-6f) continue;
+          st.x0 = std::max(0, static_cast<int>(std::floor(std::min({st.x[0], st.x[1], st.x[2]})))); st.x1 = std::min(shadowRes_ - 1, static_cast<int>(std::ceil(std::max({st.x[0], st.x[1], st.x[2]}))));
+          st.y0 = std::max(0, static_cast<int>(std::floor(std::min({st.y[0], st.y[1], st.y[2]})))); st.y1 = std::min(shadowRes_ - 1, static_cast<int>(std::ceil(std::max({st.y[0], st.y[1], st.y[2]}))));
+          if (st.x0 > st.x1 || st.y0 > st.y1) continue;
+          shadowTris_[k].push_back(st);
+        }
       }
-      for (size_t t = 0; t + 2 < m.idx.size(); t += 3) {
-        ShadowTri st; const Vec3* q[3] = {&ls[m.idx[t]], &ls[m.idx[t + 1]], &ls[m.idx[t + 2]]};
-        for (int k = 0; k < 3; ++k) { st.x[k] = q[k]->x; st.y[k] = q[k]->y; st.z[k] = q[k]->z; }
-        st.area = (st.x[1] - st.x[0]) * (st.y[2] - st.y[0]) - (st.y[1] - st.y[0]) * (st.x[2] - st.x[0]);
-        if (std::abs(st.area) < 1e-6f) continue;
-        st.x0 = std::max(0, static_cast<int>(std::floor(std::min({st.x[0], st.x[1], st.x[2]})))); st.x1 = std::min(shadowRes_ - 1, static_cast<int>(std::ceil(std::max({st.x[0], st.x[1], st.x[2]}))));
-        st.y0 = std::max(0, static_cast<int>(std::floor(std::min({st.y[0], st.y[1], st.y[2]})))); st.y1 = std::min(shadowRes_ - 1, static_cast<int>(std::ceil(std::max({st.y[0], st.y[1], st.y[2]}))));
-        if (st.x0 > st.x1 || st.y0 > st.y1) continue;
-        shadowTris_.push_back(st);
-      }
+    }
+    if (pointOn_ && mat.castShadow) { // luzes pontuais/spot: cada face de cada luz com sombra recebe os triangulos
+      for (size_t i = 0; i < lf_.shadowLights.size(); ++i)
+        for (u32 f = 0; f < lf_.shadowLights[i].faces; ++f) addFaceCaster(m, world, lf_.shadowLights[i], f, i * kMaxPointShadowFaces + f);
     }
     for (size_t t = 0; t + 2 < m.idx.size(); t += 3) {
       const V& a = v[m.idx[t]]; const V& b = v[m.idx[t + 1]]; const V& c = v[m.idx[t + 2]];
@@ -322,50 +354,141 @@ public:
     pending_.clear();
   }
 
-  // Passe de profundidade do sol: cada thread preenche uma faixa de linhas do mapa (sem disputa de escrita).
-  void flushShadow() const {
-    if (shadowSkip_) { shadowTris_.clear(); return; }
-    if (!shadowOn_ || shadowTris_.empty()) { shadowTris_.clear(); shadowValid_ = shadowOn_; return; }
-    const int R = shadowRes_;
-    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    const int nT = std::clamp(static_cast<int>(std::min(hw, 8u)), 1, std::max(1, R / 64));
-    auto work = [&](int band) {
-      const int y0 = R * band / nT, y1 = R * (band + 1) / nT - 1;
-      for (const ShadowTri& t : shadowTris_) {
-        if (t.y1 < y0 || t.y0 > y1) continue;
-        const f32 inv = 1.f / t.area;
-        for (int y = std::max(t.y0, y0); y <= std::min(t.y1, y1); ++y)
-          for (int x = t.x0; x <= t.x1; ++x) {
-            const f32 px = static_cast<f32>(x) + 0.5f, py = static_cast<f32>(y) + 0.5f;
-            const f32 w0 = ((t.x[1] - px) * (t.y[2] - py) - (t.y[1] - py) * (t.x[2] - px)) * inv, w1 = ((t.x[2] - px) * (t.y[0] - py) - (t.y[2] - py) * (t.x[0] - px)) * inv, w2 = 1.f - w0 - w1;
-            if (w0 < -1e-4f || w1 < -1e-4f || w2 < -1e-4f) continue; // pequena tolerancia: evita furos entre triangulos vizinhos
-            const f32 z = w0 * t.z[0] + w1 * t.z[1] + w2 * t.z[2];
-            f32& d = shadowMap_[static_cast<size_t>(y) * static_cast<size_t>(R) + static_cast<size_t>(x)];
-            if (z >= 0.f && z < d) d = z;
-          }
+  // Projeta os triangulos de um objeto na face f de uma luz pontual/spot (perspectiva). Triangulos com algum vertice
+  // atras do near da face sao descartados (sombra incompleta so nesse caso raro, perto da luz).
+  void addFaceCaster(const Mesh& m, const Mat4& world, const ShadowLight& sl, u32 f, size_t slot) {
+    const f32 R = static_cast<f32>(pointRes_);
+    std::vector<Vec4> c(m.pos.size());
+    for (size_t i = 0; i < m.pos.size(); ++i) {
+      const Vec3 wp = world.transformPoint(m.pos[i]);
+      c[i] = sl.vp[f].mul({wp.x, wp.y, wp.z, 1});
+    }
+    for (size_t t = 0; t + 2 < m.idx.size(); t += 3) {
+      const Vec4* q[3] = {&c[m.idx[t]], &c[m.idx[t + 1]], &c[m.idx[t + 2]]};
+      if (q[0]->w <= sl.nearZ || q[1]->w <= sl.nearZ || q[2]->w <= sl.nearZ) continue;
+      FaceTri ft;
+      for (int j = 0; j < 3; ++j) {
+        ft.x[j] = (q[j]->x / q[j]->w * 0.5f + 0.5f) * R;
+        ft.y[j] = (0.5f - q[j]->y / q[j]->w * 0.5f) * R;
+        ft.iw[j] = 1.f / q[j]->w; // 1/w: interpolado na tela para obter a profundidade correta
       }
-    };
-    if (nT == 1) work(0);
-    else { std::vector<std::thread> th; for (int i = 1; i < nT; ++i) th.emplace_back(work, i); work(0); for (auto& t : th) t.join(); }
-    shadowTris_.clear(); shadowValid_ = true;
+      ft.area = (ft.x[1] - ft.x[0]) * (ft.y[2] - ft.y[0]) - (ft.y[1] - ft.y[0]) * (ft.x[2] - ft.x[0]);
+      if (std::abs(ft.area) < 1e-6f) continue;
+      ft.x0 = std::max(0, static_cast<int>(std::floor(std::min({ft.x[0], ft.x[1], ft.x[2]}))));
+      ft.x1 = std::min(pointRes_ - 1, static_cast<int>(std::ceil(std::max({ft.x[0], ft.x[1], ft.x[2]}))));
+      ft.y0 = std::max(0, static_cast<int>(std::floor(std::min({ft.y[0], ft.y[1], ft.y[2]}))));
+      ft.y1 = std::min(pointRes_ - 1, static_cast<int>(std::ceil(std::max({ft.y[0], ft.y[1], ft.y[2]}))));
+      if (ft.x0 > ft.x1 || ft.y0 > ft.y1) continue;
+      faceTris_[slot].push_back(ft);
+    }
   }
 
-  // Fracao de luz (0 = sombra total, 1 = iluminado) que chega ao ponto p com normal n. PCF (media de vizinhos).
-  f32 sunVisibility(Vec3 p, Vec3 n, f32 ndl) const {
-    const f32 R = static_cast<f32>(shadowRes_);
-    p = p + n * (shadowSet_.normalBias * shadowFr_.texelWorld);
-    const Vec4 c = shadowFr_.viewProj.mul({p.x, p.y, p.z, 1});
-    const f32 fx = (c.x * 0.5f + 0.5f) * R, fy = (1.f - (c.y * 0.5f + 0.5f)) * R;
-    if (c.z > 1.f || c.z < 0.f || fx < 0.f || fy < 0.f || fx >= R || fy >= R) return 1.f; // fora do mapa: sem sombra
-    const f32 bias = shadowSet_.bias * (1.f + 2.f * (1.f - ndl)); // mais bias em superficies de raspao
-    const int k = std::clamp(shadowSet_.pcf, 0, 2), ix = static_cast<int>(fx), iy = static_cast<int>(fy), res = shadowRes_;
-    int lit = 0, total = 0;
-    for (int dy = -k; dy <= k; ++dy)
-      for (int dx = -k; dx <= k; ++dx) {
-        const int sx = std::clamp(ix + dx, 0, res - 1), sy = std::clamp(iy + dy, 0, res - 1);
-        ++total; if (shadowMap_[static_cast<size_t>(sy) * static_cast<size_t>(res) + static_cast<size_t>(sx)] >= c.z - bias) ++lit;
+  // Rasteriza as faces de luzes pontuais/spot. Profundidade = distancia ao longo do eixo da face (w do clip), com
+  // interpolacao correta em perspectiva (1/w linear na tela).
+  void flushFaces() const {
+    const int R = pointRes_;
+    for (size_t slot = 0; slot < kMaxPointShadowLights * kMaxPointShadowFaces; ++slot) {
+      if (faceTris_[slot].empty()) continue;
+      std::vector<f32>& map = faceMap_[slot];
+      for (const FaceTri& t : faceTris_[slot]) {
+        const f32 inv = 1.f / t.area;
+        for (int y = t.y0; y <= t.y1; ++y)
+          for (int x = t.x0; x <= t.x1; ++x) {
+            const f32 px = static_cast<f32>(x) + 0.5f, py = static_cast<f32>(y) + 0.5f;
+            const f32 w0 = ((t.x[1] - px) * (t.y[2] - py) - (t.y[1] - py) * (t.x[2] - px)) * inv;
+            const f32 w1 = ((t.x[2] - px) * (t.y[0] - py) - (t.y[2] - py) * (t.x[0] - px)) * inv;
+            const f32 w2 = 1.f - w0 - w1;
+            if (w0 < -1e-4f || w1 < -1e-4f || w2 < -1e-4f) continue;
+            const f32 iw = w0 * t.iw[0] + w1 * t.iw[1] + w2 * t.iw[2];
+            if (iw <= 0.f) continue;
+            const f32 depth = 1.f / iw;
+            f32& d = map[static_cast<size_t>(y) * static_cast<size_t>(R) + static_cast<size_t>(x)];
+            if (depth < d) d = depth;
+          }
       }
-    return static_cast<f32>(lit) / static_cast<f32>(total);
+      faceTris_[slot].clear();
+    }
+  }
+
+  // Visibilidade (0..1) de um ponto pela face de uma luz pontual/spot: 3x3 PCF sobre o mapa da face. Viés em distancia
+  // (ao longo da normal, contra acne) e constante (contra a propria superficie). Fora da face = iluminado.
+  f32 faceVisibility(const ShadowLight& sl, size_t slotBase, Vec3 p, Vec3 n) const {
+    const Vec3 d = p - sl.position;
+    u32 f = 0;
+    if (sl.type == LightType::Point) {
+      const f32 ax = std::abs(d.x), ay = std::abs(d.y), az = std::abs(d.z);
+      if (ax >= ay && ax >= az) f = d.x > 0.f ? 0u : 1u;
+      else if (ay >= az) f = d.y > 0.f ? 2u : 3u;
+      else f = d.z > 0.f ? 4u : 5u;
+    }
+    if (f >= sl.faces) return 1.f;
+    const f32 dist = length(d);
+    const Vec3 pb = p + n * (0.01f + 0.002f * dist);
+    const Vec4 c = sl.vp[f].mul({pb.x, pb.y, pb.z, 1});
+    if (c.w <= sl.nearZ) return 1.f;
+    const f32 nx = c.x / c.w, ny = c.y / c.w;
+    if (std::abs(nx) > 1.f || std::abs(ny) > 1.f) return 1.f;
+    const int R = pointRes_;
+    const int cx = static_cast<int>(std::lround((nx * 0.5f + 0.5f) * static_cast<f32>(R) - 0.5f));
+    const int cy = static_cast<int>(std::lround((0.5f - ny * 0.5f) * static_cast<f32>(R) - 0.5f));
+    const f32 depth = c.w, bias = 0.02f + 0.0015f * depth;
+    const std::vector<f32>& map = faceMap_[slotBase + f];
+    int lit = 0, tot = 0;
+    for (int dy = -1; dy <= 1; ++dy)
+      for (int dx = -1; dx <= 1; ++dx) {
+        const int x = std::clamp(cx + dx, 0, R - 1), y = std::clamp(cy + dy, 0, R - 1);
+        ++tot;
+        if (map[static_cast<size_t>(y) * static_cast<size_t>(R) + static_cast<size_t>(x)] >= depth - bias) ++lit;
+      }
+    return static_cast<f32>(lit) / static_cast<f32>(tot);
+  }
+
+  // Visibilidade de uma luz pontual/spot do quadro, achada pela posicao (a LightPrism guarda a mesma posicao).
+  f32 pointShadowFor(LightType type, const LightPrism::Vec3& lpos, Vec3 p, Vec3 n) const {
+    if (!pointOn_) return 1.f;
+    for (size_t i = 0; i < lf_.shadowLights.size(); ++i) {
+      const ShadowLight& sl = lf_.shadowLights[i];
+      if (sl.type != type) continue;
+      const Vec3 d{sl.position.x - lpos.x, sl.position.y - lpos.y, sl.position.z - lpos.z};
+      if (dot(d, d) > 1e-8f) continue;
+      return faceVisibility(sl, i * kMaxPointShadowFaces, p, n);
+    }
+    return 1.f;
+  }
+
+  // Passe de profundidade do sol: uma profundidade por cascata. Cada thread preenche uma faixa de linhas (sem disputa).
+  void flushShadow() const {
+    flushFaces();
+    if (shadowSkip_) { for (auto& t : shadowTris_) t.clear(); return; }
+    if (!shadowOn_) { for (auto& t : shadowTris_) t.clear(); shadowValid_ = false; return; }
+    const int R = shadowRes_;
+    auto raster = [R](const std::vector<ShadowTri>& tris, std::vector<f32>& map) {
+      const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+      const int nT = std::clamp(static_cast<int>(std::min(hw, 8u)), 1, std::max(1, R / 64));
+      auto work = [&](int band) {
+        const int y0 = R * band / nT, y1 = R * (band + 1) / nT - 1;
+        for (const ShadowTri& t : tris) {
+          if (t.y1 < y0 || t.y0 > y1) continue;
+          const f32 inv = 1.f / t.area;
+          for (int y = std::max(t.y0, y0); y <= std::min(t.y1, y1); ++y)
+            for (int x = t.x0; x <= t.x1; ++x) {
+              const f32 px = static_cast<f32>(x) + 0.5f, py = static_cast<f32>(y) + 0.5f;
+              const f32 w0 = ((t.x[1] - px) * (t.y[2] - py) - (t.y[1] - py) * (t.x[2] - px)) * inv, w1 = ((t.x[2] - px) * (t.y[0] - py) - (t.y[2] - py) * (t.x[0] - px)) * inv, w2 = 1.f - w0 - w1;
+              if (w0 < -1e-4f || w1 < -1e-4f || w2 < -1e-4f) continue; // pequena tolerancia: evita furos entre triangulos vizinhos
+              const f32 z = w0 * t.z[0] + w1 * t.z[1] + w2 * t.z[2];
+              f32& d = map[static_cast<size_t>(y) * static_cast<size_t>(R) + static_cast<size_t>(x)];
+              if (z >= 0.f && z < d) d = z;
+            }
+        }
+      };
+      if (nT == 1) work(0);
+      else { std::vector<std::thread> th; for (int i = 1; i < nT; ++i) th.emplace_back(work, i); work(0); for (auto& t : th) t.join(); }
+    };
+    for (u32 k = 0; k < shadowCount_; ++k) {
+      if (!shadowTris_[k].empty()) raster(shadowTris_[k], shadowMap_[k]);
+      shadowTris_[k].clear();
+    }
+    shadowValid_ = true;
   }
 
   const Mat4& viewProj() const { return viewProj_; }
@@ -381,6 +504,7 @@ public:
 private:
   struct Tri { f32 x[3], y[3], zw[3], iw[3]; f32 area; Vec3 wp[3], n[3]; f32 uv[3][2]; int x0, x1, y0, y1; u32 mat; };
   struct ShadowTri { f32 x[3], y[3], z[3]; f32 area; int x0, x1, y0, y1; };
+  struct FaceTri { f32 x[3], y[3], iw[3]; f32 area; int x0, x1, y0, y1; };
 
   void rasterize(const Tri& t, int ya, int yb, u64& count) const {
     const Material& mat = mats_[t.mat];
@@ -408,45 +532,38 @@ private:
       }
   }
 
+  // Sombreamento: BRDF PBR da LightPrism (Reference::EvaluateBRDF) para cada luz do quadro, sombra do sol por cascatas
+  // (Reference::CsmVisibility) e luz ambiente como irradiancia SH9 (Ibl::EvalSh). O tonemap fica em put().
   Vec3 shade(Vec3 p, Vec3 n, const Material& m) const {
+    namespace R = LightPrism::Reference;
     const Vec3 V = normalize(cam_.eye - p);
-    Vec3 col{ambient_.x * m.albedo.x, ambient_.y * m.albedo.y, ambient_.z * m.albedo.z};
-    const f32 shin = 2.f / std::max(m.roughness * m.roughness, 0.02f) - 2.f;
-    for (const Light& L : lights_) {
-      Vec3 toL; f32 att = 1.f;
-      if (L.type == LightType::Directional) toL = normalize(L.direction * -1.f);
-      else {
-        const Vec3 d = L.position - p; const f32 dist = length(d); toL = d * (1.f / std::max(dist, 1e-4f));
-        att = attenuation(dist, L.range);
-        if (L.type == LightType::Spot) att *= spotFactor(L.direction, toL * -1.f, std::cos(L.innerAngle), std::cos(L.outerAngle));
+    R::SurfaceData s;
+    s.N = LightRig::lp(n); s.V = LightRig::lp(V); s.albedo = LightRig::lp(m.albedo); s.metallic = m.metallic; s.roughness = m.roughness;
+    const LightPrism::Vec3 P = LightRig::lp(p);
+    LightPrism::Vec3 col = LightPrism::Ibl::EvalSh(lf_.ambient, s.N) * (1.f - m.metallic) * s.albedo;
+    // Luzes pontuais/spot: a BRDF e a janela da LightPrism; a sombra (quando a luz projeta) multiplica a contribuicao.
+    for (const auto& l : lf_.points) col = col + R::EvaluatePointLight(l, s, P) * (m.receiveShadow ? pointShadowFor(LightType::Point, l.position, p, n) : 1.f);
+    for (const auto& l : lf_.spots) col = col + R::EvaluateSpotLight(l, s, P) * (m.receiveShadow ? pointShadowFor(LightType::Spot, l.position, p, n) : 1.f);
+    if (lf_.hasSun) {
+      f32 vis = 1.f;
+      if (shadowOn_ && m.receiveShadow) {
+        LightPrism::CsmDepthMaps maps; maps.size = static_cast<uint32_t>(shadowRes_);
+        for (u32 k = 0; k < shadowCount_; ++k) maps.data[k] = shadowMap_[k].data();
+        const f32 viewDepth = -LightRig::lp(view_.transformPoint(p)).z;
+        vis = R::CsmVisibility(lf_.csm.gpu, maps, P, s.N, viewDepth);
       }
-      const f32 ndl = std::max(0.f, dot(n, toL));
-      if (ndl <= 0 || att <= 0) continue;
-      if (L.castShadow && shadowOn_ && m.receiveShadow) att *= 1.f - shadowSet_.strength * (1.f - sunVisibility(p, n, ndl));
-      const Vec3 H = normalize(toL + V);
-      const f32 spec = std::pow(std::max(0.f, dot(n, H)), shin) * (1.f - m.roughness * 0.7f);
-      const f32 k = L.intensity * att * ndl;
-      const f32 diff = 1.f - m.metallic;
-      col = col + Vec3{L.color.x * k * (m.albedo.x * diff + spec * (0.04f + m.metallic * m.albedo.x)), L.color.y * k * (m.albedo.y * diff + spec * (0.04f + m.metallic * m.albedo.y)),
-                       L.color.z * k * (m.albedo.z * diff + spec * (0.04f + m.metallic * m.albedo.z))};
+      col = col + R::EvaluateDirectionalLight(lf_.sun, s) * vis;
     }
-    return col;
+    return {col.x, col.y, col.z};
   }
-  // Reinhard + gama 2.2 por tabela (a versao com pow() por pixel era o gargalo da CPU).
-  static const u8* tonemapLut() {
-    static const std::vector<u8> lut = [] {
-      std::vector<u8> t(4097);
-      for (size_t i = 0; i < t.size(); ++i) t[i] = static_cast<u8>(std::clamp(std::pow(static_cast<f32>(i) / 4096.f, 1.f / 2.2f), 0.f, 1.f) * 255.f + 0.5f);
-      return t;
-    }();
-    return lut.data();
-  }
+  // Tonemap ACES + sRGB exato (Reference::TonemapToSRGB, o mesmo do HLSL). A exposicao ja esta nas intensidades.
   void put(size_t i, Vec3 c) const {
-    const u8* lut = tonemapLut();
-    auto tm = [&](f32 v) { v = std::max(v, 0.f); v = v / (1.f + v); return lut[static_cast<int>(v * 4096.f)]; };
-    u8* o = const_cast<u8*>(&color_[i * 4]);
-    o[0] = tm(c.x); o[1] = tm(c.y); o[2] = tm(c.z); o[3] = 255;
+    const LightPrism::Vec3 o = LightPrism::Reference::TonemapToSRGB(LightRig::lp(c));
+    u8* px = &color_[i * 4];
+    px[0] = toByte(o.x); px[1] = toByte(o.y); px[2] = toByte(o.z); px[3] = 255;
   }
+  static u8 toByte(f32 v) { return static_cast<u8>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f); }
+  static Mat4 toTool(const LightPrism::Mat4& m) { Mat4 r; for (int c = 0; c < 4; ++c) for (int k = 0; k < 4; ++k) r.m[c][k] = m.m[k][c]; return r; } // linha -> coluna (ver LightRig::toLp)
 
   u32 w_ = 1, h_ = 1;
   mutable std::vector<u8> color_;
@@ -454,13 +571,18 @@ private:
   mutable std::vector<Tri> pending_;
   std::vector<Material> mats_;
   Camera cam_; Mat4 view_, viewProj_;
-  std::vector<Light> lights_; Vec3 ambient_;
+  LightFrame lf_;
   u64 tris_ = 0;
   mutable u64 shaded_ = 0;
-  // sombras do sol
-  bool shadowOn_ = false, shadowSkip_ = false; mutable bool shadowValid_ = false; ShadowSettings shadowSet_; ShadowFrustum shadowFr_; int shadowRes_ = 1024;
-  mutable std::vector<f32> shadowMap_;
-  mutable std::vector<ShadowTri> shadowTris_;
+  // sombras do sol: uma profundidade (e uma lista de triangulos) por cascata da LightPrism
+  bool shadowOn_ = false, shadowSkip_ = false; mutable bool shadowValid_ = false; int shadowRes_ = 1024; u32 shadowCount_ = 0;
+  Mat4 cascadeVp_[LightPrism::kMaxCsmCascades];
+  mutable std::vector<f32> shadowMap_[LightPrism::kMaxCsmCascades];
+  mutable std::vector<ShadowTri> shadowTris_[LightPrism::kMaxCsmCascades];
+  // sombras de luzes pontuais/spot: slot = luz * 6 + face (ver setLighting)
+  bool pointOn_ = false; int pointRes_ = 512;
+  mutable std::vector<f32> faceMap_[kMaxPointShadowLights * kMaxPointShadowFaces];
+  mutable std::vector<FaceTri> faceTris_[kMaxPointShadowLights * kMaxPointShadowFaces];
 };
 
 } // namespace tool

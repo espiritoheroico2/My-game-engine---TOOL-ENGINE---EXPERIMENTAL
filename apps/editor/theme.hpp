@@ -1,3 +1,7 @@
+// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo, padroes e regras em ui_contract.hpp (secoes 2.14 e 4 R6).
+// Elementos: ImGuiStyle (Colors, FrameRounding, ScaleAllSizes), FontGlobalScale, GetStyleColorName.
+// Dados: ThemeBase (5 cores + arredondamento + escala) em assets/themes/*.json; a paleta completa sai daqui.
+// Troca SpriteUI: o tema precisa de um equivalente (tokens de cor, raio e escala) que a SpriteUI consuma.
 // ToolEngine Editor - temas de cores da UI.
 // Um tema = 5 cores-base (fundo, superficie, texto, destaque, borda) + arredondamento + escala.
 // Dessas cores sai a paleta completa do ImGui; qualquer cor pode ser ajustada depois na lista

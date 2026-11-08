@@ -193,9 +193,9 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(ed.saveScene() && ed.openScene("Main", false), "scene with shadow flags saves and reloads");
     bool ok = false; ed.scene.world().each<MeshRenderer>([&](tool::Entity e, MeshRenderer& mr) { auto* n = ed.scene.world().get<Name>(e); if (n && std::string(n->text) == "Caster") ok = !mr.castShadow && !mr.receiveShadow; });
     check(ok, "cast/receive shadow flags persist per object"); }
-  ed.sceneInfo.render.shadow.resolution = 2048; ed.sceneInfo.render.post.enabled = true; ed.sceneInfo.render.post.exposure = 1.f;
+  ed.sceneInfo.render.lighting.shadowMapResolution = 2048; ed.sceneInfo.render.lighting.csmCascades = 2; ed.sceneInfo.render.post.enabled = true; ed.sceneInfo.render.post.exposure = 1.f;
   ed.saveScene(); ed.openScene("Main", false);
-  check(ed.sceneInfo.render.shadow.resolution == 2048 && ed.sceneInfo.render.post.exposure == 1.f, "scene lighting and post-processing settings persist");
+  check(ed.sceneInfo.render.lighting.shadowMapResolution == 2048 && ed.sceneInfo.render.lighting.csmCascades == 2 && ed.sceneInfo.render.post.exposure == 1.f, "scene lighting (Light Prism) and post-processing settings persist");
   { const tool::u8* pa = ed.renderView(c, 160, 90, false); unsigned long long sa = 0; for (int i = 0; i < 160 * 90 * 4; ++i) sa += pa[i];
     ed.sceneInfo.render.post.enabled = false; const tool::u8* b = ed.renderView(c, 160, 90, false); unsigned long long sb = 0; for (int i = 0; i < 160 * 90 * 4; ++i) sb += b[i];
     (void)sa; (void)sb; check(true, "render with shadows runs"); }
