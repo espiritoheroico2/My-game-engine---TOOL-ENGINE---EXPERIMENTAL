@@ -1,0 +1,4 @@
+Esta exportacao NAO inclui a pasta third_party/.
+Nenhum arquivo de third_party/ foi alterado desde a ultima entrega, entao ela nao foi reenviada.
+Para compilar, mantenha as pastas abaixo em third_party/ (iguais as que voce ja tem):
+  DiligentCore, LightPrism, SDL3, imgui, imnodes, miniaudio, quickjs-ng, stb

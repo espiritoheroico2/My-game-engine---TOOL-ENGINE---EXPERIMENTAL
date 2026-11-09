@@ -524,6 +524,13 @@
   "Bloom (glow of bright and emissive objects)": "Bloom (brilho de objetos claros e emissivos)",
   "Bright areas glow into their surroundings. Emissive objects: Inspector > Emission. GPU and software renderer.": "As áreas claras brilham ao redor. Objetos emissivos: Inspetor > Emissão. Renderizador GPU e por software.",
   "Bloom threshold": "Limiar do bloom",
-  "Bloom strength": "Força do bloom"
+  "Bloom strength": "Força do bloom",
+  "CPU work per frame (ms)": "Trabalho da CPU por quadro (ms)",
+  "CPU work only (no VSync wait): avg %.2f ms   jitter %.2f ms": "So trabalho da CPU (sem espera do VSync): media %.2f ms   oscilacao %.2f ms",
+  "Edit Mesh": "Editar malha",
+  "Paint Mesh": "Pintar malha",
+  "Edit the 3D model of an object: move vertices, faces and edges. In development.": "Edita o modelo 3D de um objeto: mover vertices, faces e arestas. Em desenvolvimento.",
+  "Paint colors and textures directly on the 3D model. In development.": "Pinta cores e texturas direto no modelo 3D. Em desenvolvimento.",
+  "Feature in development: not available yet.": "Recurso em desenvolvimento: ainda não disponível."
  }
 }

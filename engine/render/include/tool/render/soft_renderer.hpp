@@ -5,6 +5,7 @@
 #pragma once
 #include "tool/render/lighting.hpp"
 #include "tool/render/texture.hpp"
+#include "tool/core/parallel.hpp"
 
 #include "LightPrism/Reference/Brdf.hpp"
 #include "LightPrism/Reference/Tonemap.hpp"
@@ -16,7 +17,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -392,12 +392,7 @@ public:
       shadedPer[static_cast<size_t>(band)] = count;
     };
     if (nT == 1) work(0);
-    else {
-      std::vector<std::thread> th;
-      for (int i = 1; i < nT; ++i) th.emplace_back(work, i);
-      work(0);
-      for (auto& t : th) t.join();
-    }
+    else tool::parallelFor(static_cast<size_t>(nT), 1, [&](size_t b, size_t e) { for (size_t band = b; band < e; ++band) work(static_cast<int>(band)); });
     for (u64 c : shadedPer) shaded_ += c;
     resolve();
     pending_.clear();
@@ -533,7 +528,7 @@ public:
         }
       };
       if (nT == 1) work(0);
-      else { std::vector<std::thread> th; for (int i = 1; i < nT; ++i) th.emplace_back(work, i); work(0); for (auto& t : th) t.join(); }
+      else tool::parallelFor(static_cast<size_t>(nT), 1, [&](size_t b, size_t e) { for (size_t band = b; band < e; ++band) work(static_cast<int>(band)); });
     };
     for (u32 k = 0; k < shadowCount_; ++k) {
       if (!shadowTris_[k].empty()) raster(shadowTris_[k], shadowMap_[k]);
@@ -639,18 +634,8 @@ private:
   }
   // Depois de rasterizar: SSAO da Light Prism (ComputeSsao) sobre a cena inteira e cor final = direta + ambiente * AO.
   // Roda fn(begin, end) sobre [0, n) em faixas, em varias threads (ate 8). Cada faixa escreve so os seus indices.
-  template <class F> static void parallelRange(size_t n, F&& fn) {
-    const unsigned nT = std::min(std::max(1u, std::thread::hardware_concurrency()), 8u);
-    if (nT <= 1 || n < 4096) { fn(size_t{0}, n); return; }
-    const size_t chunk = (n + nT - 1) / nT;
-    std::vector<std::thread> th;
-    for (unsigned t = 1; t < nT; ++t) {
-      const size_t b = t * chunk, e = std::min(n, b + chunk);
-      if (b < e) th.emplace_back([&fn, b, e] { fn(b, e); });
-    }
-    fn(size_t{0}, std::min(n, chunk));
-    for (auto& x : th) x.join();
-  }
+  // Usa o pool persistente (tool::parallelFor): nao cria threads a cada quadro.
+  template <class F> static void parallelRange(size_t n, F&& fn) { tool::parallelFor(n, 4096, std::forward<F>(fn)); }
 
   void resolve() const {
     const size_t n = static_cast<size_t>(w_) * h_;

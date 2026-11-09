@@ -638,6 +638,16 @@ void drawConsole(Editor& ed) {
   ImGui::End();
 }
 
+// Janela de recurso ainda nao pronto: mostra o aviso e nada mais (Edit Mesh e Paint Mesh).
+void drawFeatureStub(Editor& ed, const char* title, const char* text, bool* open) {
+  (void)ed;
+  if (!ImGui::Begin(title, open)) { ImGui::End(); return; }
+  ImGui::TextWrapped("%s", text);
+  ImGui::Separator();
+  ImGui::TextDisabled("%s", T("Feature in development: not available yet."));
+  ImGui::End();
+}
+
 void drawProfiler(Editor& ed) {
   if (!ImGui::Begin(W("Profiler", "prof").c_str(), &ed.showProfiler)) { ImGui::End(); return; }
   editor::helpIcon("profiler");
@@ -650,6 +660,9 @@ void drawProfiler(Editor& ed) {
   static float buf[editor::FrameProfiler::kHistory];
   p.ordered(p.frameMs, buf);
   ImGui::PlotLines("##frames", buf, editor::FrameProfiler::kHistory, 0, F("frame time (ms), last %d frames", editor::FrameProfiler::kHistory).c_str(), 0.f, std::max(16.7f, st.max * 1.1f), ImVec2(-1, 70));
+  ImGui::Text("%s", F("CPU work only (no VSync wait): avg %.2f ms   jitter %.2f ms", static_cast<double>(st.workAvg), static_cast<double>(st.workJitter)).c_str());
+  p.ordered(p.workMs, buf);
+  ImGui::PlotLines("##work", buf, editor::FrameProfiler::kHistory, 0, T("CPU work per frame (ms)"), 0.f, std::max(4.f, st.workAvg * 2.f), ImVec2(-1, 50));
   if (ImGui::CollapsingHeader(T("Time per zone (average ms)"), ImGuiTreeNodeFlags_DefaultOpen)) {
     float work = 0.f;
     if (ImGui::BeginTable("zones", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
@@ -1442,7 +1455,7 @@ void drawMenu(Editor& ed, bool& quit) {
   }
   if (ImGui::BeginMenu(T("Window"))) {
     ImGui::MenuItem(T("Hierarchy"), nullptr, &ed.showHierarchy); ImGui::MenuItem(T("Inspector"), nullptr, &ed.showInspector); ImGui::MenuItem("Console", nullptr, &ed.showConsole);
-    ImGui::MenuItem("Profiler", nullptr, &ed.showProfiler); ImGui::MenuItem(T("Scene"), nullptr, &ed.showScene); ImGui::MenuItem(T("Game"), nullptr, &ed.showGame);
+    ImGui::MenuItem("Profiler", nullptr, &ed.showProfiler); ImGui::MenuItem(T("Edit Mesh"), nullptr, &ed.showEditMesh); ImGui::MenuItem(T("Paint Mesh"), nullptr, &ed.showPaintMesh); ImGui::MenuItem(T("Scene"), nullptr, &ed.showScene); ImGui::MenuItem(T("Game"), nullptr, &ed.showGame);
     ImGui::MenuItem("Assets", nullptr, &ed.showAssets); ImGui::MenuItem(T("Scenes"), nullptr, &ed.showScenes);
     ImGui::MenuItem(T("Settings"), nullptr, &ed.showSettings);
     ImGui::MenuItem(T("Narrative Controller"), nullptr, &ed.showNarrative);
@@ -1784,7 +1797,9 @@ int main(int argc, char** argv) {
     std::unique_ptr<editor::ZoneTimer> zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Events); // um cronometro de cada vez
     int nEvents = 0;
     while (SDL_PollEvent(&e)) {
-      ++nEvents;
+      // Movimento do mouse sem botao (so passar por cima) nao conta como atividade: senao a cena nunca fica ociosa
+      // e cada pixel de mouse refaz as duas vistas por 3 quadros. A interface continua redesenhando a cada quadro.
+      if (!(e.type == SDL_EVENT_MOUSE_MOTION && e.motion.state == 0 && !ed.freeFly)) ++nEvents;
       ImGui_ImplSDL3_ProcessEvent(&e);
       if (ed.logKeys && (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP))
         tool::logInfo(std::string("[keys] ") + (e.type == SDL_EVENT_KEY_DOWN ? "down " : "up ") + SDL_GetKeyName(e.key.key) + (e.key.repeat ? " (repeat)" : "") + (ImGui::GetIO().WantTextInput ? " [text field]" : ""));
@@ -1851,6 +1866,8 @@ int main(int argc, char** argv) {
       if (ed.showGame) drawGameView(ed, renderer);
       if (ed.showConsole) drawConsole(ed);
       if (ed.showProfiler) drawProfiler(ed);
+      if (ed.showEditMesh) drawFeatureStub(ed, T("Edit Mesh"), T("Edit the 3D model of an object: move vertices, faces and edges. In development."), &ed.showEditMesh);
+      if (ed.showPaintMesh) drawFeatureStub(ed, T("Paint Mesh"), T("Paint colors and textures directly on the 3D model. In development."), &ed.showPaintMesh);
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showAssets) editor::drawAssets(ed);
       if (ed.showScenes) editor::drawScenes(ed);
@@ -1876,6 +1893,7 @@ int main(int argc, char** argv) {
     zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Present);
     SDL_RenderPresent(renderer);
     tool::debug().endFrame();
+    { static editor::PerfWarnings perfWarn; perfWarn.check(ed.prof); }   // avisos de recurso no Console (a cada 30 quadros)
     if (ed.fpsMode >= 1 && ed.fpsMode <= 3 && !headless) { // limite manual de FPS (30/60/120): espera o que sobrar do quadro
       static const Uint64 target[4] = {0, 1000000000ull / 30, 1000000000ull / 60, 1000000000ull / 120};
       const Uint64 spent = SDL_GetTicksNS() - frameStart;

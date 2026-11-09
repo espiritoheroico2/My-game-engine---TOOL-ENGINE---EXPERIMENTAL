@@ -15,8 +15,10 @@ struct IblData {                       // 160 bytes (IblGPU)
 };
 
 cbuffer IblCB : register(b3) { IblData Ibl; };
-TextureCube<float3> IblPrefiltered : register(t3);
-Texture2D<float2>   IblBrdfLut     : register(t4);
+// t3..t6 = CSM, t8..t9 = clusters, t10..t13 = sombras pontuais, t14 = AO. Registradores de IBL ficam fora desses
+// intervalos: D3D12 recusa dois recursos no mesmo registrador (X4610).
+TextureCube<float3> IblPrefiltered : register(t16);
+Texture2D<float2>   IblBrdfLut     : register(t15);
 SamplerState        IblSampler     : register(s2);   // linear, clamp
 
 // E(n)/pi: o chamador multiplica por albedo (e por kD).

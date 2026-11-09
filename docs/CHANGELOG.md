@@ -3,6 +3,15 @@
 ## 0.7.18-beta (em andamento) — editor de script, oclusao e ray tracing
 
 **Ultimas mudancas: Vulkan, luz e IBL**
+- Correcao (D3D12): `pbr.ps` falhava com `X4610 SRV binding ranges overlap for range T[4:4]`. `IblBrdfLut` (IBL) e `CsmMap1` (sombra) usavam `t4`, e `IblPrefiltered` e `CsmMap0` usavam `t3`. Os registradores de IBL agora sao `t15` e `t16`. No Vulkan isso passava despercebido; no D3D12 o compilador recusa. Os avisos `X4000` (variavel possivelmente nao inicializada) continuam: nao derrubam a compilacao, mas ainda serao limpos.
+- Verificado: `gpu_test vulkan` e `ctest` iguais. D3D12 ainda nao foi compilado aqui (sem `dxc` nesta maquina): precisa testar no Windows.
+- Frame time (1/3): o Profiler mostra tambem o "trabalho da CPU" (sem a espera do VSync), com grafico e desvio padrao proprios.
+- Frame time (2/3): movimento do mouse sem botao nao conta mais como atividade. Antes, cada pixel de mouse refazia as duas vistas por 3 quadros.
+- Frame time (3/3): o renderizador CPU criava threads a cada quadro (raster, sombras, SSAO). Agora usa o pool persistente (`tool::parallelFor`). O bloom reaproveita os buffers.
+- Sombras: Scene e Game dividiam um renderizador e uma assinatura, entao o shadow map de uma apagava o da outra e nada era reaproveitado. Agora cada vista tem o seu renderizador e a sua assinatura (CPU). A GPU ainda e compartilhada: pendente.
+- Avisos de recurso no Console (TOOL-W301..W307): oscilacao do trabalho da CPU, pico de zona, objetos, triangulos, pixels, sombras refeitas a cada quadro e memoria. Dispara na transicao e repete a cada 10 s enquanto continuar. Limites ajustaveis em `PerfWarnings::Limits`.
+- Janelas "Edit Mesh" e "Paint Mesh" (menu Window): so aviso de recurso em desenvolvimento.
+- Testes: `ctest` 4/4, `tool_tests` 140/140, selftest do editor 224/224, `gpu_test vulkan` igual. Medidas de frame time nao foram feitas aqui (sem GPU real): precisam ser medidas no Windows.
 - Correcao (Vulkan): o pipeline PBR falhava com "dynamic uniform buffers (10) excede o limite do dispositivo (8)" (`TOOL-E150`/`TOOL-E153`) em GPUs que aceitam so 8 buffers uniformes dinamicos. O Vulkan conta cada cbuffer por estagio, e o PBR tinha `FrameBuffer` e `ObjectBuffer` nos dois (VS e PS). Agora o pixel shader nao le esses dois: o vertex shader calcula o que o PS precisa e passa por interpolacao (valores por objeto com `nointerpolation`). Total: 8.
 - Teste: `gpu_test` (Vulkan/llvmpipe) passa com os mesmos numeros de antes, e `ctest` 4/4. Teste em GPU real ainda pendente.
 - Nao usar `MUTABLE` nesses recursos: a tentativa quebrou sombras e texturas no `gpu_test`.

@@ -553,7 +553,14 @@ Makes this object emit light. With Settings > Lighting > Bloom on, the bright pa
 Bloom (glow of bright and emissive objects)	Bloom (brilho de objetos claros e emissivos)	Bloom (resplandor de objetos brillantes y emisivos)
 Bright areas glow into their surroundings. Emissive objects: Inspector > Emission. GPU and software renderer.	As áreas claras brilham ao redor. Objetos emissivos: Inspetor > Emissão. Renderizador GPU e por software.	Las áreas brillantes resplandecen a su alrededor. Objetos emisivos: Inspector > Emisión. Renderizador GPU y por software.
 Bloom threshold	Limiar do bloom	Umbral del bloom
-Bloom strength	Força do bloom	Intensidad del bloom"""
+Bloom strength	Força do bloom	Intensidad del bloom
+CPU work per frame (ms)	Trabalho da CPU por quadro (ms)	Trabajo de la CPU por cuadro (ms)
+CPU work only (no VSync wait): avg %.2f ms   jitter %.2f ms	So trabalho da CPU (sem espera do VSync): media %.2f ms   oscilacao %.2f ms	Solo trabajo de la CPU (sin espera de VSync): media %.2f ms   oscilacion %.2f ms
+Edit Mesh	Editar malha	Editar malla
+Paint Mesh	Pintar malha	Pintar malla
+Edit the 3D model of an object: move vertices, faces and edges. In development.	Edita o modelo 3D de um objeto: mover vertices, faces e arestas. Em desenvolvimento.	Edita el modelo 3D de un objeto: mover vértices, caras y aristas. En desarrollo.
+Paint colors and textures directly on the 3D model. In development.	Pinta cores e texturas direto no modelo 3D. Em desenvolvimento.	Pinta colores y texturas directamente sobre el modelo 3D. En desarrollo.
+Feature in development: not available yet.	Recurso em desenvolvimento: ainda não disponível.	Función en desarrollo: todavía no disponible."""
 tab = [r.split("\t") for r in ROWS.split("\n")]
 assert all(len(r) == 3 for r in tab), [r for r in tab if len(r) != 3][:2]
 out = root / "assets/lang"; out.mkdir(parents=True, exist_ok=True)

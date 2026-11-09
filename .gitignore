@@ -16,5 +16,4 @@ editor_theme.json
 
 # Saida da exportacao do editor (File > Export game)
 Projeto Final/Export/
-/third_party/LightPrism
-build_log.txt
+third_party/LightPrism/

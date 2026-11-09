@@ -21,7 +21,10 @@ inline void applyBloomRgba8(std::uint8_t* rgba, unsigned w, unsigned h, float th
   const unsigned hw = std::max(1u, w / 2), hh = std::max(1u, h / 2);
   auto lum = [](float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; };
   // 1) limiar em meia resolucao (media 2x2 da imagem de origem)
-  std::vector<float> a(static_cast<std::size_t>(hw) * hh * 3, 0.f);
+  // Buffers reaproveitados entre quadros (alocar ~1,5 MB por quadro custava tempo e tirava o frame time do lugar).
+  static thread_local std::vector<float> a, b;
+  const std::size_t need = static_cast<std::size_t>(hw) * hh * 3;
+  a.assign(need, 0.f);
   for (unsigned y = 0; y < hh; ++y)
     for (unsigned x = 0; x < hw; ++x) {
       float sr = 0.f, sg = 0.f, sb = 0.f;
@@ -39,7 +42,7 @@ inline void applyBloomRgba8(std::uint8_t* rgba, unsigned w, unsigned h, float th
     }
   // 2) gaussiana 9 taps: horizontal (a -> b) e vertical (b -> a); mesmos pesos do bloom.hlsl
   static const float W[5] = {0.227027f, 0.194595f, 0.121622f, 0.054054f, 0.016216f};
-  std::vector<float> b(a.size(), 0.f);
+  b.assign(need, 0.f);
   auto blur = [&](const std::vector<float>& src, std::vector<float>& dst, int dx, int dy) {
     for (int y = 0; y < static_cast<int>(hh); ++y)
       for (int x = 0; x < static_cast<int>(hw); ++x) {

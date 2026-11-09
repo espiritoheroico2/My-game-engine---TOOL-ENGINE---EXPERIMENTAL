@@ -58,6 +58,7 @@ struct FrameProfiler {
   using Clock = std::chrono::steady_clock;
 
   std::array<float, kHistory> frameMs{};                                         // tempo total do quadro (inclui esperas de VSync)
+  std::array<float, kHistory> workMs{};                                          // so trabalho da CPU: zonas menos Present (VSync) e menos a espera ociosa
   std::array<std::array<float, kHistory>, static_cast<size_t>(Zone::Count)> zoneMs{};
   int head = 0, filled = 0;                                                      // anel circular
   float cur[static_cast<size_t>(Zone::Count)] = {};                              // zonas do quadro em andamento
@@ -73,7 +74,12 @@ struct FrameProfiler {
     frameStart = now;
     if (!paused) {
       frameMs[static_cast<size_t>(head)] = ms;
-      for (size_t z = 0; z < static_cast<size_t>(Zone::Count); ++z) { zoneMs[z][static_cast<size_t>(head)] = cur[z]; }
+      float work = 0;
+      for (size_t z = 0; z < static_cast<size_t>(Zone::Count); ++z) {
+        zoneMs[z][static_cast<size_t>(head)] = cur[z];
+        if (static_cast<Zone>(z) != Zone::Present) work += cur[z];
+      }
+      workMs[static_cast<size_t>(head)] = work;
       head = (head + 1) % kHistory; filled = std::min(filled + 1, kHistory);
     }
     std::memset(cur, 0, sizeof cur);
@@ -84,9 +90,14 @@ struct FrameProfiler {
   void add(Zone z, float ms) { cur[static_cast<int>(z)] += ms; }
 
   // Resumo estatistico dos ultimos `filled` quadros.
-  struct Stats { float avg = 0, min = 0, max = 0, p99 = 0, fps = 0, low1 = 0, jitter = 0; };
+  struct Stats { float avg = 0, min = 0, max = 0, p99 = 0, fps = 0, low1 = 0, jitter = 0, workAvg = 0, workJitter = 0; };
   Stats stats() const {
     Stats s; if (filled == 0) return s;
+    double wsum = 0, wvar = 0;
+    for (int i = 0; i < filled; ++i) wsum += workMs[static_cast<size_t>(i)];
+    s.workAvg = static_cast<float>(wsum / filled);
+    for (int i = 0; i < filled; ++i) { const double d = static_cast<double>(workMs[static_cast<size_t>(i)]) - s.workAvg; wvar += d * d; }
+    s.workJitter = static_cast<float>(std::sqrt(wvar / filled));   // oscilacao so do trabalho da CPU (sem VSync)
     std::array<float, kHistory> tmp{}; double sum = 0; s.min = 1e9f;
     for (int i = 0; i < filled; ++i) { const float v = frameMs[static_cast<size_t>(i)]; tmp[static_cast<size_t>(i)] = v; sum += v; s.min = std::min(s.min, v); s.max = std::max(s.max, v); }
     s.avg = static_cast<float>(sum / filled);

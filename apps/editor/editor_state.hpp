@@ -11,6 +11,7 @@
 #include "voxel.hpp"
 #include "narrative_panel.hpp"
 #include "profiler.hpp"
+#include "perf_warnings.hpp"
 #include "project.hpp"
 #include "project_settings.hpp"
 #include "script.hpp"
@@ -73,6 +74,7 @@ struct Editor {
 
   // janelas
   bool showHierarchy = true, showInspector = true, showConsole = true, showProfiler = true, showScene = true, showGame = true;
+  bool showEditMesh = false, showPaintMesh = false;   // janelas de recursos futuros (so aviso de "em desenvolvimento")
   bool showAssets = true, showScenes = true, showNarrative = true, showSettings = true, showInputMap = false;
   bool showEditorInfo = false, showExport = false;   // File > Editor info / Export game
   bool resetLayout = false;
@@ -94,7 +96,7 @@ struct Editor {
   double time = 0;
 
   // visualizacao
-  tool::SoftRenderer renderer{640, 360};
+  tool::SoftRenderer rendererScene{640, 360}, rendererGame{640, 360};   // um por vista (ver renderView)
   tool::LightRig lightRig;       // Light Prism: luzes, clusters, cascatas e ambiente (um quadro para CPU e GPU)
   tool::Mesh cube = tool::Mesh::cube(0.5f), sphere = tool::Mesh::sphere(0.5f), plane = tool::Mesh::plane(0.5f);
   // Nivel de detalhe: esfera de baixa resolucao (8x5 = ~80 triangulos contra ~576) para objetos longe da camera.
@@ -160,7 +162,7 @@ struct Editor {
   // execucao (Play)
   bool playing = false;
   // Variaveis do jogo (SavePoint/UI/Narrative) e eventos de UI da ultima passada (limpos a cada quadro de Play).
-  std::uint64_t sigGpu = 0, sigCpu = 0; bool sigGpuValid = false, sigCpuValid = false;   // assinatura (casters + luz) do ultimo shadow map de cada renderer (sleeper de sombras)
+  std::uint64_t sigGpu = 0, sigCpu[2] = {0, 0}; bool sigGpuValid = false, sigCpuValid[2] = {false, false};   // assinatura (casters + luz) do ultimo shadow map, por renderer/vista (sleeper de sombras)
   std::unordered_map<std::string, float> vars;
   // Eventos enviados a objetos (acao "send" do Narrative / futuro script): fila por objeto, limpa a cada Play.
   std::unordered_map<uint32_t, std::vector<std::string>> objectInbox;
@@ -185,7 +187,7 @@ struct Editor {
   std::unordered_map<const tool::Mesh*, BoundsEntry> boundsCache_;   // esfera de cada malha (para o frustum culling)
   std::unique_ptr<LightPrism::Rt::Bvh> rtBvh_;                         // BVH da cena para o RT AO (CPU); refeito so se a cena mudou
   std::uint64_t rtSig_ = 0; bool rtHave_ = false;
-  std::uint64_t psigCpu = 0; bool psigCpuValid = false;   // assinatura das sombras de pontual/spot (CPU)
+  std::uint64_t psigCpu[2] = {0, 0}; bool psigCpuValid[2] = {false, false};   // assinatura das sombras de pontual/spot (CPU), por vista (0 = Scene, 1 = Game)
   std::uint64_t psigGpu = 0; bool psigGpuValid = false;   // a mesma, para a GPU
  std::vector<std::string> uiEvents;
   struct Particle { tool::Vec3 p, v; float age = 0.f, life = 1.f; float phase = 0.f; tool::Vec3 jit{}; };  // jit: deslocamento do nascimento (local)
@@ -722,9 +724,11 @@ struct Editor {
   // `zone` = onde contar o tempo no Profiler; `fx` = pos-processamento a aplicar na imagem pronta (nullptr = nenhum).
   const tool::u8* renderView(const tool::Camera& cam, int w, int h, bool highlight, Zone zone = Zone::SceneRender, const tool::PostFx* fx = nullptr) {
     const tool::u8* out = nullptr;
+    const int vi = zone == Zone::GameRender ? 1 : 0;                       // vista: 0 = Scene, 1 = Game
+    tool::SoftRenderer& renderer = vi ? rendererGame : rendererScene;      // cada vista tem o seu renderizador CPU
     {
       ZoneTimer zt(prof, zone);
-      out = renderScene(cam, w, h, highlight);
+      out = renderScene(cam, w, h, highlight, vi);
     }
     if (out && sceneInfo.sky.enabled && !cam.ortho) { // skybox de imagens: preenche so o fundo (alfa 0), antes do pos-processamento
       ZoneTimer zt(prof, Zone::Sky);
@@ -752,7 +756,8 @@ struct Editor {
   }
 
 private:
-  const tool::u8* renderScene(const tool::Camera& cam, int w, int h, bool highlight) {
+  const tool::u8* renderScene(const tool::Camera& cam, int w, int h, bool highlight, int vi) {
+    tool::SoftRenderer& renderer = vi ? rendererGame : rendererScene;   // renderizador e assinatura da vista (0 = Scene, 1 = Game)
     std::vector<tool::Light> lights; tool::Vec3 ambient; int sunIdx = -1;
     // Com skybox ligado, o fundo sai com alfa 0 (o skybox e pintado depois, em renderView). 2D nao usa skybox.
     const float bgAlpha = (sceneInfo.sky.enabled && !cam.ortho) ? 0.f : 1.f;
@@ -766,11 +771,11 @@ private:
     const bool shadows = lf.shadows();
     // "Sleeper" de sombras: se a assinatura do shadow map e igual a do quadro anterior, o renderizador reaproveita os mapas.
     const std::uint64_t sigNow = shadows ? shadowSignature(cam, w, h, lights) : 0;
-    if (!shadows) sigGpuValid = sigCpuValid = false;
+    if (!shadows) { sigGpuValid = false; sigCpuValid[vi] = false; }   // (renderView tambem usa vi nas assinaturas da GPU)
     // Sombras de pontual/spot: assinatura sem a camera (ver pointShadowSignature). Igual para a GPU e a CPU.
     const bool pointShadows = !lf.shadowLights.empty();
     const std::uint64_t psigNow = pointShadows ? pointShadowSignature(cam, lf) : 0;
-    if (!pointShadows) psigGpuValid = psigCpuValid = false;
+    if (!pointShadows) { psigGpuValid = false; psigCpuValid[vi] = false; }
     tool::u64 tris = 0; unsigned draws = 0, casters = 0;
     // Emissao do objeto: cor x intensidade (linear). Vale para todas as partes de um modelo.
     auto emissionOf = [](const MeshRenderer& mr) { return tool::Vec3{mr.emissive[0] * mr.emissiveIntensity, mr.emissive[1] * mr.emissiveIntensity, mr.emissive[2] * mr.emissiveIntensity}; };
@@ -918,13 +923,14 @@ private:
       }
       tris = 0; draws = 0; casters = 0; // a CPU vai contar de novo
     }
+    // Um renderizador e uma assinatura de sombra por vista: Scene e Game nao apagam o shadow map uma da outra.
     if (static_cast<int>(renderer.width()) != w || static_cast<int>(renderer.height()) != h) renderer.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
     renderer.begin(cam, {0.08f, 0.09f, 0.11f}, bgAlpha);
-    const bool reCpu = shadows && sigCpuValid && sigCpu == sigNow;
-    const bool rePoint = pointShadows && psigCpuValid && psigCpu == psigNow;
+    const bool reCpu = shadows && sigCpuValid[vi] && sigCpu[vi] == sigNow;
+    const bool rePoint = pointShadows && psigCpuValid[vi] && psigCpu[vi] == psigNow;
     renderer.setLighting(lf, reCpu, rePoint);
-    if (shadows) { sigCpu = sigNow; sigCpuValid = true; if (renderer.shadowPassSkipped()) ++prof.counters.shadowReused; }
-    if (pointShadows) { psigCpu = psigNow; psigCpuValid = true; } else psigCpuValid = false;
+    if (shadows) { sigCpu[vi] = sigNow; sigCpuValid[vi] = true; if (renderer.shadowPassSkipped()) ++prof.counters.shadowReused; }
+    if (pointShadows) { psigCpu[vi] = psigNow; psigCpuValid[vi] = true; } else psigCpuValid[vi] = false;
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
       if (scene.world().has<Inactive>(e)) return;
       pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); renderer.draw(m, worldMat(e), mat); });
