@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <unordered_map>
 
@@ -92,10 +93,6 @@ public:
   // editor volta para o renderizador em CPU.
   bool init(rhi::IDevice& dev, std::unique_ptr<LightPrism::IGraphicsDevice> lp, const std::string& shaderDir, u32 w, u32 h) {
     release();
-    if (dev.backend() == rhi::Backend::GLES) {
-      debug().report("TOOL-W141", Severity::Warning, "a iluminacao Light Prism ainda nao tem shaders OpenGL (GLSL): o OpenGL usa o renderizador CPU. Use Vulkan ou Direct3D 12 para a GPU.");
-      return false;
-    }
     if (!lp) { debug().report("TOOL-E142", Severity::Error, "dispositivo Light Prism indisponivel (backend sem Diligent)"); return false; }
     dev_ = &dev; lp_ = std::move(lp);
     LightPrism::ClusterSystemDesc cd;
@@ -112,9 +109,22 @@ public:
     std::string shp;
     if (!loadHlsl(shaderDir, "shadow_point.hlsl", shp)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow_point.hlsl em " + shaderDir); release(); return false; }
 
+    // OpenGL: cada shader usa o GLSL 430 gerado offline (tools/shaders/build_glsl.py -> glsl/<nome>.430.glsl).
+    // Vulkan/D3D12 seguem com o HLSL. Um ponto unico de criacao: mk(desc).
+    const bool gl = dev.backend() == rhi::Backend::GLES;
+    if (gl) debug().report("TOOL-W142", Severity::Warning, "OpenGL: pipeline em GLSL 430 (gerado de HLSL). Pendente: bloom e sombra pontual ainda diferem do Vulkan; use Vulkan ou D3D12 para a versao final.");
+    auto mk = [&](rhi::ShaderDesc d) -> rhi::ShaderId {
+      if (!gl) return dev.createShader(d);
+      std::ifstream in(shaderDir + "/glsl/" + d.name + ".430.glsl", std::ios::binary);
+      if (!in) { debug().report("TOOL-E140", Severity::Error, "nao achei o GLSL '" + d.name + ".430.glsl' em " + shaderDir + "/glsl"); }
+      d.source.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+      d.lang = rhi::ShaderLang::GLSL; d.entry = "main";
+      return dev.createShader(d);
+    };
+
     rhi::ShaderDesc vs; vs.stage = rhi::ShaderStage::Vertex; vs.entry = "VSMain"; vs.name = "pbr.vs"; vs.source = src;
     rhi::ShaderDesc ps; ps.stage = rhi::ShaderStage::Pixel; ps.entry = "PSMain"; ps.name = "pbr.ps"; ps.source = src;
-    vs_ = dev.createShader(vs); ps_ = dev.createShader(ps);
+    vs_ = mk(vs); ps_ = mk(ps);
     rhi::PipelineDesc pd; pd.vs = vs_; pd.ps = ps_; pd.name = "pbr";
     pd.layout = {{3, 0}, {3, 12}, {2, 24}}; pd.vertexStride = 32;
     pd.uniformNames = pbrUniformNames(); pd.textureNames = pbrTextureNames(); pd.storageNames = pbrStorageNames();
@@ -127,20 +137,20 @@ public:
     rhi::ShaderDesc svs = vs, sps = ps;
     svs.name = "shadow.vs"; sps.name = "shadow.ps"; svs.source = sh; sps.source = sh;
     svs.entry = "VSMain"; sps.entry = "PSMain";
-    shVs_ = dev.createShader(svs); shPs_ = dev.createShader(sps);
+    shVs_ = mk(svs); shPs_ = mk(sps);
     rhi::PipelineDesc sd; sd.vs = shVs_; sd.ps = shPs_; sd.name = "shadow"; sd.color = rhi::Format::R32F; sd.cull = rhi::CullMode::None;
     sd.layout = {{3, 0}}; sd.vertexStride = 32; sd.uniformNames = {"ShadowBuffer"};
     shPipe_ = dev.createPipeline(sd);
     // passe de sombra de pontuais/spot: grava a distancia (clip.w) numa faixa R x 6R por luz
     rhi::ShaderDesc pvs = svs, pps = sps;
     pvs.name = "shadowpoint.vs"; pps.name = "shadowpoint.ps"; pvs.source = shp; pps.source = shp;
-    ptVs_ = dev.createShader(pvs); ptPs_ = dev.createShader(pps);
+    ptVs_ = mk(pvs); ptPs_ = mk(pps);
     rhi::PipelineDesc pd2 = sd; pd2.vs = ptVs_; pd2.ps = ptPs_; pd2.name = "shadowpoint";
     ptPipe_ = dev.createPipeline(pd2);
     // SSAO: prepasso (normal + profundidade RGBA16F), AO bruto e blur (triangulo de tela cheia, ver fsVb_)
     rhi::ShaderDesc pre; pre.stage = rhi::ShaderStage::Vertex; pre.entry = "VSMain"; pre.name = "prepass.vs"; pre.source = prepassSrc;
     rhi::ShaderDesc prePs = pre; prePs.stage = rhi::ShaderStage::Pixel; prePs.entry = "PSMain"; prePs.name = "prepass.ps";
-    preVs_ = dev.createShader(pre); prePs_ = dev.createShader(prePs);
+    preVs_ = mk(pre); prePs_ = mk(prePs);
     rhi::PipelineDesc pp; pp.vs = preVs_; pp.ps = prePs_; pp.name = "prepass";
     pp.layout = {{3, 0}, {3, 12}, {2, 24}}; pp.vertexStride = 32; pp.uniformNames = {"FrameBuffer", "ObjectBuffer"};
     pp.color = rhi::Format::RGBA16F; pp.cull = rhi::CullMode::Back;
@@ -148,7 +158,7 @@ public:
     rhi::ShaderDesc fsv; fsv.stage = rhi::ShaderStage::Vertex; fsv.entry = "VSMain"; fsv.name = "ssao.vs"; fsv.source = ssaoSrc;
     rhi::ShaderDesc ssP = fsv; ssP.stage = rhi::ShaderStage::Pixel; ssP.entry = "SsaoMain"; ssP.name = "ssao.ps";
     rhi::ShaderDesc blP = fsv; blP.stage = rhi::ShaderStage::Pixel; blP.entry = "SsaoBlur"; blP.name = "ssaoblur.ps";
-    fsVs_ = dev.createShader(fsv); ssaoPs_ = dev.createShader(ssP); blurPs_ = dev.createShader(blP);
+    fsVs_ = mk(fsv); ssaoPs_ = mk(ssP); blurPs_ = mk(blP);
     rhi::PipelineDesc sp; sp.vs = fsVs_; sp.ps = ssaoPs_; sp.name = "ssao"; sp.layout = {{3, 0}}; sp.vertexStride = 12;
     sp.uniformNames = {"SsaoCB"}; sp.textureNames = {"GBuf"}; sp.color = rhi::Format::R32F; sp.cull = rhi::CullMode::None;
     ssaoPipe_ = dev.createPipeline(sp);
@@ -158,9 +168,9 @@ public:
       std::string bloomSrc;
       if (!loadHlsl(shaderDir, "bloom.hlsl", bloomSrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei bloom.hlsl em " + shaderDir); release(); return false; }
       rhi::ShaderDesc bs; bs.stage = rhi::ShaderStage::Pixel; bs.source = bloomSrc;
-      bs.name = "bloom.thr"; bs.entry = "BloomThreshold"; bloomThrPs_ = dev.createShader(bs);
-      bs.name = "bloom.blur"; bs.entry = "BloomBlur"; bloomBlurPs_ = dev.createShader(bs);
-      bs.name = "bloom.comp"; bs.entry = "BloomComposite"; bloomCompPs_ = dev.createShader(bs);
+      bs.name = "bloom.thr"; bs.entry = "BloomThreshold"; bloomThrPs_ = mk(bs);
+      bs.name = "bloom.blur"; bs.entry = "BloomBlur"; bloomBlurPs_ = mk(bs);
+      bs.name = "bloom.comp"; bs.entry = "BloomComposite"; bloomCompPs_ = mk(bs);
       rhi::PipelineDesc tp; tp.vs = fsVs_; tp.ps = bloomThrPs_; tp.name = "bloomthr"; tp.layout = {{3, 0}}; tp.vertexStride = 12;
       tp.uniformNames = {"BloomCB"}; tp.textureNames = {"Src"}; tp.color = rhi::Format::RGBA16F; tp.cull = rhi::CullMode::None;
       bloomThrPipe_ = dev.createPipeline(tp);

@@ -158,7 +158,11 @@ private:
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("props");
+    // Um ID por no selecionado: campos com o mesmo rotulo nao dividem o estado de edicao entre nos diferentes
+    // (antes, trocar de no com um campo em foco fazia o texto aparecer ou apagar no lugar errado).
+    ImGui::PushID(selected_);
     drawProperties(*nodes);
+    ImGui::PopID();
     drawTest();
     ImGui::EndChild();
   }

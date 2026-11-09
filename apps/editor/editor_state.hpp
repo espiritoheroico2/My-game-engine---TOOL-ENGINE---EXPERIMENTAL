@@ -78,6 +78,7 @@ struct Editor {
   bool showAssets = true, showScenes = true, showNarrative = true, showSettings = true, showInputMap = false;
   bool showEditorInfo = false, showExport = false;   // File > Editor info / Export game
   bool resetLayout = false;
+  unsigned sceneLoads = 0;          // conta aberturas de cena: os avisos de desempenho esperam o carregamento acabar
   bool lockInterface = false;  // Interface travada: abas/janelas nao saem do encaixe e os divisores nao se mexem (menu Interface)
   bool dockWithShift = false;  // encaixar/desencaixar janelas so segurando Shift (evita encaixes acidentais)
   bool showCulled = false;     // Scene: mostra em vermelho os objetos que a camera de jogo nao desenha
@@ -486,6 +487,7 @@ struct Editor {
     ensureSceneCode(); openSceneNarrative();
     undoReset();
     statusLine = "Scene opened: " + name; tool::logInfo(statusLine);
+    ++sceneLoads;
     return true;
   }
   bool newScene(const std::string& name) {

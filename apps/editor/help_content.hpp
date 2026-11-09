@@ -264,6 +264,68 @@ Selecione a bola > Physics > marque "Vector physics" > aperte "Right": gravidade
 Versao em script: ainda nao disponivel neste runtime. Use o Tool nativo acima, ou veja os exemplos de script que funcionam em "Scripts: exemplos (QuickJS)".
 )H"},
 
+  {"ex_platform", "Examples", "Example: spinning and bouncing platform", "Exemplo: plataforma girando e quicando",
+R"H(# Spinning platform
+1. Create > Cube, scale it to 6 x 0.5 x 6. In Physics press "Add Physics" and set Body = Static (it does not fall, but it moves when you tell it to).
+2. Add Tool > Spin. In "Degrees / second (X Y Z)" set Y = 45.
+3. Create a second cube above the platform and give it Physics (Dynamic).
+Press Play: the cube lands on the platform while it turns.
+# Bouncing pad
+On the small cube, Add Tool > On Collision. Action = "Bounce this object", Bounce speed = 12 (m/s). Use "Only objects with tag" to bounce only the objects with a tag (for example "Player").
+Note: the On Collision tool needs a Physics component on the same object.
+)H",
+R"H(# Plataforma girando
+1. Create > Cube, escale para 6 x 0,5 x 6. Em Physics aperte "Add Physics" e troque Body = Static (ela nao cai, mas se move quando voce manda).
+2. Add Tool > Spin. Em "Degrees / second (X Y Z)" coloque Y = 45.
+3. Crie outro cubo acima da plataforma e de a ele Physics (Dynamic).
+Aperte Play: o cubo pousa na plataforma enquanto ela gira.
+# Trampolim
+No cubo pequeno, Add Tool > On Collision. Action = "Bounce this object", Bounce speed = 12 (m/s). Use "Only objects with tag" para quicar so os objetos com uma tag (por exemplo "Player").
+Obs.: o tool On Collision precisa de um componente Physics no mesmo objeto.
+)H"},
+
+  {"ex_hud", "Examples", "Example: health bar with the Narrative Controller", "Exemplo: barra de vida com o Narrative Controller",
+R"H(# Health bar
+1. In the Narrative window, create a "start" node and connect a "set" node after it: variable = health, value = 100.
+2. Add a UI element of kind Bar: Variable = health, "Full at" = 100. The bar fills with health / Full at.
+3. Add a UI element of kind Button with "Event name (on click)" = hurt. Its click emits the event "hurt".
+4. Add a "trigger" node with event = hurt, connected to an "add" node: variable = health, value = -25.
+Press Play and click the button: the bar drops by a quarter each time.
+# Note
+Narrative variables are shared by the whole scene, so any node can read or change health. Use the Save/Load example to keep them between sessions.
+)H",
+R"H(# Barra de vida
+1. Na janela Narrative, crie um no "start" e ligue depois dele um no "set": variable = health, value = 100.
+2. Adicione um elemento de UI do tipo Bar: Variable = health, "Full at" = 100. A barra enche com health / Full at.
+3. Adicione um elemento de UI do tipo Button com "Event name (on click)" = hurt. Ao clicar, ele dispara o evento "hurt".
+4. Adicione um no "trigger" com event = hurt, ligado a um no "add": variable = health, value = -25.
+Aperte Play e clique no botao: a barra cai um quarto a cada clique.
+# Obs.
+As variaveis do Narrative sao compartilhadas pela cena inteira, entao qualquer no pode ler ou mudar a vida. Use o exemplo de Salvar/Carregar para guardar entre sessoes.
+)H"},
+
+  {"ex_saveload", "Examples", "Example: save and load the game", "Exemplo: salvar e carregar o jogo",
+R"H(# Save and load
+Narrative window:
+1. A "trigger" node with event = save, connected to a "savepoint" node with slot = slot1.
+2. A "trigger" node with event = load, connected to a "loadpoint" node with slot = slot1.
+3. Two UI buttons: one with "Event name (on click)" = save, another = load.
+Press Play, change health, click Save, change it again, then click Load: health goes back to the saved value.
+The file is written to Saves/slot1.save.json in the project folder.
+# What is saved
+Only the Narrative variables and flows. Object positions and physics are not saved by this node.
+)H",
+R"H(# Salvar e carregar
+Janela Narrative:
+1. Um no "trigger" com event = save, ligado a um no "savepoint" com slot = slot1.
+2. Um no "trigger" com event = load, ligado a um no "loadpoint" com slot = slot1.
+3. Dois botoes de UI: um com "Event name (on click)" = save, outro = load.
+Aperte Play, mude a vida, clique em Save, mude de novo e clique em Load: a vida volta ao valor salvo.
+O arquivo e gravado em Saves/slot1.save.json dentro da pasta do projeto.
+# O que e salvo
+Somente as variaveis e os fluxos do Narrative. Posicoes de objetos e fisica nao sao salvas por esse no.
+)H"},
+
   {"api", "Examples", "Script API (QuickJS)", "API de script (QuickJS)",
 R"H(Scripts are plain JavaScript functions (QuickJS). There are no classes and no `this` in scripts. Each object with a script has its own context, and its variables are private to it.
 # Entry points

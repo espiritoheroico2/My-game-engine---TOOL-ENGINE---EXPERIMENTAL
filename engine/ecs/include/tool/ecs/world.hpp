@@ -3,11 +3,13 @@
 // Interface pensada para poder trocar o backend por Flecs sem mexer no resto.
 #pragma once
 #include "tool/core/handle.hpp"
+#include "tool/core/parallel.hpp"
 #include "tool/core/tags.hpp"
 #include "tool/debug/debug.hpp"
 
 #include <algorithm>
 #include <cstdlib>
+#include <deque>
 #include <memory>
 #include <typeinfo>
 #include <utility>
@@ -38,6 +40,7 @@ public:
     ensure(e.index);
     tags_[e.index] = {};
     dormant_[e.index] = false;
+    sim_[e.index] = 1;
     return e;
   }
 
@@ -52,6 +55,7 @@ public:
       if (s) s->remove(e.index);
     tags_[e.index] = {};
     dormant_[e.index] = false;
+    sim_[e.index] = 1;
     return ids_.destroy(e);
   }
 
@@ -89,15 +93,61 @@ public:
 
   // --- iteracao -----------------------------------------------------------------
   // Percorre entidades vivas (e nao dormentes) com todos os componentes Ts.
+  // fn pode alterar o mundo (copia dos indices). A copia usa um vetor reaproveitado: sem alocacao por chamada.
   template <class... Ts, class F> void each(F&& fn) {
     static_assert(sizeof...(Ts) > 0);
     if (((findStorage<Ts>() == nullptr) || ...)) return;
-    const std::vector<u32> idx = smallestIndices<Ts...>(); // copia: fn pode alterar o mundo
-    for (u32 i : idx) {
+    ScratchLease L = lease();
+    const auto& src = smallestIndices<Ts...>();
+    L.v.assign(src.begin(), src.end());
+    for (u32 i : L.v) {
       if (dormant_[i] || !ids_.aliveIndex(i) || !(findStorage<Ts>()->has(i) && ...)) continue;
       fn(Entity{i, ids_.generationOf(i)}, *findStorage<Ts>()->get(i)...);
     }
   }
+
+  // Varre um componente T direto no vetor denso (memoria contigua, sem busca esparsa). fn(Entity, T&).
+  // Pode alterar OUTROS componentes; nao adicione nem remova T dentro de fn.
+  template <class T, class F> void forEachDense(F&& fn) {
+    auto* st = findStorage<T>();
+    if (!st) return;
+    for (size_t p = 0; p < st->data.size(); ++p) {
+      const u32 i = st->denseIdx[p];
+      if (dormant_[i] || !ids_.aliveIndex(i)) continue;
+      fn(Entity{i, ids_.generationOf(i)}, st->data[p]);
+    }
+  }
+
+  // Igual a each, mas dividido em blocos entre os nucleos (pool persistente). fn roda em paralelo para entidades
+  // diferentes: so use com fn que escreve apenas nos proprios componentes (e le o resto sem alterar).
+  template <class... Ts, class F> void parallelEach(F&& fn) {
+    static_assert(sizeof...(Ts) > 0);
+    if (((findStorage<Ts>() == nullptr) || ...)) return;
+    ScratchLease L = lease();
+    const auto& src = smallestIndices<Ts...>();
+    L.v.assign(src.begin(), src.end());
+    const std::vector<u32>& idx = L.v;
+    tool::parallelFor(idx.size(), 512, [&](size_t b, size_t e) {
+      for (size_t k = b; k < e; ++k) {
+        const u32 i = idx[k];
+        if (dormant_[i] || !ids_.aliveIndex(i) || !(findStorage<Ts>()->has(i) && ...)) continue;
+        fn(Entity{i, ids_.generationOf(i)}, *findStorage<Ts>()->get(i)...);
+      }
+    });
+  }
+
+  // Quantos componentes T existem (sem contar dormentes).
+  template <class T> size_t count() const {
+    auto* st = findStorage<T>();
+    return st ? st->size() : 0;
+  }
+
+  // Simulacao ligada/desligada por entidade (fisica e scripts podem pular as que estao longe da camera).
+  // Diferente de dormant: a entidade continua visivel e nas consultas; so o sistema de simulacao a ignora.
+  void setSimulating(Entity e, bool v) {
+    if (alive(e)) sim_[e.index] = v ? 1 : 0;
+  }
+  bool isSimulating(Entity e) const { return alive(e) && sim_[e.index] != 0; }
 
   // Entidades com todas as tags de `mask`.
   template <class F> void eachTagged(const TagMask& mask, F&& fn) {
@@ -192,13 +242,31 @@ private:
     if (index >= tags_.size()) {
       tags_.resize(index + 1);
       dormant_.resize(index + 1, false);
+      sim_.resize(index + 1, 1);
     }
+  }
+
+  // Vetores de indices reaproveitados pelas iteracoes. Um deque: ao aninhar each() dentro de each(), a referencia
+  // do nivel de fora continua valida quando o nivel de dentro cria o seu vetor.
+  struct ScratchLease {
+    World& w;
+    std::vector<u32>& v;
+    ~ScratchLease() { --w.scratchDepth_; }
+  };
+  ScratchLease lease() {
+    if (scratchDepth_ == scratch_.size()) scratch_.emplace_back();
+    std::vector<u32>& v = scratch_[scratchDepth_++];
+    v.clear();
+    return ScratchLease{*this, v};
   }
 
   HandleAllocator ids_;
   std::vector<std::unique_ptr<IStorage>> storages_;
   std::vector<TagMask> tags_;
   std::vector<bool> dormant_;
+  std::vector<char> sim_;                       // 1 = simulando (padrao), 0 = fora da simulacao
+  mutable std::deque<std::vector<u32>> scratch_; // reserva de vetores de indices (ver lease)
+  size_t scratchDepth_ = 0;
 };
 
 } // namespace tool

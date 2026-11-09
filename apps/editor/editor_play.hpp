@@ -55,6 +55,7 @@ inline void Editor::startPhysics() {
     play.ents.push_back(e); play.tf.push_back(nt); play.rb.push_back(r); play.col.push_back(c);
   });
   play.dead.assign(play.ents.size(), 0);
+  play.culled.assign(play.ents.size(), 0); play.culledCount = 0;
   if (!play.ents.empty() && ps.enabled) { play.world.Rebuild(play.tf, play.rb, play.col); play.built = true; }
 }
 
@@ -117,6 +118,33 @@ inline void Editor::stepPlay(float dt) {
     for (size_t i = 0; i < play.ents.size(); ++i) { // corpos estaticos/cinematicos seguem o Transform do editor (gizmo, tools, narrativa)
       if (play.dead[i] || !w.alive(play.ents[i]) || play.rb[i].IsDynamic()) continue;
       if (const Transform* t = w.get<Transform>(play.ents[i])) { play.tf[i].position = {t->pos[0], t->pos[1], t->pos[2]}; play.tf[i].rotation = eulerToQuat(t->rot); }
+    }
+    // Culling de simulacao (Settings > Physics > Simulation radius): corpos DINAMICOS longe da camera principal
+    // param de integrar (isSleeping) e saem da ECS como nao simulados. Histerese de 10%: nao oscila na borda.
+    // Cinematicos e estaticos nao entram: continuam como estavam.
+    const float R = sceneInfo.physics.simRadius;
+    if (R > 0.f && !cams.empty()) {
+      if (const Transform* ct = w.get<Transform>(cams[0])) {
+        const float cx = ct->pos[0], cy = ct->pos[1], cz = ct->pos[2];
+        const float outR2 = R * R, inR2 = (R * 0.9f) * (R * 0.9f);
+        play.culledCount = 0;
+        for (size_t i = 0; i < play.ents.size(); ++i) {
+          if (play.dead[i] || !w.alive(play.ents[i]) || !play.rb[i].IsDynamic()) continue;
+          const float dx = play.tf[i].position.x - cx, dy = play.tf[i].position.y - cy, dz = play.tf[i].position.z - cz;
+          const float d2 = dx * dx + dy * dy + dz * dz;
+          if (!play.culled[i] && d2 > outR2) {
+            play.culled[i] = 1; play.rb[i].isSleeping = true; play.rb[i].velocity = {}; play.rb[i].angularVelocity = {};
+            w.setSimulating(play.ents[i], false);
+          } else if (play.culled[i] && d2 < inR2) {
+            play.culled[i] = 0; play.rb[i].WakeUp(); w.setSimulating(play.ents[i], true);
+          }
+          if (play.culled[i]) ++play.culledCount;
+        }
+      }
+    } else if (play.culledCount > 0) { // raio desligado: devolve tudo para a simulacao
+      for (size_t i = 0; i < play.ents.size(); ++i)
+        if (play.culled[i]) { play.culled[i] = 0; play.rb[i].WakeUp(); if (w.alive(play.ents[i])) w.setSimulating(play.ents[i], true); }
+      play.culledCount = 0;
     }
     play.world.Simulate(play.tf, play.rb, play.col, dt);
     // 4) sincroniza

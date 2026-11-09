@@ -1527,6 +1527,23 @@ void applyLayoutLock(ImGuiDockNode* node, bool lock) {
   for (ImGuiDockNode* child : node->ChildNodes) applyLayoutLock(child, lock);
 }
 
+// Janela solta (fora do encaixe) que saiu da area do editor volta para dentro: pelo menos 80 px continuam visiveis
+// (sem isso, ao reduzir a janela do editor ou arrastar para fora, a janela some e nao volta).
+void keepFloatingWindowsOnScreen(const ImGuiViewport* vp) {
+  ImGuiContext* ctx = ImGui::GetCurrentContext();
+  constexpr float keep = 80.f;
+  const float x0 = vp->WorkPos.x, y0 = vp->WorkPos.y, x1 = x0 + vp->WorkSize.x, y1 = y0 + vp->WorkSize.y;
+  constexpr ImGuiWindowFlags skip = ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_ChildMenu;
+  for (int i = 0; i < ctx->Windows.Size; ++i) {
+    ImGuiWindow* w = ctx->Windows[i];
+    if (!w->WasActive || w->Hidden || (w->Flags & skip) || w->DockNode || w->DockIsActive) continue;
+    ImVec2 p = w->Pos;
+    p.x = std::clamp(p.x, x0 - w->Size.x + keep, x1 - keep);
+    p.y = std::clamp(p.y, y0, y1 - keep);
+    if (p.x != w->Pos.x || p.y != w->Pos.y) ImGui::SetWindowPos(w->Name, p, ImGuiCond_Always);
+  }
+}
+
 // Travar interface: cancela o arrasto de janela pela barra de titulo e encaixa de volta as janelas que estiverem
 // flutuando (so as do editor: nomes com "###"). Roda a cada quadro enquanto a opcao estiver ligada.
 void lockWindows(ImGuiID dock) {
@@ -1855,6 +1872,7 @@ int main(int argc, char** argv) {
       ImGui::GetIO().ConfigDockingWithShift = ed.dockWithShift;          // encaixe so com Shift, se ligado
       applyLayoutLock(ImGui::DockBuilderGetNode(dock), ed.lockInterface); // travar layout, se ligado (cada quadro)
       if (ed.lockInterface) lockWindows(dock);
+      keepFloatingWindowsOnScreen(ImGui::GetMainViewport());
       const bool focusTabs = layoutFocus > 0 && --layoutFocus == 0; // seleciona as abas ativas do layout padrao (Inspector, Scene, Assets)
       if (ed.showHierarchy) drawHierarchy(ed);
       if (focusTabs) ImGui::SetNextWindowFocus();
@@ -1893,7 +1911,9 @@ int main(int argc, char** argv) {
     zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Present);
     SDL_RenderPresent(renderer);
     tool::debug().endFrame();
-    { static editor::PerfWarnings perfWarn; perfWarn.check(ed.prof); }   // avisos de recurso no Console (a cada 30 quadros)
+    { static editor::PerfWarnings perfWarn; static unsigned seenLoads = 0;
+      if (ed.sceneLoads != seenLoads) { seenLoads = ed.sceneLoads; perfWarn.quietFor(240); } // cena nova: compila shaders e cria pipelines
+      perfWarn.check(ed.prof); }   // avisos de recurso no Console (a cada 30 quadros)
     if (ed.fpsMode >= 1 && ed.fpsMode <= 3 && !headless) { // limite manual de FPS (30/60/120): espera o que sobrar do quadro
       static const Uint64 target[4] = {0, 1000000000ull / 30, 1000000000ull / 60, 1000000000ull / 120};
       const Uint64 spent = SDL_GetTicksNS() - frameStart;

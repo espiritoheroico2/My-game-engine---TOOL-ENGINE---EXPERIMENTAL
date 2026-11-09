@@ -62,11 +62,6 @@ int main(int argc, char** argv) {
   if (!dev) { std::fprintf(stderr, "FALHA ao criar %s: %s\n", which.c_str(), err.c_str()); return 1; }
   std::printf("backend=%s adaptador=%s\n", rhi::toString(dev->backend()), dev->deviceName().c_str());
 
-  if (dev->backend() == rhi::Backend::GLES) { // a iluminacao Light Prism ainda nao tem GLSL: o editor usa a CPU nesse caso
-    std::printf("PULADO: OpenGL sem iluminacao Light Prism (GLSL pendente); o editor cai para a CPU\n");
-    dev.reset(); if (win) { SDL_DestroyWindow(win); SDL_Quit(); }
-    return 0;
-  }
   GpuRenderer gpu;
   // Dispositivo da Light Prism sobre o mesmo RHI (clusters e buffers de luz rodam nele).
   if (!gpu.init(*dev, rhi::createLightPrismDevice(*dev), std::string(TOOL_SOURCE_DIR) + "/assets/shaders", 320, 180)) {
@@ -201,7 +196,6 @@ int main(int argc, char** argv) {
     std::printf("textura: gpu esq R=%d B=%d dir R=%d B=%d | cpu esq R=%d B=%d dir R=%d B=%d\n",
                 at(g, xl)[0], at(g, xl)[2], at(g, xr)[0], at(g, xr)[2], at(c, xl)[0], at(c, xl)[2], at(c, xr)[0], at(c, xr)[2]);
     texOk = gpuOk && cpuOk;
-    if (std::string(rhi::toString(dev->backend())) == "gles") { texOk = true; std::printf("textura: OpenGL/GLES ainda nao amostra texturas (pendente), teste pulado\n"); }
   }
   // SSAO (Light Prism): caixa sobre o chao, so luz ambiente. Com AO a base da caixa e o chao ao redor escurecem.
   // GPU e CPU precisam escurecer quantidades parecidas de pixels (tolerancia de 40%).
@@ -289,8 +283,13 @@ int main(int argc, char** argv) {
   const bool emOk = emRan && gpuHalo > 150 && cpuHalo > 150 &&
                     std::abs(static_cast<double>(gpuHalo) - static_cast<double>(cpuHalo)) <= 0.4 * static_cast<double>(std::max(gpuHalo, cpuHalo));
   std::printf("bloom: pixels com halo gpu=%zu cpu=%zu\n", gpuHalo, cpuHalo);
-  const bool ok = shadowOk && pointOk && aoOk && emOk && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
-  std::printf(ok ? "OK\n" : "FALHA: imagem da GPU diverge do esperado\n");
+  // OpenGL: sombra pontual e bloom ainda diferem do Vulkan (pendente, aviso TOOL-W142). Nesse caso o teste
+  // reporta PENDENTE e nao falha; o resto (objetos, texturas, SSAO, sombra do sol) continua valendo.
+  const bool gl = dev->backend() == rhi::Backend::GLES;
+  const bool glPending = gl && !(pointOk && emOk);
+  const bool ok = shadowOk && (pointOk || gl) && aoOk && (emOk || gl) && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
+  if (ok && glPending) std::printf("PENDENTE (OpenGL): sombra pontual e bloom ainda nao batem com o Vulkan; o resto passou\n");
+  else std::printf(ok ? "OK\n" : "FALHA: imagem da GPU diverge do esperado\n");
   gpu.shutdown(); // libera recursos antes de destruir o dispositivo
   dev.reset();
   if (win) { SDL_DestroyWindow(win); SDL_Quit(); }

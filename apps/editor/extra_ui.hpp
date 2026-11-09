@@ -457,8 +457,11 @@ inline void drawPhysicsTab(Editor& ed) {
   ImGui::SliderInt(T("Solver iterations"), &ps.solverIterations, 1, 30); ImGui::SliderInt(T("Steps per second"), &ps.stepHz, 15, 240);
   ImGui::TextDisabled("%s", T("More iterations stack better; more steps per second is more precise. Both cost CPU."));
   ImGui::Checkbox(T("Draw colliders in the Scene view"), &ps.drawColliders);
+  ImGui::SliderFloat(T("Simulation radius (0 = everything)"), &ps.simRadius, 0.f, 1000.f, "%.0f");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Bodies outside the radius around the camera stop moving until the camera gets closer. Saves CPU in large scenes."));
   if (ed.playing && ed.play.built) { const auto& s = ed.play.world.stats; ImGui::SeparatorText(T("Live"));
-    ImGui::Text("%s", F("bodies %d   awake %d   pairs %d   contacts %d   steps/frame %d", s.bodies, s.awake, s.pairs, s.contacts, s.steps).c_str()); }
+    ImGui::Text("%s", F("bodies %d   awake %d   pairs %d   contacts %d   steps/frame %d", s.bodies, s.awake, s.pairs, s.contacts, s.steps).c_str());
+    ImGui::Text("%s", F("%s: %d   %s: %d", T("Bodies simulated"), static_cast<int>(s.bodies - ed.play.culledCount), T("Bodies outside the simulation radius"), static_cast<int>(ed.play.culledCount)).c_str()); }
 }
 
 // ====================================================================================================== COLLIDERS NA SCENE

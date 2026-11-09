@@ -45,8 +45,13 @@ public:
   };
   Limits limits;
 
+  // Ignora os proximos `frames` quadros (carregamento de cena, primeira compilacao de shaders): esses picos nao sao
+  // o problema do usuario e disparariam avisos falsos logo ao abrir o projeto.
+  void quietFor(unsigned frames) { quiet_ = frames; }
+
   // Chamar uma vez por quadro, depois de Present.
   void check(const FrameProfiler& p) {
+    if (quiet_ > 0) { --quiet_; return; }
     if (++tick_ % 30 != 0) return;
     if (tick_ == 30) {
       const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
@@ -87,6 +92,7 @@ private:
   struct State { bool active = false; Clock::time_point last{}; };
   std::unordered_map<std::string, State> state_;
   unsigned tick_ = 0;
+  unsigned quiet_ = 0;
 
   static std::string fmt(float v) { char b[32]; std::snprintf(b, sizeof b, "%.2f", static_cast<double>(v)); return b; }
 

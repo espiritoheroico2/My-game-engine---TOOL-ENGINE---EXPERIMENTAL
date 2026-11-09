@@ -33,6 +33,8 @@ struct PlayRuntime {
   std::vector<tool::Entity> ents;                  // indice do corpo -> entidade
   std::unordered_map<uint32_t, uint32_t> indexOf;  // entity.index -> indice do corpo
   std::vector<char> dead;                          // corpo "apagado" durante o Play
+  std::vector<char> culled;                        // corpo parado pelo culling de simulacao (PhysicsSettings::simRadius)
+  size_t culledCount = 0;                          // quantos corpos dinamicos estao fora da simulacao agora
   std::vector<tool::Entity> destroyQueue;
   std::string snapshot; int snapshotSel = -1; bool hasSnapshot = false;
   bool built = false;

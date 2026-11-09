@@ -184,6 +184,10 @@ Steps per second	Passos por segundo	Pasos por segundo
 More iterations stack better; more steps per second is more precise. Both cost CPU.	Mais iterações empilham melhor; mais passos por segundo é mais preciso. Ambos custam CPU.	Más iteraciones apilan mejor; más pasos por segundo es más preciso. Ambos cuestan CPU.
 Draw colliders in the Scene view	Desenhar colliders na janela Scene	Dibujar colliders en la ventana Scene
 Live	Ao vivo	En vivo
+Simulation radius (0 = everything)	Raio de simulação (0 = tudo)	Radio de simulación (0 = todo)
+Bodies outside the radius around the camera stop moving until the camera gets closer. Saves CPU in large scenes.	Corpos fora do raio em volta da câmera param de se mover até a câmera se aproximar. Economiza CPU em cenas grandes.	Los cuerpos fuera del radio alrededor de la cámara dejan de moverse hasta que la cámara se acerque. Ahorra CPU en escenas grandes.
+Bodies simulated	Corpos simulados	Cuerpos simulados
+Bodies outside the simulation radius	Corpos fora do raio de simulação	Cuerpos fuera del radio de simulación
 Gamepads detected: %d	Controles detectados: %d	Mandos detectados: %d
 + Add controller map	+ Adicionar mapa de controle	+ Añadir mapa de control
 Reset to defaults	Restaurar padrão	Restaurar predeterminado

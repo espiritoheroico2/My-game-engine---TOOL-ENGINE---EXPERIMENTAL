@@ -2,7 +2,20 @@
 
 ## 0.7.18-beta (em andamento) — editor de script, oclusao e ray tracing
 
-**Ultimas mudancas: Vulkan, luz e IBL**
+**Ultimas mudancas: estabilidade do editor, ajuda com mais exemplos**
+- Interface: campos com o mesmo rotulo dentro de um laco (Narrative) agora tem ID por no selecionado: trocar de no com o campo em foco nao mistura o texto.
+- Interface: janela solta (fora do encaixe) que sair da area do editor volta para dentro, com pelo menos 80 px visiveis.
+- Avisos de desempenho (TOOL-W301 a W307): ficam em silencio por 240 quadros depois de abrir uma cena, para nao acusar o carregamento (compilacao de shaders, pipelines) como problema.
+- Play: Tools (Move, Jump, Spin, Follow, On Collision) nao rodam em corpos fora da simulacao por distancia.
+- Ajuda: 3 exemplos novos (plataforma girando e trampolim, barra de vida com o Narrative, salvar e carregar), em portugues e ingles.
+
+**Ultimas mudancas anteriores: simulacao por distancia e ECS**
+- ECS: `each` reaproveita o vetor de indices (sem alocacao por chamada) e aceita chamadas aninhadas. Novos: `forEachDense<T>` (varredura contigua do componente), `parallelEach<Ts...>` (divide as entidades entre os nucleos pelo pool persistente, para fn que escreve so nos proprios componentes) e `count<T>()`.
+- ECS: flag de simulacao por entidade (`setSimulating` / `isSimulating`). Diferente de dormente: a entidade continua visivel e nas consultas; so a simulacao a ignora.
+- Simulacao por distancia (fisica): em Projeto > Fisica, "Simulation radius" (0 = tudo). Corpos dinamicos fora desse raio em volta da camera param (sem gastar CPU) e voltam ao se aproximar. Histerese de 10% evita piscar na borda. Corpos parados sao acordados ao voltar. Os Tools (Move, Jump, Spin, Follow) nao rodam em corpos fora da simulacao, para nao acordar o corpo de novo. Os scripts ainda nao tem VM no Play, entao nao ha o que pular neles por enquanto. O painel Live mostra quantos corpos estao simulados e quantos estao fora do raio.
+- Testes: 4 novos em `tests/test_ecs.cpp` (iteracao aninhada, `forEachDense`, `parallelEach` igual a `each` com 5000 entidades, flag de simulacao). `tool_tests`: 147 testes, 0 falhas.
+
+**Mudancas anteriores: Vulkan, luz e IBL**
 - Correcao (D3D12): `pbr.ps` falhava com `X4610 SRV binding ranges overlap for range T[4:4]`. `IblBrdfLut` (IBL) e `CsmMap1` (sombra) usavam `t4`, e `IblPrefiltered` e `CsmMap0` usavam `t3`. Os registradores de IBL agora sao `t15` e `t16`. No Vulkan isso passava despercebido; no D3D12 o compilador recusa. Os avisos `X4000` (variavel possivelmente nao inicializada) continuam: nao derrubam a compilacao, mas ainda serao limpos.
 - Verificado: `gpu_test vulkan` e `ctest` iguais. D3D12 ainda nao foi compilado aqui (sem `dxc` nesta maquina): precisa testar no Windows.
 - Frame time (1/3): o Profiler mostra tambem o "trabalho da CPU" (sem a espera do VSync), com grafico e desvio padrao proprios.
@@ -11,6 +24,8 @@
 - Sombras: Scene e Game dividiam um renderizador e uma assinatura, entao o shadow map de uma apagava o da outra e nada era reaproveitado. Agora cada vista tem o seu renderizador e a sua assinatura (CPU). A GPU ainda e compartilhada: pendente.
 - Avisos de recurso no Console (TOOL-W301..W307): oscilacao do trabalho da CPU, pico de zona, objetos, triangulos, pixels, sombras refeitas a cada quadro e memoria. Dispara na transicao e repete a cada 10 s enquanto continuar. Limites ajustaveis em `PerfWarnings::Limits`.
 - Janelas "Edit Mesh" e "Paint Mesh" (menu Window): so aviso de recurso em desenvolvimento.
+- OpenGL (1/2): os shaders agora sao GLSL 430 gerados offline de HLSL (`tools/shaders/build_glsl.py`: glslang -> SPIRV-Cross), em vez do tradutor interno do Diligent, que nao aceitava o codigo. Os compute da Light Prism tambem (`assets/shaders/lightprism/glsl/`; a Light Prism carrega o GLSL no OpenGL). Correcoes: nomes de textura (`SPIRV_Cross_Combined...`), inversao do Y do clip nos vertex shaders (exceto a tela cheia), e a entrada do SSAO (`PSMain` -> `SsaoMain`: o glslang gerava um shader vazio sem erro). Verificado: objetos (IoU 1.000), texturas, SSAO e sombra do sol batem com o Vulkan.
+- OpenGL (2/2): pendente: bloom e sombra pontual ainda diferem do Vulkan (aviso TOOL-W142). `gpu_test opengl` reporta PENDENTE nesse caso, nao falha.
 - Testes: `ctest` 4/4, `tool_tests` 140/140, selftest do editor 224/224, `gpu_test vulkan` igual. Medidas de frame time nao foram feitas aqui (sem GPU real): precisam ser medidas no Windows.
 - Correcao (Vulkan): o pipeline PBR falhava com "dynamic uniform buffers (10) excede o limite do dispositivo (8)" (`TOOL-E150`/`TOOL-E153`) em GPUs que aceitam so 8 buffers uniformes dinamicos. O Vulkan conta cada cbuffer por estagio, e o PBR tinha `FrameBuffer` e `ObjectBuffer` nos dois (VS e PS). Agora o pixel shader nao le esses dois: o vertex shader calcula o que o PS precisa e passa por interpolacao (valores por objeto com `nointerpolation`). Total: 8.
 - Teste: `gpu_test` (Vulkan/llvmpipe) passa com os mesmos numeros de antes, e `ctest` 4/4. Teste em GPU real ainda pendente.

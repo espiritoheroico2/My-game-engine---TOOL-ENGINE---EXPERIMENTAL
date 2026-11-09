@@ -246,6 +246,7 @@ struct PhysicsSettings {
   int solverIterations = 10;   // mais = empilha melhor, custa mais
   int stepHz = 60;             // passo fixo da simulacao
   bool drawColliders = true;   // desenha as caixas/esferas de colisao na janela Scene
+  float simRadius = 0.f;       // raio em volta da camera: corpos dinamicos fora dele nao sao simulados (0 = todos)
 };
 
 struct SceneFile {
@@ -262,7 +263,7 @@ struct SceneFile {
 
 inline tool::Json savePhysicsSettings(const PhysicsSettings& p) {
   tool::Json o = tool::Json::object();
-  o.set("enabled", p.enabled); o.set("gravity", ser::vec(p.gravity, 3)); o.set("solverIterations", p.solverIterations); o.set("stepHz", p.stepHz); o.set("drawColliders", p.drawColliders);
+  o.set("enabled", p.enabled); o.set("gravity", ser::vec(p.gravity, 3)); o.set("solverIterations", p.solverIterations); o.set("stepHz", p.stepHz); o.set("drawColliders", p.drawColliders); o.set("simRadius", p.simRadius);
   return o;
 }
 inline PhysicsSettings loadPhysicsSettings(const tool::Json& o) {
@@ -270,6 +271,7 @@ inline PhysicsSettings loadPhysicsSettings(const tool::Json& o) {
   for (float& g : p.gravity) g = std::clamp(g, -1000.f, 1000.f);
   p.solverIterations = std::clamp(static_cast<int>(ser::num(o, "solverIterations", 10.f)), 1, 50); p.stepHz = std::clamp(static_cast<int>(ser::num(o, "stepHz", 60.f)), 15, 240);
   p.drawColliders = ser::flag(o, "drawColliders", true);
+  p.simRadius = std::max(0.f, ser::num(o, "simRadius", 0.f));
   return p;
 }
 
