@@ -746,7 +746,7 @@ struct Editor {
       ZoneTimer zt(prof, Zone::PostFx);
       const tool::LightingSettings& L = sceneInfo.render.lighting;
       tool::u8* px = renderer.pixelsMutable();
-      tool::applyBloomRgba8(px, static_cast<unsigned>(w), static_cast<unsigned>(h), L.bloomThreshold, L.bloomStrength);
+      tool::applyGlowRgba8(px, static_cast<unsigned>(w), static_cast<unsigned>(h), renderer.glowLinear(), L.bloomStrength); // so o que emite brilha
       out = px;
     }
     if (out && fx && fx->active()) {
@@ -781,7 +781,8 @@ private:
     if (!pointShadows) { psigGpuValid = false; psigCpuValid[vi] = false; }
     tool::u64 tris = 0; unsigned draws = 0, casters = 0;
     // Emissao do objeto: cor x intensidade (linear). Vale para todas as partes de um modelo.
-    auto emissionOf = [](const MeshRenderer& mr) { return tool::Vec3{mr.emissive[0] * mr.emissiveIntensity, mr.emissive[1] * mr.emissiveIntensity, mr.emissive[2] * mr.emissiveIntensity}; };
+    // Sem "Enable emission" o objeto nao emite: nem cor extra nem brilho (bloom).
+    auto emissionOf = [](const MeshRenderer& mr) { const float k = mr.emissionOn ? mr.emissiveIntensity : 0.f; return tool::Vec3{mr.emissive[0] * k, mr.emissive[1] * k, mr.emissive[2] * k}; };
     auto material = [&](tool::Entity e, const MeshRenderer& mr) {
       tool::Material m{{mr.color[0], mr.color[1], mr.color[2]}, mr.roughness, mr.metallic, mr.castShadow, mr.receiveShadow};
       m.emissive = emissionOf(mr);

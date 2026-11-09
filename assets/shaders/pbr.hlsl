@@ -109,3 +109,7 @@ float4 PSMain(VSOut i) : SV_Target {
   color += i.emissive;   // emissao do proprio objeto: nao recebe AO nem sombra; o bloom usa o brilho depois do tone mapping
   return float4(ToneMapACESFilm(color), i.baseColor.a);   // alfa so da cor do material (a mascara do ceu depende disso)
 }
+
+// Passe de emissao (bloom): so a radiancia emissiva do objeto, sem luz nem tone mapping. Usa o mesmo VS do PBR, para a
+// profundidade ser identica a do desenho principal (o brilho so aparece onde o objeto e visivel). Alvo: brilho linear.
+float4 EmissionPS(VSOut i) : SV_Target { return float4(i.emissive, 1.0); }

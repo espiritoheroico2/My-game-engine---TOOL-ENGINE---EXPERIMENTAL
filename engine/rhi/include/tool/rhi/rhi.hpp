@@ -80,6 +80,8 @@ class ICommandList {
 public:
   virtual ~ICommandList() = default;
   virtual void begin(TextureId target, TextureId depth, f32 r, f32 g, f32 b, f32 a) = 0; // depth pode ser nulo
+  // Troca o alvo sem limpar nada (para passes que reaproveitam a profundidade). depth pode ser nulo.
+  virtual void setTargets(TextureId, TextureId) {}
   virtual void setPipeline(PipelineId p) = 0;
   virtual void setVertexBuffer(BufferId b) = 0;
   virtual void setIndexBuffer(BufferId b) = 0;

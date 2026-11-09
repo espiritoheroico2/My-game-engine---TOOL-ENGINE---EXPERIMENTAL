@@ -132,6 +132,12 @@ public:
     colorFmt_ = rhi::Format::RGBA8_SRGB;
     pd.color = colorFmt_;
     pipe_ = dev.createPipeline(pd);
+    // Passe de emissao (bloom so do que emite): o mesmo VS e cbuffers do PBR, pixel = emissao; nao escreve profundidade.
+    rhi::ShaderDesc emi = ps; emi.entry = "EmissionPS"; emi.name = "pbr.emi";
+    emiPs_ = mk(emi);
+    rhi::PipelineDesc ed = pd; ed.ps = emiPs_; ed.name = "emission"; ed.depthWrite = false; ed.color = rhi::Format::RGBA16F;
+    ed.uniformNames = {"FrameBuffer", "ObjectBuffer"}; ed.textureNames.clear(); ed.storageNames.clear();
+    emiPipe_ = dev.createPipeline(ed);
 
     // passe de sombra: so posicao, grava z da luz num alvo R32F, sem culling (as duas faces projetam sombra)
     rhi::ShaderDesc svs = vs, sps = ps;
@@ -229,11 +235,12 @@ public:
       t.bloomA = dev_->createTexture({hw, hh, 1, rhi::Format::RGBA16F, true}, nullptr);
       t.bloomB = dev_->createTexture({hw, hh, 1, rhi::Format::RGBA16F, true}, nullptr);
       t.out = dev_->createTexture({w_, h_, 1, colorFmt_, true}, nullptr);
+      t.glow = dev_->createTexture({w_, h_, 1, rhi::Format::RGBA16F, true}, nullptr); // brilho: so a emissao (bloom)
       it = targets_.emplace(key, t).first;
     }
     it->second.lastUse = frame_;
     color_ = it->second.color; depth_ = it->second.depth; gbuf_ = it->second.gbuf; aoRaw_ = it->second.aoRaw; ao_ = it->second.ao;
-    bloomA_ = it->second.bloomA; bloomB_ = it->second.bloomB; outFull_ = it->second.out;
+    bloomA_ = it->second.bloomA; bloomB_ = it->second.bloomB; outFull_ = it->second.out; glow_ = it->second.glow;
     for (auto i = targets_.begin(); i != targets_.end();) {
       if (frame_ - i->second.lastUse > 120) { destroyTarget(i->second); i = targets_.erase(i); }
       else ++i;
@@ -476,6 +483,28 @@ public:
       cl_->drawIndexed(d.mesh->count, 1);
     }
     cl_->end(); dev_->submit(*cl_); cl_.reset();
+    // Brilho do bloom: limpa em preto (nada emite) e desenha so os objetos com emissao, com a profundidade do desenho
+    // principal. Assim o halo so aparece ao redor do que emite, e nao atras de paredes.
+    if (bloomOn_ && !glow_.isNull()) {
+      auto gl = dev_->beginCommands();
+      gl->begin(glow_, kNullHandle, 0.f, 0.f, 0.f, 0.f);
+      if (!emiPipe_.isNull()) {
+        gl->setTargets(glow_, depth_);
+        gl->setPipeline(emiPipe_);
+        gl->setUniform(0, frameCb_);
+        const GpuMesh* lastG = nullptr;
+        for (const Draw& d : draws_) {
+          if (d.mat.emissive.x <= 0.f && d.mat.emissive.y <= 0.f && d.mat.emissive.z <= 0.f) continue;
+          ObjectCB oc{}; oc.world = d.world;
+          oc.emissive[0] = d.mat.emissive.x; oc.emissive[1] = d.mat.emissive.y; oc.emissive[2] = d.mat.emissive.z;
+          dev_->updateBuffer(objCb_, &oc, sizeof oc);
+          gl->setUniform(1, objCb_);
+          if (d.mesh != lastG) { gl->setVertexBuffer(d.mesh->vertex); gl->setIndexBuffer(d.mesh->index); lastG = d.mesh; }
+          gl->drawIndexed(d.mesh->count, 1);
+        }
+      }
+      gl->end(); dev_->submit(*gl);
+    }
     out_ = color_;
     if (bloomOn_ && !bloomA_.isNull() && !bloomThrPipe_.isNull()) { runBloom(); out_ = outFull_; }
     releaseImports();
@@ -506,7 +535,7 @@ private:
   // Malha na GPU. posKey/nVert/nIdx = o que foi enviado: se mudar, os buffers sao refeitos (o endereco sozinho nao basta).
   struct GpuMesh { rhi::BufferId vertex, index; u32 count = 0; const void* posKey = nullptr; size_t nVert = 0, nIdx = 0, vCap = 0, iCap = 0; u64 lastUse = 0; u32 rev = 0; };
   struct Draw { const GpuMesh* mesh; Mat4 world; Material mat; rhi::TextureId tex; f32 tw, th; };
-  struct Target { rhi::TextureId color, depth, gbuf, aoRaw, ao, bloomA, bloomB, out; u64 lastUse = 0; };
+  struct Target { rhi::TextureId color, depth, gbuf, aoRaw, ao, bloomA, bloomB, out, glow; u64 lastUse = 0; };
   // Buffers da Light Prism importados neste quadro (validos ate releaseImports()).
   struct Imports { rhi::BufferId points, spots, globals, sun, grid, cells, indices; };
 
@@ -528,7 +557,7 @@ private:
     BloomCB base{};
     base.srcSize[0] = static_cast<f32>(w_); base.srcSize[1] = static_cast<f32>(h_);
     base.haloSize[0] = static_cast<f32>(std::max(1u, w_ / 2)); base.haloSize[1] = static_cast<f32>(std::max(1u, h_ / 2));
-    base.threshold = bloomThr_; base.strength = bloomStr_;
+    base.threshold = 0.f; base.strength = bloomStr_; // o brilho ja so tem emissao: sem limiar
     BloomCB hz = base; hz.dir[0] = 1.f; hz.dir[1] = 0.f;
     BloomCB vt = base; vt.dir[0] = 0.f; vt.dir[1] = 1.f;
     dev_->updateBuffer(bloomCbThr_, &base, sizeof base);
@@ -539,7 +568,7 @@ private:
     { // 1) limiar: cor -> bloomA (meia resolucao)
       auto c = dev_->beginCommands();
       c->begin(bloomA_, kNullHandle, 0.f, 0.f, 0.f, 1.f);
-      c->setPipeline(bloomThrPipe_); c->setUniform(0, bloomCbThr_); c->setTexture(0, color_);
+      c->setPipeline(bloomThrPipe_); c->setUniform(0, bloomCbThr_); c->setTexture(0, glow_);
       fullscreen(*c); c->end(); dev_->submit(*c);
     }
     { // 2) blur horizontal: bloomA -> bloomB
@@ -630,13 +659,13 @@ private:
     for (auto& [k, g] : dyn_) freeMesh(g);
     dyn_.clear();
     for (auto& [k, t] : targets_) destroyTarget(t);
-    targets_.clear(); color_ = depth_ = bloomA_ = bloomB_ = outFull_ = out_ = kNullHandle;
+    targets_.clear(); color_ = depth_ = bloomA_ = bloomB_ = outFull_ = out_ = glow_ = kNullHandle;
     for (auto& [k, t] : texs_) dev_->destroy(t);
     texs_.clear();
     if (!white_.isNull()) { dev_->destroy(white_); white_ = kNullHandle; }
     for (auto* h : {&frameCb_, &objCb_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &brdfTex_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &vs_, &ps_, &shVs_, &shPs_, &ptVs_, &ptPs_,
                     &prePipe_, &ssaoPipe_, &blurPipe_, &fsVb_, &fsIb_, &ssaoCb_, &preVs_, &prePs_, &fsVs_, &ssaoPs_, &blurPs_,
-                    &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
+                    &emiPipe_, &emiPs_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     for (auto& t : shColor_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     for (auto& t : pointStrip_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     pointW_ = 0; pointOn_ = false; pointCount_ = 0; pointValid_ = false;
@@ -679,13 +708,15 @@ private:
   Camera cam_; Vec3 clear_; f32 clearAlpha_ = 1.f; f32 cam_zNear_ = 0.1f, cam_zFar_ = 100.f;
   std::vector<Draw> draws_;
   rhi::TextureId color_, depth_, gbuf_, aoRaw_, ao_;
+  rhi::TextureId glow_;                       // brilho do bloom (so a emissao), mesma resolucao da cor
+  rhi::ShaderId emiPs_; rhi::PipelineId emiPipe_;
   rhi::TextureId bloomA_, bloomB_, outFull_;  // outFull_: alvo da composicao (cor + bloom), separado da cor (le e escreve)
   rhi::TextureId out_;                         // imagem final lida pela CPU: color_ ou outFull_
   bool bloomOn_ = false; f32 bloomThr_ = 0.75f, bloomStr_ = 0.8f;
   rhi::ShaderId bloomThrPs_, bloomBlurPs_, bloomCompPs_;
   rhi::PipelineId bloomThrPipe_, bloomBlurPipe_, bloomCompPipe_;
   rhi::BufferId bloomCbThr_, bloomCbH_, bloomCbV_, bloomCbComp_;
-  void destroyTarget(Target& t) { dev_->destroy(t.color); dev_->destroy(t.depth); dev_->destroy(t.gbuf); dev_->destroy(t.aoRaw); dev_->destroy(t.ao); dev_->destroy(t.bloomA); dev_->destroy(t.bloomB); dev_->destroy(t.out); }
+  void destroyTarget(Target& t) { dev_->destroy(t.glow); dev_->destroy(t.color); dev_->destroy(t.depth); dev_->destroy(t.gbuf); dev_->destroy(t.aoRaw); dev_->destroy(t.ao); dev_->destroy(t.bloomA); dev_->destroy(t.bloomB); dev_->destroy(t.out); }
   rhi::Format colorFmt_ = rhi::Format::RGBA8_SRGB;
   std::unordered_map<u64, Target> targets_;
   u64 frame_ = 0;

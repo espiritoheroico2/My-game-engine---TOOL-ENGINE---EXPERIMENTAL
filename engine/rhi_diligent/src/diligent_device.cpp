@@ -378,6 +378,15 @@ public:
     d_.ctx->ClearRenderTarget(rtv, clear, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     if (dsv) d_.ctx->ClearDepthStencil(dsv, dl::CLEAR_DEPTH_FLAG, 1.f, 0, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
   }
+  void setTargets(TextureId target, TextureId depth) override {
+    if (!check()) return;
+    dl::ITextureView* rtv = nullptr; dl::ITextureView* dsv = nullptr;
+    if (auto* t = d_.obj<dl::ITexture>(target, DiligentDevice::Kind::Texture)) rtv = t->GetDefaultView(dl::TEXTURE_VIEW_RENDER_TARGET);
+    if (!rtv) { d_.err("setTargets() com alvo invalido"); return; }
+    if (!depth.isNull()) { if (auto* t = d_.obj<dl::ITexture>(depth, DiligentDevice::Kind::Texture)) dsv = t->GetDefaultView(dl::TEXTURE_VIEW_DEPTH_STENCIL); }
+    dl::ITextureView* rtvs[] = {rtv};
+    d_.ctx->SetRenderTargets(1, rtvs, dsv, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  }
   void setPipeline(PipelineId p) override {
     if (!check()) return;
     auto* pso = d_.obj<dl::IPipelineState>(p, DiligentDevice::Kind::Pipeline);

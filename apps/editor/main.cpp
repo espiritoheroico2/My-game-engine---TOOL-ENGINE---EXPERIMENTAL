@@ -459,10 +459,13 @@ void drawInspector(Editor& ed) {
     ImGui::ColorEdit3(T("Color"), mr->color);
     ImGui::SliderFloat(T("Roughness"), &mr->roughness, 0.05f, 1.f); ImGui::SliderFloat(T("Metallic"), &mr->metallic, 0.f, 1.f);
     }
-    // Emissao: qualquer objeto 3D pode emitir. Com o bloom ligado (Settings > Lighting), o brilho vira halo.
+    // Emissao: so com "Enable emission" ligado. Com o bloom ligado (Settings > Lighting), so o que emite brilha.
+    ImGui::Checkbox(T("Enable emission"), &mr->emissionOn);
+    ImGui::BeginDisabled(!mr->emissionOn);
     ImGui::ColorEdit3(T("Emission color"), mr->emissive);
     ImGui::SliderFloat(T("Emission intensity"), &mr->emissiveIntensity, 0.f, 50.f, "%.1f");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Makes this object emit light. With Settings > Lighting > Bloom on, the bright part glows around it. 0 = does not emit."));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Makes this object emit light. With Settings > Lighting > Bloom on, only emitting objects glow. 0 = does not emit."));
+    ImGui::EndDisabled();
     ImGui::Checkbox(T("Cast shadow"), &mr->castShadow); ImGui::SameLine(); ImGui::Checkbox(T("Receive shadow"), &mr->receiveShadow);
     }
   }
@@ -1338,10 +1341,9 @@ void drawLightingTab(Editor& ed) {
   c |= ImGui::SliderFloat(T("RT AO radius (m)"), &L.rtAoRadius, 0.05f, 5.f, "%.2f");
   ImGui::EndDisabled();
   // Bloom: o brilho acima do limiar (objetos emissivos e superficies muito claras) vira um halo.
-  c |= ImGui::Checkbox(T("Bloom (glow of bright and emissive objects)"), &L.bloom);
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Bright areas glow into their surroundings. Emissive objects: Inspector > Emission. GPU and software renderer."));
+  c |= ImGui::Checkbox(T("Bloom (glow of emissive objects)"), &L.bloom);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Only objects with Enable emission glow (Inspector > Emission). Other bright surfaces do not bloom. GPU and software renderer."));
   ImGui::BeginDisabled(!L.bloom);
-  c |= ImGui::SliderFloat(T("Bloom threshold"), &L.bloomThreshold, 0.f, 1.f, "%.2f");
   c |= ImGui::SliderFloat(T("Bloom strength"), &L.bloomStrength, 0.f, 4.f, "%.2f");
   ImGui::EndDisabled();
 

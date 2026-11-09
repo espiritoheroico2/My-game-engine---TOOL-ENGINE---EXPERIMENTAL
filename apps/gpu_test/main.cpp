@@ -269,13 +269,13 @@ int main(int argc, char** argv) {
   const Mesh emBox = Mesh::cube(0.5f);
   const Mat4 emWorld = Mat4::translation({0, 0.5f, 0});
   const Vec3 emBg{0.02f, 0.025f, 0.035f};
-  auto gpuEm = [&](bool bloomOn, std::vector<u8>& out) {
+  auto gpuEm = [&](bool bloomOn, std::vector<u8>& out, const Material& mat, const Mat4& world) {
     auto r = aoRigFor(false);
     const Mat4 v = Mat4::lookAt(ac.eye, ac.target, ac.up), p = ac.projection(320, 180);
     gpu.setBloom(bloomOn, 0.75f, 0.8f);
     gpu.begin(ac, emBg);
     if (!gpu.setLighting(*r, v, p)) return false;
-    gpu.draw(emBox, emWorld, emMat);
+    gpu.draw(emBox, world, mat);
     gpu.end(); dev->present();
     u32 ew = 0, eh = 0; gpu.readback(out, ew, eh);
     gpu.setBloom(false, 0.75f, 0.8f);
@@ -287,11 +287,11 @@ int main(int argc, char** argv) {
     s.begin(ac, emBg); s.setLighting(r->frame());
     s.draw(emBox, emWorld, emMat);
     std::vector<u8> px(s.pixels(), s.pixels() + 320 * 180 * 4);
-    if (bloomOn) applyBloomRgba8(px.data(), 320, 180, 0.75f, 0.8f);
+    if (bloomOn) applyGlowRgba8(px.data(), 320, 180, s.glowLinear(), 0.8f); // mesmo bloom da GPU: so o que emite
     return px;
   };
   std::vector<u8> emOnG, emOffG;
-  const bool emRan = gpuEm(true, emOnG) && gpuEm(false, emOffG);
+  const bool emRan = gpuEm(true, emOnG, emMat, emWorld) && gpuEm(false, emOffG, emMat, emWorld);
   const std::vector<u8> emOnC = cpuEm(true), emOffC = cpuEm(false);
   auto countHalo = [](const std::vector<u8>& off, const std::vector<u8>& on) {
     size_t n = 0;
@@ -299,6 +299,12 @@ int main(int argc, char** argv) {
     return n;
   };
   const size_t gpuHalo = emRan ? countHalo(emOffG, emOnG) : 0, cpuHalo = countHalo(emOffC, emOnC);
+  // Objeto claro que NAO emite: com o bloom ligado nao pode gerar halo (o bloom so segue a emissao).
+  Material brightMat{{1.f, 1.f, 1.f}, 0.5f, 0.f};
+  std::vector<u8> brOn, brOff;
+  const bool brRan = gpuEm(true, brOn, brightMat, emWorld) && gpuEm(false, brOff, brightMat, emWorld);
+  const size_t brightHalo = brRan ? countHalo(brOff, brOn) : 0;
+  std::printf("bloom sem emissao (objeto branco): halo=%zu (esperado: ~0)\n", brightHalo);
   if (out && emRan) { writePpm((std::string(out) + ".bloom_gpu_on.ppm").c_str(), emOnG.data(), 320, 180); writePpm((std::string(out) + ".bloom_cpu_on.ppm").c_str(), emOnC.data(), 320, 180); }
   const bool emOk = emRan && gpuHalo > 150 && cpuHalo > 150 &&
                     std::abs(static_cast<double>(gpuHalo) - static_cast<double>(cpuHalo)) <= 0.4 * static_cast<double>(std::max(gpuHalo, cpuHalo));
@@ -307,7 +313,8 @@ int main(int argc, char** argv) {
   // reporta PENDENTE e nao falha; o resto (objetos, texturas, SSAO, sombra do sol) continua valendo.
   const bool gl = dev->backend() == rhi::Backend::GLES;
   const bool glPending = gl && !(pointOk && emOk);
-  const bool ok = shadowOk && (pointOk || gl) && aoOk && (emOk || gl) && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
+  const bool brightOk = brRan && brightHalo < 40;   // objeto claro sem emissao: sem halo
+  const bool ok = shadowOk && (pointOk || gl) && aoOk && (emOk || gl) && brightOk && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
   if (ok && glPending) std::printf("PENDENTE (OpenGL): sombra pontual e bloom ainda nao batem com o Vulkan; o resto passou\n");
   else std::printf(ok ? "OK\n" : "FALHA: imagem da GPU diverge do esperado\n");
   gpu.shutdown(); // libera recursos antes de destruir o dispositivo

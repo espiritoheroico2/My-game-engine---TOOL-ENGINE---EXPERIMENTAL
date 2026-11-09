@@ -149,6 +149,20 @@ inline int runSelfTest(const std::string& samplesDir) {
   check(renamed >= 1 && stale == 0, "rename updates object references (every part of the hierarchy)");
   check(ed.lib.mesh("Assets/caixa_azul.glb") != nullptr && !fs::exists(tmp / "Assets" / "cubo.glb"), "renamed model loads from the new path");
   check(!renameAsset(ed, "Assets/caixa_azul.glb", "bad/name").empty(), "invalid new name is rejected");
+  { // emissao: "Enable emission" sobrevive ao salvar; cena antiga (sem o campo) com intensidade > 0 continua emitindo
+    tool::Entity me = ed.make("EmissionTest", true);
+    MeshRenderer mr; mr.emissiveIntensity = 3.f; mr.emissionOn = true; ed.scene.world().add<MeshRenderer>(me, mr);
+    tool::Entity mb = loadEntity(ed.scene, saveEntity(ed.scene, me));
+    check(ed.scene.world().get<MeshRenderer>(mb) && ed.scene.world().get<MeshRenderer>(mb)->emissionOn, "emission flag survives save and load");
+    tool::Json old = saveEntity(ed.scene, me);   // formato anterior: sem o campo
+    { tool::Json mesh = old["mesh"]; mesh.erase("emissionOn"); old.set("mesh", mesh); }
+    tool::Entity ob = loadEntity(ed.scene, old);
+    check(ed.scene.world().get<MeshRenderer>(ob) && ed.scene.world().get<MeshRenderer>(ob)->emissionOn, "old scene with emissive intensity keeps emitting (migration)");
+    tool::Json off = saveEntity(ed.scene, me);
+    { tool::Json mesh = off["mesh"]; mesh.erase("emissionOn"); mesh.set("emissiveIntensity", 0.0); off.set("mesh", mesh); }
+    tool::Entity fb = loadEntity(ed.scene, off);
+    check(ed.scene.world().get<MeshRenderer>(fb) && !ed.scene.world().get<MeshRenderer>(fb)->emissionOn, "old scene with zero intensity does not emit");
+  }
   { // luz pontual com sombra: o flag tem que sobreviver ao salvar/carregar (antes o editor o zerava)
     tool::Entity le = ed.make("ShadowLightTest", true);
     tool::Light lt; lt.type = tool::LightType::Point; lt.castShadow = true; ed.scene.world().add<LightComp>(le, LightComp{lt});

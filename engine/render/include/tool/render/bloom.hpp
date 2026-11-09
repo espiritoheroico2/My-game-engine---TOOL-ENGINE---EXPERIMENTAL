@@ -76,4 +76,64 @@ inline void applyBloomRgba8(std::uint8_t* rgba, unsigned w, unsigned h, float th
     }
 }
 
+// Bloom so da emissao (CPU): `glow` e o brilho linear por pixel (w x h x RGB, ver SoftRenderer::glowLinear). Nao tem
+// limiar: so o que emite brilha. O halo e somado a imagem em linear e volta para sRGB. Buffers reaproveitados.
+inline void applyGlowRgba8(std::uint8_t* rgba, unsigned w, unsigned h, const float* glow, float strength) {
+  if (!rgba || !glow || w == 0 || h == 0 || strength <= 0.f) return;
+  static float toLinear[256];
+  static const bool init = [] { for (int i = 0; i < 256; ++i) { const float c = i / 255.f; toLinear[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); } return true; }();
+  (void)init;
+  const unsigned hw = std::max(1u, w / 2), hh = std::max(1u, h / 2);
+  static thread_local std::vector<float> a, b;
+  const std::size_t need = static_cast<std::size_t>(hw) * hh * 3;
+  a.assign(need, 0.f);
+  // 1) meia resolucao: media 2x2 do brilho (sem limiar)
+  for (unsigned y = 0; y < hh; ++y)
+    for (unsigned x = 0; x < hw; ++x) {
+      float acc[3] = {0.f, 0.f, 0.f};
+      for (unsigned dy = 0; dy < 2; ++dy)
+        for (unsigned dx = 0; dx < 2; ++dx) {
+          const unsigned sx = std::min(x * 2 + dx, w - 1), sy = std::min(y * 2 + dy, h - 1);
+          const std::size_t p = (static_cast<std::size_t>(sy) * w + sx) * 3;
+          acc[0] += glow[p]; acc[1] += glow[p + 1]; acc[2] += glow[p + 2];
+        }
+      const std::size_t q = (static_cast<std::size_t>(y) * hw + x) * 3;
+      a[q] = acc[0] * 0.25f; a[q + 1] = acc[1] * 0.25f; a[q + 2] = acc[2] * 0.25f;
+    }
+  // 2) gaussiana 9 taps (horizontal e vertical), mesmos pesos do bloom da GPU
+  static const float W[5] = {0.227027f, 0.194595f, 0.121622f, 0.054054f, 0.016216f};
+  b.assign(need, 0.f);
+  auto blur = [&](const std::vector<float>& src, std::vector<float>& dst, int dx, int dy) {
+    for (int y = 0; y < static_cast<int>(hh); ++y)
+      for (int x = 0; x < static_cast<int>(hw); ++x) {
+        float acc[3] = {0.f, 0.f, 0.f};
+        for (int k = -4; k <= 4; ++k) {
+          const float wgt = W[std::abs(k)];
+          const int sx = std::clamp(x + dx * k, 0, static_cast<int>(hw) - 1), sy = std::clamp(y + dy * k, 0, static_cast<int>(hh) - 1);
+          const std::size_t s = (static_cast<std::size_t>(sy) * hw + sx) * 3;
+          acc[0] += src[s] * wgt; acc[1] += src[s + 1] * wgt; acc[2] += src[s + 2] * wgt;
+        }
+        const std::size_t d = (static_cast<std::size_t>(y) * hw + x) * 3;
+        dst[d] = acc[0]; dst[d + 1] = acc[1]; dst[d + 2] = acc[2];
+      }
+  };
+  blur(a, b, 1, 0);
+  blur(b, a, 0, 1);
+  // 3) composicao em resolucao cheia: linear + halo * forca, de volta para sRGB
+  auto toSrgb = [](float v) {
+    v = std::clamp(v, 0.f, 1.f);
+    return v <= 0.0031308f ? 12.92f * v : 1.055f * std::pow(v, 1.f / 2.4f) - 0.055f;
+  };
+  for (unsigned y = 0; y < h; ++y)
+    for (unsigned x = 0; x < w; ++x) {
+      const unsigned hx = std::min(x / 2, hw - 1), hy = std::min(y / 2, hh - 1);
+      const std::size_t q = (static_cast<std::size_t>(hy) * hw + hx) * 3;
+      const std::size_t p = (static_cast<std::size_t>(y) * w + x) * 4;
+      for (int c = 0; c < 3; ++c) {
+        const float v = toLinear[rgba[p + c]] + a[q + c] * strength;
+        rgba[p + c] = static_cast<std::uint8_t>(std::lround(toSrgb(v) * 255.f));
+      }
+    }
+}
+
 } // namespace tool

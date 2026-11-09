@@ -21,6 +21,7 @@ OUT = os.path.join(SHADERS, "glsl")
 JOBS = [
     ("pbr.hlsl", "vert", "VSMain", "pbr.vs"),
     ("pbr.hlsl", "frag", "PSMain", "pbr.ps"),
+    ("pbr.hlsl", "frag", "EmissionPS", "pbr.emi"),
     ("shadow.hlsl", "vert", "VSMain", "shadow.vs"),
     ("shadow.hlsl", "frag", "PSMain", "shadow.ps"),
     ("shadow_point.hlsl", "vert", "VSMain", "shadowpoint.vs"),

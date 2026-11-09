@@ -213,7 +213,7 @@ public:
     w_ = std::max(1u, w); h_ = std::max(1u, h);
     const size_t n = static_cast<size_t>(w_) * h_;
     color_.assign(n * 4, 0); depth_.assign(n, 1.f);
-    direct_.assign(n, Vec3{}); amb_.assign(n, Vec3{}); covered_.assign(n, 0);
+    direct_.assign(n, Vec3{}); amb_.assign(n, Vec3{}); emit_.assign(n, Vec3{}); covered_.assign(n, 0); glow_.assign(n * 3, 0.f);
     depthV_.assign(n, 0.f); nrmV_.assign(n, LightPrism::Vec3{}); ao_.assign(n, 1.f);
     posW_.assign(n, LightPrism::Vec3{}); nrmW_.assign(n, LightPrism::Vec3{});
   }
@@ -222,6 +222,8 @@ public:
   const u8* pixels() const { flush(); return color_.data(); } // RGBA8 (conclui o desenho pendente)
   // Mesmo buffer de pixels, mas gravavel: usado pelo pos-processamento (postfx.hpp) que altera a imagem ja pronta.
   u8* pixelsMutable() { flush(); return color_.data(); }
+  // Brilho linear por pixel (RGB float, w x h x 3): so a emissao dos materiais com emissao ligada. Base do bloom.
+  const f32* glowLinear() const { flush(); return glow_.data(); }
   u64 trianglesDrawn() const { return tris_; }
   u64 pixelsShaded() const { flush(); return shaded_; }
 
@@ -232,6 +234,7 @@ public:
     viewProj_ = cam.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * view_;
     std::fill(depth_.begin(), depth_.end(), 1.f);
     std::fill(covered_.begin(), covered_.end(), u8{0});
+    if (glowDirty_) { std::fill(glow_.begin(), glow_.end(), 0.f); glowDirty_ = false; } // so zera se o quadro anterior teve emissao
     std::fill(depthV_.begin(), depthV_.end(), 0.f); // 0 = sem geometria (entrada do SSAO)
     proj00_ = cam.projection(static_cast<f32>(w_), static_cast<f32>(h_)).m[0][0];
     proj11_ = cam.projection(static_cast<f32>(w_), static_cast<f32>(h_)).m[1][1];
@@ -580,7 +583,7 @@ private:
 
   // Sombreamento: BRDF PBR da LightPrism (Reference::EvaluateBRDF) para cada luz do quadro, sombra do sol por cascatas
   // (Reference::CsmVisibility) e luz ambiente como irradiancia SH9 (Ibl::EvalSh). O tonemap fica em put().
-  struct Lit { Vec3 direct, amb; };
+  struct Lit { Vec3 direct, amb; Vec3 emit; }; // emit: emissao do material (so ela alimenta o brilho/bloom)
   Lit shade(Vec3 p, Vec3 n, const Material& m) const {
     namespace R = LightPrism::Reference;
     const Vec3 V = normalize(cam_.eye - p);
@@ -621,11 +624,11 @@ private:
       col = col + R::EvaluateDirectionalLight(lf_.sun, s) * vis;
     }
     col = col + LightPrism::Vec3{m.emissive.x, m.emissive.y, m.emissive.z};   // emissao do proprio objeto (sem sombra nem AO)
-    return {{col.x, col.y, col.z}, {amb.x, amb.y, amb.z}};
+    return {{col.x, col.y, col.z}, {amb.x, amb.y, amb.z}, m.emissive};
   }
   // Guarda o pixel vencedor: luz direta, luz ambiente, distancia de view e normal de view (para o SSAO).
   void store(size_t i, Lit c, Vec3 wp, Vec3 n) const {
-    direct_[i] = c.direct; amb_[i] = c.amb; covered_[i] = 1;
+    direct_[i] = c.direct; amb_[i] = c.amb; emit_[i] = c.emit; covered_[i] = 1; glowDirty_ = true;
     posW_[i] = {wp.x, wp.y, wp.z}; nrmW_[i] = {n.x, n.y, n.z};
     const Vec4 vp = view_.mul({wp.x, wp.y, wp.z, 1});
     depthV_[i] = -vp.z;
@@ -654,7 +657,9 @@ private:
     } else ao_.assign(n, 1.f);
     parallelRange(n, [&](size_t b, size_t e) {
       for (size_t i = b; i < e; ++i) {
-        if (!covered_[i]) continue;
+        const size_t g = i * 3;
+        if (!covered_[i]) { glow_[g] = glow_[g + 1] = glow_[g + 2] = 0.f; continue; }
+        glow_[g] = emit_[i].x; glow_[g + 1] = emit_[i].y; glow_[g + 2] = emit_[i].z;
         put(i, direct_[i] + amb_[i] * ao_[i]);
       }
     });
@@ -683,7 +688,9 @@ private:
   mutable std::vector<f32> shadowMap_[LightPrism::kMaxCsmCascades];
   mutable std::vector<ShadowTri> shadowTris_[LightPrism::kMaxCsmCascades];
   // Buffers do pixel vencedor (ver store/resolve): luz direta e ambiente em linear, profundidade e normal de view.
-  mutable std::vector<Vec3> direct_, amb_;
+  mutable std::vector<Vec3> direct_, amb_, emit_;
+  mutable std::vector<f32> glow_;                  // emissao do pixel vencedor, RGB linear (ver glowLinear)
+  mutable bool glowDirty_ = false;
   mutable std::vector<u8> covered_;
   mutable std::vector<f32> depthV_, ao_;
   mutable std::vector<LightPrism::Vec3> posW_, nrmW_; // posicao e normal de mundo do pixel vencedor (para o RT)

@@ -2,7 +2,15 @@
 
 ## 0.7.19-beta (em andamento)
 
-Nenhuma mudanca registrada ainda.
+**Emissao e bloom**
+- Inspector > Emission: novo campo "Enable emission". So objetos com ele ligado emitem (cor extra e brilho). Cenas antigas com intensidade de emissao acima de 0 continuam emitindo.
+- Bloom so segue a emissao: objetos claros sem emissao nao brilham mais. O limiar (Bloom threshold) saiu da interface, porque nao tem mais efeito.
+- GPU: passe de emissao com o mesmo vertex shader e profundidade do desenho principal. O halo nao aparece atras de paredes. Teste no gpu_test (Vulkan): halo da GPU 2591, da CPU 2614; objeto branco sem emissao: halo 0.
+- CPU: o brilho vem do buffer de emissao de cada pixel (applyGlowRgba8), nao mais de limiar sobre a imagem.
+- OpenGL: passe de emissao gerado pelo gerador de GLSL (pbr.emi). Nao testado em GL aqui.
+- Selftest do editor: 227 checks (flag sobrevive a salvar/carregar; migracao de cena antiga).
+
+Pendente desta versao: canal alpha no mesh, fog/neblina por distancia por objeto, "use object as light".
 
 ## 0.7.18-beta — editor de script, oclusao, ray tracing, frame time e estabilidade do editor
 

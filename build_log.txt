@@ -52,7 +52,7 @@
 -- Platform: Windows-10.0.26300
 -- 64-bit:   TRUE
 -- Compiler: C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
--- Revision: SDL3-3.2.8-d66191f
+-- Revision: SDL3-3.2.8-8ab9b1a
 -- Vendor:   
 -- 
 -- Subsystems:
@@ -531,8 +531,8 @@ suppress it.
 -- Looking for pthread_create in pthread
 -- Looking for pthread_create in pthread - not found
 -- Found Threads: TRUE
--- Configuring done (167.8s)
--- Generating done (14.3s)
+-- Configuring done (200.3s)
+-- Generating done (8.7s)
 -- Build files have been written to: C:/Users/espir/Downloads/actToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/out
 Versão do MSBuild 18.11.1-1.26513.3+940033be3 para .NET Framework
 
@@ -1527,14 +1527,14 @@ C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXP
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\render\include\tool\render\lighting.hpp(157,33): warning C4324: 'tool::LightFrame': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\render\include\tool\render\soft_renderer.hpp(283,18): warning C4457: a declaração de 'f' oculta um parâmetro de função [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\render\include\tool\render\soft_renderer.hpp(286,18): warning C4457: a declaração de 'f' oculta um parâmetro de função [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
-      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\render\include\tool\render\soft_renderer.hpp(258,38):
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\render\include\tool\render\soft_renderer.hpp(261,38):
       consulte a declaração de 'f'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\components.hpp(439,17): warning C4456: a declaração de 'n' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\components.hpp(442,17): warning C4456: a declaração de 'n' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
-      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\components.hpp(364,8):
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\components.hpp(365,8):
       consulte a declaração de 'n'
   
 C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\assets\include\tool\assets\fbx.hpp(444,19): warning C4456: a declaração de 'slot' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
@@ -1589,66 +1589,66 @@ C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXP
       C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\render\include\tool\render\bloom.hpp(25,45):
       consulte a declaração de 'b'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(398,24): warning C4456: a declaração de 'g' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(412,24): warning C4456: a declaração de 'g' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
-      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(175,15):
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(189,15):
       consulte a declaração de 'g'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(463,51): warning C4456: a declaração de 'p0' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(477,51): warning C4456: a declaração de 'p0' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
-      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(318,40):
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(332,40):
       consulte a declaração de 'p0'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(504,53): warning C4456: a declaração de 'sc' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(518,53): warning C4456: a declaração de 'sc' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
-      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(189,16):
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(203,16):
       consulte a declaração de 'sc'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(532,48): warning C4456: a declaração de 'a' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(546,48): warning C4456: a declaração de 'a' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
       C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(145,16):
       consulte a declaração de 'a'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(564,25): warning C4456: a declaração de 'm' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(578,25): warning C4456: a declaração de 'm' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
       C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(129,16):
       consulte a declaração de 'm'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(569,26): warning C4456: a declaração de 'a' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(583,26): warning C4456: a declaração de 'a' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
       C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(145,16):
       consulte a declaração de 'a'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(569,72): warning C4456: a declaração de 'c' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(583,72): warning C4456: a declaração de 'c' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
       C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(138,22):
       consulte a declaração de 'c'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(571,21): warning C4456: a declaração de 'g' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(585,21): warning C4456: a declaração de 'g' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
-      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(175,15):
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(189,15):
       consulte a declaração de 'g'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(676,44): warning C4456: a declaração de 'c' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(690,44): warning C4456: a declaração de 'c' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
       C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(138,22):
       consulte a declaração de 'c'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(744,23): warning C4456: a declaração de 'px' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(758,23): warning C4456: a declaração de 'px' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
       C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(139,19):
       consulte a declaração de 'px'
   
-C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(750,25): warning C4456: a declaração de 'g' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(764,25): warning C4456: a declaração de 'g' oculta uma declaração local anterior [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
-      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(175,15):
+      C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\selftest.hpp(189,15):
       consulte a declaração de 'g'
   
 C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\algorithm(4248,24): warning C4244: '=': conversão de 'int' para 'char', possível perda de dados [C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
       C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\algorithm(4248,24):
       o contexto de instanciação do modelo (o mais antigo primeiro) é
-          C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\main.cpp(1195,50):
+          C:\Users\espir\Downloads\actToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\main.cpp(1205,50):
           consulte a referência à instanciação '_OutIt std::transform<std::_String_iterator<std::_String_val<std::_Simple_types<_Elem>>>,std::_String_iterator<std::_String_val<std::_Simple_types<_Elem>>>,int(__cdecl *)(int)>(const _InIt,const _InIt,_OutIt,_Fn)' do modelo que está sendo compilada
           with
           [

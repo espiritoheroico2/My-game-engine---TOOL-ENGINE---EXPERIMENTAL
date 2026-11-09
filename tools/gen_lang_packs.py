@@ -553,7 +553,10 @@ Object name to follow	Nome do objeto a seguir	Nombre del objeto a seguir
 No object with this name: uses this object.	Nenhum objeto com este nome: usa este objeto.	Ningún objeto con este nombre: usa este objeto.
 Emission color	Cor da emissão	Color de emisión
 Emission intensity	Intensidade da emissão	Intensidad de emisión
-Makes this object emit light. With Settings > Lighting > Bloom on, the bright part glows around it. 0 = does not emit.	Faz este objeto emitir luz. Com Configurações > Iluminação > Bloom ligado, a parte clara brilha ao redor dele. 0 = não emite.	Hace que este objeto emita luz. Con Configuración > Iluminación > Bloom activado, la parte brillante resplandece a su alrededor. 0 = no emite.
+Enable emission	Ativar emissão	Activar emisión
+Bloom (glow of emissive objects)	Bloom (brilho de objetos emissivos)	Bloom (resplandor de objetos emisivos)
+Only objects with Enable emission glow (Inspector > Emission). Other bright surfaces do not bloom. GPU and software renderer.	Só objetos com Ativar emissão brilham (Inspetor > Emissão). Outras superfícies claras não geram bloom. Renderizador GPU e por software.	Solo los objetos con Activar emisión resplandecen (Inspector > Emisión). Otras superficies brillantes no generan bloom. Renderizador GPU y por software.
+Makes this object emit light. With Settings > Lighting > Bloom on, only emitting objects glow. 0 = does not emit.	Faz este objeto emitir luz. Com Configurações > Iluminação > Bloom ligado, só objetos emissivos brilham. 0 = não emite.	Hace que este objeto emita luz. Con Configuración > Iluminación > Bloom activado, solo los objetos emisivos brillan. 0 = no emite.
 Bloom (glow of bright and emissive objects)	Bloom (brilho de objetos claros e emissivos)	Bloom (resplandor de objetos brillantes y emisivos)
 Bright areas glow into their surroundings. Emissive objects: Inspector > Emission. GPU and software renderer.	As áreas claras brilham ao redor. Objetos emissivos: Inspetor > Emissão. Renderizador GPU e por software.	Las áreas brillantes resplandecen a su alrededor. Objetos emisivos: Inspector > Emisión. Renderizador GPU y por software.
 Bloom threshold	Limiar do bloom	Umbral del bloom
