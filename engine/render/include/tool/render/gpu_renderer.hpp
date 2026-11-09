@@ -483,6 +483,8 @@ public:
   }
 
   bool readback(std::vector<u8>& rgba, u32& w, u32& h) { return dev_ && dev_->readTexture(out_, rgba, w, h); }
+  // Leitura sem esperar a GPU (editor): 1 = quadro novo em rgba, 0 = ainda nao, -1 = falha. Ver rhi.hpp.
+  int readbackAsync(int slot, std::vector<u8>& rgba, u32& w, u32& h) { return dev_ ? dev_->readTextureAsync(out_, slot, rgba, w, h) : -1; }
   // Bloom do quadro (pos-processamento): liga/desliga e parametros. Valem no proximo end().
   void setBloom(bool on, f32 threshold, f32 strength) { bloomOn_ = on; bloomThr_ = threshold; bloomStr_ = strength; }
   rhi::TextureId colorTarget() const { return color_; }

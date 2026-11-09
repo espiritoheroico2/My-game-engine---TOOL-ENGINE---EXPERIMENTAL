@@ -70,7 +70,7 @@ inline void Editor::stepPlay(float dt) {
   // 2) Tools
   const auto cams = principalCameras();
   w.each<ToolsComp, Transform>([&](tool::Entity e, ToolsComp& tl, Transform& t) {
-    if (w.has<Inactive>(e)) return;
+    if (w.has<Inactive>(e) || !w.isSimulating(e)) return; // fora da simulacao (culling): nao acorda o corpo nem move
     const int bi = bodyOf(e); Newtoon::Rigidbody* rb = bi >= 0 ? &play.rb[static_cast<size_t>(bi)] : nullptr;
     const bool dyn = rb && rb->IsDynamic();
     for (int i = 0; i < tl.count; ++i) {

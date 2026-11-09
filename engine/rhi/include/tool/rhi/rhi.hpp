@@ -111,6 +111,12 @@ public:
   virtual TextureId backbuffer() { return kNullHandle; }
   virtual bool resizeSwapchain(u32, u32) { return false; }
   virtual bool readTexture(TextureId, std::vector<u8>&, u32&, u32&) { return false; }
+  // Leitura sem esperar a GPU (para o editor): copia o alvo para um slot e devolve o quadro mais recente que a GPU
+  // ja terminou. Retorna 1 = `rgba` recebeu um quadro novo (w, h preenchidos); 0 = ainda nao ha quadro novo, `rgba`
+  // fica como estava; -1 = falha. Sem suporte, cai na leitura sincrona.
+  virtual int readTextureAsync(TextureId t, int slot, std::vector<u8>& rgba, u32& w, u32& h) {
+    (void)slot; return readTexture(t, rgba, w, h) ? 1 : -1;
+  }
   virtual std::string deviceName() const { return "null"; }
   // Importa um buffer criado por outra biblioteca na mesma GPU (ex.: IBuffer do Diligent da Light Prism). O handle NAO
   // e dono do recurso: o chamador continua responsavel pelo buffer original. Nulo se o backend nao suporta.

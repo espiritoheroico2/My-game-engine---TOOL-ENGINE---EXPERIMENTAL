@@ -100,6 +100,26 @@ int main(int argc, char** argv) {
   if (!gpu.readback(pix, w, h)) { std::fprintf(stderr, "FALHA: readback\n"); return 1; }
   if (out) writePpm(out, pix.data(), w, h);
 
+  // Leitura assincrona (a que o editor usa): a cena e identica, entao depois de alguns quadros a copia assincrona
+  // tem de devolver exatamente os mesmos pixels da leitura sincrona. Sem fence (OpenGL) ela ja responde na hora.
+  {
+    std::vector<u8> async; u32 aw = 0, ah = 0; bool ready = false; int frames = 0;
+    for (int f = 0; f < 60 && !ready; ++f) {
+      ++frames;
+      const auto [view, proj] = frame(lights, ambient, cam, static_cast<int>(w), static_cast<int>(h));
+      gpu.begin(cam, {0.02f, 0.025f, 0.035f});
+      if (!gpu.setLighting(rig, view, proj)) break;
+      for (auto& o : objs) gpu.draw(*o.m, o.w, o.mat);
+      gpu.end();
+      dev->present();
+      const int rd = gpu.readbackAsync(0, async, aw, ah);
+      if (rd < 0) { std::fprintf(stderr, "FALHA: leitura assincrona\n"); return 1; }
+      ready = rd == 1;
+    }
+    if (!ready || aw != w || ah != h || async != pix) { std::fprintf(stderr, "FALHA: leitura assincrona nao bate com a sincrona\n"); return 1; }
+    std::printf("leitura assincrona: pronta apos %d quadro(s), pixels iguais a leitura sincrona\n", frames);
+  }
+
   SoftRenderer soft(w, h);
   {
     const auto [view, proj] = frame(lights, ambient, cam, w, h);

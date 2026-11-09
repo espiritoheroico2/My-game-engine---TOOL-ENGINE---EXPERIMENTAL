@@ -1,6 +1,23 @@
 # Changelog
 
-## 0.7.18-beta (em andamento) — editor de script, oclusao e ray tracing
+## 0.7.19-beta (em andamento)
+
+Nenhuma mudanca registrada ainda.
+
+## 0.7.18-beta — editor de script, oclusao, ray tracing, frame time e estabilidade do editor
+
+**Correcoes finais desta versao: camera e botoes**
+- Camera: a Scene so gira ou faz pan se o botao foi pressionado dentro dela. Antes, um clique que comecava em outro painel e passava pela Scene girava a camera sozinha.
+- Botao preso: se o sistema ja soltou um botao do mouse e o editor ainda o considerava pressionado (soltura perdida, p.ex. fora da janela), o editor corrige o estado a cada quadro.
+- Botoes: cliques (pressionar e soltar) sao processados no mesmo quadro. Antes o ImGui espalhava os dois por quadros diferentes e o botao parecia demorar.
+
+
+**Ultimas mudancas: frame time estavel (leitura da GPU sem esperar)**
+- Causa principal de frame time instavel no caminho GPU: a cada vista, o editor copiava o quadro para a CPU e esperava a GPU terminar (`WaitForIdle`). Agora a copia e assincrona: um fence marca quando a GPU terminou, e o editor le o quadro mais recente que ja esta pronto.
+- O quadro exibido pode ficar 1 ou 2 quadros atras da camera. Os gizmos e overlays (particulas, trajetoria) usam a camera atual, entao podem parecer um pouco deslocados enquanto a camera se move.
+- Se ainda nao ha quadro da GPU (primeiros quadros, ou o tamanho da janela mudou), o quadro sai pela CPU e a API continua; so volta para a CPU se a GPU falhar.
+- OpenGL continua com leitura sincrona (sem fence aqui).
+- `gpu_test vulkan` ganhou a verificacao: a leitura assincrona fica pronta em 2 quadros e os pixels batem com a sincrona. Nao medido: ganho de tempo (sem GPU real aqui). D3D12 nao testado.
 
 **Ultimas mudancas: estabilidade do editor, ajuda com mais exemplos**
 - Interface: campos com o mesmo rotulo dentro de um laco (Narrative) agora tem ID por no selecionado: trocar de no com o campo em foco nao mistura o texto.

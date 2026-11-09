@@ -266,7 +266,8 @@ struct Editor {
   tool::GpuRenderer gpu;
   SDL_Window* gpuWin = nullptr;
   SDL_GLContext glCtx = nullptr; // so Linux/OpenGL: contexto criado pelo SDL, ativado apenas durante o desenho da GPU
-  std::vector<tool::u8> gpuPixels;
+  std::vector<tool::u8> gpuPixels[2];          // ultimo quadro lido da GPU, por vista (0 = Scene, 1 = Game)
+  int gpuPixW[2] = {0, 0}, gpuPixH[2] = {0, 0};
 
   // aparencia/idioma
   ::editor::Theme theme;
@@ -734,14 +735,14 @@ struct Editor {
     }
     if (out && sceneInfo.sky.enabled && !cam.ortho) { // skybox de imagens: preenche so o fundo (alfa 0), antes do pos-processamento
       ZoneTimer zt(prof, Zone::Sky);
-      tool::u8* px = (apiActive != 0 && out == gpuPixels.data()) ? gpuPixels.data() : renderer.pixelsMutable();
+      tool::u8* px = (apiActive != 0 && out == gpuPixels[vi].data()) ? gpuPixels[vi].data() : renderer.pixelsMutable();
       SkyTextures skyTex{};
       for (size_t i = 0; i < 6; ++i) if (sceneInfo.sky.face[i][0]) skyTex[i] = lib.texture(sceneInfo.sky.face[i]); // cache no AssetLib
       applySkybox(px, w, h, cam, sceneInfo.sky, skyTex);
       out = px;
     }
     // Bloom da CPU (o da GPU roda dentro do GpuRenderer, em end()). Depois do ceu e antes do pos-processamento.
-    if (out && sceneInfo.render.lighting.bloom && !(apiActive != 0 && out == gpuPixels.data())) {
+    if (out && sceneInfo.render.lighting.bloom && !(apiActive != 0 && out == gpuPixels[vi].data())) {
       ZoneTimer zt(prof, Zone::PostFx);
       const tool::LightingSettings& L = sceneInfo.render.lighting;
       tool::u8* px = renderer.pixelsMutable();
@@ -750,7 +751,7 @@ struct Editor {
     }
     if (out && fx && fx->active()) {
       ZoneTimer zt(prof, Zone::PostFx);
-      tool::u8* px = (apiActive != 0 && out == gpuPixels.data()) ? gpuPixels.data() : renderer.pixelsMutable();
+      tool::u8* px = (apiActive != 0 && out == gpuPixels[vi].data()) ? gpuPixels[vi].data() : renderer.pixelsMutable();
       tool::applyPostFx(px, w, h, *fx);
       out = px;
     }
@@ -909,19 +910,24 @@ private:
         gpu.end();
         gpuDev->present();
         tool::u32 rw = 0, rh = 0;
-        const bool readOk = gpu.readback(gpuPixels, rw, rh);
+        // Leitura sem esperar a GPU: o quadro lido pode ser de 1 ou 2 quadros atras (ver readTextureAsync).
+        const int rd = gpu.readbackAsync(vi, gpuPixels[vi], rw, rh);
+        if (rd == 1) { gpuPixW[vi] = static_cast<int>(rw); gpuPixH[vi] = static_cast<int>(rh); }
         if (tool::debug().count(tool::Severity::Error) > errBefore) {
           if (++gpuBadFrames >= 5) { applyApi(0); apiStatus = "Software (CPU) - the GPU reported errors in several frames in a row (see Console)"; gpuBadFrames = 0; }
         } else gpuBadFrames = 0;
-        if (apiActive != 0 && readOk && static_cast<int>(rw) == w && static_cast<int>(rh) == h) {
+        const bool haveFrame = rd >= 0 && gpuPixW[vi] == w && gpuPixH[vi] == h && !gpuPixels[vi].empty();
+        if (apiActive != 0 && haveFrame) {
           if (std::getenv("TOOL_DUMP")) { // depuracao: media de brilho do quadro (para comparar APIs sem olhar a tela)
-            unsigned long long sum = 0; for (size_t i = 0; i < gpuPixels.size(); i += 4) sum += gpuPixels[i] + gpuPixels[i + 1] + gpuPixels[i + 2];
-            std::fprintf(stderr, "GPU frame mean brightness: %.1f\n", static_cast<double>(sum) / (static_cast<double>(gpuPixels.size()) / 4.0 * 3.0));
+            const auto& gp = gpuPixels[vi];
+            unsigned long long sum = 0; for (size_t i = 0; i < gp.size(); i += 4) sum += gp[i] + gp[i + 1] + gp[i + 2];
+            std::fprintf(stderr, "GPU frame mean brightness: %.1f\n", static_cast<double>(sum) / (static_cast<double>(gp.size()) / 4.0 * 3.0));
           }
           prof.counters.tris += tris; prof.counters.draws += draws; prof.counters.shadowCasters += casters;
-          return gpuPixels.data();
+          return gpuPixels[vi].data();
         }
-        if (apiActive != 0) { applyApi(0); apiStatus = "Software (CPU) - GPU readback failed"; }
+        // Sem quadro da GPU ainda (primeiros quadros ou tamanho mudou): este quadro sai pela CPU e a API continua.
+        if (apiActive != 0 && rd < 0) { applyApi(0); apiStatus = "Software (CPU) - GPU readback failed"; }
       }
       tris = 0; draws = 0; casters = 0; // a CPU vai contar de novo
     }

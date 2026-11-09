@@ -966,9 +966,16 @@ void drawSceneView(Editor& ed, SDL_Renderer* sdl) {
       dl->PushClipRect(origin, {origin.x + static_cast<float>(w), origin.y + static_cast<float>(h)}, true);
       const bool consumed = ed.showGizmos && !ed.playing && editor::transformGizmo(ed, dl, xf, gizmo, hovered);
       dl->PopClipRect();
+      // O arrasto da camera so vale se o botao foi pressionado DENTRO desta vista. Antes, um clique que comecava em outro
+      // painel e passava por cima da Scene girava a camera sozinha (o ImGui considera "arrastando" qualquer botao preso).
+      static bool navRight = false, navMid = false;
+      if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) navRight = true;
+      if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) navMid = true;
+      if (!ImGui::IsMouseDown(ImGuiMouseButton_Right)) navRight = false;
+      if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle)) navMid = false;
       if (hovered && !gizmo.dragging()) {
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) { ed.yaw -= io.MouseDelta.x * 0.008f; ed.pitch = std::clamp(ed.pitch + io.MouseDelta.y * 0.008f, -1.5f, 1.5f); }
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+        if (navRight && ImGui::IsMouseDragging(ImGuiMouseButton_Right)) { ed.yaw -= io.MouseDelta.x * 0.008f; ed.pitch = std::clamp(ed.pitch + io.MouseDelta.y * 0.008f, -1.5f, 1.5f); }
+        if (navMid && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
           const tool::Vec3 f = tool::normalize(cam.target - cam.eye), r = tool::normalize(tool::cross(f, {0, 1, 0})), u = tool::cross(r, f);
           const float kk = ed.dist * 0.0016f;
           ed.target = ed.target - r * (io.MouseDelta.x * kk) + u * (io.MouseDelta.y * kk);
@@ -1697,6 +1704,9 @@ int main(int argc, char** argv) {
   ImNodes::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+  // Clique (botao para baixo e para cima) processado no mesmo quadro: sem isso o ImGui espalha os dois por dois quadros e
+  // o botao parece demorar para responder.
+  io.ConfigInputTrickleEventQueue = false;
   io.IniFilename = headless ? nullptr : "editor_layout.ini";
   ImGui::StyleColorsDark();
   loadUiFont(io);
@@ -1826,6 +1836,15 @@ int main(int argc, char** argv) {
       if (e.type == SDL_EVENT_DROP_FILE && e.drop.data) editor::queueImport(e.drop.data); // arrastar arquivos do sistema para a janela
     }
     ed.idleFrames = nEvents > 0 ? 0 : ed.idleFrames + 1;
+    // Botao que o sistema ja soltou, mas o ImGui ainda considera preso (a soltura se perdeu, p.ex. fora da janela):
+    // corrige aqui, senao qualquer movimento do mouse continua arrastando a camera ou a interface.
+    if (!headless) {
+      const Uint32 mb = SDL_GetMouseState(nullptr, nullptr);
+      ImGuiIO& inp = ImGui::GetIO();
+      if (inp.MouseDown[0] && !(mb & SDL_BUTTON_LMASK)) inp.AddMouseButtonEvent(0, false);
+      if (inp.MouseDown[1] && !(mb & SDL_BUTTON_RMASK)) inp.AddMouseButtonEvent(1, false);
+      if (inp.MouseDown[2] && !(mb & SDL_BUTTON_MMASK)) inp.AddMouseButtonEvent(2, false);
+    }
     zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Update);
     ed.time = static_cast<double>(SDL_GetTicks() - t0) / 1000.0;
     ed.scene.setClock(ed.time);

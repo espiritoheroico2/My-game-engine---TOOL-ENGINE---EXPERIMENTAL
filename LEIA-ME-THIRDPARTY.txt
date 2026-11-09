@@ -1,4 +1,18 @@
-Esta exportacao NAO inclui a pasta third_party/.
-Nenhum arquivo de third_party/ foi alterado desde a ultima entrega, entao ela nao foi reenviada.
-Para compilar, mantenha as pastas abaixo em third_party/ (iguais as que voce ja tem):
-  DiligentCore, LightPrism, SDL3, imgui, imnodes, miniaudio, quickjs-ng, stb
+Dependencias de terceiros (third_party/)
+=========================================
+
+Este pacote NAO inclui as pastas abaixo, porque nao foram alteradas nesta versao.
+Para compilar, copie-as para a pasta third_party/ do projeto (mesmos nomes):
+
+  DiligentCore   (renderizacao: Vulkan, D3D12, OpenGL) - pasta completa
+  SDL3           - pasta completa
+  imgui          - pasta completa (ImGui 1.91.9b)
+  imnodes        - pasta completa
+  miniaudio      - pasta completa
+  quickjs-ng     - pasta completa
+  stb            - pasta completa
+  LightPrism     - SO o arquivo alterado nesta versao esta incluido:
+                   third_party/LightPrism/src/Backends/Diligent/DiligentDevice.cpp
+                   Os demais arquivos da LightPrism devem vir da pasta original.
+
+Se o projeto nao tiver essas pastas, a compilacao falha logo no CMake.

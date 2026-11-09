@@ -56,6 +56,11 @@ public:
   dl::RefCntAutoPtr<dl::ISwapChain> swapchain;
   dl::RefCntAutoPtr<dl::ITexture> staging_;   // textura de leitura reaproveitada (readTexture)
   dl::Uint32 stagingW_ = 0, stagingH_ = 0; dl::TEXTURE_FORMAT stagingFmt_ = dl::TEX_FORMAT_UNKNOWN;
+  // Leitura assincrona (readTextureAsync): uma copia em voo por slot. O fence_ marca quando a GPU terminou a copia.
+  struct AsyncSlot { dl::RefCntAutoPtr<dl::ITexture> staging; dl::Uint64 value = 0; bool inFlight = false; u32 w = 0, h = 0; bool bgra = false; };
+  std::vector<AsyncSlot> asyncSlots_;
+  dl::RefCntAutoPtr<dl::IFence> fence_;
+  dl::Uint64 fenceNext_ = 1;
   std::string adapter;
 
   Backend backend() const override { return kind; }
@@ -268,6 +273,57 @@ public:
     }
     ctx->UnmapTextureSubresource(staging, 0, 0);
     return true;
+  }
+
+  // Copia assincrona: nunca espera a GPU. Cada chamada (1) le a copia que a GPU ja terminou, se houver, e (2) se o slot
+  // esta livre, enfileira uma copia nova do alvo e sinaliza o fence. Com isso o quadro exibido fica 1 ou 2 quadros atras,
+  // mas a CPU nao para esperando a GPU (era o principal causador de frame time instavel no editor).
+  int readTextureAsync(TextureId t, int slot, std::vector<u8>& rgba, u32& w, u32& h) override {
+    if (kind == Backend::GLES || slot < 0 || slot > 7) return readTexture(t, rgba, w, h) ? 1 : -1; // GL: sem fence aqui
+    if (asyncSlots_.size() <= static_cast<size_t>(slot)) asyncSlots_.resize(static_cast<size_t>(slot) + 1);
+    if (!fence_) device->CreateFence(dl::FenceDesc{}, &fence_);
+    if (!fence_) return -1;
+    AsyncSlot& s = asyncSlots_[static_cast<size_t>(slot)];
+    int result = 0;
+    if (s.inFlight && fence_->GetCompletedValue() >= s.value) { // a copia deste slot ja terminou: le sem esperar
+      dl::MappedTextureSubresource m;
+      ctx->MapTextureSubresource(s.staging, 0, 0, dl::MAP_READ, dl::MAP_FLAG_DO_NOT_WAIT, nullptr, m);
+      if (m.pData) {
+        rgba.resize(static_cast<size_t>(s.w) * s.h * 4);
+        for (u32 y = 0; y < s.h; ++y) {
+          const u8* src = static_cast<const u8*>(m.pData) + static_cast<size_t>(y) * m.Stride;
+          u8* dst = rgba.data() + static_cast<size_t>(y) * s.w * 4;
+          if (!s.bgra) std::memcpy(dst, src, static_cast<size_t>(s.w) * 4);
+          else for (u32 x = 0; x < s.w; ++x) { dst[x * 4] = src[x * 4 + 2]; dst[x * 4 + 1] = src[x * 4 + 1]; dst[x * 4 + 2] = src[x * 4]; dst[x * 4 + 3] = src[x * 4 + 3]; }
+        }
+        ctx->UnmapTextureSubresource(s.staging, 0, 0);
+        w = s.w; h = s.h; result = 1;
+      }
+      s.inFlight = false;
+    }
+    if (s.inFlight) return result; // copia ainda em voo: nao toca no staging
+    dl::ITexture* tex = nullptr;
+    if (auto* t0 = obj<dl::ITexture>(t, Kind::Texture)) tex = t0;
+    else if (swapchain && t == backbufferHandle_) tex = swapchain->GetCurrentBackBufferRTV()->GetTexture();
+    if (!tex) return result ? result : -1;
+    const auto& td = tex->GetDesc();
+    if (td.Format != dl::TEX_FORMAT_RGBA8_UNORM && td.Format != dl::TEX_FORMAT_RGBA8_UNORM_SRGB && td.Format != dl::TEX_FORMAT_BGRA8_UNORM && td.Format != dl::TEX_FORMAT_BGRA8_UNORM_SRGB) return -1;
+    if (!s.staging || s.w != td.Width || s.h != td.Height || s.bgra != (td.Format == dl::TEX_FORMAT_BGRA8_UNORM || td.Format == dl::TEX_FORMAT_BGRA8_UNORM_SRGB)) {
+      dl::TextureDesc sd = td;
+      sd.Name = "tool async readback"; sd.Usage = dl::USAGE_STAGING; sd.BindFlags = dl::BIND_NONE; sd.CPUAccessFlags = dl::CPU_ACCESS_READ;
+      s.staging.Release();
+      device->CreateTexture(sd, nullptr, &s.staging);
+      if (!s.staging) return -1;
+    }
+    s.w = td.Width; s.h = td.Height;
+    s.bgra = td.Format == dl::TEX_FORMAT_BGRA8_UNORM || td.Format == dl::TEX_FORMAT_BGRA8_UNORM_SRGB;
+    dl::CopyTextureAttribs ca(tex, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION, s.staging, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    ctx->CopyTexture(ca);
+    s.value = fenceNext_++;
+    ctx->EnqueueSignal(fence_, s.value);
+    ctx->Flush(); // envia a copia e o sinal agora: sem isso o fence so completa num quadro muito depois
+    s.inFlight = true;
+    return result;
   }
 
   // ---- acesso interno aos comandos ----
