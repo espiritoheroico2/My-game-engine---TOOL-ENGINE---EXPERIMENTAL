@@ -16,8 +16,19 @@ namespace editor {
 namespace SpriteUi = ToolEngine::SpriteUi;
 namespace SpriteRendering = ToolEngine::SpriteUi::Rendering;
 
+// Painel de diagnostico do SpriteUI (Window > SpriteUI diagnostics).
+//
+// Separado em duas partes para poder ser testado sem janela:
+//   update(): layout, roteamento de ponteiro, metricas e extracao do FramePacket (sem SDL_Renderer).
+//   render(): desenha o FramePacket e o texto com o SDL_Renderer do editor.
+// draw() junta as duas para o loop do editor.
 class SpriteUiDiagnostics {
  public:
+  struct PointerInput {
+    float x = 0.f, y = 0.f;
+    bool leftDown = false;
+  };
+
   SpriteUiDiagnostics() {
     SpriteUi::FlexItem panel;
     panel.width = {SpriteUi::SizeMode::Fixed, 380.f};
@@ -52,17 +63,19 @@ class SpriteUiDiagnostics {
     updateButtonVisuals({});
   }
 
+  // Chamar uma vez por quadro de evento, antes de handleEvent.
   void beginFrame() {
     pointerPressed_ = false;
     pointerReleased_ = false;
     pointerCancelled_ = false;
   }
 
+  // Retorna true quando o evento pertence ao painel (o editor nao o passa ao ImGui).
   bool handleEvent(const SDL_Event& event, bool& visible) {
     if (!visible) return false;
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE && !event.key.repeat) {
       visible = false;
-      router_.Reset();
+      resetInteraction();
       return true;
     }
     if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
@@ -95,14 +108,20 @@ class SpriteUiDiagnostics {
     return false;
   }
 
-  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool& visible, float fps,
-            float sceneMs, float postFxMs) {
-    if (!visible) return true;
-    if (!renderer || !window) return false;
-    if (!SDL_SetRenderClipRect(renderer, nullptr)) return false;
-
-    int windowWidth = 0, windowHeight = 0;
-    if (!SDL_GetWindowSize(window, &windowWidth, &windowHeight)) return false;
+  // Logica do quadro: layout, ponteiro, metricas e FramePacket. Nao usa SDL_Renderer.
+  // Retorna false somente em falha real (estilo invalido); pacote vazio ou invalido apenas nao desenha.
+  bool update(int windowWidth, int windowHeight, const PointerInput& pointer, bool& visible,
+              float fps, float sceneMs, float postFxMs) {
+    if (!visible) {
+      resetInteraction();
+      return true;
+    }
+    // Janela minimizada ou sem area: nao ha o que desenhar. Pular o quadro, sem tratar como erro
+    // (senao o editor fecharia o painel ao minimizar a janela).
+    if (windowWidth <= 0 || windowHeight <= 0) {
+      hasPacket_ = false;
+      return true;
+    }
 
     const float panelWidth = std::max(1.f, std::min(380.f, static_cast<float>(windowWidth) - 32.f));
     const float panelHeight = std::max(1.f, std::min(156.f, static_cast<float>(windowHeight) - 16.f));
@@ -117,21 +136,19 @@ class SpriteUiDiagnostics {
     tree_.Layout({{panelBounds_.x, panelBounds_.y}, {panelBounds_.w, panelBounds_.h}});
 
     auto scene = bridge_.Extract(tree_);
-    float mouseX = 0.f, mouseY = 0.f;
-    const SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mouseX, &mouseY);
     const std::uint64_t frameId = ++frameId_;
     SpriteUi::Input::UIInputSnapshot input;
-    input.pointerPositionLogical = {mouseX, mouseY};
-    input.pointerDeltaLogical = hasPointer_ ? SpriteUi::Vec2{mouseX - lastMouseX_, mouseY - lastMouseY_}
+    input.pointerPositionLogical = {pointer.x, pointer.y};
+    input.pointerDeltaLogical = hasPointer_ ? SpriteUi::Vec2{pointer.x - lastMouseX_, pointer.y - lastMouseY_}
                                              : SpriteUi::Vec2{};
-    input.primaryDown = (mouse & SDL_BUTTON_LMASK) != 0;
+    input.primaryDown = pointer.leftDown;
     input.primaryPressed = pointerPressed_;
     input.primaryReleased = pointerReleased_;
     input.pointerCancelled = pointerCancelled_;
     input.windowFocused = focused_;
     input.frameId = frameId;
-    lastMouseX_ = mouseX;
-    lastMouseY_ = mouseY;
+    lastMouseX_ = pointer.x;
+    lastMouseY_ = pointer.y;
     hasPointer_ = true;
 
     const auto events = router_.Process(input, scene.hitTargets);
@@ -143,6 +160,7 @@ class SpriteUiDiagnostics {
       if (event.target == pauseButton_) paused_ = !paused_;
       if (event.target == closeButton_) {
         visible = false;
+        resetInteraction();
         return true;
       }
     }
@@ -158,16 +176,61 @@ class SpriteUiDiagnostics {
         item.tintPremultipliedLinear = visual->tintPremultipliedLinear;
       }
     }
-    if (!scene.clipHierarchy.valid) return false;
-    const auto packet = extractor_.Build(frameId, scene.renderItems, nullptr,
-                                         scene.clipHierarchy.effectiveRects);
-    if (!SpriteRendering::IsFramePacketValid(packet)) return false;
-    if (!renderPacket(renderer, packet)) return false;
+    hasPacket_ = false;
+    if (!scene.clipHierarchy.valid) return true;
+    packet_ = extractor_.Build(frameId, scene.renderItems, nullptr, scene.clipHierarchy.effectiveRects);
+    hasPacket_ = SpriteRendering::IsFramePacketValid(packet_);
+    return true;
+  }
+
+  // Desenha o ultimo quadro calculado por update(). Retorna false apenas em falha do SDL.
+  bool render(SDL_Renderer* renderer) {
+    if (!renderer) return false;
+    if (!SDL_SetRenderClipRect(renderer, nullptr)) return false;
+    if (hasPacket_ && !renderPacket(renderer, packet_)) return false;
     return drawText(renderer);
+  }
+
+  // Atalho do loop do editor: le tamanho da janela e mouse, atualiza e desenha.
+  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool& visible, float fps,
+            float sceneMs, float postFxMs) {
+    if (!visible) return true;
+    if (!renderer || !window) return false;
+    int windowWidth = 0, windowHeight = 0;
+    if (!SDL_GetWindowSize(window, &windowWidth, &windowHeight)) return false;
+    float mouseX = 0.f, mouseY = 0.f;
+    const SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mouseX, &mouseY);
+    const PointerInput pointer{mouseX, mouseY, (mouse & SDL_BUTTON_LMASK) != 0};
+    if (!update(windowWidth, windowHeight, pointer, visible, fps, sceneMs, postFxMs)) return false;
+    if (!visible) return true;
+    return render(renderer);
+  }
+
+  // Estado para teste e para a interface.
+  bool paused() const { return paused_; }
+  bool hasCapture() const { return router_.GetState().capturedEntity.IsValid(); }
+  bool hasPacket() const { return hasPacket_; }
+  // Centro de um botao em coordenadas da janela, valido depois de um update() com o painel visivel.
+  bool buttonCenter(bool close, float& x, float& y) const {
+    const auto* node = tree_.Get(close ? closeButton_ : pauseButton_);
+    if (!node) return false;
+    const auto& rect = node->node.rect;
+    x = rect.position.x + rect.size.x * 0.5f;
+    y = rect.position.y + rect.size.y * 0.5f;
+    return true;
   }
 
  private:
   struct Bounds { float x = 0.f, y = 0.f, w = 0.f, h = 0.f; };
+
+  // Limpa captura, hover, cliques pendentes e o ultimo ponteiro. Usado ao fechar e ao esconder o painel,
+  // para que a proxima abertura nao herde captura antiga nem um salto de delta.
+  void resetInteraction() {
+    router_.Reset();
+    hasPointer_ = false;
+    hasPacket_ = false;
+    pointerPressed_ = pointerReleased_ = pointerCancelled_ = false;
+  }
 
   bool contains(float x, float y) const {
     return x >= panelBounds_.x && y >= panelBounds_.y &&
@@ -217,16 +280,15 @@ class SpriteUiDiagnostics {
     };
   }
 
+  // Desenha so os batches de cor solida. Batch com textura (ainda sem backend de texto) e pulado,
+  // em vez de abortar o pacote inteiro e fechar o painel.
   bool renderPacket(SDL_Renderer* renderer, const SpriteRendering::FramePacket& packet) {
     if (!SDL_SetRenderClipRect(renderer, nullptr)) return false;
     vertices_.reserve(packet.instances.size() * 4);
     indices_.reserve(packet.instances.size() * 6);
 
     for (const auto& batch : packet.batches) {
-      if (batch.textureSlice != SpriteRendering::WhiteTextureSlice) {
-        SDL_SetRenderClipRect(renderer, nullptr);
-        return false;
-      }
+      if (batch.textureSlice != SpriteRendering::WhiteTextureSlice) continue;
       if (batch.clipIndex != SpriteRendering::NoClipIndex) {
         const auto& clip = packet.clipRects[batch.clipIndex];
         const int left = static_cast<int>(std::floor(clip.minX));
@@ -255,6 +317,7 @@ class SpriteUiDiagnostics {
         for (const SDL_FPoint point : points) vertices_.push_back({point, color, {}});
         indices_.insert(indices_.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
       }
+      if (vertices_.empty()) continue;
       if (!SDL_RenderGeometry(renderer, nullptr, vertices_.data(),
                              static_cast<int>(vertices_.size()), indices_.data(),
                              static_cast<int>(indices_.size()))) {
@@ -296,6 +359,7 @@ class SpriteUiDiagnostics {
   SpriteUi::LayoutSceneBridge bridge_;
   SpriteUi::Input::UIEventRouter router_;
   SpriteRendering::RenderExtractor extractor_;
+  SpriteRendering::FramePacket packet_;
   SpriteUi::UIHandle panel_{}, pauseButton_{}, closeButton_{};
   std::vector<SDL_Vertex> vertices_;
   std::vector<int> indices_;
@@ -304,7 +368,7 @@ class SpriteUiDiagnostics {
   float lastMouseX_ = 0.f, lastMouseY_ = 0.f;
   float shownFps_ = 0.f, shownSceneMs_ = 0.f, shownPostFxMs_ = 0.f;
   bool pointerPressed_ = false, pointerReleased_ = false, pointerCancelled_ = false;
-  bool hasPointer_ = false, focused_ = true, paused_ = false;
+  bool hasPointer_ = false, hasPacket_ = false, focused_ = true, paused_ = false;
 };
 
 } // namespace editor

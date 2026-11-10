@@ -16,6 +16,9 @@
 #include "script_complete.hpp"
 #include "narrative_panel.hpp"
 #include "export.hpp"
+#ifdef TOOL_WITH_SPRITEUI
+#include "spriteui_diagnostics.hpp"
+#endif
 #include <algorithm>
 
 namespace editor {
@@ -177,6 +180,52 @@ inline int runSelfTest(const std::string& samplesDir) {
     const MeshRenderer* fz = ed.scene.world().get<MeshRenderer>(fo);
     check(fz && !fz->fogOn && fz->fogAmount == 1.f, "old scene without fog stays without fog; amount is clamped to 0..1");
   }
+#ifdef TOOL_WITH_SPRITEUI
+  { // SpriteUI diagnostics: logica do painel sem janela (layout, clique, fechar, Escape, janela minimizada)
+    editor::SpriteUiDiagnostics d;
+    bool vis = true;
+    // update() consome os cliques pendentes; nao chamar beginFrame aqui, senao apaga o clique recem-registrado.
+    auto frame = [&](float x, float y, bool down) {
+      return d.update(800, 600, {x, y, down}, vis, 60.f, 1.f, 0.5f);
+    };
+    auto event = [&](Uint32 type, float x, float y) {
+      d.beginFrame();
+      SDL_Event e{};
+      e.type = type;
+      e.button.button = SDL_BUTTON_LEFT;
+      e.button.x = x;
+      e.button.y = y;
+      return d.handleEvent(e, vis);
+    };
+    auto click = [&](float x, float y) {
+      const bool down = event(SDL_EVENT_MOUSE_BUTTON_DOWN, x, y);
+      frame(x, y, true);
+      const bool up = event(SDL_EVENT_MOUSE_BUTTON_UP, x, y);
+      frame(x, y, false);
+      return down && up;
+    };
+    check(frame(0.f, 0.f, false) && d.hasPacket(), "spriteui: primeiro quadro gera um FramePacket valido");
+    float px = 0.f, py = 0.f, cx = 0.f, cy = 0.f;
+    check(d.buttonCenter(false, px, py) && d.buttonCenter(true, cx, cy), "spriteui: botoes Pausar e Fechar tem posicao depois do layout");
+    check(!event(SDL_EVENT_MOUSE_BUTTON_DOWN, 2.f, 2.f), "spriteui: clique fora do painel nao e consumido");
+    check(click(px, py) && d.paused(), "spriteui: clique em Pausar pausa as metricas");
+    check(click(px, py) && !d.paused(), "spriteui: segundo clique em Pausar retoma as metricas");
+    check(click(cx, cy) && !vis, "spriteui: clique em Fechar esconde o painel");
+    check(!d.hasCapture(), "spriteui: fechar limpa a captura do ponteiro");
+    vis = true;
+    check(frame(0.f, 0.f, false) && !d.hasCapture(), "spriteui: reabrir comeca sem captura herdada");
+    SDL_Event esc{};
+    esc.type = SDL_EVENT_KEY_DOWN;
+    esc.key.key = SDLK_ESCAPE;
+    esc.key.repeat = false;
+    d.beginFrame();
+    check(d.handleEvent(esc, vis) && !vis, "spriteui: Escape esconde o painel e e consumido");
+    vis = true;
+    check(frame(0.f, 0.f, false), "spriteui: reabrir apos Escape funciona");
+    check(d.update(100, 60, {0.f, 0.f, false}, vis, 60.f, 1.f, 0.5f) && d.hasPacket(), "spriteui: janela pequena ainda gera pacote");
+    check(d.update(0, 0, {0.f, 0.f, false}, vis, 60.f, 1.f, 0.5f) && vis && !d.hasPacket(), "spriteui: janela minimizada (0x0) nao fecha o painel");
+  }
+#endif
   { // luz pontual com sombra: o flag tem que sobreviver ao salvar/carregar (antes o editor o zerava)
     tool::Entity le = ed.make("ShadowLightTest", true);
     tool::Light lt; lt.type = tool::LightType::Point; lt.castShadow = true; ed.scene.world().add<LightComp>(le, LightComp{lt});
