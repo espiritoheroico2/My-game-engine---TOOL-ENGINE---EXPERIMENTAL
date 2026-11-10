@@ -35,7 +35,11 @@ class UndoStack {
   }
   // Troca o estado atual SEM criar passo: usado logo apos restaurar um estado, para que ler a cena de volta
   // (que pode serializar um pouco diferente, ex. caminho de script) nao seja confundido com uma edicao.
-  void rebase(UndoState s) { bytes_ += s.data.size(); cur_ = std::move(s); }
+  void rebase(UndoState s) {
+    bytes_ -= std::min(bytes_, cur_.data.size());
+    bytes_ += s.data.size();
+    cur_ = std::move(s);
+  }
   bool canUndo() const { return !undo_.empty(); }
   bool canRedo() const { return !redo_.empty(); }
   size_t undoCount() const { return undo_.size(); }

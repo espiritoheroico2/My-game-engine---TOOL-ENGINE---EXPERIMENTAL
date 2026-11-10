@@ -94,7 +94,7 @@ public:
   using Handler = std::function<void(const std::any&)>;
 
   EventId intern(const std::string& name) {
-    auto [it, ok] = ids_.try_emplace(name, static_cast<EventId>(ids_.size() + 1));
+    auto [it, ok] = eventIds_.try_emplace(name, static_cast<EventId>(eventIds_.size() + 1));
     (void)ok;
     return it->second;
   }
@@ -108,17 +108,21 @@ public:
 
   // Dispara imediatamente passando pelo arbitro. Handlers podem emitir (cadeia de causa).
   Verdict emit(EventId id, double now, std::any payload = {}, u64 messageId = 0) {
-    const Verdict v = arbiter_.tryFire(id, now, messageId);
-    if (v != Verdict::Allowed) return v;
+    const Verdict verdict = arbiter_.tryFire(id, now, messageId);
+    if (verdict != Verdict::Allowed) return verdict;
+
     arbiter_.push(id);
-    if (auto it = handlers_.find(id); it != handlers_.end())
-      for (auto& h : std::vector<Handler>(it->second)) h(payload);
+    const auto handlersIt = handlers_.find(id);
+    if (handlersIt != handlers_.end() && !handlersIt->second.empty()) {
+      const auto snapshot = handlersIt->second;
+      for (const auto& handler : snapshot) handler(payload);
+    }
     arbiter_.pop();
-    return v;
+    return verdict;
   }
 
 private:
-  std::unordered_map<std::string, EventId> ids_;
+  std::unordered_map<std::string, EventId> eventIds_;
   std::unordered_map<EventId, std::vector<Handler>> handlers_;
   EventArbiter arbiter_;
 };

@@ -119,6 +119,16 @@
       "cacheVariables": {
         "TOOL_WITH_D3D12": "ON"
       }
+    },
+    {
+      "name": "editor-gpu-dx11",
+      "displayName": "Editor + GPU (Direct3D 11)",
+      "inherits": "editor-gpu",
+      "binaryDir": "${sourceDir}/out-dx11",
+      "cacheVariables": {
+        "TOOL_WITH_D3D11": "ON",
+        "TOOL_WITH_D3D12": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -169,6 +179,14 @@
     {
       "name": "editor-gpu-dx12",
       "configurePreset": "editor-gpu-dx12",
+      "configuration": "Release",
+      "targets": [
+        "tool_editor"
+      ]
+    },
+    {
+      "name": "editor-gpu-dx11",
+      "configurePreset": "editor-gpu-dx11",
       "configuration": "Release",
       "targets": [
         "tool_editor"

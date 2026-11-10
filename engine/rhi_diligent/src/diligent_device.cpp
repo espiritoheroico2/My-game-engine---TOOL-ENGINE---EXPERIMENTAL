@@ -15,6 +15,9 @@
 #if TOOL_HAS_D3D12
 #include "EngineFactoryD3D12.h"
 #endif
+#if TOOL_HAS_D3D11
+#include "EngineFactoryD3D11.h"
+#endif
 
 #include <cstring>
 #include <unordered_map>
@@ -260,7 +263,7 @@ public:
     ctx->CopyTexture(ca);
     ctx->WaitForIdle();
     dl::MappedTextureSubresource m;
-    ctx->MapTextureSubresource(staging, 0, 0, dl::MAP_READ, kind == Backend::GLES ? dl::MAP_FLAG_NONE : dl::MAP_FLAG_DO_NOT_WAIT, nullptr, m); // Vulkan/D3D12 exigem DO_NOT_WAIT (ja esperamos acima)
+    ctx->MapTextureSubresource(staging, 0, 0, dl::MAP_READ, kind == Backend::GLES ? dl::MAP_FLAG_NONE : dl::MAP_FLAG_DO_NOT_WAIT, nullptr, m); // APIs nao-GL usam DO_NOT_WAIT
     if (!m.pData) return false;
     w = td.Width; h = td.Height;
     rgba.resize(static_cast<size_t>(w) * h * 4);
@@ -378,6 +381,11 @@ public:
     d_.ctx->ClearRenderTarget(rtv, clear, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     if (dsv) d_.ctx->ClearDepthStencil(dsv, dl::CLEAR_DEPTH_FLAG, 1.f, 0, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
   }
+  void beginKeep(TextureId target, TextureId depth) override {
+    if (open_) d_.err("beginKeep() dentro de begin()");
+    open_ = true;
+    setTargets(target, depth);
+  }
   void setTargets(TextureId target, TextureId depth) override {
     if (!check()) return;
     dl::ITextureView* rtv = nullptr; dl::ITextureView* dsv = nullptr;
@@ -478,6 +486,9 @@ std::vector<Backend> compiledBackends() {
 #if TOOL_HAS_D3D12
   v.push_back(Backend::D3D12);
 #endif
+#if TOOL_HAS_D3D11
+  v.push_back(Backend::D3D11);
+#endif
 #if TOOL_HAS_VULKAN
   v.push_back(Backend::Vulkan);
 #endif
@@ -544,6 +555,22 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
     if (!dev->device || !ctxs[0]) return fail("D3D12: falha ao criar o dispositivo");
     dev->ctx.Attach(ctxs[0]);
     if (wantSwap) { f->CreateSwapChainD3D12(dev->device, dev->ctx, scd, dl::FullScreenModeDesc{}, win, &dev->swapchain); if (!dev->swapchain) return fail("D3D12: falha ao criar a swapchain"); }
+    break;
+  }
+#endif
+#if TOOL_HAS_D3D11
+  case Backend::D3D11: {
+    if (!wantSwap) return fail("D3D11: precisa de uma janela nativa");
+    auto* f = dl::GetEngineFactoryD3D11();
+    dl::EngineD3D11CreateInfo ci;
+    ci.EnableValidation = info.validation;
+    if (!info.validation) debug().report("TOOL-I204", Severity::Info, "D3D11 sem validacao: erros do driver podem passar sem aviso");
+    dl::IDeviceContext* ctxs[1] = {};
+    f->CreateDeviceAndContextsD3D11(ci, &dev->device, ctxs);
+    if (!dev->device || !ctxs[0]) return fail("D3D11: falha ao criar o dispositivo");
+    dev->ctx.Attach(ctxs[0]);
+    f->CreateSwapChainD3D11(dev->device, dev->ctx, scd, dl::FullScreenModeDesc{}, win, &dev->swapchain);
+    if (!dev->swapchain) return fail("D3D11: falha ao criar a swapchain");
     break;
   }
 #endif

@@ -22,9 +22,27 @@
 
 namespace editor {
 
-enum class Zone : int { Events, Update, Hierarchy, SceneRender, GameRender, PostFx, Sky, Ui, Present, Count };
+enum class Zone : int {
+  Events,
+  Update,
+  Hierarchy,
+  SceneRender,
+  ScenePrepare,
+  CpuRender,
+  GpuRender,
+  GpuReadback,
+  GameRender,
+  PostFx,
+  Sky,
+  Ui,
+  Present,
+  Count
+};
 inline const char* zoneName(Zone z) {
-  static const char* n[] = {"Events + input", "Update (audio, pool)", "Panels (hierarchy, inspector...)", "Scene view render", "Game view render", "Post-processing (FXAA, sharpen)", "Skybox (images)", "UI draw (ImGui)", "Present + frame limiter"};
+  static const char* n[] = {"Events + input", "Update (audio, pool)", "Panels (hierarchy, inspector...)", "Scene view render",
+                            "Scene preparation (culling, shadows)", "CPU rasterization", "GPU render/submit", "GPU readback",
+                            "Game view render", "Post-processing (FXAA, sharpen)", "Skybox (images)", "UI draw (ImGui)",
+                            "Present (VSync)"};
   return n[static_cast<int>(z)];
 }
 
@@ -62,6 +80,7 @@ struct FrameProfiler {
   std::array<std::array<float, kHistory>, static_cast<size_t>(Zone::Count)> zoneMs{};
   int head = 0, filled = 0;                                                      // anel circular
   float cur[static_cast<size_t>(Zone::Count)] = {};                              // zonas do quadro em andamento
+  float waitMs = 0;                                                               // espera ociosa/limite de FPS, fora das zonas de trabalho
   FrameCounters counters, last;                                                  // `last` = quadro anterior (para mostrar)
   double memoryMB = 0, peakMemoryMB = 0;
   SysMonitor sys;                                                                // CPU, nucleos, RAM, VRAM e cache (amostra a cada 0,5 s)
@@ -74,20 +93,20 @@ struct FrameProfiler {
     frameStart = now;
     if (!paused) {
       frameMs[static_cast<size_t>(head)] = ms;
-      float work = 0;
       for (size_t z = 0; z < static_cast<size_t>(Zone::Count); ++z) {
         zoneMs[z][static_cast<size_t>(head)] = cur[z];
-        if (static_cast<Zone>(z) != Zone::Present) work += cur[z];
       }
-      workMs[static_cast<size_t>(head)] = work;
+      workMs[static_cast<size_t>(head)] = std::max(0.f, ms - waitMs - cur[static_cast<size_t>(Zone::Present)]);
       head = (head + 1) % kHistory; filled = std::min(filled + 1, kHistory);
     }
+    waitMs = 0;
     std::memset(cur, 0, sizeof cur);
     last = counters; counters = FrameCounters{};
     sys.update(std::chrono::duration<double>(now.time_since_epoch()).count());
     if ((++memTick & 31) == 1) { memoryMB = processMemoryMB(); peakMemoryMB = std::max(peakMemoryMB, memoryMB); } // memoria: 1 leitura a cada 32 quadros
   }
   void add(Zone z, float ms) { cur[static_cast<int>(z)] += ms; }
+  void addWait(float ms) { waitMs += std::max(0.f, ms); }
 
   // Resumo estatistico dos ultimos `filled` quadros.
   struct Stats { float avg = 0, min = 0, max = 0, p99 = 0, fps = 0, low1 = 0, jitter = 0, workAvg = 0, workJitter = 0; };
@@ -126,9 +145,23 @@ private:
 
 // Mede uma zona enquanto o objeto existir.
 struct ZoneTimer {
-  FrameProfiler& p; Zone z; FrameProfiler::Clock::time_point t0 = FrameProfiler::Clock::now();
+  FrameProfiler& p;
+  Zone z;
+  FrameProfiler::Clock::time_point t0 = FrameProfiler::Clock::now();
+  bool active = true;
   ZoneTimer(FrameProfiler& prof, Zone zone) : p(prof), z(zone) {}
-  ~ZoneTimer() { p.add(z, std::chrono::duration<float, std::milli>(FrameProfiler::Clock::now() - t0).count()); }
+  ~ZoneTimer() { stop(); }
+  void stop() {
+    if (!active) return;
+    p.add(z, std::chrono::duration<float, std::milli>(FrameProfiler::Clock::now() - t0).count());
+    active = false;
+  }
+  void restart(Zone zone) {
+    stop();
+    z = zone;
+    t0 = FrameProfiler::Clock::now();
+    active = true;
+  }
   ZoneTimer(const ZoneTimer&) = delete; ZoneTimer& operator=(const ZoneTimer&) = delete;
 };
 

@@ -99,9 +99,9 @@ public:
     if (((findStorage<Ts>() == nullptr) || ...)) return;
     ScratchLease L = lease();
     const auto& src = smallestIndices<Ts...>();
-    L.v.assign(src.begin(), src.end());
+    L.v = src;
     for (u32 i : L.v) {
-      if (dormant_[i] || !ids_.aliveIndex(i) || !(findStorage<Ts>()->has(i) && ...)) continue;
+      if (dormant_[i] || !ids_.aliveIndex(i) || !matchAll<Ts...>(i)) continue;
       fn(Entity{i, ids_.generationOf(i)}, *findStorage<Ts>()->get(i)...);
     }
   }
@@ -125,12 +125,12 @@ public:
     if (((findStorage<Ts>() == nullptr) || ...)) return;
     ScratchLease L = lease();
     const auto& src = smallestIndices<Ts...>();
-    L.v.assign(src.begin(), src.end());
+    L.v = src;
     const std::vector<u32>& idx = L.v;
     tool::parallelFor(idx.size(), 512, [&](size_t b, size_t e) {
       for (size_t k = b; k < e; ++k) {
         const u32 i = idx[k];
-        if (dormant_[i] || !ids_.aliveIndex(i) || !(findStorage<Ts>()->has(i) && ...)) continue;
+        if (dormant_[i] || !ids_.aliveIndex(i) || !matchAll<Ts...>(i)) continue;
         fn(Entity{i, ids_.generationOf(i)}, *findStorage<Ts>()->get(i)...);
       }
     });
@@ -211,14 +211,22 @@ private:
       if (!has(i)) return;
       const u32 pos = sparse[i];
       const u32 last = denseIdx.back();
-      data[pos] = std::move(data.back());
-      denseIdx[pos] = last;
-      sparse[last] = pos;
+      if (pos != denseIdx.size() - 1) {
+        data[pos] = std::move(data.back());
+        denseIdx[pos] = last;
+        sparse[last] = pos;
+      }
       data.pop_back();
       denseIdx.pop_back();
       sparse[i] = kInvalidIndex;
     }
   };
+
+  template <class... Ts> bool matchAll(u32 i) const {
+    bool ok = true;
+    ((ok = ok && findStorage<Ts>() && findStorage<Ts>()->has(i)), ...);
+    return ok;
+  }
 
   template <class... Ts> const std::vector<u32>& smallestIndices() const {
     const std::vector<u32>* best = nullptr;

@@ -10,8 +10,10 @@ WHAT YOU GET
   The default language is English; Portuguese (pt-BR) and Spanish are in
   Settings > Language.
 
-  NOTHING is downloaded while building: SDL3, ImGui, imnodes and miniaudio are
-  already inside third_party/. You do NOT need Git, Ninja, Python or internet.
+  SDL3, ImGui, imnodes and miniaudio are already inside third_party/. The
+  experimental SpriteUI diagnostics panel is fetched by CMake on the first
+  build (Git and internet required). For an offline build, configure with
+  -DTOOL_WITH_SPRITEUI=OFF. Ninja and Python are not needed for the CPU editor.
 
 ------------------------------------------------------------------------------
  1. WHAT TO INSTALL (Windows 10/11, once)
@@ -61,7 +63,7 @@ WHAT YOU GET
      project and the working directory is the project root.
 
 ------------------------------------------------------------------------------
- 5. OPTIONAL: GPU RENDERING (Vulkan / OpenGL via DiligentCore)
+ 5. OPTIONAL: GPU RENDERING (Vulkan / OpenGL / Direct3D via DiligentCore)
 ------------------------------------------------------------------------------
   Not needed to test the editor. The DiligentCore sources (~200 MB) are NOT
   included in the package. To enable them:
@@ -72,9 +74,12 @@ WHAT YOU GET
     DiligentCore needs it to configure; without it CMake says "Could NOT find Python3".
     2. Run:  build_editor.bat gpu        (preset "editor-gpu-dx12": Vulkan + OpenGL + Direct3D 12, ~10-15 min)
                  build_editor.bat gpu nodx12 (preset "editor-gpu": without Direct3D 12)
-    3. In the editor: Settings > Graphics > pick Vulkan or OpenGL.
+       Direct3D 11 can be enabled separately with:
+         cmake --preset editor-gpu-dx11
+         cmake --build --preset editor-gpu-dx11
+    3. In the editor: Settings > Graphics > pick a compiled backend.
   If the GPU backend cannot start, the editor falls back to the CPU renderer.
-  Direct3D 12 exists in the code but is OFF and untested (-DTOOL_WITH_D3D12=ON).
+  Direct3D 11 and 12 are optional Windows backends and OFF in the default presets.
 
 ------------------------------------------------------------------------------
  6. TROUBLESHOOTING

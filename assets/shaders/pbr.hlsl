@@ -25,6 +25,8 @@ cbuffer ObjectBuffer : register(b6) {
   float    _pad1;
   float4   texInfo;       // largura, altura, 1 = tem textura de albedo (AlbedoMap)
   float4   emissive;      // rgb = radiancia emissiva (cor x intensidade), linear; soma antes do tone mapping (bloom)
+  float4   fogColor;      // rgb = cor da neblina (linear)
+  float4   fogParams;     // x = inicio (m), y = fim (m), z = quantidade maxima (0 = sem neblina)
 };
 Texture2D AlbedoMap : register(t0);
 Texture2D<float> AoMap : register(t14); // SSAO (ssao.hlsl): 1 = sem oclusao; so afeta a luz ambiente, como na Light Prism  // Load, sem sampler: amostragem "mais proximo" com repeticao
@@ -107,6 +109,11 @@ float4 PSMain(VSOut i) : SV_Target {
   // Luzes do sol, pontuais e spot: pelos clusters (e pelas cascatas do sol).
   color += EvaluateClusteredLights(s, i.worldPos, i.clip.xy, i.viewDepth, receive);
   color += i.emissive;   // emissao do proprio objeto: nao recebe AO nem sombra; o bloom usa o brilho depois do tone mapping
+  if (fogParams.z > 0.0) { // neblina por distancia: mistura com a cor da neblina, linear, antes do tone mapping
+    float d = length(i.toCam);
+    float f = saturate((d - fogParams.x) / max(fogParams.y - fogParams.x, 0.001)) * fogParams.z;
+    color = lerp(color, fogColor.rgb, f);
+  }
   return float4(ToneMapACESFilm(color), i.baseColor.a);   // alfa so da cor do material (a mascara do ceu depende disso)
 }
 

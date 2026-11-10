@@ -44,6 +44,18 @@ TEST(ecs_destroy_removes_components_and_stale_handle) {
   CHECK(n == 0);
 }
 
+TEST(ecs_remove_last_component_keeps_reuse_safe) {
+  World w;
+  struct StringValue { std::string text; };
+  Entity a = w.create();
+  w.add<StringValue>(a, "first");
+  w.remove<StringValue>(a);
+  Entity b = w.create();
+  w.add<StringValue>(b, "second");
+  CHECK(w.get<StringValue>(b) != nullptr);
+  CHECK(w.get<StringValue>(b)->text == "second");
+}
+
 TEST(ecs_swap_remove_keeps_others) {
   World w;
   Entity a = w.create(), b = w.create(), c = w.create();
@@ -51,6 +63,25 @@ TEST(ecs_swap_remove_keeps_others) {
   w.destroy(a);
   CHECK(w.get<Pos>(b)->x == 2.f);
   CHECK(w.get<Pos>(c)->x == 3.f);
+}
+
+TEST(ecs_swap_remove_when_last_entity_index_matches_dense_position) {
+  World w;
+  const Entity first = w.create();
+  const Entity last = w.create();
+  const Entity middle = w.create();
+  w.add<Pos>(first, 1.f);
+  w.add<Pos>(middle, 3.f);
+  w.add<Pos>(last, 2.f);
+
+  CHECK(w.destroy(middle));
+  float sum = 0.f;
+  int count = 0;
+  w.forEachDense<Pos>([&](Entity, Pos& p) { sum += p.x; ++count; });
+  CHECK(count == 2);
+  CHECK(sum == 3.f);
+  CHECK(w.has<Pos>(last));
+  CHECK(w.get<Pos>(last)->x == 2.f);
 }
 
 TEST(ecs_tags_and_query) {

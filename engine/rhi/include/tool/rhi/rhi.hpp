@@ -11,19 +11,19 @@
 
 namespace tool::rhi {
 
-enum class Backend : u8 { Null, Vulkan, D3D12, WebGPU, GLES, Count };
+enum class Backend : u8 { Null, Vulkan, D3D12, WebGPU, GLES, D3D11, Count };
 enum class Platform : u8 { Windows, Linux, Android, Web, UWP, MacOS, Count };
 
 inline const char* toString(Backend b) {
-  static const char* n[] = {"null", "vulkan", "d3d12", "webgpu", "gles"};
+  static const char* n[] = {"null", "vulkan", "d3d12", "webgpu", "gles", "d3d11"};
   return n[static_cast<int>(b)];
 }
 
 // Ordem de preferencia por plataforma (secao de multi-API). `available` diz o que o dispositivo suporta.
 inline std::vector<Backend> backendPriority(Platform p) {
   switch (p) {
-  case Platform::Windows: return {Backend::D3D12, Backend::Vulkan, Backend::GLES};
-  case Platform::UWP: return {Backend::D3D12};
+  case Platform::Windows: return {Backend::D3D12, Backend::D3D11, Backend::Vulkan, Backend::GLES};
+  case Platform::UWP: return {Backend::D3D12, Backend::D3D11};
   case Platform::Linux: return {Backend::Vulkan, Backend::GLES};
   case Platform::Android: return {Backend::Vulkan, Backend::GLES};
   case Platform::Web: return {Backend::WebGPU, Backend::GLES}; // GLES == WebGL2
@@ -82,6 +82,8 @@ public:
   virtual void begin(TextureId target, TextureId depth, f32 r, f32 g, f32 b, f32 a) = 0; // depth pode ser nulo
   // Troca o alvo sem limpar nada (para passes que reaproveitam a profundidade). depth pode ser nulo.
   virtual void setTargets(TextureId, TextureId) {}
+  // Abre a lista SEM limpar o alvo (passes extras, como o transparente): equivale a begin() sem clear.
+  virtual void beginKeep(TextureId, TextureId) {}
   virtual void setPipeline(PipelineId p) = 0;
   virtual void setVertexBuffer(BufferId b) = 0;
   virtual void setIndexBuffer(BufferId b) = 0;

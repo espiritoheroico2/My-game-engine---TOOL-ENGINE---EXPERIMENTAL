@@ -34,6 +34,7 @@ int main(int argc, char** argv) {
   if (which == "vulkan") info.backend = rhi::Backend::Vulkan;
   else if (which == "opengl") info.backend = rhi::Backend::GLES;
   else if (which == "d3d12") info.backend = rhi::Backend::D3D12;
+  else if (which == "d3d11") info.backend = rhi::Backend::D3D11;
   else { std::fprintf(stderr, "backend desconhecido: %s\n", which.c_str()); return 2; }
 
   if (info.backend == rhi::Backend::GLES) { // OpenGL precisa de uma janela (oculta) para o contexto
@@ -56,6 +57,15 @@ int main(int argc, char** argv) {
     info.nativeDisplay = SDL_GetPointerProperty(p, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
 #endif
   }
+#if defined(_WIN32)
+  if (info.backend == rhi::Backend::D3D11) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) { std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+    win = SDL_CreateWindow("gpu", 320, 180, SDL_WINDOW_HIDDEN);
+    if (!win) { std::fprintf(stderr, "janela: %s\n", SDL_GetError()); return 1; }
+    const SDL_PropertiesID p = SDL_GetWindowProperties(win);
+    info.nativeWindow = SDL_GetPointerProperty(p, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+  }
+#endif
 
   std::string err;
   auto dev = rhi::createDiligentDevice(info, &err);
@@ -313,8 +323,34 @@ int main(int argc, char** argv) {
   // reporta PENDENTE e nao falha; o resto (objetos, texturas, SSAO, sombra do sol) continua valendo.
   const bool gl = dev->backend() == rhi::Backend::GLES;
   const bool glPending = gl && !(pointOk && emOk);
+  // Transparencia: o mesmo cubo com opacidade 0.5. No centro da imagem, o vermelho tem de ficar entre o cubo solido e o
+  // fundo, e GPU e CPU devem concordar (passe transparente de mistura nos dois caminhos).
+  Material solidMat{{1.f, 0.2f, 0.2f}, 0.6f, 0.f};
+  Material halfMat = solidMat; halfMat.opacity = 0.5f;
+  std::vector<u8> solidG, halfG;
+  const bool trRan = gpuEm(false, solidG, solidMat, emWorld) && gpuEm(false, halfG, halfMat, emWorld);
+  auto centerRed = [](const std::vector<u8>& px) {
+    double sum = 0; int n = 0;
+    for (int y = 80; y < 100; ++y) for (int x = 150; x < 170; ++x) { sum += px[(static_cast<size_t>(y) * 320 + x) * 4]; ++n; }
+    return sum / n;
+  };
+  auto cpuHalf = [&]() {
+    auto r = aoRigFor(false);
+    SoftRenderer s(320, 180);
+    s.begin(ac, emBg); s.setLighting(r->frame());
+    s.draw(emBox, emWorld, halfMat);
+    std::vector<u8> px(s.pixels(), s.pixels() + 320 * 180 * 4);
+    return px;
+  };
+  std::vector<u8> bgG;   // mesma cena sem o cubo (cubo empurrado para fora da tela): referencia do fundo
+  const bool bgRan = gpuEm(false, bgG, solidMat, Mat4::translation({0, -50.f, 0}));
+  const double solidR = trRan ? centerRed(solidG) : 0, bgR = bgRan ? centerRed(bgG) : 0;
+  const double gpuHalfR = trRan ? centerRed(halfG) : 0;
+  const double cpuHalfR = centerRed(cpuHalf());
+  const bool trOk = trRan && bgRan && gpuHalfR > bgR + 8 && gpuHalfR < solidR - 8 && std::abs(gpuHalfR - cpuHalfR) <= 25;
+  std::printf("transparencia: centro vermelho solido=%.0f meio=%.0f fundo=%.0f | cpu meio=%.0f\n", solidR, gpuHalfR, bgR, cpuHalfR);
   const bool brightOk = brRan && brightHalo < 40;   // objeto claro sem emissao: sem halo
-  const bool ok = shadowOk && (pointOk || gl) && aoOk && (emOk || gl) && brightOk && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
+  const bool ok = shadowOk && (pointOk || gl) && aoOk && (emOk || gl) && brightOk && trOk && gCount > 2000 && iou > 0.85 && texOk && debug().count(Severity::Error) == 0;
   if (ok && glPending) std::printf("PENDENTE (OpenGL): sombra pontual e bloom ainda nao batem com o Vulkan; o resto passou\n");
   else std::printf(ok ? "OK\n" : "FALHA: imagem da GPU diverge do esperado\n");
   gpu.shutdown(); // libera recursos antes de destruir o dispositivo

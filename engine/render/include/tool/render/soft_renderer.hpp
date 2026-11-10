@@ -189,7 +189,8 @@ struct Mesh {
 
 // castShadow / receiveShadow: por objeto, independentes (ver lighting.hpp).
 // emissive: radiancia linear emitida pelo objeto (cor x intensidade); nao e iluminada, so soma na cor (e o bloom usa o brilho).
-struct Material { Vec3 albedo{0.8f, 0.8f, 0.8f}; f32 roughness = 0.5f; f32 metallic = 0.f; bool castShadow = true, receiveShadow = true; const Texture* albedoMap = nullptr; Vec3 emissive{0.f, 0.f, 0.f}; };
+struct Material { Vec3 albedo{0.8f, 0.8f, 0.8f}; f32 roughness = 0.5f; f32 metallic = 0.f; bool castShadow = true, receiveShadow = true; const Texture* albedoMap = nullptr; Vec3 emissive{0.f, 0.f, 0.f}; f32 opacity = 1.f; /* <1: passe transparente (mistura) */
+  Vec3 fogColor{0.6f, 0.65f, 0.7f}; f32 fogStart = 5.f, fogEnd = 50.f, fogAmount = 0.f; /* neblina por distancia; 0 = sem */ };
 
 struct Camera {
   Vec3 eye{0, 2, 6}, target{0, 0.5f, 0}, up{0, 1, 0};
@@ -213,6 +214,7 @@ public:
     w_ = std::max(1u, w); h_ = std::max(1u, h);
     const size_t n = static_cast<size_t>(w_) * h_;
     color_.assign(n * 4, 0); depth_.assign(n, 1.f);
+    tdepth_.assign(n, 1.f); tCovered_.assign(n, 0); tDirect_.assign(n, Vec3{}); tAmb_.assign(n, Vec3{}); tAlpha_.assign(n, 0.f);
     direct_.assign(n, Vec3{}); amb_.assign(n, Vec3{}); emit_.assign(n, Vec3{}); covered_.assign(n, 0); glow_.assign(n * 3, 0.f);
     depthV_.assign(n, 0.f); nrmV_.assign(n, LightPrism::Vec3{}); ao_.assign(n, 1.f);
     posW_.assign(n, LightPrism::Vec3{}); nrmW_.assign(n, LightPrism::Vec3{});
@@ -243,7 +245,8 @@ public:
     color_[0] = toByte(toSrgb(clearColor.x)); color_[1] = toByte(toSrgb(clearColor.y)); color_[2] = toByte(toSrgb(clearColor.z));
     color_[3] = clearAlpha < 0.5f ? 0 : 255;
     for (size_t i = 1; i < static_cast<size_t>(w_) * h_; ++i) std::memcpy(&color_[i * 4], &color_[0], 4); // cor de fundo: calcula 1 vez e copia
-    pending_.clear(); mats_.clear();
+    pending_.clear(); pendingT_.clear(); mats_.clear();
+    std::fill(tdepth_.begin(), tdepth_.end(), 1.f); std::fill(tCovered_.begin(), tCovered_.end(), u8{0});
     shadowOn_ = false; shadowSkip_ = false; for (auto& t : shadowTris_) t.clear(); // sombras: o chamador liga de novo com setLighting() a cada quadro
     pointOn_ = false; for (auto& t : faceTris_) t.clear();
     tris_ = shaded_ = 0;
@@ -314,7 +317,7 @@ public:
     }
     const u32 matIdx = static_cast<u32>(mats_.size());
     mats_.push_back(mat);
-    if (shadowOn_ && !shadowSkip_ && mat.castShadow) { // triangulos vistos do sol, uma lista por cascata (sem culling: sombra vale para as duas faces)
+    if (shadowOn_ && !shadowSkip_ && mat.castShadow && mat.opacity >= 1.f) { // transparentes nao projetam sombra (como na GPU) // triangulos vistos do sol, uma lista por cascata (sem culling: sombra vale para as duas faces)
       const f32 R = static_cast<f32>(shadowRes_);
       for (u32 k = 0; k < shadowCount_; ++k) {
         std::vector<Vec3> ls(m.pos.size()); // x,y em texels, z em 0..1 (convencao da LightPrism: y cresce para baixo)
@@ -334,7 +337,7 @@ public:
         }
       }
     }
-    if (pointOn_ && !pointSkip_ && mat.castShadow) { // luzes pontuais/spot: cada face de cada luz com sombra recebe os triangulos
+    if (pointOn_ && !pointSkip_ && mat.castShadow && mat.opacity >= 1.f) { // luzes pontuais/spot: cada face de cada luz com sombra recebe os triangulos
       for (size_t i = 0; i < lf_.shadowLights.size(); ++i)
         for (u32 f = 0; f < lf_.shadowLights[i].faces; ++f) addFaceCaster(m, world, lf_.shadowLights[i], f, i * kMaxPointShadowFaces + f);
     }
@@ -373,13 +376,13 @@ public:
       const V* vs[3] = {&a, &b, &c};
       for (int k = 0; k < 3; ++k) { r.iw[k] = 1.f / vs[k]->w; r.zw[k] = vs[k]->z / vs[k]->w; r.wp[k] = vs[k]->wp; r.n[k] = vs[k]->n; r.uv[k][0] = vs[k]->u; r.uv[k][1] = vs[k]->v; }
       r.mat = matIdx;
-      pending_.push_back(r);
+      (mat.opacity < 1.f ? pendingT_ : pending_).push_back(r);
     }
   }
 
   // Rasteriza os triangulos pendentes (varias threads, cada uma com uma faixa de linhas).
   void flush() const {
-    if (pending_.empty()) return;
+    if (pending_.empty() && pendingT_.empty()) return;
     flushShadow();
     const int H = static_cast<int>(h_);
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
@@ -399,6 +402,37 @@ public:
     for (u64 c : shadedPer) shaded_ += c;
     resolve();
     pending_.clear();
+    if (!pendingT_.empty()) { // transparentes: rasterizados depois do opaco, com profundidade do opaco, e misturados por cima
+      auto workT = [&](int band) {
+        const int y0 = H * band / nT, y1 = H * (band + 1) / nT - 1;
+        u64 count = 0;
+        for (const Tri& t : pendingT_) {
+          if (t.y1 < y0 || t.y0 > y1) continue;
+          rasterize(t, std::max(t.y0, y0), std::min(t.y1, y1), count, true);
+        }
+      };
+      if (nT == 1) workT(0);
+      else tool::parallelFor(static_cast<size_t>(nT), 1, [&](size_t b, size_t e) { for (size_t band = b; band < e; ++band) workT(static_cast<int>(band)); });
+      resolveTransparent();
+      pendingT_.clear();
+    }
+  }
+
+  static f32 srgbDecode(f32 v) { return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); }
+  static f32 srgbEncode(f32 v) { v = std::clamp(v, 0.f, 1.f); return v <= 0.0031308f ? 12.92f * v : 1.055f * std::pow(v, 1.f / 2.4f) - 0.055f; }
+  // Mistura as camadas transparentes sobre a cor final do opaco (no espaco sRGB, como o resto do tonemap: aproximacao).
+  void resolveTransparent() const {
+    parallelRange(static_cast<size_t>(w_) * h_, [&](size_t b, size_t e) {
+      for (size_t i = b; i < e; ++i) {
+        if (!tCovered_[i]) continue;
+        // Mistura em linear (como a GPU, que blenda no formato sRGB): decodifica, mistura e codifica de volta.
+        const LightPrism::Vec3 o = LightPrism::Reference::TonemapToSRGB(LightRig::lp(tDirect_[i] + tAmb_[i]));
+        const f32 a = std::clamp(tAlpha_[i], 0.f, 1.f);
+        u8* px = &color_[i * 4];
+        const f32 src[3] = {o.x, o.y, o.z};
+        for (int c = 0; c < 3; ++c) px[c] = toByte(srgbEncode(srgbDecode(px[c] / 255.f) * (1.f - a) + srgbDecode(src[c]) * a));
+      }
+    });
   }
 
   // Projeta os triangulos de um objeto na face f de uma luz pontual/spot (perspectiva). Triangulos com algum vertice
@@ -555,7 +589,7 @@ private:
   struct ShadowTri { f32 x[3], y[3], z[3]; f32 area; int x0, x1, y0, y1; };
   struct FaceTri { f32 x[3], y[3], iw[3]; f32 area; int x0, x1, y0, y1; };
 
-  void rasterize(const Tri& t, int ya, int yb, u64& count) const {
+  void rasterize(const Tri& t, int ya, int yb, u64& count, bool transparent = false) const {
     const Material& mat = mats_[t.mat];
     const f32 ax = t.x[0], ay = t.y[0], bx = t.x[1], by = t.y[1], cx = t.x[2], cy = t.y[2];
     for (int y = ya; y <= yb; ++y)
@@ -565,8 +599,8 @@ private:
         if (w0 < 0 || w1 < 0 || w2 < 0) continue;
         const f32 z = w0 * t.zw[0] + w1 * t.zw[1] + w2 * t.zw[2];
         const size_t di = static_cast<size_t>(y) * w_ + static_cast<size_t>(x);
-        if (z < 0 || z >= depth_[di]) continue;
-        depth_[di] = z;
+        if (transparent) { if (z < 0 || z >= depth_[di] || z >= tdepth_[di]) continue; tdepth_[di] = z; } // nao escreve no opaco
+        else { if (z < 0 || z >= depth_[di]) continue; depth_[di] = z; }
         // interpolacao com correcao de perspectiva
         const f32 p0 = w0 * t.iw[0], p1 = w1 * t.iw[1], p2 = w2 * t.iw[2], inv = 1.f / (p0 + p1 + p2);
         const Vec3 wp = (t.wp[0] * p0 + t.wp[1] * p1 + t.wp[2] * p2) * inv;
@@ -575,8 +609,8 @@ private:
           const f32 uu = (t.uv[0][0] * p0 + t.uv[1][0] * p1 + t.uv[2][0] * p2) * inv, vv = (t.uv[0][1] * p0 + t.uv[1][1] * p1 + t.uv[2][1] * p2) * inv;
           u8 tx[4]; mat.albedoMap->texel(uu, vv, tx);
           Material mm = mat; mm.albedo = {mat.albedo.x * tx[0] / 255.f, mat.albedo.y * tx[1] / 255.f, mat.albedo.z * tx[2] / 255.f};
-          store(di, shade(wp, n, mm), wp, n);
-        } else store(di, shade(wp, n, mat), wp, n);
+          emitPixel(transparent, di, shade(wp, n, mm), wp, n, mat.opacity);
+        } else emitPixel(transparent, di, shade(wp, n, mat), wp, n, mat.opacity);
         ++count;
       }
   }
@@ -608,7 +642,7 @@ private:
     if (rl > 1e-12f) Rd = {Rd.x / rl, Rd.y / rl, Rd.z / rl};
     const LightPrism::Vec3 dif = LightPrism::Ibl::EvalSh(lf_.ambient, Nl);
     const LightPrism::Vec3 spc = LightPrism::Ibl::EvalSh(lf_.ambient, Rd);
-    const LightPrism::Vec3 amb{kD.x * alb.x * dif.x + Fss.x * spc.x, kD.y * alb.y * dif.y + Fss.y * spc.y, kD.z * alb.z * dif.z + Fss.z * spc.z};
+    LightPrism::Vec3 amb{kD.x * alb.x * dif.x + Fss.x * spc.x, kD.y * alb.y * dif.y + Fss.y * spc.y, kD.z * alb.z * dif.z + Fss.z * spc.z};
     LightPrism::Vec3 col{0.f, 0.f, 0.f};                                                                       // luz direta
     // Luzes pontuais/spot: a BRDF e a janela da LightPrism; a sombra (quando a luz projeta) multiplica a contribuicao.
     for (const auto& l : lf_.points) col = col + R::EvaluatePointLight(l, s, P) * (m.receiveShadow ? pointShadowFor(LightType::Point, l.position, p, n) : 1.f);
@@ -624,9 +658,20 @@ private:
       col = col + R::EvaluateDirectionalLight(lf_.sun, s) * vis;
     }
     col = col + LightPrism::Vec3{m.emissive.x, m.emissive.y, m.emissive.z};   // emissao do proprio objeto (sem sombra nem AO)
+    if (m.fogAmount > 0.f) { // neblina: (1-f)*(direta + ambiente*AO) + f*cor; a parte do ambiente e escalada aqui (o AO vem depois)
+      const f32 d = length(p - cam_.eye);
+      const f32 f = std::clamp((d - m.fogStart) / std::max(m.fogEnd - m.fogStart, 0.001f), 0.f, 1.f) * m.fogAmount;
+      const LightPrism::Vec3 fc{m.fogColor.x, m.fogColor.y, m.fogColor.z};
+      col = col * (1.f - f) + fc * f; amb = amb * (1.f - f);
+    }
     return {{col.x, col.y, col.z}, {amb.x, amb.y, amb.z}, m.emissive};
   }
   // Guarda o pixel vencedor: luz direta, luz ambiente, distancia de view e normal de view (para o SSAO).
+  // Pixel de um triangulo: opaco vai para o buffer principal; transparente vai para a camada de mistura.
+  void emitPixel(bool transparent, size_t i, Lit c, Vec3 wp, Vec3 n, f32 alpha) const {
+    if (!transparent) { store(i, c, wp, n); return; }
+    tDirect_[i] = c.direct; tAmb_[i] = c.amb; tAlpha_[i] = alpha; tCovered_[i] = 1;
+  }
   void store(size_t i, Lit c, Vec3 wp, Vec3 n) const {
     direct_[i] = c.direct; amb_[i] = c.amb; emit_[i] = c.emit; covered_[i] = 1; glowDirty_ = true;
     posW_[i] = {wp.x, wp.y, wp.z}; nrmW_[i] = {n.x, n.y, n.z};
@@ -676,7 +721,10 @@ private:
   u32 w_ = 1, h_ = 1;
   mutable std::vector<u8> color_;
   mutable std::vector<f32> depth_;
-  mutable std::vector<Tri> pending_;
+  mutable std::vector<Tri> pending_, pendingT_;  // pendingT_: triangulos transparentes (passe depois do opaco)
+  mutable std::vector<f32> tdepth_, tAlpha_;
+  mutable std::vector<Vec3> tDirect_, tAmb_;
+  mutable std::vector<u8> tCovered_;
   std::vector<Material> mats_;
   Camera cam_; Mat4 view_, viewProj_;
   LightFrame lf_;

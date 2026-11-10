@@ -76,10 +76,11 @@ struct Editor {
   bool showHierarchy = true, showInspector = true, showConsole = true, showProfiler = true, showScene = true, showGame = true;
   bool showEditMesh = false, showPaintMesh = false;   // janelas de recursos futuros (so aviso de "em desenvolvimento")
   bool showAssets = true, showScenes = true, showNarrative = true, showSettings = true, showInputMap = false;
+  bool showSpriteUiDiagnostics = false;
   bool showEditorInfo = false, showExport = false;   // File > Editor info / Export game
   bool resetLayout = false;
   unsigned sceneLoads = 0;          // conta aberturas de cena: os avisos de desempenho esperam o carregamento acabar
-  bool lockInterface = false;  // Interface travada: abas/janelas nao saem do encaixe e os divisores nao se mexem (menu Interface)
+  bool lockInterface = true;   // Interface travada: abas/janelas nao saem do encaixe e os divisores nao se mexem (menu Interface)
   bool dockWithShift = false;  // encaixar/desencaixar janelas so segurando Shift (evita encaixes acidentais)
   bool showCulled = false;     // Scene: mostra em vermelho os objetos que a camera de jogo nao desenha
   bool logKeys = false;        // depuracao: escreve no Console cada tecla e texto digitado
@@ -245,7 +246,7 @@ struct Editor {
   // Resolucao do jogo (janela Game): 0 = acompanha a janela x escala; 1..4 = fixa (640x360, 1280x720, 1920x1080, 2560x1440); 5 = personalizada
   int resMode = 0, customW = 1280, customH = 720;
   bool pixelFilter = false; // ampliar a imagem com pixels nitidos (nearest) em vez de suave (linear)
-  int fpsMode = 0;          // 0 = VSync; 1 = 30; 2 = 60; 3 = 120; 4 = sem limite
+  int fpsMode = 4;          // 0 = VSync; 1 = 30; 2 = 60; 3 = 120; 4 = sem limite (padrao)
   // Ocioso: sem evento (mouse, teclado, janela) ha 3 quadros e sem Play, as vistas 3D nao sao redesenhadas (economiza GPU/CPU).
   int idleFrames = 0;
   // Ocioso = nada muda na tela: sem Play, sem emissor de particulas animando (ou pausado) e sem interacao ha 3 quadros.
@@ -295,7 +296,10 @@ struct Editor {
 #ifdef TOOL_EDITOR_GPU
     tool::rhi::DeviceInfo info; info.width = 640; info.height = 360;
     info.validation = std::getenv("TOOL_GPU_VALIDATION") != nullptr; // depuracao: TOOL_GPU_VALIDATION=1 liga as camadas de validacao (mais lento)
-    info.backend = choice == 1 ? tool::rhi::Backend::Vulkan : choice == 2 ? tool::rhi::Backend::GLES : tool::rhi::Backend::D3D12;
+    info.backend = choice == 1 ? tool::rhi::Backend::Vulkan
+                  : choice == 2 ? tool::rhi::Backend::GLES
+                  : choice == 3 ? tool::rhi::Backend::D3D12
+                                : tool::rhi::Backend::D3D11;
     if (info.backend == tool::rhi::Backend::GLES) {
 #if defined(_WIN32)
       // Windows: o Diligent cria o contexto OpenGL sozinho a partir do HWND. A janela NAO pode ter sido
@@ -310,7 +314,7 @@ struct Editor {
 #endif
       if (!gpuWin) { apiStatus = std::string("OpenGL: could not create the context window: ") + SDL_GetError(); apiChoice = 0; return; }
     }
-    if (info.backend == tool::rhi::Backend::D3D12) {
+    if (info.backend == tool::rhi::Backend::D3D12 || info.backend == tool::rhi::Backend::D3D11) {
 #if defined(_WIN32)
       gpuWin = SDL_CreateWindow("gpu", 64, 64, SDL_WINDOW_HIDDEN);
 #endif
@@ -760,6 +764,7 @@ struct Editor {
 
 private:
   const tool::u8* renderScene(const tool::Camera& cam, int w, int h, bool highlight, int vi) {
+    ZoneTimer prepareTimer(prof, Zone::ScenePrepare);
     tool::SoftRenderer& renderer = vi ? rendererGame : rendererScene;   // renderizador e assinatura da vista (0 = Scene, 1 = Game)
     std::vector<tool::Light> lights; tool::Vec3 ambient; int sunIdx = -1;
     // Com skybox ligado, o fundo sai com alfa 0 (o skybox e pintado depois, em renderView). 2D nao usa skybox.
@@ -783,9 +788,15 @@ private:
     // Emissao do objeto: cor x intensidade (linear). Vale para todas as partes de um modelo.
     // Sem "Enable emission" o objeto nao emite: nem cor extra nem brilho (bloom).
     auto emissionOf = [](const MeshRenderer& mr) { const float k = mr.emissionOn ? mr.emissiveIntensity : 0.f; return tool::Vec3{mr.emissive[0] * k, mr.emissive[1] * k, mr.emissive[2] * k}; };
+    // Neblina por objeto: sem "Fog" ligado a quantidade fica 0 e o objeto nao recebe neblina.
+    auto applyFog = [](tool::Material& m, const MeshRenderer& mr) {
+      m.fogAmount = mr.fogOn ? mr.fogAmount : 0.f;
+      m.fogColor = {mr.fogColor[0], mr.fogColor[1], mr.fogColor[2]};
+      m.fogStart = mr.fogStart; m.fogEnd = mr.fogEnd;
+    };
     auto material = [&](tool::Entity e, const MeshRenderer& mr) {
       tool::Material m{{mr.color[0], mr.color[1], mr.color[2]}, mr.roughness, mr.metallic, mr.castShadow, mr.receiveShadow};
-      m.emissive = emissionOf(mr);
+      m.emissive = emissionOf(mr); m.opacity = mr.opacity; applyFog(m, mr);
       if (mr.texture[0]) m.albedoMap = lib.texture(mr.texture);
       if (highlight && e == selected) m.albedo = m.albedo * 1.25f;
       return m;
@@ -801,7 +812,7 @@ private:
           const tool::assets::ModelPart& part = lm->data.parts[static_cast<size_t>(pi)];
           tool::Material m = part.material;
           m.castShadow = mr.castShadow; m.receiveShadow = mr.receiveShadow;
-          m.emissive = emissionOf(mr);
+          m.emissive = emissionOf(mr); m.opacity = mr.opacity; applyFog(m, mr);
           if (po) for (const PartOverride& ov : po->items) if (ov.part == pi) { m.albedo = {ov.color[0], ov.color[1], ov.color[2]}; m.roughness = ov.roughness; m.metallic = ov.metallic; }
           if (mr.texture[0]) m.albedoMap = lib.texture(mr.texture);
           if (highlight && e == selected) m.albedo = m.albedo * 1.25f;
@@ -884,8 +895,10 @@ private:
         }
       });
     };
+    prepareTimer.stop();
     ++prof.counters.views; prof.counters.pixels += static_cast<tool::u64>(w) * static_cast<tool::u64>(h);
     if (apiActive != 0) {
+      ZoneTimer gpuTimer(prof, Zone::GpuRender);
       // Protecao: se a GPU reportar erros em quadros seguidos (ex.: memoria esgotada, driver instavel), volta para a CPU
       // em vez de congelar o editor com milhares de mensagens. O motivo fica em Settings > Graphics e no Console.
       const size_t errBefore = tool::debug().count(tool::Severity::Error);
@@ -912,7 +925,11 @@ private:
         gpuDev->present();
         tool::u32 rw = 0, rh = 0;
         // Leitura sem esperar a GPU: o quadro lido pode ser de 1 ou 2 quadros atras (ver readTextureAsync).
-        const int rd = gpu.readbackAsync(vi, gpuPixels[vi], rw, rh);
+        int rd = 0;
+        {
+          ZoneTimer readbackTimer(prof, Zone::GpuReadback);
+          rd = gpu.readbackAsync(vi, gpuPixels[vi], rw, rh);
+        }
         if (rd == 1) { gpuPixW[vi] = static_cast<int>(rw); gpuPixH[vi] = static_cast<int>(rh); }
         if (tool::debug().count(tool::Severity::Error) > errBefore) {
           if (++gpuBadFrames >= 5) { applyApi(0); apiStatus = "Software (CPU) - the GPU reported errors in several frames in a row (see Console)"; gpuBadFrames = 0; }
@@ -932,6 +949,7 @@ private:
       }
       tris = 0; draws = 0; casters = 0; // a CPU vai contar de novo
     }
+    ZoneTimer cpuTimer(prof, Zone::CpuRender);
     // Um renderizador e uma assinatura de sombra por vista: Scene e Game nao apagam o shadow map uma da outra.
     if (static_cast<int>(renderer.width()) != w || static_cast<int>(renderer.height()) != h) renderer.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
     renderer.begin(cam, {0.08f, 0.09f, 0.11f}, bgAlpha);

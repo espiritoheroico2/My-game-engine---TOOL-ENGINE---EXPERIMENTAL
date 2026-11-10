@@ -151,8 +151,9 @@ inline int runSelfTest(const std::string& samplesDir) {
   check(!renameAsset(ed, "Assets/caixa_azul.glb", "bad/name").empty(), "invalid new name is rejected");
   { // emissao: "Enable emission" sobrevive ao salvar; cena antiga (sem o campo) com intensidade > 0 continua emitindo
     tool::Entity me = ed.make("EmissionTest", true);
-    MeshRenderer mr; mr.emissiveIntensity = 3.f; mr.emissionOn = true; ed.scene.world().add<MeshRenderer>(me, mr);
+    MeshRenderer mr; mr.emissiveIntensity = 3.f; mr.emissionOn = true; mr.opacity = 0.4f; ed.scene.world().add<MeshRenderer>(me, mr);
     tool::Entity mb = loadEntity(ed.scene, saveEntity(ed.scene, me));
+    check(ed.scene.world().get<MeshRenderer>(mb) && std::abs(ed.scene.world().get<MeshRenderer>(mb)->opacity - 0.4f) < 1e-4f, "object opacity survives save and load");
     check(ed.scene.world().get<MeshRenderer>(mb) && ed.scene.world().get<MeshRenderer>(mb)->emissionOn, "emission flag survives save and load");
     tool::Json old = saveEntity(ed.scene, me);   // formato anterior: sem o campo
     { tool::Json mesh = old["mesh"]; mesh.erase("emissionOn"); old.set("mesh", mesh); }
@@ -162,6 +163,19 @@ inline int runSelfTest(const std::string& samplesDir) {
     { tool::Json mesh = off["mesh"]; mesh.erase("emissionOn"); mesh.set("emissiveIntensity", 0.0); off.set("mesh", mesh); }
     tool::Entity fb = loadEntity(ed.scene, off);
     check(ed.scene.world().get<MeshRenderer>(fb) && !ed.scene.world().get<MeshRenderer>(fb)->emissionOn, "old scene with zero intensity does not emit");
+  }
+  { // neblina por objeto: liga/valores sobrevivem ao salvar; cena antiga nao tem neblina; quantidade fica em 0..1
+    tool::Entity fe = ed.make("FogTest", true);
+    MeshRenderer fr; fr.fogOn = true; fr.fogColor[0] = 0.1f; fr.fogColor[1] = 0.2f; fr.fogColor[2] = 0.3f; fr.fogStart = 8.f; fr.fogEnd = 80.f; fr.fogAmount = 0.5f;
+    ed.scene.world().add<MeshRenderer>(fe, fr);
+    tool::Entity fl = loadEntity(ed.scene, saveEntity(ed.scene, fe));
+    const MeshRenderer* fg = ed.scene.world().get<MeshRenderer>(fl);
+    check(fg && fg->fogOn && std::abs(fg->fogColor[2] - 0.3f) < 1e-4f && std::abs(fg->fogStart - 8.f) < 1e-4f && std::abs(fg->fogEnd - 80.f) < 1e-4f && std::abs(fg->fogAmount - 0.5f) < 1e-4f, "fog settings survive save and load");
+    tool::Json oldFog = saveEntity(ed.scene, fe);
+    { tool::Json mesh = oldFog["mesh"]; mesh.erase("fogOn"); mesh.erase("fogAmount"); mesh.set("fogAmount", 7.0); oldFog.set("mesh", mesh); }
+    tool::Entity fo = loadEntity(ed.scene, oldFog);
+    const MeshRenderer* fz = ed.scene.world().get<MeshRenderer>(fo);
+    check(fz && !fz->fogOn && fz->fogAmount == 1.f, "old scene without fog stays without fog; amount is clamped to 0..1");
   }
   { // luz pontual com sombra: o flag tem que sobreviver ao salvar/carregar (antes o editor o zerava)
     tool::Entity le = ed.make("ShadowLightTest", true);
@@ -328,7 +342,11 @@ inline int runSelfTest(const std::string& samplesDir) {
     ed.projSettings.link("camPrincipal", "Principal");
     check(ed.principalCameras().size() >= 1 && ed.isPrincipal(ca), "a camera tagged with a Principal alias counts as Principal"); }
   { editor::FrameProfiler pf; for (int i = 0; i < 50; ++i) { pf.beginFrame(); pf.add(Zone::Ui, 2.f); } const auto st = pf.stats();
-    check(st.avg >= 0.f && pf.zoneAvg(Zone::Ui) > 1.f, "profiler records zones"); }
+    check(st.avg >= 0.f && pf.zoneAvg(Zone::Ui) > 1.f, "profiler records zones");
+    pf.frameStart = editor::FrameProfiler::Clock::now() - std::chrono::milliseconds(20);
+    pf.add(Zone::Present, 5.f); pf.addWait(7.f); pf.beginFrame();
+    check(pf.workMs[static_cast<size_t>(pf.head - 1)] >= 6.f && pf.workMs[static_cast<size_t>(pf.head - 1)] <= 12.f,
+          "profiler excludes frame limiter, idle wait and present from CPU work"); }
   ed.toggleFreeFly(); const tool::Vec3 p0 = ed.flyPos; ed.flyMove(1.f, 1.f, 0.f, 0.f, false);
   check(tool::length(ed.flyPos - p0) > 1.f, "free navigation moves the camera"); ed.toggleFreeFly(); check(!ed.freeFly, "free navigation toggles off");
 

@@ -8,9 +8,30 @@
 - GPU: passe de emissao com o mesmo vertex shader e profundidade do desenho principal. O halo nao aparece atras de paredes. Teste no gpu_test (Vulkan): halo da GPU 2591, da CPU 2614; objeto branco sem emissao: halo 0.
 - CPU: o brilho vem do buffer de emissao de cada pixel (applyGlowRgba8), nao mais de limiar sobre a imagem.
 - OpenGL: passe de emissao gerado pelo gerador de GLSL (pbr.emi). Nao testado em GL aqui.
-- Selftest do editor: 227 checks (flag sobrevive a salvar/carregar; migracao de cena antiga).
+- Selftest do editor: 230 checks (flag sobrevive a salvar/carregar; migracao de cena antiga; neblina sobrevive a salvar/carregar).
 
-Pendente desta versao: canal alpha no mesh, fog/neblina por distancia por objeto, "use object as light".
+**Transparencia por objeto (Opacity)**
+- Inspector > Opacity (0 a 1). Objetos com opacidade abaixo de 1 sao desenhados depois dos opacos e misturados sobre eles, do fundo para a frente. Objetos transparentes nao projetam sombra.
+- Limitacao: cada pixel mostra so a camada transparente mais proxima. Nao ha ordenacao de varias camadas transparentes sobrepostas no mesmo pixel.
+- Mistura feita em linear nos dois renderizadores (CPU e GPU). Teste no gpu_test (Vulkan): objeto a 40%: centro 159 na GPU e 159 na CPU, igual ao fundo de referencia.
+
+**Neblina por objeto (Fog)**
+- Inspector > Enable fog: cor, quantidade (0 a 1), inicio e fim da neblina pela distancia da camera. Antes do inicio nao ha neblina; depois do fim entra a quantidade total.
+- Aplicada no renderizador por software e no GPU (constantes do objeto e pixel shader pbr.hlsl). Os shaders GLSL foram regenerados com tools/shaders/build_glsl.py.
+- Ainda sem teste de paridade CPU/GPU para a neblina no gpu_test.
+
+**SpriteUI (primeira tela experimental)**
+- `Window > SpriteUI diagnostics` cria um painel com layout, hit testing, roteamento de input e extracao de `FramePacket` do SpriteUI; mostra FPS, Scene e PostFX e permite congelar as metricas.
+- O painel compartilha o loop SDL, o renderer e a janela existentes. O `FramePacket` de retangulos solidos e desenhado pelo SDL; ImGui continua nas demais telas. Ainda nao e o backend SpriteUI de producao nem uma substituicao do ImGui.
+- A dependencia usa commit fixo e pode ser desligada com `TOOL_WITH_SPRITEUI=OFF`.
+
+**Janelas do editor (encaixe)**
+- Interface travada agora vem ligada por padrao. Uma migracao unica (dockLockV2) aplica isso a quem ja tinha o arquivo de configuracoes com a opcao desligada; depois disso, a escolha salva e respeitada.
+- Com a interface travada, o arrasto de janela ou aba e cancelado durante o gesto: a janela nao sai do encaixe. Antes, o travamento redockava todas as janelas no no raiz a cada quadro, juntando as abas numa so barra; isso foi removido.
+- Verificado no Xvfb: aba do Inspector arrastada para fora continuou no encaixe.
+- Campos de texto que se apagam sozinhos: ainda nao reproduzidos; nao considerar corrigido.
+
+Pendente desta versao: canal alpha no mesh, "use object as light", bloom mais forte e skybox, multi-material em mesh importado.
 
 ## 0.7.18-beta — editor de script, oclusao, ray tracing, frame time e estabilidade do editor
 

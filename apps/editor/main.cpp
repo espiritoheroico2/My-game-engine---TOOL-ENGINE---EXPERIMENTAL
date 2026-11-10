@@ -11,7 +11,7 @@
 // ToolEngine Editor - janelas ancoraveis estilo Unity (ImGui docking) + SDL3.
 // Janelas: Hierarchy, Inspector, Scene, Game, Assets, Scenes, Console, Profiler, Narrative Controller, Settings.
 // O estado esta em editor_state.hpp; Assets/Scenes em assets_panel.hpp; componentes em components.hpp.
-// Uso: tool_editor [--frames N] [--api vulkan|opengl|d3d12] [--lang pt-BR] [--tab N] [--play] [--screenshot-tab ...]
+// Uso: tool_editor [--frames N] [--api vulkan|opengl|d3d12|d3d11] [--bench-frames N] [--lang pt-BR] [--tab N] [--play] [--screenshot-tab ...]
 //   (N > 0 roda sem interacao e sai; usado nos testes automaticos)
 #include "assets_panel.hpp"
 #include <cctype>
@@ -24,6 +24,9 @@
 #include "selftest.hpp"
 #include "viewport_tools.hpp"
 #include "script_window.hpp"
+#ifdef TOOL_WITH_SPRITEUI
+#include "spriteui_diagnostics.hpp"
+#endif
 
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_sdlrenderer3.h"
@@ -257,10 +260,10 @@ void drawHierarchy(Editor& ed) {
   ImGui::SameLine();
   if (ImGui::Button(T("Delete")) && has) { if (w.has<ed_::Locked>(ed.selected)) ed.statusLine = T("Object is locked: unlock it (padlock) before deleting."); else ed.destroy(ed.selected); }
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Delete the selected object and its children (Delete key)"));
-  if (ImGui::CollapsingHeader(T("Pool demo (DeleteAndReuse)"))) {
+  if (ImGui::CollapsingHeader(T("Pool demo (Recycle)"))) {
     if (ImGui::Button(T("+ Enemy"))) ed.spawnEnemy();
     ImGui::SameLine();
-    if (ImGui::Button("DeleteAndReuse") && has) { tool::ToolObject(&ed.scene, ed.selected).DeleteAndReuse(); ed.selected = {}; }
+    if (ImGui::Button("Recycle") && has) { tool::ToolObject(&ed.scene, ed.selected).recycle(); ed.selected = {}; }
     ImGui::SameLine();
     if (ImGui::Button(T("Clear pool"))) ed.scene.flushPool();
   }
@@ -460,11 +463,22 @@ void drawInspector(Editor& ed) {
     ImGui::SliderFloat(T("Roughness"), &mr->roughness, 0.05f, 1.f); ImGui::SliderFloat(T("Metallic"), &mr->metallic, 0.f, 1.f);
     }
     // Emissao: so com "Enable emission" ligado. Com o bloom ligado (Settings > Lighting), so o que emite brilha.
+    ImGui::SliderFloat(T("Opacity"), &mr->opacity, 0.f, 1.f, "%.2f");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("1 = solid. Lower values make the object transparent: it is drawn after the solid objects and blended over them. Transparent objects do not cast shadows."));
     ImGui::Checkbox(T("Enable emission"), &mr->emissionOn);
     ImGui::BeginDisabled(!mr->emissionOn);
     ImGui::ColorEdit3(T("Emission color"), mr->emissive);
     ImGui::SliderFloat(T("Emission intensity"), &mr->emissiveIntensity, 0.f, 50.f, "%.1f");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Makes this object emit light. With Settings > Lighting > Bloom on, only emitting objects glow. 0 = does not emit."));
+    ImGui::EndDisabled();
+    // Neblina: so com "Enable fog" ligado. Escurece/clareia o objeto para a cor da neblina conforme a distancia da camera.
+    ImGui::Checkbox(T("Enable fog"), &mr->fogOn);
+    ImGui::BeginDisabled(!mr->fogOn);
+    ImGui::ColorEdit3(T("Fog color"), mr->fogColor);
+    ImGui::SliderFloat(T("Fog amount"), &mr->fogAmount, 0.f, 1.f, "%.2f");
+    ImGui::DragFloat(T("Fog start"), &mr->fogStart, 0.5f, 0.f, 1000.f, "%.1f");
+    ImGui::DragFloat(T("Fog end"), &mr->fogEnd, 0.5f, 0.f, 1000.f, "%.1f");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Fades the object towards the fog color with distance from the camera: nothing before Fog start, full amount after Fog end."));
     ImGui::EndDisabled();
     ImGui::Checkbox(T("Cast shadow"), &mr->castShadow); ImGui::SameLine(); ImGui::Checkbox(T("Receive shadow"), &mr->receiveShadow);
     }
@@ -667,17 +681,16 @@ void drawProfiler(Editor& ed) {
   p.ordered(p.workMs, buf);
   ImGui::PlotLines("##work", buf, editor::FrameProfiler::kHistory, 0, T("CPU work per frame (ms)"), 0.f, std::max(4.f, st.workAvg * 2.f), ImVec2(-1, 50));
   if (ImGui::CollapsingHeader(T("Time per zone (average ms)"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    float work = 0.f;
     if (ImGui::BeginTable("zones", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
       for (int z = 0; z < static_cast<int>(Zone::Count); ++z) {
-        const float a = p.zoneAvg(static_cast<Zone>(z)); work += a;
+        const float a = p.zoneAvg(static_cast<Zone>(z));
         ImGui::TableNextRow(); ImGui::TableNextColumn(); ImGui::TextUnformatted(T(editor::zoneName(static_cast<Zone>(z))));
         ImGui::TableNextColumn(); ImGui::Text("%.2f", static_cast<double>(a));
         ImGui::TableNextColumn(); ImGui::ProgressBar(st.avg > 0 ? std::min(1.f, a / st.avg) : 0.f, ImVec2(-1, 0), "");
       }
       ImGui::EndTable();
     }
-    ImGui::TextDisabled("%s", F("measured work: %.2f ms of %.2f ms (the rest is waiting: VSync / frame limit)", static_cast<double>(work), static_cast<double>(st.avg)).c_str());
+    ImGui::TextDisabled("%s", F("measured CPU work: %.2f ms of %.2f ms (excluding idle wait, frame limit and VSync)", static_cast<double>(st.workAvg), static_cast<double>(st.avg)).c_str());
   }
   if (ImGui::CollapsingHeader(T("Rendering"), ImGuiTreeNodeFlags_DefaultOpen)) {
     const auto& c = p.last;
@@ -1074,13 +1087,25 @@ void drawGraphicsTab(Editor& ed) {
   int pick = ed.apiRequested;
   ImGui::RadioButton("Software (CPU)", &pick, 0);
 #ifdef TOOL_EDITOR_GPU
+  bool d3d11Available = false;
   for (auto b : tool::rhi::compiledBackends()) {
     if (b == tool::rhi::Backend::Vulkan) ImGui::RadioButton("Vulkan", &pick, 1);
     else if (b == tool::rhi::Backend::GLES) ImGui::RadioButton("OpenGL", &pick, 2);
     else if (b == tool::rhi::Backend::D3D12) ImGui::RadioButton("Direct3D 12", &pick, 3); // so existe se compilado com TOOL_WITH_D3D12
+    else if (b == tool::rhi::Backend::D3D11) { ImGui::RadioButton("Direct3D 11", &pick, 4); d3d11Available = true; }
+  }
+  if (!d3d11Available) {
+    ImGui::BeginDisabled();
+    ImGui::RadioButton("Direct3D 11 (not built)", &pick, 4);
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("%s", T("Build with the 'editor-gpu-dx11' preset to enable Direct3D 11."));
   }
 #else
   ImGui::TextDisabled("%s", T("GPU backends are not available in this build (use the 'beta' preset)."));
+  ImGui::BeginDisabled();
+  ImGui::RadioButton("Direct3D 11 (not built)", &pick, 4);
+  ImGui::EndDisabled();
+  ImGui::TextDisabled("%s", T("Build with the 'editor-gpu-dx11' preset to enable Direct3D 11."));
 #endif
   if (pick != ed.apiRequested) { ed.applyApi(pick); ed.settingsDirty = true; }   // so quando o usuario muda o radio (nao a cada quadro)
   ImGui::SeparatorText(T("Quality"));
@@ -1469,6 +1494,9 @@ void drawMenu(Editor& ed, bool& quit) {
     ImGui::MenuItem(T("Settings"), nullptr, &ed.showSettings);
     ImGui::MenuItem(T("Narrative Controller"), nullptr, &ed.showNarrative);
     ImGui::MenuItem(T("Input Map"), nullptr, &ed.showInputMap);
+#ifdef TOOL_WITH_SPRITEUI
+    ImGui::MenuItem(T("SpriteUI diagnostics"), nullptr, &ed.showSpriteUiDiagnostics);
+#endif
     ImGui::MenuItem(T("Help"), "F1", &editor::helpState().open); ImGui::Separator();
     if (ImGui::MenuItem(T("Reset layout"))) ed.resetLayout = true;
     ImGui::EndMenu();
@@ -1553,15 +1581,12 @@ void keepFloatingWindowsOnScreen(const ImGuiViewport* vp) {
   }
 }
 
-// Travar interface: cancela o arrasto de janela pela barra de titulo e encaixa de volta as janelas que estiverem
-// flutuando (so as do editor: nomes com "###"). Roda a cada quadro enquanto a opcao estiver ligada.
-void lockWindows(ImGuiID dock) {
+// Travar interface: cancela o arrasto de janela (barra de titulo ou aba) enquanto ele acontece, para que a janela
+// nao saia do encaixe. Nao reencaixa nada: redocar todas as janelas no no raiz a cada quadro juntava todas as abas
+// numa unica barra e desfazia o layout. Roda a cada quadro enquanto a opcao estiver ligada.
+void lockWindows() {
   ImGuiContext& g = *ImGui::GetCurrentContext();
   if (g.MovingWindow) { ImGui::ClearActiveID(); g.MovingWindow = nullptr; }
-  for (ImGuiWindow* win : g.Windows) {
-    if (!win->WasActive || win->DockIsActive || (win->Flags & ImGuiWindowFlags_Popup) || !std::strstr(win->Name, "###")) continue;
-    ImGui::DockBuilderDockWindow(win->Name, dock);
-  }
 }
 
 // Layout padrao estilo Unity: hierarquia/cenas a esquerda, inspetor a direita, assets/console embaixo, Scene+Game no centro.
@@ -1596,7 +1621,7 @@ void saveSettings(Editor& ed) {
   j.set("graphicsApi", ed.apiRequested);
   j.set("resMode", ed.resMode); j.set("customW", ed.customW); j.set("customH", ed.customH); j.set("pixelFilter", ed.pixelFilter); j.set("fpsMode", ed.fpsMode);
   j.set("upscaleMode", ed.upscaleMode); j.set("aaMode", ed.aaMode);
-  j.set("lockInterface", ed.lockInterface); j.set("dockWithShift", ed.dockWithShift);
+  j.set("lockInterface", ed.lockInterface); j.set("dockWithShift", ed.dockWithShift); j.set("dockLockV2", true);
   j.set("renderScaleSet", ed.renderScaleSet); if (ed.renderScaleSet) j.set("renderScale", static_cast<double>(ed.renderScale));
   j.set("lastScene", ed.sceneInfo.name);
   { std::error_code ec; j.set("lastProject", std::filesystem::absolute(ed.project.root, ec).string()); }
@@ -1614,9 +1639,12 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
       ed.showGridScene = editor::ser::flag(*j, "showGridScene", true); ed.showGridGame = editor::ser::flag(*j, "showGridGame", false); ed.showGizmos = editor::ser::flag(*j, "showGizmos", true);
       ed.resMode = std::clamp(static_cast<int>(editor::ser::num(*j, "resMode", 0.f)), 0, 5);
       ed.customW = static_cast<int>(editor::ser::num(*j, "customW", 1280.f)); ed.customH = static_cast<int>(editor::ser::num(*j, "customH", 720.f));
-      ed.pixelFilter = editor::ser::flag(*j, "pixelFilter", false); ed.fpsMode = std::clamp(static_cast<int>(editor::ser::num(*j, "fpsMode", 0.f)), 0, 4);
+      ed.pixelFilter = editor::ser::flag(*j, "pixelFilter", false); ed.fpsMode = std::clamp(static_cast<int>(editor::ser::num(*j, "fpsMode", 4.f)), 0, 4);
       ed.upscaleMode = std::clamp(static_cast<int>(editor::ser::num(*j, "upscaleMode", 2.f)), 0, 3); ed.aaMode = std::clamp(static_cast<int>(editor::ser::num(*j, "aaMode", 0.f)), 0, 1);
-      ed.lockInterface = editor::ser::flag(*j, "lockInterface", false); ed.dockWithShift = editor::ser::flag(*j, "dockWithShift", false);
+      // Migracao unica (dockLockV2): arquivos antigos gravaram lockInterface=false por padrao; com a interface travada
+      // como padrao, janelas nao saem mais do encaixe. Depois disso, a escolha salva pelo usuario e respeitada.
+      ed.lockInterface = j->has("dockLockV2") ? editor::ser::flag(*j, "lockInterface", true) : true;
+      ed.dockWithShift = editor::ser::flag(*j, "dockWithShift", false);
       if (editor::ser::flag(*j, "renderScaleSet", false)) { ed.renderScaleSet = true; ed.renderScale = std::clamp(editor::ser::num(*j, "renderScale", 1.f), 0.25f, 2.f); }
       api = static_cast<int>(editor::ser::num(*j, "graphicsApi", 0.f)); lastScene = (*j)["lastScene"].asString(); lastProject = (*j)["lastProject"].asString();
     }
@@ -1667,16 +1695,18 @@ int main(int argc, char** argv) {
   int maxFrames = 0; int startApi = -1; bool startPlaying = false, selfTest = false, playerMode = false;
   long long ecsCount = 0;   // --ecs N: benchmark de N esferas (ver abaixo)
   long long voxelCount = 0; // --voxel N: benchmark de N chunks de terreno (16x16x16 blocos cada)
+  int benchFrames = 300;    // --bench-frames N: quadros medidos apos aquecimento
   int mapSide = 0;          // --map N: mapa de N x N chunks de terreno, centrado na origem (ver Criar > Test map of chunks)
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--map") == 0) mapSide = std::atoi(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--frames") == 0) maxFrames = std::atoi(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--ecs") == 0) ecsCount = std::atoll(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--voxel") == 0) voxelCount = std::atoll(argv[i + 1]);
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-frames") == 0) benchFrames = std::clamp(std::atoi(argv[i + 1]), 1, 10000);
   const bool headless = maxFrames > 0 || ecsCount > 0 || voxelCount > 0;   // sem dialogo de projeto, sem gravar cena/configuracoes
   std::string projectArg;   // --project <pasta>: abre esse projeto direto, sem a janela de inicio
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--project") == 0) projectArg = argv[i + 1];
   if ((ecsCount > 0 || voxelCount > 0 || mapSide > 0) && projectArg.empty()) { std::fprintf(stderr, "--ecs/--voxel precisam de --project <pasta de teste> (nao grava o projeto)\n"); return 1; }
-  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--api") == 0) startApi = std::strcmp(argv[i + 1], "vulkan") == 0 ? 1 : std::strcmp(argv[i + 1], "opengl") == 0 ? 2 : std::strcmp(argv[i + 1], "d3d12") == 0 ? 3 : 0;
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--api") == 0) startApi = std::strcmp(argv[i + 1], "vulkan") == 0 ? 1 : std::strcmp(argv[i + 1], "opengl") == 0 ? 2 : std::strcmp(argv[i + 1], "d3d12") == 0 ? 3 : std::strcmp(argv[i + 1], "d3d11") == 0 ? 4 : 0;
   for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--play") == 0) startPlaying = true; if (std::strcmp(argv[i], "--selftest") == 0) selfTest = true; if (std::strcmp(argv[i], "--player") == 0) playerMode = true; }
   std::string startLang, startTheme, startScene, focusWin, selectName; int startTab = -1; bool showInputMapAtStart = false; std::string narrativeFile;
   for (int i = 1; i + 1 < argc; ++i) {
@@ -1699,7 +1729,7 @@ int main(int argc, char** argv) {
   SDL_Window* window = SDL_CreateWindow("ToolEngine Editor", 1600, 900, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, maxFrames > 0 ? "software" : nullptr) : nullptr;
   if (!window || !renderer) { std::fprintf(stderr, "window/renderer: %s\n", SDL_GetError()); return 1; }
-  SDL_SetRenderVSync(renderer, ecsCount > 0 ? 0 : 1);   // --ecs: sem vsync, para medir o custo real do quadro
+  SDL_SetRenderVSync(renderer, 0); // o limite so e ativado se o usuario selecionar VSync ou um FPS fixo
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
@@ -1800,7 +1830,7 @@ int main(int argc, char** argv) {
   if (!narrativeFile.empty()) ed.narrative.open(narrativeFile);
   if (startPlaying) ed.startPlay();
   // --ecs N: benchmark sem vsync. Cria N esferas (como "test ECS: N"), mede o tempo de cada quadro depois do nascimento
-  // e imprime media, p50, p95 e maximo. Sai sozinho ao fim de 300 quadros medidos.
+  // e imprime media, p50, p95 e maximo. Sai sozinho ao fim de benchFrames quadros medidos.
   if (ecsCount > 0) ed.startEcsTest(ecsCount);
   if (mapSide > 0) ed.generateChunkMap(mapSide);
   if (voxelCount > 0) {   // chunks em grade quadrada, todos com terreno
@@ -1813,7 +1843,12 @@ int main(int argc, char** argv) {
   int frame = 0, layoutFocus = 0;
   const Uint64 t0 = SDL_GetTicks();
   const bool bench = ecsCount > 0 || voxelCount > 0;
-  std::vector<double> benchMs; bool benchArmed = false;
+  std::vector<double> benchMs;
+  std::array<double, static_cast<size_t>(editor::Zone::Count)> benchZoneMs{};
+  bool benchArmed = false;
+#ifdef TOOL_WITH_SPRITEUI
+  editor::SpriteUiDiagnostics spriteUiDiagnostics;
+#endif
   while (!quit) {
     const Uint64 frameStart = SDL_GetTicksNS();
     if (ed.fpsDirty && renderer) { SDL_SetRenderVSync(renderer, ed.fpsMode == 0 && !headless ? 1 : 0); ed.fpsDirty = false; }
@@ -1822,14 +1857,28 @@ int main(int argc, char** argv) {
     SDL_Event e;
     // Ocioso: espera ate 16 ms pelo proximo evento (em vez de girar o quadro sem parar). O evento volta para a fila.
     // A espera vem ANTES da zona de medicao: nao e trabalho e nao deve aparecer como "Events + input".
-    if (ed.viewsIdle() && !headless) { SDL_Event waited; if (SDL_WaitEventTimeout(&waited, 16)) SDL_PushEvent(&waited); }
-    std::unique_ptr<editor::ZoneTimer> zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Events); // um cronometro de cada vez
+    if (ed.viewsIdle() && !headless) {
+      const auto waitStart = editor::FrameProfiler::Clock::now();
+      SDL_Event waited;
+      if (SDL_WaitEventTimeout(&waited, 16)) SDL_PushEvent(&waited);
+      ed.prof.addWait(std::chrono::duration<float, std::milli>(editor::FrameProfiler::Clock::now() - waitStart).count());
+    }
+    editor::ZoneTimer zone(ed.prof, editor::Zone::Events);
     int nEvents = 0;
+#ifdef TOOL_WITH_SPRITEUI
+    spriteUiDiagnostics.beginFrame();
+#endif
     while (SDL_PollEvent(&e)) {
       // Movimento do mouse sem botao (so passar por cima) nao conta como atividade: senao a cena nunca fica ociosa
       // e cada pixel de mouse refaz as duas vistas por 3 quadros. A interface continua redesenhando a cada quadro.
       if (!(e.type == SDL_EVENT_MOUSE_MOTION && e.motion.state == 0 && !ed.freeFly)) ++nEvents;
+#ifdef TOOL_WITH_SPRITEUI
+      const bool spriteUiHandled =
+          spriteUiDiagnostics.handleEvent(e, ed.showSpriteUiDiagnostics);
+      if (!spriteUiHandled) ImGui_ImplSDL3_ProcessEvent(&e);
+#else
       ImGui_ImplSDL3_ProcessEvent(&e);
+#endif
       if (ed.logKeys && (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP))
         tool::logInfo(std::string("[keys] ") + (e.type == SDL_EVENT_KEY_DOWN ? "down " : "up ") + SDL_GetKeyName(e.key.key) + (e.key.repeat ? " (repeat)" : "") + (ImGui::GetIO().WantTextInput ? " [text field]" : ""));
       if (ed.logKeys && e.type == SDL_EVENT_TEXT_INPUT) tool::logInfo(std::string("[keys] text '") + (e.text.text ? e.text.text : "") + "'");
@@ -1847,7 +1896,7 @@ int main(int argc, char** argv) {
       if (inp.MouseDown[1] && !(mb & SDL_BUTTON_RMASK)) inp.AddMouseButtonEvent(1, false);
       if (inp.MouseDown[2] && !(mb & SDL_BUTTON_MMASK)) inp.AddMouseButtonEvent(2, false);
     }
-    zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Update);
+    zone.restart(editor::Zone::Update);
     ed.time = static_cast<double>(SDL_GetTicks() - t0) / 1000.0;
     ed.scene.setClock(ed.time);
     ed.scene.collectPool(ed.time);
@@ -1862,7 +1911,7 @@ int main(int argc, char** argv) {
         if (ed.freeFly) ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse; else ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
       }
     }
-    zone.reset();
+    zone.stop();
     const auto panelsStart = editor::FrameProfiler::Clock::now();
 
     ImGui_ImplSDLRenderer3_NewFrame(); ImGui_ImplSDL3_NewFrame(); ImGui::NewFrame();
@@ -1892,7 +1941,7 @@ int main(int argc, char** argv) {
       }
       ImGui::GetIO().ConfigDockingWithShift = ed.dockWithShift;          // encaixe so com Shift, se ligado
       applyLayoutLock(ImGui::DockBuilderGetNode(dock), ed.lockInterface); // travar layout, se ligado (cada quadro)
-      if (ed.lockInterface) lockWindows(dock);
+      if (ed.lockInterface) lockWindows();
       keepFloatingWindowsOnScreen(ImGui::GetMainViewport());
       const bool focusTabs = layoutFocus > 0 && --layoutFocus == 0; // seleciona as abas ativas do layout padrao (Inspector, Scene, Assets)
       if (ed.showHierarchy) drawHierarchy(ed);
@@ -1922,15 +1971,28 @@ int main(int argc, char** argv) {
       const float inner = ed.prof.cur[static_cast<int>(editor::Zone::SceneRender)] + ed.prof.cur[static_cast<int>(editor::Zone::GameRender)] + ed.prof.cur[static_cast<int>(editor::Zone::PostFx)] + ed.prof.cur[static_cast<int>(editor::Zone::Sky)];
       ed.prof.add(editor::Zone::Hierarchy, std::max(0.f, total - inner));
     }
-    zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Ui);
+    zone.restart(editor::Zone::Ui);
     ImGui::Render();
     if (!headless && !playerMode && (ed.themeDirty || ed.langDirty || ed.settingsDirty) && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) { saveSettings(ed); ed.themeDirty = ed.langDirty = ed.settingsDirty = false; }
 
     { const ImVec4 bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg); SDL_SetRenderDrawColor(renderer, static_cast<Uint8>(bg.x * 255), static_cast<Uint8>(bg.y * 255), static_cast<Uint8>(bg.z * 255), 255); }
     SDL_RenderClear(renderer);
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
-    zone = std::make_unique<editor::ZoneTimer>(ed.prof, editor::Zone::Present);
+#ifdef TOOL_WITH_SPRITEUI
+    if (!headless && !playerMode && ed.showSpriteUiDiagnostics) {
+      const auto stats = ed.prof.stats();
+      if (!spriteUiDiagnostics.draw(
+              renderer, window, ed.showSpriteUiDiagnostics, stats.fps,
+              ed.prof.cur[static_cast<int>(editor::Zone::SceneRender)],
+              ed.prof.cur[static_cast<int>(editor::Zone::PostFx)])) {
+        tool::logError(std::string("SpriteUI diagnostics render failed: ") + SDL_GetError());
+        ed.showSpriteUiDiagnostics = false;
+      }
+    }
+#endif
+    zone.restart(editor::Zone::Present);
     SDL_RenderPresent(renderer);
+    zone.stop();
     tool::debug().endFrame();
     { static editor::PerfWarnings perfWarn; static unsigned seenLoads = 0;
       if (ed.sceneLoads != seenLoads) { seenLoads = ed.sceneLoads; perfWarn.quietFor(240); } // cena nova: compila shaders e cria pipelines
@@ -1938,9 +2000,12 @@ int main(int argc, char** argv) {
     if (ed.fpsMode >= 1 && ed.fpsMode <= 3 && !headless) { // limite manual de FPS (30/60/120): espera o que sobrar do quadro
       static const Uint64 target[4] = {0, 1000000000ull / 30, 1000000000ull / 60, 1000000000ull / 120};
       const Uint64 spent = SDL_GetTicksNS() - frameStart;
-      if (spent < target[ed.fpsMode]) SDL_DelayNS(target[ed.fpsMode] - spent);
+      if (spent < target[ed.fpsMode]) {
+        const auto waitStart = editor::FrameProfiler::Clock::now();
+        SDL_DelayNS(target[ed.fpsMode] - spent);
+        ed.prof.addWait(std::chrono::duration<float, std::milli>(editor::FrameProfiler::Clock::now() - waitStart).count());
+      }
     }
-    zone.reset();
     ++frame; if (maxFrames > 0 && frame >= maxFrames) quit = true;
     if (bench) {
       bool armed = false;
@@ -1949,13 +2014,14 @@ int main(int argc, char** argv) {
       if (voxelCount > 0 && frame == 10) benchArmed = true;   // chunks nao tem nascimento: mede a partir do 10o quadro
       if (benchArmed && !armed) {   // nascimento terminou: mede os proximos quadros
         benchMs.push_back(static_cast<double>(SDL_GetTicksNS() - frameStart) / 1e6);
-        if (benchMs.size() >= 300) {
+        for (size_t z = 0; z < benchZoneMs.size(); ++z) benchZoneMs[z] += ed.prof.cur[z];
+        if (benchMs.size() >= static_cast<size_t>(benchFrames)) {
           std::vector<double> s = benchMs; std::sort(s.begin(), s.end());
           double sum = 0; for (double v : s) sum += v;
           std::printf("ECS bench: %s, %zu bodies, %zu frames\n", ecsCount > 0 ? (std::to_string(ecsCount) + " spheres").c_str() : (std::to_string(voxelCount) + " voxel chunks").c_str(), ed.play.ents.size(), s.size());
           std::printf("ECS bench: avg %.2f ms (%.1f fps), p50 %.2f ms, p95 %.2f ms, max %.2f ms\n", sum / s.size(), 1000.0 * s.size() / sum,
                       s[s.size() / 2], s[s.size() * 95 / 100], s.back());
-          for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::printf("ECS bench:   %-34s %7.2f ms\n", editor::zoneName(static_cast<editor::Zone>(z)), static_cast<double>(ed.prof.zoneAvg(static_cast<editor::Zone>(z))));
+          for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::printf("ECS bench:   %-34s %7.2f ms\n", editor::zoneName(static_cast<editor::Zone>(z)), benchZoneMs[static_cast<size_t>(z)] / s.size());
           std::printf("ECS bench:   last frame: %llu draws, %llu triangles, %llu culled\n", static_cast<unsigned long long>(ed.prof.last.draws), static_cast<unsigned long long>(ed.prof.last.tris), static_cast<unsigned long long>(ed.prof.last.culled));
           quit = true;
         }

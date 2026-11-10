@@ -554,6 +554,14 @@ No object with this name: uses this object.	Nenhum objeto com este nome: usa est
 Emission color	Cor da emissão	Color de emisión
 Emission intensity	Intensidade da emissão	Intensidad de emisión
 Enable emission	Ativar emissão	Activar emisión
+Enable fog	Ativar neblina	Activar niebla
+Fog color	Cor da neblina	Color de niebla
+Fog amount	Quantidade de neblina	Cantidad de niebla
+Fog start	Início da neblina	Inicio de la niebla
+Fog end	Fim da neblina	Fin de la niebla
+Fades the object towards the fog color with distance from the camera: nothing before Fog start, full amount after Fog end.	Esmaece o objeto para a cor da neblina conforme a distância da câmera: nada antes do Início da neblina, quantidade total depois do Fim da neblina.	Desvanece el objeto hacia el color de niebla según la distancia a la cámara: nada antes del Inicio de la niebla, cantidad total después del Fin de la niebla.
+Opacity	Opacidade	Opacidad
+1 = solid. Lower values make the object transparent: it is drawn after the solid objects and blended over them. Transparent objects do not cast shadows.	1 = sólido. Valores menores deixam o objeto transparente: ele é desenhado depois dos sólidos e misturado sobre eles. Objetos transparentes não projetam sombra.	1 = sólido. Valores menores hacen el objeto transparente: se dibuja después de los sólidos y se mezcla sobre ellos. Los objetos transparentes no proyectan sombra.
 Bloom (glow of emissive objects)	Bloom (brilho de objetos emissivos)	Bloom (resplandor de objetos emisivos)
 Only objects with Enable emission glow (Inspector > Emission). Other bright surfaces do not bloom. GPU and software renderer.	Só objetos com Ativar emissão brilham (Inspetor > Emissão). Outras superfícies claras não geram bloom. Renderizador GPU e por software.	Solo los objetos con Activar emisión resplandecen (Inspector > Emisión). Otras superficies brillantes no generan bloom. Renderizador GPU y por software.
 Makes this object emit light. With Settings > Lighting > Bloom on, only emitting objects glow. 0 = does not emit.	Faz este objeto emitir luz. Com Configurações > Iluminação > Bloom ligado, só objetos emissivos brilham. 0 = não emite.	Hace que este objeto emita luz. Con Configuración > Iluminación > Bloom activado, solo los objetos emisivos brillan. 0 = no emite.

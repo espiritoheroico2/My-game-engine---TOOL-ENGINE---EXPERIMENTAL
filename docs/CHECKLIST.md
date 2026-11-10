@@ -2,6 +2,11 @@
 
 Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.md`.
 
+### SpriteUI (migracao incremental em andamento)
+- [x] Painel experimental de diagnostico em `Window > SpriteUI diagnostics` (layout, input e extracao de FramePacket)
+- [~] Geometria solida pelo SDL existente; ainda falta backend SpriteUI de producao e migracao de telas do editor
+- [ ] Texto, imagens/fontes e primeira tela principal migrada, mantendo ImGui como fallback
+
 ## Feito
 
 ### 0.7.17-beta (AO, hierarquia e multi-material, projeto enxuto)

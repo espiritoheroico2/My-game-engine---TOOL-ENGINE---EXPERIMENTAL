@@ -54,11 +54,11 @@ inline bool loadHlsl(const std::string& dir, const std::string& file, std::strin
 // Layouts identicos aos cbuffers de pbr.hlsl e shadow.hlsl. Os da Light Prism (Globals, sol, CSM, IBL, clusters) sao
 // os proprios structs da biblioteca (LightPrism::GlobalLightingGPU, CsmGPU, IblGPU, ClusterGridGPU), que ja batem com o HLSL.
 struct FrameCB { Mat4 viewProj; Mat4 view; f32 camera[3]; f32 pad = 0; };
-struct ObjectCB { Mat4 world; f32 color[4]; f32 metallic, roughness, receiveShadow, pad; f32 texInfo[4]; f32 emissive[4]; }; // texInfo: largura, altura, 1 = tem textura; emissive: rgb = cor x intensidade
+struct ObjectCB { Mat4 world; f32 color[4]; f32 metallic, roughness, receiveShadow, pad; f32 texInfo[4]; f32 emissive[4]; f32 fogColor[4]; f32 fogParams[4]; }; // texInfo: largura, altura, 1 = tem textura; emissive: rgb = cor x intensidade
 struct ShadowCB { Mat4 lightViewProj, world; };
 // Parametros do bloom (espelho de bloom.hlsl): tamanhos em pixels, direcao do blur, limiar e forca.
 struct BloomCB { f32 srcSize[2]; f32 haloSize[2]; f32 dir[2]; f32 threshold, strength; };
-static_assert(sizeof(FrameCB) == 144 && sizeof(ObjectCB) == 128 && sizeof(ShadowCB) == 128 && sizeof(BloomCB) == 32, "layout de cbuffer");
+static_assert(sizeof(FrameCB) == 144 && sizeof(ObjectCB) == 160 && sizeof(ShadowCB) == 128 && sizeof(BloomCB) == 32, "layout de cbuffer");
 // Sombras de luzes pontuais/spot (espelho de PointShadowCB em lightprism/Common/PointShadow.hlsli).
 struct PointShadowLightGPU { f32 posType[4]; f32 params[4]; Mat4 vp[6]; };
 struct PointShadowGPU { u32 count; u32 pad[3]; PointShadowLightGPU lights[kMaxPointShadowLights]; };
@@ -138,6 +138,9 @@ public:
     rhi::PipelineDesc ed = pd; ed.ps = emiPs_; ed.name = "emission"; ed.depthWrite = false; ed.color = rhi::Format::RGBA16F;
     ed.uniformNames = {"FrameBuffer", "ObjectBuffer"}; ed.textureNames.clear(); ed.storageNames.clear();
     emiPipe_ = dev.createPipeline(ed);
+    // Transparente: mesmo PBR, com mistura alfa e sem escrever profundidade (o alfa vem de ObjectCB.color[3]).
+    rhi::PipelineDesc td = pd; td.name = "transparent"; td.blend = true; td.depthWrite = false;
+    transPipe_ = dev.createPipeline(td);
 
     // passe de sombra: so posicao, grava z da luz num alvo R32F, sem culling (as duas faces projetam sombra)
     rhi::ShaderDesc svs = vs, sps = ps;
@@ -331,7 +334,7 @@ public:
     ++frame_;
     cam_ = cam; clear_ = clear; clearAlpha_ = clearAlpha;
     cam_zNear_ = cam.nearZ; cam_zFar_ = cam.farZ;
-    draws_.clear(); shadowOn_ = false; shadowSkip_ = false; open_ = true;
+    draws_.clear(); tdraws_.clear(); shadowOn_ = false; shadowSkip_ = false; open_ = true;
     // Remocao de malhas que nao aparecem ha 240 quadros (evita vazamento de buffers na GPU).
     if ((frame_ & 63) == 0) for (auto it = meshes_.begin(); it != meshes_.end();) {
       if (frame_ - it->second.lastUse > 240) { freeMesh(it->second); it = meshes_.erase(it); } else ++it;
@@ -343,14 +346,14 @@ public:
     if (!open_ || m.idx.empty()) return;
     GpuMesh& g = dynamicSlot(slot, m);
     if (g.index.isNull()) return;
-    draws_.push_back(makeDraw(&g, world, mat));
+    addDraw(makeDraw(&g, world, mat));
   }
 
   void draw(const Mesh& m, const Mat4& world, const Material& mat) {
     if (!open_) return;
     GpuMesh& g = upload(m);
     if (g.index.isNull()) return;
-    draws_.push_back(makeDraw(&g, world, mat));
+    addDraw(makeDraw(&g, world, mat));
   }
 
   // Textura do albedo na GPU (cache por Texture::id). Sem textura, devolve a branca 1x1 (o shader ignora).
@@ -450,32 +453,37 @@ public:
       cl->begin(ao_, kNullHandle, 1.f, 1.f, 1.f, 1.f); // sem SSAO: AO = 1 em todo o quadro
       cl->end(); dev_->submit(*cl);
     }
+    // Ligacoes comuns do passe PBR (opaco e transparente): mesmos buffers, mapas e luzes.
+    auto bindScene = [&](rhi::ICommandList* c, rhi::PipelineId p) {
+      c->setPipeline(p);
+      c->setUniform(0, frameCb_);
+      c->setUniform(2, imp_.globals);
+      c->setUniform(3, imp_.sun);
+      c->setUniform(4, csmCb_);
+      c->setUniform(5, iblCb_);
+      c->setUniform(6, imp_.grid);
+      c->setUniform(7, pointCb_);
+      c->setStorage(0, imp_.points);
+      c->setStorage(1, imp_.spots);
+      c->setStorage(2, imp_.cells);
+      c->setStorage(3, imp_.indices);
+      // Mapas de sombra: as cascatas que nao existem apontam para o primeiro mapa (o shader so le as validas).
+      for (u32 k = 0; k < 4; ++k) c->setTexture(1 + k, shColor_[k < shadowCount_ ? k : 0]);
+      for (u32 i = 0; i < 4; ++i) c->setTexture(5 + i, pointStrip_[i < pointCount_ ? i : 0]);
+      c->setTexture(9, ao_);
+      c->setTexture(10, brdfTex_);   // LUT da BRDF (IBL especular)
+    };
     cl_ = dev_->beginCommands();
     // Alvo UNORM (OpenGL): nao usamos (o OpenGL ainda nao tem iluminacao); mantemos o clear em linear para Vulkan/D3D12.
     cl_->begin(color_, depth_, clear_.x, clear_.y, clear_.z, clearAlpha_);
-    cl_->setPipeline(pipe_);
-    cl_->setUniform(0, frameCb_);
-    cl_->setUniform(2, imp_.globals);
-    cl_->setUniform(3, imp_.sun);
-    cl_->setUniform(4, csmCb_);
-    cl_->setUniform(5, iblCb_);
-    cl_->setUniform(6, imp_.grid);
-    cl_->setUniform(7, pointCb_);
-    cl_->setStorage(0, imp_.points);
-    cl_->setStorage(1, imp_.spots);
-    cl_->setStorage(2, imp_.cells);
-    cl_->setStorage(3, imp_.indices);
-    // Mapas de sombra: as cascatas que nao existem apontam para o primeiro mapa (o shader so le as validas).
-    for (u32 k = 0; k < 4; ++k) cl_->setTexture(1 + k, shColor_[k < shadowCount_ ? k : 0]);
-    for (u32 i = 0; i < 4; ++i) cl_->setTexture(5 + i, pointStrip_[i < pointCount_ ? i : 0]);
-    cl_->setTexture(9, ao_);
-    cl_->setTexture(10, brdfTex_);   // LUT da BRDF (IBL especular)
+    bindScene(cl_.get(), pipe_);
     const GpuMesh* last = nullptr;
     for (const Draw& d : draws_) {
       ObjectCB oc{}; oc.world = d.world; oc.color[0] = d.mat.albedo.x; oc.color[1] = d.mat.albedo.y; oc.color[2] = d.mat.albedo.z; oc.color[3] = 1.f;
       oc.metallic = d.mat.metallic; oc.roughness = d.mat.roughness; oc.receiveShadow = d.mat.receiveShadow ? 1.f : 0.f; // o shader decide: sol (cascatas) e pontuais/spot
       oc.texInfo[0] = d.tw; oc.texInfo[1] = d.th; oc.texInfo[2] = d.tw > 0.f ? 1.f : 0.f;
       oc.emissive[0] = d.mat.emissive.x; oc.emissive[1] = d.mat.emissive.y; oc.emissive[2] = d.mat.emissive.z; oc.emissive[3] = 0.f;
+      fillFog(oc, d.mat);
       dev_->updateBuffer(objCb_, &oc, sizeof oc);
       cl_->setUniform(1, objCb_);
       cl_->setTexture(0, d.tex.isNull() ? white_ : d.tex);
@@ -504,6 +512,31 @@ public:
         }
       }
       gl->end(); dev_->submit(*gl);
+    }
+    // Passe transparente: objetos com opacidade < 1, do mais distante para o mais perto, misturados sobre o opaco.
+    // Usa a profundidade do opaco sem escrever nela (nao aparecem atras de paredes). Sombra e brilho nao vem daqui.
+    if (!tdraws_.empty() && !transPipe_.isNull()) {
+      const Vec3 eye = cam_.eye;
+      auto dist2 = [&](const Draw& d) { const Vec3 p = d.world.transformPoint({0, 0, 0}); const Vec3 q = p - eye; return dot(q, q); };
+      std::sort(tdraws_.begin(), tdraws_.end(), [&](const Draw& a, const Draw& b) { return dist2(a) > dist2(b); });
+      auto tl = dev_->beginCommands();
+      tl->beginKeep(color_, depth_);
+      bindScene(tl.get(), transPipe_);
+      const GpuMesh* lastT = nullptr;
+      for (const Draw& d : tdraws_) {
+        ObjectCB oc{}; oc.world = d.world;
+        oc.color[0] = d.mat.albedo.x; oc.color[1] = d.mat.albedo.y; oc.color[2] = d.mat.albedo.z; oc.color[3] = d.mat.opacity;
+        oc.metallic = d.mat.metallic; oc.roughness = d.mat.roughness; oc.receiveShadow = d.mat.receiveShadow ? 1.f : 0.f;
+        oc.texInfo[0] = d.tw; oc.texInfo[1] = d.th; oc.texInfo[2] = d.tw > 0.f ? 1.f : 0.f;
+        oc.emissive[0] = d.mat.emissive.x; oc.emissive[1] = d.mat.emissive.y; oc.emissive[2] = d.mat.emissive.z; oc.emissive[3] = 0.f;
+        fillFog(oc, d.mat);
+        dev_->updateBuffer(objCb_, &oc, sizeof oc);
+        tl->setUniform(1, objCb_);
+        tl->setTexture(0, d.tex.isNull() ? white_ : d.tex);
+        if (d.mesh != lastT) { tl->setVertexBuffer(d.mesh->vertex); tl->setIndexBuffer(d.mesh->index); lastT = d.mesh; }
+        tl->drawIndexed(d.mesh->count, 1);
+      }
+      tl->end(); dev_->submit(*tl);
     }
     out_ = color_;
     if (bloomOn_ && !bloomA_.isNull() && !bloomThrPipe_.isNull()) { runBloom(); out_ = outFull_; }
@@ -665,7 +698,7 @@ private:
     if (!white_.isNull()) { dev_->destroy(white_); white_ = kNullHandle; }
     for (auto* h : {&frameCb_, &objCb_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &brdfTex_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &vs_, &ps_, &shVs_, &shPs_, &ptVs_, &ptPs_,
                     &prePipe_, &ssaoPipe_, &blurPipe_, &fsVb_, &fsIb_, &ssaoCb_, &preVs_, &prePs_, &fsVs_, &ssaoPs_, &blurPs_,
-                    &emiPipe_, &emiPs_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
+                    &emiPipe_, &emiPs_, &transPipe_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     for (auto& t : shColor_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     for (auto& t : pointStrip_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     pointW_ = 0; pointOn_ = false; pointCount_ = 0; pointValid_ = false;
@@ -707,6 +740,13 @@ private:
   std::string lastError_;
   Camera cam_; Vec3 clear_; f32 clearAlpha_ = 1.f; f32 cam_zNear_ = 0.1f, cam_zFar_ = 100.f;
   std::vector<Draw> draws_;
+  std::vector<Draw> tdraws_;                  // objetos transparentes (opacity < 1): passe proprio, do fundo para a frente
+  static void fillFog(ObjectCB& oc, const Material& m) {
+    oc.fogColor[0] = m.fogColor.x; oc.fogColor[1] = m.fogColor.y; oc.fogColor[2] = m.fogColor.z; oc.fogColor[3] = 0.f;
+    oc.fogParams[0] = m.fogStart; oc.fogParams[1] = m.fogEnd; oc.fogParams[2] = m.fogAmount; oc.fogParams[3] = 0.f;
+  }
+  void addDraw(Draw&& d) { (d.mat.opacity < 1.f ? tdraws_ : draws_).push_back(std::move(d)); }
+  rhi::PipelineId transPipe_;
   rhi::TextureId color_, depth_, gbuf_, aoRaw_, ao_;
   rhi::TextureId glow_;                       // brilho do bloom (so a emissao), mesma resolucao da cor
   rhi::ShaderId emiPs_; rhi::PipelineId emiPipe_;

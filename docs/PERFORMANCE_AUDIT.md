@@ -4,7 +4,7 @@ Escopo desta etapa: núcleo (ECS, GPU, paralelismo), editor (cena e jogo), siste
 
 ## 1. Ambiente das medições
 
-- Máquina de desenvolvimento com **2 núcleos**. Os tempos absolutos são **pessimistas** em relação à sua máquina (10 cores físicos / 20 lógicos). Use-os para comparar antes/depois, não como número final.
+- Máquina de desenvolvimento: **Windows x64, Intel Xeon E5-2666 v3 @ 2,90 GHz, 20 processadores lógicos**. Resultados absolutos variam por configuração e backend; use-os como referência deste ambiente, não como garantia para outra máquina.
 - Os valores abaixo foram medidos aqui. Quando não houve medição, está marcado como **estimativa de código**.
 
 ## 2. Achados e estado
@@ -39,11 +39,15 @@ Observação: a execução sob ASan com `detect_leaks=1` encerra com código 1 p
 
 - `ctest --test-dir build/editor-gpu`: 4/4.
 - `tool_tests` (build/dev): **131 testes, 0 falhas**, incluindo os 4 testes novos de upscaling e FXAA.
-- Selftest do editor (build normal): 119 checks, 0 falhas (incluindo 3 checks novos de orçamento e lotes de partículas).
+- `editor_selftest` no build Windows Release: falha com access violation (`-1073741819`) durante os checks do runtime QuickJS; o teste `ui_editor` passa. O último check impresso envolve o aviso S005 para alvo ausente. Essa falha ainda precisa ser isolada; não foi mascarada.
 
 ## 5. Medições
 
-Os números são deste ambiente (2 núcleos). Para os seus números, use `test ECS: N` (Console) com N = 10 000, 50 000 e 100 000, e leia as zonas **Physics**, **Update** e **Scene render** no Profiler.
+Medição de 30 quadros ativos com `--ecs 5 --bench-frames 30 --project .\Project`, no backend Software (CPU): média **60,97 ms** (16,4 FPS), p50 **60,57 ms**, p95 **63,92 ms**, máximo **66,66 ms**. A amostra continha 11 corpos no total (incluindo os objetos da cena padrão). Hotspots: Scene view render **44,55 ms**, CPU rasterization **44,22 ms** e Post-processing **13,09 ms**; rasterização está incluída na zona de renderização e não deve ser somada a ela. Esse resultado caracteriza apenas o caminho CPU/software desta máquina, não o backend GPU.
+
+Nova varredura dos caminhos críticos: `SoftRenderer::rasterize` executa interpolação perspectiva, normalização e avaliação PBR por fragmento coberto; esse caminho corresponde à zona CPU rasterization dominante. O `resolve` percorre a imagem inteira e o FXAA/sharpen também processa pixels em CPU quando habilitado, compatível com o custo medido em Post-processing. Esses caminhos devem ser priorizados para otimização; mudanças de algoritmo devem manter paridade visual e ser comparadas com uma cena e configuração fixas. Também há ordenações por quadro de draws transparentes (`gpu_renderer.hpp`) e candidatos de luz (`lighting.hpp`), mas não foram isolados como gargalo por esta medição.
+
+Para repetir no seu sistema, use `test ECS: N` (Console) com N = 10 000, 50 000 e 100 000, e leia as zonas **Physics**, **Update** e **Scene render** no Profiler.
 
 Medição de upscaling (`/home/claude/scratch/bench_up.cpp`, `-O2`, 2 threads): ver `docs/RENDER_SCALING.md`.
 
@@ -53,3 +57,16 @@ Medição de upscaling (`/home/claude/scratch/bench_up.cpp`, `-O2`, 2 threads): 
 2. **A9 `each` sem cópia.** Simples e local; reduz uma alocação por sistema por quadro.
 3. **A13 script por arquivo.** Necessário antes de escalar objetos com script.
 4. **A10/A11 hierarquia e tags.** Medir primeiro.
+
+## 7. Instrumentação e limites de quadro
+
+- O Profiler agora separa preparação da cena, rasterização CPU, submissão GPU e readback; as zonas internas podem se sobrepor ao tempo total da vista.
+- `CPU work` é calculado como tempo total menos espera ociosa, espera do limite manual e Present/VSync, em vez de somar zonas aninhadas.
+- Os cronômetros de zona do loop principal reutilizam armazenamento na pilha, evitando alocações de heap por quadro.
+- O limite inicial de FPS passou a ser ilimitado. VSync e limites de 30/60/120 FPS continuam disponíveis quando selecionados em Settings > Graphics.
+- Ainda não há uma comparação numérica antes/depois feita no mesmo hardware nesta revisão; use `--ecs N` ou `--voxel N` com `--project <pasta>` para coletar média, p50, p95 e tempos das zonas no próprio sistema. `--bench-frames N` ajusta a amostra medida (padrão 300; intervalo 1–10000), após o aquecimento. Exemplo de render ativo: `tool_editor --ecs 5 --bench-frames 30 --project .\Project`. As médias das zonas usam os mesmos quadros medidos; zonas aninhadas podem se sobrepor.
+
+## 8. Direct3D 11
+
+- O backend D3D11 agora pode ser habilitado opcionalmente no Windows com o preset `editor-gpu-dx11`; o padrão continua desligado para não aumentar o tempo de compilação GPU dos presets existentes.
+- O suporte compartilha o RHI e os shaders HLSL usados por D3D12. Deve ser validado em uma máquina Windows com driver D3D11; não foi possível confirmar a execução em hardware gráfico neste ambiente.

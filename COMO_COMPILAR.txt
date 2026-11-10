@@ -10,8 +10,10 @@ O QUE VOCE RECEBE
   O idioma padrao e o INGLES; Portugues (pt-BR) e Espanhol ficam em
   Settings > Language.
 
-  NADA e baixado durante a compilacao: SDL3, ImGui, imnodes e miniaudio ja
-  estao em third_party/. NAO precisa de Git, Ninja, Python nem internet.
+  SDL3, ImGui, imnodes e miniaudio ja estao em third_party/. O painel
+  experimental SpriteUI e baixado pelo CMake no primeiro build (precisa de Git
+  e internet); para compilar offline, use -DTOOL_WITH_SPRITEUI=OFF.
+  Ninja e Python nao sao necessarios para o editor CPU.
 
 ------------------------------------------------------------------------------
  1. O QUE INSTALAR (Windows 10/11, uma vez)

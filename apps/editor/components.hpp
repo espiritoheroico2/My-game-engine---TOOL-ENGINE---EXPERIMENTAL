@@ -53,7 +53,13 @@ struct MeshRenderer {
   // (Settings > Lighting), o brilho acima do limiar vira um halo ao redor do objeto.
   float emissive[3] = {1.f, 1.f, 1.f};
   float emissiveIntensity = 0.f;
+  float opacity = 1.f;       // 1 = opaco; menor = transparente (passe de mistura, do fundo para a frente)
   bool emissionOn = false;   // "Enable emission": so com ele o objeto emite (cor extra e brilho do bloom)
+  // Neblina por distancia (Settings > Lighting > Fog, por objeto): a cor some para a cor da neblina entre start e end.
+  bool fogOn = false;
+  float fogColor[3] = {0.6f, 0.65f, 0.7f};
+  float fogStart = 5.f, fogEnd = 50.f;
+  float fogAmount = 1.f;     // 0..1: quanto da cor da neblina entra no objeto a partir de fogEnd
 };
 // Material editado por parte de um modelo (sobrepoe o material que veio do arquivo). `part` = indice em ModelData::parts.
 struct PartOverride { int part = 0; float color[3] = {0.8f, 0.8f, 0.8f}; float roughness = 0.5f, metallic = 0.f; };
@@ -285,7 +291,9 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     Json o = Json::object(); o.set("shape", mr->shape); o.set("color", ser::vec(mr->color, 3)); o.set("roughness", static_cast<double>(mr->roughness));
     o.set("metallic", static_cast<double>(mr->metallic)); o.set("model", std::string(mr->model)); o.set("texture", std::string(mr->texture));
     o.set("castShadow", mr->castShadow); o.set("receiveShadow", mr->receiveShadow); o.set("node", mr->node);
-    o.set("emissive", ser::vec(mr->emissive, 3)); o.set("emissiveIntensity", static_cast<double>(mr->emissiveIntensity)); o.set("emissionOn", mr->emissionOn); j.set("mesh", o);
+    o.set("emissive", ser::vec(mr->emissive, 3)); o.set("emissiveIntensity", static_cast<double>(mr->emissiveIntensity)); o.set("emissionOn", mr->emissionOn); o.set("opacity", static_cast<double>(mr->opacity));
+    o.set("fogOn", mr->fogOn); o.set("fogColor", ser::vec(mr->fogColor, 3)); o.set("fogStart", static_cast<double>(mr->fogStart)); o.set("fogEnd", static_cast<double>(mr->fogEnd)); o.set("fogAmount", static_cast<double>(mr->fogAmount));
+    j.set("mesh", o);
   }
   if (auto* po = w.get<PartOverrides>(e)) {
     Json arr = Json::array();
@@ -372,7 +380,11 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     m.node = static_cast<int>(o["node"].asNumber(-1));
     ser::readVec(o["emissive"], m.emissive, 3); m.emissiveIntensity = ser::num(o, "emissiveIntensity", 0.f);
     // Cenas antigas nao tinham o campo: quem ja tinha intensidade acima de 0 continua emitindo.
+    m.opacity = ser::clampNum(o, "opacity", 1.f, 0.f, 1.f);
     m.emissionOn = o.has("emissionOn") ? ser::flag(o, "emissionOn", false) : m.emissiveIntensity > 0.f;
+    m.fogOn = ser::flag(o, "fogOn", false); ser::readVec(o["fogColor"], m.fogColor, 3);
+    m.fogStart = ser::num(o, "fogStart", 5.f); m.fogEnd = ser::num(o, "fogEnd", 50.f);
+    m.fogAmount = ser::clampNum(o, "fogAmount", 1.f, 0.f, 1.f);
     if (m.shape < 0 || m.shape > 9) m.shape = 0;
     w.add<MeshRenderer>(e, m);
   }

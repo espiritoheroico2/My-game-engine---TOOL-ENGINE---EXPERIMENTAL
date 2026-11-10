@@ -1,8 +1,17 @@
-# SpriteUi: plano de implementacao (0.7.8)
+# SpriteUi: plano de implementacao
 
 Base: documento "SpriteUi: Arquitetura e Engenharia (Especificacao Revisada V2.0)".
-Este arquivo e o PLANO por fases. Nada disso esta implementado nesta versao: o editor continua com ImGui
-e a engine com `UiCanvas` (componente de UI de jogo, `docs/UI.md` e `docs/UI_FX.md`).
+Este arquivo registra o plano e o estado atual. A primeira tela experimental foi adicionada ao editor:
+`Window > SpriteUI diagnostics`, com ImGui mantido nas demais telas e como fallback.
+
+O painel usa `LayoutTree`, `LayoutSceneBridge`, `UIEventRouter` e `RenderExtractor` do SpriteUI. Para
+evitar um segundo dispositivo ou event loop, a geometria solida do `FramePacket` e desenhada no
+`SDL_Renderer` ja usado pelo editor; o texto usa a fonte de depuracao do SDL. Isso valida o fluxo
+incremental, mas ainda nao e um backend SpriteUI de producao nem substitui ImGui no editor. O
+componente de UI de jogo `UiCanvas` permanece separado (`docs/UI.md` e `docs/UI_FX.md`).
+
+O CMake usa o SpriteUI no commit fixo `8f45694fdf4f3543c6cf3f691aecc19a3239e7ce`. A integracao pode
+ser desligada com `-DTOOL_WITH_SPRITEUI=OFF`; nesse caso o editor permanece com ImGui.
 
 ## 1. Decisoes antes de codar
 
@@ -45,6 +54,7 @@ Cada fase termina com testes passando e documentacao atualizada (CHANGELOG, CHEC
 
 ### Fase 4: widgets e migracao do editor
 - Widgets basicos: painel, botao, rotulo, slider, campo de texto, lista.
+- [x] Prova de fluxo: painel experimental de diagnostico (layout, input e extracao); desenho temporario em SDL.
 - Migrar o editor de ImGui para SpriteUi uma tela por vez (Console, Hierarchy, Inspector, Assets, Settings), mantendo o ImGui como fallback ate cada tela estar validada.
 - Manter o selftest verde a cada tela migrada.
 

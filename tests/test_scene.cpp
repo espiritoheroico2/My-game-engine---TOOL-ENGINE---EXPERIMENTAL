@@ -21,7 +21,7 @@ TEST(scene_delete_and_reuse_reuses_identical) {
   Quiet q; Scene s; auto bp = enemyBp(s);
   auto a = s.spawn(bp);
   a.get<Hp>()->v = 0;
-  a.DeleteAndReuse();
+  a.recycle();
   CHECK(!a.valid());              // handle antigo morre
   CHECK(s.dormantCount() == 1);
   auto b = s.spawn(bp);           // identico -> reaproveita
@@ -31,6 +31,16 @@ TEST(scene_delete_and_reuse_reuses_identical) {
   CHECK(b.get<Hp>()->v == 50);    // valores de criacao restaurados
   CHECK(!a.valid());              // o antigo continua invalido
   CHECK(s.world().liveCount() == 1);
+}
+
+TEST(scene_recycle_compatibility_aliases) {
+  Quiet q; Scene s; auto bp = enemyBp(s);
+  auto a = s.spawn(bp);
+  a.deleteAndReuse();
+  CHECK(!a.valid());
+  auto b = s.spawn(bp);
+  CHECK(b.valid());
+  CHECK(s.stats().reused == 1);
 }
 
 TEST(scene_different_signature_not_reused) {
