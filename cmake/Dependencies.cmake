@@ -86,18 +86,21 @@ if(TOOL_WITH_EDITOR)
     set(SPRITEUI_BUILD_SDL3_ADAPTER OFF CACHE BOOL "" FORCE)
     set(SPRITEUI_BUILD_VISUALIZER OFF CACHE BOOL "" FORCE)
     set(SPRITEUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(SPRITEUI_WITH_TOOLENGINE_RHI ON CACHE BOOL "" FORCE)
+    set(SPRITEUI_TOOLENGINE_RHI_TARGET tool_rhi CACHE STRING "" FORCE)
     set(SPRITEUI_ENABLE_WARNINGS OFF CACHE BOOL "" FORCE)
     if(EXISTS "${TOOL_THIRD_PARTY}/SpriteUi/CMakeLists.txt")
       add_subdirectory("${TOOL_THIRD_PARTY}/SpriteUi" "${CMAKE_BINARY_DIR}/_deps/spriteui-build" EXCLUDE_FROM_ALL)
     else()
       FetchContent_Declare(spriteui
         GIT_REPOSITORY https://github.com/espiritoheroico2/SpriteUi.git
-        GIT_TAG 8f45694fdf4f3543c6cf3f691aecc19a3239e7ce
+        GIT_TAG b9bef4a3eac6586f3cbef49b187196b62cce2260
         GIT_SHALLOW FALSE
       )
       FetchContent_MakeAvailable(spriteui)
     endif()
   endif()
+
 
   if(EXISTS ${TOOL_THIRD_PARTY}/imgui/imgui.cpp AND EXISTS ${TOOL_THIRD_PARTY}/imnodes/imnodes.cpp)
     set(imgui_SOURCE_DIR ${TOOL_THIRD_PARTY}/imgui)
@@ -154,4 +157,28 @@ if(TOOL_WITH_QUICKJS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/quickjs-ng/CMake
   set(QJS_ENABLE_INSTALL OFF)
   set(QJS_BUILD_CLI_STATIC OFF)
   add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/quickjs-ng ${CMAKE_BINARY_DIR}/_deps/quickjs-build EXCLUDE_FROM_ALL)
+endif()
+
+# SpriteUI quando o editor esta desligado (ex.: teste com GPU do backend ui_sprite). Com o editor, o bloco acima ja baixa.
+if(TOOL_WITH_SPRITEUI AND NOT TOOL_WITH_EDITOR) # SpriteUI sem editor (ex.: teste com GPU do backend)
+  set(SPRITEUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(SPRITEUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(SPRITEUI_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+  set(SPRITEUI_BUILD_FUZZERS OFF CACHE BOOL "" FORCE)
+  set(SPRITEUI_BUILD_SDL3_ADAPTER OFF CACHE BOOL "" FORCE)
+  set(SPRITEUI_BUILD_VISUALIZER OFF CACHE BOOL "" FORCE)
+  set(SPRITEUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+  set(SPRITEUI_WITH_TOOLENGINE_RHI ON CACHE BOOL "" FORCE)
+  set(SPRITEUI_TOOLENGINE_RHI_TARGET tool_rhi CACHE STRING "" FORCE)
+  set(SPRITEUI_ENABLE_WARNINGS OFF CACHE BOOL "" FORCE)
+  if(EXISTS "${TOOL_THIRD_PARTY}/SpriteUi/CMakeLists.txt")
+    add_subdirectory("${TOOL_THIRD_PARTY}/SpriteUi" "${CMAKE_BINARY_DIR}/_deps/spriteui-build" EXCLUDE_FROM_ALL)
+  else()
+    FetchContent_Declare(spriteui
+      GIT_REPOSITORY https://github.com/espiritoheroico2/SpriteUi.git
+      GIT_TAG b9bef4a3eac6586f3cbef49b187196b62cce2260
+      GIT_SHALLOW FALSE
+    )
+    FetchContent_MakeAvailable(spriteui)
+  endif()
 endif()

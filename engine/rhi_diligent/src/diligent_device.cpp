@@ -160,7 +160,13 @@ public:
     gp.DepthStencilDesc.DepthEnable = d.depthTest;
     gp.DepthStencilDesc.DepthWriteEnable = d.depthWrite;
     gp.DepthStencilDesc.DepthFunc = dl::COMPARISON_FUNC_LESS_EQUAL;
-    if (d.blend) {
+    // Scissor sempre ligado: sem setScissor o recorte e o alvo inteiro (definido em begin), entao nada muda para
+    // pipelines antigas; o recorte por lote so funciona com esta flag.
+    gp.RasterizerDesc.ScissorEnable = true;
+    if (d.blendPremultiplied) {
+      auto& rt = gp.BlendDesc.RenderTargets[0];
+      rt.BlendEnable = true; rt.SrcBlend = dl::BLEND_FACTOR_ONE; rt.DestBlend = dl::BLEND_FACTOR_INV_SRC_ALPHA;
+    } else if (d.blend) {
       auto& rt = gp.BlendDesc.RenderTargets[0];
       rt.BlendEnable = true; rt.SrcBlend = dl::BLEND_FACTOR_SRC_ALPHA; rt.DestBlend = dl::BLEND_FACTOR_INV_SRC_ALPHA;
     }
@@ -381,10 +387,22 @@ public:
     d_.ctx->ClearRenderTarget(rtv, clear, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     if (dsv) d_.ctx->ClearDepthStencil(dsv, dl::CLEAR_DEPTH_FLAG, 1.f, 0, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
   }
+  // Abre a lista sem limpar o alvo. Resolve o alvo como begin() (inclusive o backbuffer) e define viewport,
+  // scissor padrao e o tamanho do alvo, que o recorte e setScissor usam.
   void beginKeep(TextureId target, TextureId depth) override {
     if (open_) d_.err("beginKeep() dentro de begin()");
     open_ = true;
-    setTargets(target, depth);
+    dl::ITextureView* rtv = nullptr; dl::ITextureView* dsv = nullptr;
+    if (d_.isBackbuffer(target)) { rtv = d_.swapchain->GetCurrentBackBufferRTV(); dsv = d_.swapchain->GetDepthBufferDSV(); }
+    else if (auto* t = d_.obj<dl::ITexture>(target, DiligentDevice::Kind::Texture)) rtv = t->GetDefaultView(dl::TEXTURE_VIEW_RENDER_TARGET);
+    if (!rtv) { d_.err("beginKeep() com alvo invalido"); open_ = false; return; }
+    if (!depth.isNull()) { if (auto* t = d_.obj<dl::ITexture>(depth, DiligentDevice::Kind::Texture)) dsv = t->GetDefaultView(dl::TEXTURE_VIEW_DEPTH_STENCIL); }
+    dl::ITextureView* rtvs[] = {rtv};
+    d_.ctx->SetRenderTargets(1, rtvs, dsv, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    const auto& td = rtv->GetTexture()->GetDesc();
+    dl::Viewport vp; vp.Width = static_cast<float>(td.Width); vp.Height = static_cast<float>(td.Height);
+    d_.ctx->SetViewports(1, &vp, td.Width, td.Height);
+    targetW_ = static_cast<u32>(td.Width); targetH_ = static_cast<u32>(td.Height);
   }
   void setTargets(TextureId target, TextureId depth) override {
     if (!check()) return;
@@ -452,6 +470,34 @@ public:
     if (!pipe_ || !vb_ || !ib_) { d_.err("draw sem pipeline/vertex/index buffer"); return; }
     d_.ctx->CommitShaderResources(pipe_->srb, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     dl::DrawIndexedAttribs da; da.IndexType = dl::VT_UINT32; da.NumIndices = n; da.NumInstances = inst; da.Flags = dl::DRAW_FLAG_VERIFY_ALL;
+    d_.ctx->DrawIndexed(da);
+    ++d_.stats_.draws; d_.stats_.triangles += (n / 3) * inst;
+  }
+  void setScissor(u32 x, u32 y, u32 w, u32 h) override {
+    if (!check()) return;
+    if (w == 0 || h == 0 || x + w > targetW_ || y + h > targetH_) { d_.err("setScissor fora do alvo"); return; }
+    // Contrato do RHI: origem no topo-esquerdo, como o viewport e o readback. No OpenGL o recorte do Diligent
+    // fica espelhado em Y para alvos offscreen (medido com spriteui_gpu_test: o Vulkan confere sem ajuste), entao
+    // o GL converte a faixa vertical antes de chamar o Diligent. Validado apenas para alvos offscreen.
+    dl::Rect r;
+    r.left = static_cast<int>(x);
+    r.right = static_cast<int>(x + w);
+    if (d_.backend() == Backend::GLES) {
+      r.top = static_cast<int>(targetH_ - (y + h));
+      r.bottom = static_cast<int>(targetH_ - y);
+    } else {
+      r.top = static_cast<int>(y);
+      r.bottom = static_cast<int>(y + h);
+    }
+    d_.ctx->SetScissorRects(1, &r, targetW_, targetH_);
+  }
+  void drawIndexedRange(u32 first, u32 n, u32 inst) override {
+    if (!check()) return;
+    if (!pipe_ || !vb_ || !ib_) { d_.err("draw sem pipeline/vertex/index buffer"); return; }
+    if (n == 0) { d_.err("drawIndexedRange sem indices"); return; }
+    d_.ctx->CommitShaderResources(pipe_->srb, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    dl::DrawIndexedAttribs da; da.IndexType = dl::VT_UINT32; da.NumIndices = n; da.NumInstances = inst;
+    da.FirstIndexLocation = first; da.BaseVertex = 0; da.Flags = dl::DRAW_FLAG_VERIFY_ALL;
     d_.ctx->DrawIndexed(da);
     ++d_.stats_.draws; d_.stats_.triangles += (n / 3) * inst;
   }

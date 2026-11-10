@@ -10,6 +10,8 @@ layout(binding = 6, std140) uniform ObjectBuffer
     float _pad1;
     vec4 texInfo;
     vec4 emissive;
+    vec4 fogColor;
+    vec4 fogParams;
 } _32;
 
 layout(binding = 4, std140) uniform FrameBuffer
