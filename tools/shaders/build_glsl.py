@@ -35,6 +35,8 @@ JOBS = [
     ("bloom.hlsl", "frag", "BloomThreshold", "bloom.thr"),
     ("bloom.hlsl", "frag", "BloomBlur", "bloom.blur"),
     ("bloom.hlsl", "frag", "BloomComposite", "bloom.comp"),
+    ("spriteui.hlsl", "vert", "VSMain", "spriteui.vs"),
+    ("spriteui.hlsl", "frag", "PSMain", "spriteui.ps"),
 ]
 
 # compute da Light Prism (cluster): saem em assets/shaders/lightprism/glsl/<arquivo>.<entry>.430.glsl

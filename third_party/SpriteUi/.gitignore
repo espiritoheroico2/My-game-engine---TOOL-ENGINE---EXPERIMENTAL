@@ -1,0 +1,23 @@
+/build/
+/build-release/
+/build-*/
+/out/
+/.vs/
+/.idea/
+*.user
+*.suo
+*.pdb
+*.obj
+*.o
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+
+/.cache/
+compile_commands.json
+/Testing/
+
+# Screenshots written by the visual tests (reference copies live in docs/img)
+snapshots/

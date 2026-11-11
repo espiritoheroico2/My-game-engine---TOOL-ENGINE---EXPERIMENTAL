@@ -58,6 +58,12 @@ private:
       open_ = true;
       if (!d_.valid(t, Kind::Texture)) d_.err("begin() com alvo invalido");
     }
+    void beginKeep(TextureId t, TextureId d) override {
+      if (open_) d_.err("beginKeep() dentro de begin()");
+      open_ = true;
+      if (!d_.valid(t, Kind::Texture)) d_.err("beginKeep() com alvo invalido");
+      if (!d.isNull() && !d_.valid(d, Kind::Texture)) d_.err("beginKeep() com profundidade invalida");
+    }
     void setPipeline(PipelineId p) override {
       if (!check()) return;
       if (!d_.valid(p, Kind::Pipeline)) { d_.err("setPipeline com handle invalido"); pipeline_ = false; return; }
@@ -71,6 +77,13 @@ private:
     void drawIndexed(u32 n, u32 inst) override {
       if (!check()) return;
       if (!pipeline_ || !vb_ || !ib_) { d_.err("draw sem pipeline/vertex/index buffer"); return; }
+      ++d_.stats_.draws; d_.stats_.triangles += (n / 3) * inst;
+    }
+    void setScissor(u32, u32, u32 w, u32 h) override { if (check() && (w == 0 || h == 0)) d_.err("setScissor com area vazia"); }
+    void drawIndexedRange(u32, u32 n, u32 inst) override {
+      if (!check()) return;
+      if (!pipeline_ || !vb_ || !ib_) { d_.err("draw sem pipeline/vertex/index buffer"); return; }
+      if (n == 0) { d_.err("drawIndexedRange sem indices"); return; }
       ++d_.stats_.draws; d_.stats_.triangles += (n / 3) * inst;
     }
     void end() override { if (!open_) d_.err("end() sem begin()"); open_ = false; }

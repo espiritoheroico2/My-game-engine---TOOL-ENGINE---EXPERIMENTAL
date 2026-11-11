@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: MSVC
+            os: windows-2022
+            compiler: msvc
+          - name: GCC
+            os: ubuntu-24.04
+            compiler: g++
+          - name: Clang
+            os: ubuntu-24.04
+            compiler: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: bash
+        run: |
+          if [ "${{ matrix.compiler }}" = "msvc" ]; then
+            cmake -S . -B build -DSPRITEUI_CHECK_HEADERS=ON -DSPRITEUI_BUILD_BENCHMARKS=ON
+          elif [ "${{ matrix.compiler }}" = "clang++" ]; then
+            cmake -S . -B build -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DSPRITEUI_CHECK_HEADERS=ON -DSPRITEUI_BUILD_BENCHMARKS=ON -DSPRITEUI_BUILD_FUZZERS=ON
+          else
+            cmake -S . -B build -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DSPRITEUI_CHECK_HEADERS=ON -DSPRITEUI_BUILD_BENCHMARKS=ON
+          fi
+      - name: Build
+        run: cmake --build build --config Debug --parallel
+      - name: Check public headers
+        run: cmake --build build --config Debug --target spriteui_check_headers --parallel
+      - name: Test
+        run: ctest --test-dir build --config Debug --output-on-failure
+      - name: Run CPU benchmarks
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-2022" ]; then
+            ./build/Debug/spriteui_benchmarks.exe
+          else
+            ./build/spriteui_benchmarks
+          fi
+      - name: Fuzz configuration parser
+        if: matrix.compiler == 'clang++'
+        shell: bash
+        run: |
+          cmake -E copy_directory tests/fuzz/corpus/config "$RUNNER_TEMP/spriteui-config-fuzz-corpus"
+          ./build/spriteui_fuzz_config "$RUNNER_TEMP/spriteui-config-fuzz-corpus" -max_total_time=30
+
+  sanitizers:
+    name: GCC ASan + UBSan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build-sanitized
+          -DCMAKE_CXX_COMPILER=g++
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          -DSPRITEUI_BUILD_EXAMPLES=OFF
+      - name: Build
+        run: cmake --build build-sanitized --parallel
+      - name: Test
+        run: ctest --test-dir build-sanitized --output-on-failure
+
+  sdl3-adapter:
+    name: SDL3 3.2.30 adapter
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build SDL3
+        shell: bash
+        run: |
+          git clone --depth 1 --branch release-3.2.30 https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/SDL"
+          cmake -S "$RUNNER_TEMP/SDL" -B "$RUNNER_TEMP/SDL/build" \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl3-install" \
+            -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_X11=OFF -DSDL_WAYLAND=OFF
+          cmake --build "$RUNNER_TEMP/SDL/build" --parallel
+          cmake --install "$RUNNER_TEMP/SDL/build"
+      - name: Configure
+        run: >-
+          cmake -S . -B build-sdl3
+          -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/sdl3-install"
+          -DSPRITEUI_BUILD_SDL3_ADAPTER=ON
+          -DSPRITEUI_CHECK_HEADERS=ON
+      - name: Build
+        run: cmake --build build-sdl3 --parallel
+      - name: Check public headers
+        run: cmake --build build-sdl3 --target spriteui_check_headers --parallel
+      - name: Test
+        run: ctest --test-dir build-sdl3 --output-on-failure

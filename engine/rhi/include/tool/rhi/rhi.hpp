@@ -59,6 +59,8 @@ struct VertexAttrib { u32 components = 3; u32 offset = 0; };
 struct PipelineDesc {
   Handle vs, ps;
   bool depthTest = true, depthWrite = true, blend = false;
+  // Blend premultiplicado (ONE, INV_SRC_ALPHA) para UI e sprites com cor ja multiplicada por alfa. Tem prioridade sobre `blend`.
+  bool blendPremultiplied = false;
   Format color = Format::RGBA8_SRGB, depth = Format::D32F;
   CullMode cull = CullMode::Back;
   std::vector<VertexAttrib> layout; u32 vertexStride = 0;
@@ -83,7 +85,7 @@ public:
   // Troca o alvo sem limpar nada (para passes que reaproveitam a profundidade). depth pode ser nulo.
   virtual void setTargets(TextureId, TextureId) {}
   // Abre a lista SEM limpar o alvo (passes extras, como o transparente): equivale a begin() sem clear.
-  virtual void beginKeep(TextureId, TextureId) {}
+  virtual void beginKeep(TextureId target, TextureId depth) = 0;
   virtual void setPipeline(PipelineId p) = 0;
   virtual void setVertexBuffer(BufferId b) = 0;
   virtual void setIndexBuffer(BufferId b) = 0;
@@ -95,6 +97,11 @@ public:
   // Buffer estruturado somente leitura (StructuredBuffer) no slot de PipelineDesc::storageNames. Padrao: nada (backends sem suporte ignoram).
   virtual void setStorage(u32 /*slot*/, BufferId /*b*/) {}
   virtual void drawIndexed(u32 indexCount, u32 instances) = 0;
+  // Recorte (scissor) em pixels do alvo atual. Padrao depois de begin()/setViewport: alvo inteiro.
+  virtual void setScissor(u32 x, u32 y, u32 w, u32 h) = 0;
+  // Desenha a partir de um deslocamento do index buffer (firstIndex), sem base de vertice. Usado para desenhar
+  // lotes diferentes de um mesmo buffer dentro de um quadro.
+  virtual void drawIndexedRange(u32 firstIndex, u32 indexCount, u32 instances = 1) = 0;
   virtual void end() = 0;
 };
 
