@@ -26,6 +26,7 @@
 #include "script_window.hpp"
 #ifdef TOOL_WITH_SPRITEUI
 #include "spriteui_diagnostics.hpp"
+#include "start_screen_spriteui.hpp"
 #endif
 
 #include "backends/imgui_impl_sdl3.h"
@@ -1707,6 +1708,8 @@ int main(int argc, char** argv) {
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--project") == 0) projectArg = argv[i + 1];
   if ((ecsCount > 0 || voxelCount > 0 || mapSide > 0) && projectArg.empty()) { std::fprintf(stderr, "--ecs/--voxel precisam de --project <pasta de teste> (nao grava o projeto)\n"); return 1; }
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--api") == 0) startApi = std::strcmp(argv[i + 1], "vulkan") == 0 ? 1 : std::strcmp(argv[i + 1], "opengl") == 0 ? 2 : std::strcmp(argv[i + 1], "d3d12") == 0 ? 3 : std::strcmp(argv[i + 1], "d3d11") == 0 ? 4 : 0;
+  bool useImGuiStart = false;   // --imgui-start: dialogo de inicio antigo (ImGui); padrao: tela SpriteUI
+  for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--imgui-start") == 0) useImGuiStart = true; }
   for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--play") == 0) startPlaying = true; if (std::strcmp(argv[i], "--selftest") == 0) selfTest = true; if (std::strcmp(argv[i], "--player") == 0) playerMode = true; }
   std::string startLang, startTheme, startScene, focusWin, selectName; int startTab = -1; bool showInputMapAtStart = false; std::string narrativeFile;
   for (int i = 1; i + 1 < argc; ++i) {
@@ -1790,7 +1793,22 @@ int main(int argc, char** argv) {
     const std::string loc = editor::defaultProjectsFolder(lastProject);
     std::snprintf(dlg.location, sizeof dlg.location, "%s", loc.c_str());
     bool closed = false;
-    while (!dlg.done && !closed) {
+    std::filesystem::path startRoot;
+    bool startDone = false;
+#ifdef TOOL_WITH_SPRITEUI
+    if (!useImGuiStart) {
+      ToolEngine::SpriteUi::Text::TruetypeAtlas atlas;
+      if (editor::start::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", atlas)) {
+        editor::start::Model model(lastProject, editor::defaultProjectsFolder(lastProject));
+        startDone = editor::start::RunStartScreen(window, renderer, model, atlas,
+                                                  editor::defaultProjectsFolder(lastProject), closed);
+        startRoot = model.result();
+      } else {
+        std::fprintf(stderr, "Fonte da tela de inicio nao encontrada (assets/fonts/Xmind-Regular.ttf); usando o ImGui.\n");
+      }
+    }
+#endif
+    while (!startDone && !dlg.done && !closed) {
       SDL_Event ev;
       while (SDL_PollEvent(&ev)) {
         ImGui_ImplSDL3_ProcessEvent(&ev);
@@ -1810,7 +1828,7 @@ int main(int argc, char** argv) {
       SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
       return 0;
     }
-    ed.project.root = dlg.result;
+    ed.project.root = startDone ? startRoot : dlg.result;
     saveSettings(ed); // lembra o projeto para o proximo "Abrir ultimo projeto"
   }
   ed.project.ensure();

@@ -11,6 +11,12 @@ if(TOOL_WITH_DILIGENT)
 endif()
 if(TOOL_WITH_SPRITEUI)
   target_link_libraries(tool_editor PRIVATE SpriteUi::SpriteUI)
+  target_link_libraries(tool_editor PRIVATE SpriteUi::TextStb)
+  # Camada L4b (tela de inicio sem janela): estado dos campos, foco, selecao e acoes do modelo.
+  add_executable(editor_start_screen_model_tests tests/test_start_screen_model.cpp)
+  target_include_directories(editor_start_screen_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_start_screen_model_tests PRIVATE SpriteUi::SpriteUI tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::audio_miniaudio tool::assets tool::pack tool::mod)
+  add_test(NAME Editor.StartScreenModel COMMAND editor_start_screen_model_tests)
   target_compile_definitions(tool_editor PRIVATE TOOL_WITH_SPRITEUI=1)
 endif()
 

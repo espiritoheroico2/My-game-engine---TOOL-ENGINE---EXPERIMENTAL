@@ -89,6 +89,7 @@ if(TOOL_WITH_EDITOR)
     set(SPRITEUI_WITH_TOOLENGINE_RHI ON CACHE BOOL "" FORCE)
     set(SPRITEUI_TOOLENGINE_RHI_TARGET tool_rhi CACHE STRING "" FORCE)
     set(SPRITEUI_ENABLE_WARNINGS OFF CACHE BOOL "" FORCE)
+    set(SPRITEUI_WITH_TEXT_STB ON CACHE BOOL "" FORCE)   # atlas de fonte (stb_truetype) para o texto da UI
     if(EXISTS "${TOOL_THIRD_PARTY}/SpriteUi/CMakeLists.txt")
       add_subdirectory("${TOOL_THIRD_PARTY}/SpriteUi" "${CMAKE_BINARY_DIR}/_deps/spriteui-build" EXCLUDE_FROM_ALL)
     else()
