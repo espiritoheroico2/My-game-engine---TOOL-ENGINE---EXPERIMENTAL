@@ -146,7 +146,7 @@ class HierarchyPanel {
                 scrollBy(-e.wheel.y * Metrics::kRowH * Metrics::kWheelRows);
                 return true;
             case SDL_EVENT_KEY_DOWN:
-                return onKey(e.key.key);
+                return onKey(e.key.key, static_cast<SDL_Keymod>(e.key.mod));
             case SDL_EVENT_TEXT_INPUT:
                 if (!renaming_) return false;
                 rename_.insert(e.text.text);
@@ -191,6 +191,11 @@ class HierarchyPanel {
         packet_ = extractor_.Build(++frameId_, items, nullptr, clips);
         if (!SR::IsFramePacketValid(packet_)) return true;
         return sdl_.draw(renderer, packet_);
+    }
+
+    [[nodiscard]] bool wantsTextCursor(float x, float y) const {
+        return visible_ && renaming_ &&
+               (renameDragging_ || renameField().contains(x - rect_.x, y - rect_.y));
     }
 
  private:
@@ -303,6 +308,11 @@ class HierarchyPanel {
         }
         focused_ = true;
         if (renaming_ && !renameField().contains(x - rect_.x, y - rect_.y)) commitRename();
+        if (renaming_) {
+            moveRenameCaret(x, y);
+            renameDragging_ = true;
+            return true;
+        }
         if (contextOpen_) {
             const int item = contextItemAt(x, y);
             contextOpen_ = false;
@@ -385,6 +395,10 @@ class HierarchyPanel {
     }
 
     bool onMotion(float x, float y) {
+        if (renameDragging_ && renaming_) {
+            moveRenameCaret(x, y);
+            return true;
+        }
         const bool dragging = drag_.Phase() != Dd::DragPhase::Idle;
         if (dragging) (void)drag_.PointerMove(SU::Vec2{x - rect_.x, y - rect_.y}, buildTargets());
         if (contains(x, y)) hoverRow_ = rowAt(x, y);
@@ -393,6 +407,10 @@ class HierarchyPanel {
     }
 
     bool onUp(float x, float y) {
+        if (renameDragging_) {
+            renameDragging_ = false;
+            return true;
+        }
         if (drag_.Phase() == Dd::DragPhase::Idle) return contains(x, y);
         const auto result = drag_.PointerUp(SU::Vec2{x - rect_.x, y - rect_.y}, buildTargets());
         if (result) dropOn(*result);
@@ -426,9 +444,9 @@ class HierarchyPanel {
         return hm::VisibleRange(model_.RowCount(), scrollY_, Metrics::kRowH, listBox().h);
     }
 
-    bool onKey(SDL_Keycode key) {
+    bool onKey(SDL_Keycode key, SDL_Keymod mod) {
         if (renaming_) {
-            renameKey(key);
+            renameKey(key, mod);
             return true;
         }
         if (!focused_) return false;
@@ -462,6 +480,7 @@ class HierarchyPanel {
         const hm::Item* item = model_.Find(id);
         if (!item) return;
         renaming_ = true;
+        renameDragging_ = false;
         renameId_ = id;
         rename_.setText(item->label);
         if (window_) SDL_StartTextInput(window_);
@@ -475,23 +494,56 @@ class HierarchyPanel {
 
     void stopRename() {
         renaming_ = false;
+        renameDragging_ = false;
         rename_.clear();
         if (window_) SDL_StopTextInput(window_);
     }
 
-    void renameKey(SDL_Keycode key) {
+    void renameKey(SDL_Keycode key, SDL_Keymod mod) {
+        const bool extend = (mod & SDL_KMOD_SHIFT) != 0;
+        if ((mod & SDL_KMOD_CTRL) != 0) {
+            switch (key) {
+                case SDLK_A: rename_.selectAll(); return;
+                case SDLK_C:
+                    if (rename_.hasSelection()) SDL_SetClipboardText(rename_.selectedText().c_str());
+                    return;
+                case SDLK_X:
+                    if (rename_.hasSelection()) {
+                        SDL_SetClipboardText(rename_.selectedText().c_str());
+                        rename_.eraseSelection();
+                    }
+                    return;
+                case SDLK_V: {
+                    char* text = SDL_GetClipboardText();
+                    if (!text) break;
+                    const std::string pasted(text);
+                    SDL_free(text);
+                    rename_.insert(pasted.substr(0, pasted.find_first_of("\r\n")));
+                    return;
+                }
+                default: break;
+            }
+        }
         switch (key) {
             case SDLK_RETURN:
             case SDLK_KP_ENTER: commitRename(); break;
             case SDLK_ESCAPE: stopRename(); break;
             case SDLK_BACKSPACE: rename_.backspace(); break;
             case SDLK_DELETE: rename_.del(); break;
-            case SDLK_LEFT: rename_.left(); break;
-            case SDLK_RIGHT: rename_.right(); break;
-            case SDLK_HOME: rename_.home(); break;
-            case SDLK_END: rename_.end(); break;
+            case SDLK_LEFT: rename_.left(extend); break;
+            case SDLK_RIGHT: rename_.right(extend); break;
+            case SDLK_HOME: rename_.home(extend); break;
+            case SDLK_END: rename_.end(extend); break;
             default: break;
         }
+    }
+
+    void moveRenameCaret(float x, float y) {
+        const sui::Box field = renameField();
+        const ST::TextLayoutResult layout = list_.layout(rename_.text(), Metrics::kFont);
+        const std::size_t caret = ST::FindInsertionOffset(layout, {std::max(0.f, x - rect_.x - field.x),
+                                                                  std::max(0.f, y - rect_.y - field.y)});
+        rename_.moveCaretTo(caret, renameDragging_);
     }
 
     // Campo do renomear: na linha do objeto em edicao, depois do icone.
@@ -650,8 +702,16 @@ class HierarchyPanel {
         list_.addSolid(field.x, field.y, field.w, field.h, colors_.field, 0.3f);
         const float textY = y + (Metrics::kRowH - list_.lineHeight(Metrics::kFont)) * 0.5f;
         const std::string& text = rename_.text();
+        const ST::TextLayoutResult layout = list_.layout(text, Metrics::kFont);
+        if (rename_.hasSelection()) {
+            const auto [begin, end] = rename_.selectionRange();
+            const float firstX = ST::GetCaretRect(layout, static_cast<std::uint32_t>(begin)).position.x;
+            const float lastX = ST::GetCaretRect(layout, static_cast<std::uint32_t>(end)).position.x;
+            list_.addSolid(labelX + std::min(firstX, lastX), textY, std::abs(lastX - firstX), layout.lineHeight, colors_.rowSel,
+                           0.4f);
+        }
         list_.addText(labelX, textY, text, Metrics::kFont, theme_.text, field.w);
-        const float caretX = labelX + list_.layout(text.substr(0, rename_.caret()), Metrics::kFont).size.x;
+        const float caretX = labelX + ST::GetCaretRect(layout, static_cast<std::uint32_t>(rename_.caret())).position.x;
         list_.addSolid(caretX, y + 4.f, 1.f, Metrics::kRowH - 8.f, colors_.caret, 0.4f);
     }
 
@@ -723,6 +783,7 @@ class HierarchyPanel {
     int hoverContextItem_ = -1;
     bool focused_ = false;
     bool renaming_ = false;
+    bool renameDragging_ = false;
     hm::Id renameId_ = hm::NoId;
     hm::Id lastScenePick_ = hm::NoId;
     hm::Id lastClickId_ = hm::NoId;

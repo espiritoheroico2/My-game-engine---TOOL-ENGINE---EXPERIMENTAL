@@ -130,6 +130,26 @@ void TestLineEdit() {
   CHECK(l.caret() == 1);
   l.right();
   CHECK(l.del() && l.text() == "aç");
+
+  l.clear();
+  l.insert("hello");
+  l.moveCaretTo(1);
+  l.moveCaretTo(4, true);
+  const auto selectedRange = l.selectionRange();
+  CHECK(l.hasSelection() && selectedRange.first == 1 && selectedRange.second == 4);
+  CHECK(l.selectedText() == "ell");
+  l.insert("i");
+  CHECK(l.text() == "hio" && l.caret() == 2 && !l.hasSelection());
+  l.moveCaretTo(1);
+  l.moveCaretTo(2, true);
+  CHECK(l.backspace() && l.text() == "ho" && l.caret() == 1);
+
+  l.clear();
+  l.insert("a\xC3\xA7" "b");   // "açb"
+  l.moveCaretTo(2);              // continuation byte must snap to a codepoint boundary
+  CHECK(l.caret() == 1);
+  l.moveCaretTo(3, true);
+  CHECK(l.selectedText() == "\xC3\xA7");
 }
 
 void TestHistory() {

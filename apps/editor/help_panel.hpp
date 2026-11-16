@@ -87,7 +87,11 @@ class HelpPanel {
   // Chamar para cada evento do SDL, antes do ImGui. Retorna true quando o evento e da janela (o ImGui nao o recebe).
   // `open` = ed.showHelp: o X fecha a janela.
   bool handleEvent(const SDL_Event& e, SDL_Window* window, bool& open) {
-    if (!open) return false;
+    if (!open) {
+      setSearchFocus(false, window);
+      open_ = false;
+      return false;
+    }
     switch (e.type) {
       case SDL_EVENT_TEXT_INPUT:
         if (!model_.SearchFocused()) return false;
@@ -106,9 +110,22 @@ class HelpPanel {
         if (e.button.button != SDL_BUTTON_LEFT || !panel_.contains(e.button.x, e.button.y)) return false;
         click(e.button.x, e.button.y, open, window);
         return true;
+      case SDL_EVENT_MOUSE_MOTION:
+        if (!model_.Search().DraggingSelection()) return false;
+        moveSearchCaret(e.motion.x, e.motion.y);
+        dirty_ = true;
+        return true;
+      case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (e.button.button != SDL_BUTTON_LEFT || !model_.Search().DraggingSelection()) return false;
+        model_.Search().PointerUp();
+        return true;
       default:
         return false;
     }
+  }
+
+  [[nodiscard]] bool wantsTextCursor(float x, float y) const {
+    return open_ && searchBox_.contains(x, y);
   }
 
   // Desenha a janela quando `open`. Retorna false so em falha do SDL.
@@ -117,7 +134,11 @@ class HelpPanel {
       model_.SetPortuguese(portuguese);
       dirty_ = true;
     }
-    if (!open) return true;
+    open_ = open;
+    if (!open) {
+      setSearchFocus(false, window);
+      return true;
+    }
     if (!renderer || !window) return false;
     int ww = 0, wh = 0;
     if (!SDL_GetWindowSize(window, &ww, &wh)) return false;
@@ -346,8 +367,8 @@ class HelpPanel {
     }
     if (searchBox_.contains(x, y)) {
       setSearchFocus(true, window);
-      const SU::Vec2 local{x - searchBox_.x, y - searchBox_.y};
-      model_.Search().PointerDown(local, {searchBox_.w, searchBox_.h}, list_.layout(model_.SearchText(), kFont), searchStyle());
+      model_.Search().PointerDown({x - searchBox_.x, y - searchBox_.y}, {searchBox_.w, searchBox_.h},
+                                  list_.layout(model_.SearchText(), kFont), searchStyle());
       dirty_ = true;
       return;
     }
@@ -381,6 +402,13 @@ class HelpPanel {
     } else {
       SDL_StopTextInput(window);
     }
+  }
+
+  void moveSearchCaret(float x, float y) {
+    const SU::Vec2 local{x - searchBox_.x, y - searchBox_.y};
+    Edit::TextField& field = model_.Search();
+    const ST::TextLayoutResult layout = list_.layout(model_.SearchText(), kFont);
+    field.PointerMove(local, {searchBox_.w, searchBox_.h}, layout, searchStyle());
   }
 
   void keyInSearch(SDL_Keycode key, SDL_Keymod mod, SDL_Window* window) {
@@ -424,6 +452,7 @@ class HelpPanel {
   SR::FramePacket packet_;
   std::uint64_t frameId_ = 0;
   bool dirty_ = true;
+  bool open_ = false;
 
   int windowW_ = -1, windowH_ = -1;
   Box panel_, searchBox_, listBox_, bodyBox_, closeBox_;

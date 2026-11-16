@@ -211,6 +211,16 @@ class InspectorPanel {
     }
 
     // Eventos do SDL, antes do ImGui. true quando o evento e do Inspector. A roda fica com o ImGui (a janela rola).
+    [[nodiscard]] bool wantsTextCursor(float x, float y) const {
+        if (!shown_ || !sui::Box{visible_.x, visible_.y, visible_.w, visible_.h}.contains(x, y)) return false;
+        const SU::Vec2 p{x - origin_.x, y - origin_.y};
+        if (field_kind_ == FieldKind::Hex && popup_.open && contains(pickerLayout().hexField, p)) return true;
+        for (const Control& c : controls_) {
+            if (!c.disabled && (c.kind == Kind::Num || c.kind == Kind::Text) && contains(c.box, p)) return true;
+        }
+        return false;
+    }
+
     bool handleEvent(const SDL_Event& e) {
         if (!shown_) return false;
         switch (e.type) {

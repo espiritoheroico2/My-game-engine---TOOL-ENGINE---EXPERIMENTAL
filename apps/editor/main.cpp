@@ -521,6 +521,8 @@ editor::sui::Box gInspectorOrigin;   // canto do bloco SpriteUI na tela (preench
 editor::sui::Box gInspectorVisible;  // parte do bloco que cabe na janela ImGui (a janela rola e corta)
 bool gProfilerFrame = false;         // a janela ImGui do Profiler esta visivel neste quadro
 editor::sui::Box gProfilerRect;       // area de conteudo da janela dockavel Profiler
+bool gConsoleFrame = false;          // a janela ImGui do Console esta visivel neste quadro
+editor::sui::Box gConsoleRect;        // area de conteudo da janela dockavel Console
 
 // Dados do objeto selecionado para o painel. Os ponteiros valem neste quadro.
 editor::inspector_panel::Context inspectorContext(Editor& ed) {
@@ -628,6 +630,23 @@ void drawProfilerFrame(Editor& ed) {
   gProfilerRect = {origin.x, origin.y, avail.x, avail.y};
   ImGui::Dummy(avail);
   gProfilerFrame = true;
+  ImGui::End();
+}
+
+void drawConsoleFrame(Editor& ed) {
+  gConsoleFrame = false;
+  if (!ed.showConsole) return;
+  ImGui::SetNextWindowSize({720.f, 280.f}, ImGuiCond_FirstUseEver);
+  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+  if (!ImGui::Begin(W("Console", "cons").c_str(), &ed.showConsole, flags)) {
+    ImGui::End();
+    return;
+  }
+  const ImVec2 origin = ImGui::GetCursorScreenPos();
+  const ImVec2 avail = ImGui::GetContentRegionAvail();
+  gConsoleRect = {origin.x, origin.y, avail.x, avail.y};
+  ImGui::Dummy(avail);
+  gConsoleFrame = true;
   ImGui::End();
 }
 #endif
@@ -2184,6 +2203,17 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
   return api;
 }
 
+SDL_Renderer* createEditorRenderer(SDL_Window* window, bool forceSoftware) {
+  if (!window) return nullptr;
+  if (forceSoftware) return SDL_CreateRenderer(window, "software");
+  for (int i = 0; i < SDL_GetNumRenderDrivers(); ++i) {
+    const char* driver = SDL_GetRenderDriver(i);
+    if (!driver || std::strcmp(driver, "vulkan") == 0 || std::strcmp(driver, "software") == 0) continue;
+    if (SDL_Renderer* renderer = SDL_CreateRenderer(window, driver)) return renderer;
+  }
+  return SDL_CreateRenderer(window, "software");
+}
+
 } // namespace
 
 // O editor le assets/ (shaders, idiomas, temas) por caminho relativo. Para funcionar com dois cliques no .exe
@@ -2266,7 +2296,7 @@ int main(int argc, char** argv) {
   enterProjectRoot();
   if (selfTest) { const int rc = editor::runSelfTest("assets/samples"); SDL_Quit(); return rc; } // sem janela
   SDL_Window* window = SDL_CreateWindow("ToolEngine Editor", 1600, 900, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-  SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, maxFrames > 0 ? "software" : nullptr) : nullptr;
+  SDL_Renderer* renderer = createEditorRenderer(window, maxFrames > 0);
   if (!window || !renderer) { std::fprintf(stderr, "window/renderer: %s\n", SDL_GetError()); return 1; }
   SDL_SetRenderVSync(renderer, 0); // o limite so e ativado se o usuario selecionar VSync ou um FPS fixo
 
@@ -2428,6 +2458,10 @@ int main(int argc, char** argv) {
   bool testMapGenerate = false;   // o botao "Generate map" so marca; o mapa e gerado depois do quadro
   std::unique_ptr<editor::console_panel::ConsolePanel> consolePanel;
   if (uiReady) consolePanel = std::make_unique<editor::console_panel::ConsolePanel>(uiAtlas, uiRenderer);
+  SDL_Cursor* spriteTextCursor = uiReady ? SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT) : nullptr;
+  bool spriteTextCursorActive = false;
+  bool cursorWarningLogged = false;
+  if (uiReady && !spriteTextCursor) tool::logWarn(std::string("Could not create text cursor: ") + SDL_GetError());
   std::unique_ptr<editor::hierarchy_panel::HierarchyPanel> hierPanel;
   if (uiReady) hierPanel = std::make_unique<editor::hierarchy_panel::HierarchyPanel>(uiAtlas, uiRenderer);
   gHierarchySpriteOn = hierPanel != nullptr;
@@ -2481,7 +2515,7 @@ int main(int argc, char** argv) {
       const editor::testmap::Action testMapAction = testMapPanel ? testMapPanel->handleEvent(e, editor::testMapState().open, editor::testMapState().side) : editor::testmap::Action::None;
       if (testMapAction == editor::testmap::Action::Generate) testMapGenerate = true;
       const bool menuHandled = menuPanel && menuPanel->handleEvent(e);
-      const bool consoleHandled = consolePanel && consolePanel->handleEvent(e, ed.showConsole);
+      const bool consoleHandled = consolePanel && consolePanel->handleEvent(e, ed.showConsole && gConsoleFrame);
       const bool hierHandled = hierPanel && hierPanel->handleEvent(e);
       const bool setHandled = settingsPanel && settingsPanel->handleEvent(e);
       const bool inspHandled = inspPanel && inspPanel->handleEvent(e);
@@ -2560,6 +2594,7 @@ int main(int argc, char** argv) {
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showInspector) drawInspector(ed);
       if (profPanel) drawProfilerFrame(ed);
+      if (consolePanel) drawConsoleFrame(ed);
       ed_::scriptWindowUi(ed); // janela de edicao de script (fora do Inspector)
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showScene) drawSceneWindow(ed, renderer);
@@ -2661,11 +2696,11 @@ int main(int argc, char** argv) {
       }
       for (const editor::mainmenu::Request& request : menuRequests) applyMenuRequest(ed, quit, request);
     }
-    if (consolePanel && ed.showConsole) {   // por cima do ImGui, como o Profiler
+    if (consolePanel) {
       const editor::console_panel::Source source{ed.console, ed.consoleSerial, tool::debug().count(tool::Severity::Error),
                                                  tool::debug().count(tool::Severity::Warning)};
       editor::console_panel::Requests requests;
-      if (!consolePanel->draw(renderer, window, ed.showConsole, source, requests)) {
+      if (!consolePanel->draw(renderer, window, ed.showConsole && gConsoleFrame, gConsoleRect, source, requests)) {
         tool::logError(std::string("Console SpriteUI render failed: ") + SDL_GetError());
         ed.showConsole = false;
       }
@@ -2687,6 +2722,25 @@ int main(int argc, char** argv) {
         tool::logError(std::string("SpriteUI diagnostics render failed: ") + SDL_GetError());
         ed.showSpriteUiDiagnostics = false;
       }
+    }
+#endif
+#ifdef TOOL_WITH_SPRITEUI
+    float mouseX = 0.f, mouseY = 0.f;
+    SDL_GetMouseState(&mouseX, &mouseY);
+    const bool textFieldHovered =
+        (hierPanel && ed.showHierarchy && gHierarchyFrame && hierPanel->wantsTextCursor(mouseX, mouseY)) ||
+        (consolePanel && ed.showConsole && gConsoleFrame && consolePanel->wantsTextCursor(mouseX, mouseY)) ||
+        (inspPanel && ed.showInspector && gInspectorFrame && inspPanel->wantsTextCursor(mouseX, mouseY)) ||
+        (helpPanel && editor::helpState().open && helpPanel->wantsTextCursor(mouseX, mouseY));
+    if (textFieldHovered && spriteTextCursor) {
+      if (!SDL_SetCursor(spriteTextCursor) && !cursorWarningLogged) {
+        tool::logWarn(std::string("Could not activate text cursor: ") + SDL_GetError());
+        cursorWarningLogged = true;
+      }
+      spriteTextCursorActive = true;
+    } else if (spriteTextCursorActive) {
+      SDL_SetCursor(SDL_GetDefaultCursor());
+      spriteTextCursorActive = false;
     }
 #endif
     zone.restart(editor::Zone::Present);
@@ -2733,6 +2787,7 @@ int main(int argc, char** argv) {
   ed.sceneTex.destroy(); ed.gameTex[0].destroy(); ed.gameTex[1].destroy();
   ed.shutdownGpu();
   ImGui_ImplSDLRenderer3_Shutdown(); ImGui_ImplSDL3_Shutdown();
+  SDL_SetCursor(SDL_GetDefaultCursor());
   ImNodes::DestroyContext(); ImGui::DestroyContext();
 #ifdef TOOL_WITH_SPRITEUI
   profPanel.reset();
@@ -2740,6 +2795,7 @@ int main(int argc, char** argv) {
   statusPanel.reset();
   helpPanel.reset();
   testMapPanel.reset();
+  if (spriteTextCursor) SDL_DestroyCursor(spriteTextCursor);
   uiRenderer.destroy();   // a textura do atlas e destruida antes do renderer SDL
 #endif
   SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();

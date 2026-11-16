@@ -43,26 +43,18 @@ namespace ST = ToolEngine::SpriteUi::Text;
 namespace cm = editor::console_model;
 
 struct Theme {
-  static constexpr float kMaxWidth = 720.f;
-  static constexpr float kMargin = 12.f;          // distancia das bordas da janela
-  static constexpr float kMinHeight = 220.f;
-  static constexpr float kMaxHeight = 380.f;
-  static constexpr float kHeightShare = 0.42f;    // fracao da altura da janela, dentro de kMin/kMaxHeight
   static constexpr float kPad = sui::kPanelPadding;
-  static constexpr float kHeaderH = 34.f;         // titulo e X
   static constexpr float kRowH = 30.f;            // barra de botoes, barra de filtros e linha de comando
   static constexpr float kBtnH = 24.f;
   static constexpr float kBtnPad = 12.f;          // espaco de cada lado do rotulo dentro do botao
   static constexpr float kBtnGap = 6.f;
   static constexpr float kFieldH = 24.f;
   static constexpr float kFieldInset = 8.f;
-  static constexpr float kCloseSize = 24.f;
   static constexpr float kListGap = 4.f;
   static constexpr float kListInset = 6.f;        // recuo do texto dentro da lista
   static constexpr float kRowGap = 3.f;           // espaco entre duas linhas do log
   static constexpr float kScrollLane = 12.f;      // reserva a direita da lista para a barra de rolagem
   static constexpr float kScrollW = 4.f;
-  static constexpr float kTitleFont = 16.f;
   static constexpr float kFont = 13.f;
   static constexpr float kSmallFont = 11.f;
   static constexpr float kWheelStep = 48.f;
@@ -85,21 +77,20 @@ struct Colors {
   SU::Vec4 btnOn = Srgb(0.12f, 0.31f, 0.52f);       // Auto-scroll ligado
   SU::Vec4 field = Srgb(0.08f, 0.10f, 0.14f);
   SU::Vec4 fieldFocus = Srgb(0.10f, 0.13f, 0.19f);
+  SU::Vec4 selection = Srgb(0.15f, 0.22f, 0.37f, 0.75f);
   SU::Vec4 caret = Srgb(0.91f, 0.918f, 0.933f);
   SU::Vec4 rowHover = Srgb(0.12f, 0.15f, 0.20f);
   SU::Vec4 infoText = Srgb(0.91f, 0.918f, 0.933f);
   SU::Vec4 warnText = Srgb(1.f, 0.85f, 0.3f);       // mesmas cores do Console ImGui
   SU::Vec4 errorText = Srgb(1.f, 0.4f, 0.4f);
   SU::Vec4 scroll = Srgb(0.45f, 0.48f, 0.55f, 0.75f);
-  SU::Vec4 closeIdle = Srgb(0.20f, 0.22f, 0.27f);
-  SU::Vec4 closeHover = Srgb(0.62f, 0.22f, 0.22f);
 };
 
 enum class HAlign : std::uint8_t { Left, Center, Right };
 enum class Focus : std::uint8_t { None, Filter, Command };
 
-// Alvo de clique: botoes, chips de nivel, campos, linhas da lista e o X.
-enum class Target : std::uint8_t { None, Close, Clear, Check, Copy, Follow, Level, Filter, Command, Run, Row };
+// Alvo de clique: botoes, chips de nivel, campos e linhas da lista.
+enum class Target : std::uint8_t { None, Clear, Check, Copy, Follow, Level, Filter, Command, Run, Row };
 
 struct Hit {
   Target target = Target::None;
@@ -132,21 +123,25 @@ class ConsolePanel {
   ConsolePanel(const ConsolePanel&) = delete;
   ConsolePanel& operator=(const ConsolePanel&) = delete;
 
-  // true quando o evento e do painel (o editor nao o passa ao ImGui). `visible` = ed.showConsole.
-  bool handleEvent(const SDL_Event& e, bool& visible) {
+  // Eventos de ponteiro tambem chegam ao ImGui para a janela hospedeira continuar focavel e dockavel.
+  bool handleEvent(const SDL_Event& e, bool visible) {
     if (!visible) return false;
     switch (e.type) {
       case SDL_EVENT_MOUSE_WHEEL:
-        if (!contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
-        scroll_ = std::clamp(scroll_ - e.wheel.y * Theme::kWheelStep, 0.f, maxScroll_);
-        model_.onScrolled(scroll_, maxScroll_);
-        return true;
+        if (contains(e.wheel.mouse_x, e.wheel.mouse_y)) {
+          scroll_ = std::clamp(scroll_ - e.wheel.y * Theme::kWheelStep, 0.f, maxScroll_);
+          model_.onScrolled(scroll_, maxScroll_);
+        }
+        return false;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        return onMouseDown(e, visible);
+        onMouseDown(e);
+        return false;
       case SDL_EVENT_MOUSE_BUTTON_UP:
-        return onMouseUp(e);
+        onMouseUp(e);
+        return false;
       case SDL_EVENT_MOUSE_MOTION:
-        return contains(e.motion.x, e.motion.y);
+        if (draggingSelection_) moveCaretFromPointer(e.motion.x, e.motion.y, true);
+        return false;
       case SDL_EVENT_TEXT_INPUT:
         if (focus_ == Focus::None || !e.text.text) return false;
         insertText(e.text.text);
@@ -159,19 +154,26 @@ class ConsolePanel {
     }
   }
 
+  [[nodiscard]] bool wantsTextCursor(float x, float y) const {
+    if (draggingSelection_) return true;
+    const Hit hover = contains(x, y) ? hitTest(x, y) : Hit{};
+    return hover.target == Target::Filter || hover.target == Target::Command;
+  }
+
   // Calcula o quadro e desenha. Retorna false so em falha do SDL. Os pedidos do usuario saem em `out`.
-  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool visible, const Source& src, Requests& out) {
+  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool visible, sui::Box bounds, const Source& src, Requests& out) {
     if (!visible) {
       resetInteraction();
       return true;
     }
     if (!renderer || !window) return false;
-    int ww = 0, wh = 0;
-    if (!SDL_GetWindowSize(window, &ww, &wh)) return false;
-    if (ww <= 0 || wh <= 0) return true;   // janela minimizada: nada a desenhar
+    if (bounds.w <= 0.f || bounds.h <= 0.f) {
+      resetInteraction();
+      return true;
+    }
     window_ = window;
 
-    layoutPanel(static_cast<float>(ww), static_cast<float>(wh));
+    layoutPanel(bounds);
     if (pending_.target != Target::None) {
       applyClick(pending_, src.entries, out);
       pending_ = Hit{};
@@ -212,40 +214,55 @@ class ConsolePanel {
 
   static SU::FlexItem panelStyle() {
     SU::FlexItem panel;
-    panel.width = {SU::SizeMode::Fixed, Theme::kMaxWidth};
-    panel.height = {SU::SizeMode::Fixed, Theme::kMinHeight};
+    panel.width = {SU::SizeMode::Fixed, 1.f};
+    panel.height = {SU::SizeMode::Fixed, 1.f};
     panel.direction = SU::LayoutDirection::Column;
     panel.alignItems = SU::AlignItems::Stretch;
     return panel;
   }
 
   // ---------- Eventos ----------
-  bool onMouseDown(const SDL_Event& e, bool& visible) {
-    if (e.button.button != SDL_BUTTON_LEFT) return false;
+  void onMouseDown(const SDL_Event& e) {
+    if (e.button.button != SDL_BUTTON_LEFT) return;
+    pressed_ = Hit{};
     const float x = e.button.x, y = e.button.y;
     if (!contains(x, y)) {
       setFocus(Focus::None);
-      return false;
+      draggingSelection_ = false;
+      return;
     }
     const Hit h = hitTest(x, y);
-    if (h.target == Target::Close) {
-      visible = false;
-      resetInteraction();
-      return true;
-    }
     setFocus(h.target == Target::Filter ? Focus::Filter : h.target == Target::Command ? Focus::Command : Focus::None);
     pressed_ = h;
-    return true;
+    draggingSelection_ = focus_ != Focus::None;
+    if (draggingSelection_) moveCaretFromPointer(x, y, false);
   }
 
   // Botao dispara ao soltar sobre o mesmo alvo; campos so ganham foco no clique (ja tratado acima).
-  bool onMouseUp(const SDL_Event& e) {
-    if (e.button.button != SDL_BUTTON_LEFT || pressed_.target == Target::None) return false;
+  void onMouseUp(const SDL_Event& e) {
+    if (e.button.button != SDL_BUTTON_LEFT) return;
     const Hit h = hitTest(e.button.x, e.button.y);
     const bool isField = h.target == Target::Filter || h.target == Target::Command;
-    if (h == pressed_ && !isField) pending_ = h;
+    if (pressed_.target != Target::None && h == pressed_ && !isField) pending_ = h;
     pressed_ = Hit{};
-    return true;
+    draggingSelection_ = false;
+  }
+
+  void moveCaretFromPointer(float x, float y, bool extend) {
+    const Target target = focus_ == Focus::Filter ? Target::Filter : focus_ == Focus::Command ? Target::Command : Target::None;
+    const auto box = std::find_if(boxes_.begin(), boxes_.end(), [target](const Box& b) { return b.target == target; });
+    if (box == boxes_.end()) return;
+
+    cm::LineEdit& line = focus_ == Focus::Filter ? model_.filter() : model_.command();
+    const float innerX = panelBounds_.x + box->x + Theme::kFieldInset;
+    const float innerW = std::max(0.f, box->w - 2.f * Theme::kFieldInset);
+    const ST::TextLayoutResult layout = layoutOf(line.text(), Theme::kFont);
+    const float caretX = ST::GetCaretRect(layout, static_cast<std::uint32_t>(line.caret())).position.x;
+    const float shift = std::max(0.f, caretX - innerW + 4.f);
+    const float localX = std::max(0.f, x - innerX + shift);
+    const float localY = std::clamp(y - (panelBounds_.y + box->y) - (box->h - layout.lineHeight) * 0.5f,
+                                    0.f, layout.lineHeight);
+    line.moveCaretTo(ST::FindInsertionOffset(layout, {localX, localY}), extend);
   }
 
   void insertText(const char* utf8) {
@@ -263,6 +280,7 @@ class ConsolePanel {
     const bool onFilter = focus_ == Focus::Filter;
     cm::LineEdit& line = onFilter ? model_.filter() : model_.command();
     const bool ctrl = (mod & SDL_KMOD_CTRL) != 0;
+    const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
     const bool editsText = key == SDLK_BACKSPACE || key == SDLK_DELETE || (ctrl && (key == SDLK_X || key == SDLK_V));
     if (editsText && onFilter) dirty_ = true;
     switch (key) {
@@ -273,10 +291,13 @@ class ConsolePanel {
         break;
       case SDLK_BACKSPACE: line.backspace(); break;
       case SDLK_DELETE: line.del(); break;
-      case SDLK_LEFT: line.left(); break;
-      case SDLK_RIGHT: line.right(); break;
-      case SDLK_HOME: line.home(); break;
-      case SDLK_END: line.end(); break;
+      case SDLK_A:
+        if (ctrl) line.selectAll();
+        break;
+      case SDLK_LEFT: line.left(shift); break;
+      case SDLK_RIGHT: line.right(shift); break;
+      case SDLK_HOME: line.home(shift); break;
+      case SDLK_END: line.end(shift); break;
       case SDLK_UP:
         if (!onFilter) model_.historyUp();
         break;
@@ -284,12 +305,20 @@ class ConsolePanel {
         if (!onFilter) model_.historyDown();
         break;
       case SDLK_C:
-        if (ctrl && !line.empty()) SDL_SetClipboardText(line.text().c_str());
+        if (ctrl && !line.empty()) {
+          const std::string text = line.hasSelection() ? line.selectedText() : line.text();
+          SDL_SetClipboardText(text.c_str());
+        }
         break;
       case SDLK_X:
         if (ctrl && !line.empty()) {
-          SDL_SetClipboardText(line.text().c_str());
-          line.clear();
+          if (line.hasSelection()) {
+            SDL_SetClipboardText(line.selectedText().c_str());
+            line.eraseSelection();
+          } else {
+            SDL_SetClipboardText(line.text().c_str());
+            line.clear();
+          }
         }
         break;
       case SDLK_V:
@@ -346,6 +375,7 @@ class ConsolePanel {
     if (next == focus_) return;
     focus_ = next;
     if (next == Focus::None) {
+      draggingSelection_ = false;
       if (textWindow_) SDL_StopTextInput(textWindow_);
       textWindow_ = nullptr;
     } else if (!textWindow_ && window_) {
@@ -357,6 +387,7 @@ class ConsolePanel {
   void resetInteraction() {
     pressed_ = Hit{};
     pending_ = Hit{};
+    draggingSelection_ = false;
     setFocus(Focus::None);
   }
 
@@ -386,14 +417,14 @@ class ConsolePanel {
   }
 
   // ---------- Geometria ----------
-  void layoutPanel(float W, float H) {
-    panelW_ = std::max(1.f, std::min(Theme::kMaxWidth, W - 2.f * Theme::kMargin));
-    panelH_ = std::max(1.f, std::min(std::clamp(H * Theme::kHeightShare, Theme::kMinHeight, Theme::kMaxHeight), H - 2.f * Theme::kMargin));
-    panelBounds_ = {Theme::kMargin, H - panelH_ - Theme::kMargin, panelW_, panelH_};
+  void layoutPanel(sui::Box bounds) {
+    panelW_ = std::max(1.f, bounds.w);
+    panelH_ = std::max(1.f, bounds.h);
+    panelBounds_ = {bounds.x, bounds.y, panelW_, panelH_};
     setSize(panel_, panelW_, panelH_);
     tree_.Layout({{panelBounds_.x, panelBounds_.y}, {panelW_, panelH_}});
 
-    listTop_ = Theme::kHeaderH + 2.f * Theme::kRowH + Theme::kListGap;
+    listTop_ = 2.f * Theme::kRowH + Theme::kListGap;
     const float commandY = panelH_ - Theme::kRowH;
     viewportH_ = std::max(0.f, commandY - Theme::kListGap - listTop_);
   }
@@ -513,13 +544,8 @@ class ConsolePanel {
   void buildChrome(const Source& src) {
     boxes_.clear();
     const float pad = Theme::kPad;
-    const float buttonRowY = Theme::kHeaderH;
+    const float buttonRowY = 0.f;
     const float btnY = buttonRowY + (Theme::kRowH - Theme::kBtnH) * 0.5f;
-
-    Box& close = pushBox(Target::Close, -1, panelW_ - pad - Theme::kCloseSize, (Theme::kHeaderH - Theme::kCloseSize) * 0.5f,
-                         Theme::kCloseSize, Theme::kCloseSize);
-    close.label = "X";
-    close.textColor = colors_.text;
 
     float x = addButton(Target::Clear, T("Clear"), pad, btnY);
     x = addButton(Target::Check, T("Check scripts"), x, btnY);
@@ -538,7 +564,7 @@ class ConsolePanel {
 
   void buildFilterRow(const cm::LogEntries& entries) {
     const float pad = Theme::kPad;
-    const float chipY = Theme::kHeaderH + Theme::kRowH + (Theme::kRowH - Theme::kBtnH) * 0.5f;
+    const float chipY = Theme::kRowH + (Theme::kRowH - Theme::kBtnH) * 0.5f;
     const cm::Counts counts = cm::ConsoleModel::countAll(entries);
     const char* names[cm::kGroupCount] = {T("Info"), T("Warnings"), T("Errors")};
     const SU::Vec4 colors[cm::kGroupCount] = {colors_.infoText, colors_.warnText, colors_.errorText};
@@ -555,7 +581,7 @@ class ConsolePanel {
       b.textColor = on ? colors[g] : colors_.textDim;
       x += w + Theme::kBtnGap;
     }
-    pushBox(Target::Filter, -1, x, Theme::kHeaderH + Theme::kRowH + (Theme::kRowH - Theme::kFieldH) * 0.5f,
+    pushBox(Target::Filter, -1, x, Theme::kRowH + (Theme::kRowH - Theme::kFieldH) * 0.5f,
             std::max(40.f, panelW_ - pad - x), Theme::kFieldH);
   }
 
@@ -609,9 +635,7 @@ class ConsolePanel {
     const float px = panelBounds_.x, py = panelBounds_.y;
     const std::uint32_t panelClip = addClip(px, py, panelW_, panelH_);
     addSolid(px, py, panelW_, panelH_, colors_.panel, 0.f, panelClip);
-    addText(px + Theme::kPad, py + Theme::kHeaderH * 0.5f, T("Console"), Theme::kTitleFont, colors_.title, panelW_ * 0.5f, 0.3f,
-            panelClip);
-    addText(px + panelW_ - Theme::kPad, py + Theme::kHeaderH + Theme::kRowH * 0.5f, rightText_, Theme::kSmallFont, colors_.textDim,
+    addText(px + panelW_ - Theme::kPad, py + Theme::kRowH * 0.5f, rightText_, Theme::kSmallFont, colors_.textDim,
             rightMaxW_, 0.3f, panelClip, HAlign::Right);
 
     for (const Box& b : boxes_) {
@@ -633,7 +657,6 @@ class ConsolePanel {
   }
 
   SU::Vec4 backgroundOf(const Box& b, bool hot, bool pressed) const {
-    if (b.target == Target::Close) return hot ? colors_.closeHover : colors_.closeIdle;
     if (pressed) return colors_.btnPressed;
     if (b.target == Target::Follow && b.on) return colors_.btnOn;
     if (b.target == Target::Level && !b.on) return hot ? colors_.btn : colors_.panel;
@@ -657,8 +680,18 @@ class ConsolePanel {
       addText(innerX, midY, hint, Theme::kFont, colors_.textDim, innerW, 0.35f, clip);
       return;
     }
-    const float caretX = textWidth(line.text().substr(0, line.caret()), Theme::kFont);
+    const ST::TextLayoutResult layout = layoutOf(line.text(), Theme::kFont);
+    const float caretX = ST::GetCaretRect(layout, static_cast<std::uint32_t>(line.caret())).position.x;
     const float shift = std::max(0.f, caretX - innerW + 4.f);
+    if (line.hasSelection()) {
+      const auto [begin, end] = line.selectionRange();
+      const float firstX = ST::GetCaretRect(layout, static_cast<std::uint32_t>(begin)).position.x;
+      const float lastX = ST::GetCaretRect(layout, static_cast<std::uint32_t>(end)).position.x;
+      const float top = y + (b.h - layout.lineHeight) * 0.5f;
+      const float left = innerX + std::min(firstX, lastX) - shift;
+      const float width = std::abs(lastX - firstX);
+      if (width > 0.f) addSolid(left, top, width, layout.lineHeight, colors_.selection, 0.25f, clip);
+    }
     addText(innerX - shift, midY, line.text(), Theme::kFont, colors_.text, 1e6f, 0.35f, clip);
     if (focused) addSolid(innerX + caretX - shift, y + 4.f, 1.f, b.h - 8.f, colors_.caret, 0.4f, clip);
   }
@@ -734,6 +767,7 @@ class ConsolePanel {
   SDL_Window* textWindow_ = nullptr;   // janela em que o texto do SDL foi ligado (nullptr = desligado)
   Hit pressed_{}, pending_{};
   Focus focus_ = Focus::None;
+  bool draggingSelection_ = false;
 };
 
 }  // namespace editor::console_panel

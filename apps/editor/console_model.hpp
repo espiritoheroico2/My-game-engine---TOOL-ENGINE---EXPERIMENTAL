@@ -16,6 +16,7 @@
 
 #include "tool/core/log.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -76,39 +77,86 @@ class LineEdit {
   [[nodiscard]] const std::string& text() const { return text_; }
   [[nodiscard]] std::size_t caret() const { return caret_; }
   [[nodiscard]] bool empty() const { return text_.empty(); }
+  [[nodiscard]] bool hasSelection() const { return anchor_ != caret_; }
+  [[nodiscard]] std::pair<std::size_t, std::size_t> selectionRange() const {
+    return {std::min(anchor_, caret_), std::max(anchor_, caret_)};
+  }
+  [[nodiscard]] std::string selectedText() const {
+    const auto [begin, end] = selectionRange();
+    return text_.substr(begin, end - begin);
+  }
 
   void setText(std::string s) {
     text_ = std::move(s);
     caret_ = text_.size();
+    anchor_ = caret_;
   }
-  void clear() { text_.clear(); caret_ = 0; }
+  void clear() { text_.clear(); caret_ = anchor_ = 0; }
 
   void insert(std::string_view s) {
-    text_.insert(caret_, s.data(), s.size());
-    caret_ += s.size();
+    if (s.empty()) return;
+    const auto [begin, end] = selectionRange();
+    text_.replace(begin, end - begin, s.data(), s.size());
+    caret_ = anchor_ = begin + s.size();
   }
 
   bool backspace() {
+    if (hasSelection()) return eraseSelection();
     if (caret_ == 0) return false;
     const std::size_t p = prev(caret_);
     text_.erase(p, caret_ - p);
-    caret_ = p;
+    caret_ = anchor_ = p;
     return true;
   }
 
   bool del() {
+    if (hasSelection()) return eraseSelection();
     if (caret_ >= text_.size()) return false;
     text_.erase(caret_, next(caret_) - caret_);
+    anchor_ = caret_;
     return true;
   }
 
-  void left() { caret_ = prev(caret_); }
-  void right() { caret_ = next(caret_); }
-  void home() { caret_ = 0; }
-  void end() { caret_ = text_.size(); }
+  void left(bool extend = false) {
+    if (!extend && hasSelection()) caret_ = selectionRange().first;
+    else caret_ = prev(caret_);
+    if (!extend) anchor_ = caret_;
+  }
+  void right(bool extend = false) {
+    if (!extend && hasSelection()) caret_ = selectionRange().second;
+    else caret_ = next(caret_);
+    if (!extend) anchor_ = caret_;
+  }
+  void home(bool extend = false) {
+    caret_ = 0;
+    if (!extend) anchor_ = caret_;
+  }
+  void end(bool extend = false) {
+    caret_ = text_.size();
+    if (!extend) anchor_ = caret_;
+  }
+  void moveCaretTo(std::size_t byteOffset, bool extend = false) {
+    caret_ = boundary(std::min(byteOffset, text_.size()));
+    if (!extend) anchor_ = caret_;
+  }
+  void selectAll() {
+    anchor_ = 0;
+    caret_ = text_.size();
+  }
+  bool eraseSelection() {
+    if (!hasSelection()) return false;
+    const auto [begin, end] = selectionRange();
+    text_.erase(begin, end - begin);
+    caret_ = anchor_ = begin;
+    return true;
+  }
 
  private:
   static bool isCont(char c) { return (static_cast<unsigned char>(c) & 0xC0) == 0x80; }
+  [[nodiscard]] std::size_t boundary(std::size_t p) const {
+    while (p > 0 && p < text_.size() && isCont(text_[p])) --p;
+    return p;
+  }
   [[nodiscard]] std::size_t prev(std::size_t p) const {
     if (p == 0) return 0;
     --p;
@@ -124,6 +172,7 @@ class LineEdit {
 
   std::string text_;
   std::size_t caret_ = 0;
+  std::size_t anchor_ = 0;
 };
 
 class ConsoleModel {
