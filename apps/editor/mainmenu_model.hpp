@@ -1,8 +1,8 @@
 #pragma once
 
 // Modelo da barra de menus principal (Arquivo, Editar, Janela, Interface, Opcoes) e dos botoes Play, Pausa e Parar.
-// Diz o que cada menu mostra (texto, atalho, marca, desabilitado) e qual pedido cada item dispara. Nao usa SDL,
-// ImGui nem SpriteUI: o painel (mainmenu_panel.hpp) desenha, e o Editor executa o pedido (main.cpp).
+// Diz o que cada menu mostra (texto, atalho, marca, desabilitado) e qual pedido cada item dispara. Nao depende de
+// SDL, ImGui nem SpriteUI: mainmenu_panel.hpp desenha e main.cpp executa os pedidos.
 // Roda no ctest como Editor.MainMenuModel.
 
 #include <cstddef>

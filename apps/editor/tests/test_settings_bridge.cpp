@@ -99,6 +99,8 @@ bool ItemsDiffer(const std::vector<Rendering::UIRenderItem>& a, const std::vecto
 void TestBuiltItemsFollowState() {
   Elm::Checkbox empty;
   Elm::Checkbox checked;
+  empty.border = {{0.f, 0.f}, {16.f, 16.f}};
+  checked.border = empty.border;
   SyncCheckbox(checked, true);
   const auto emptyItems = Elm::BuildCheckboxItems(empty, Elm::CheckboxStyle{}, 0.3f, 1);
   const auto checkedItems = Elm::BuildCheckboxItems(checked, Elm::CheckboxStyle{}, 0.3f, 1);
@@ -110,6 +112,7 @@ void TestBuiltItemsFollowState() {
   CHECK(!Elm::BuildRadioGroupItems(group, Elm::RadioStyle{}, 0.3f, 1).empty());
 
   Elm::Dropdown dropdown;
+  dropdown.border = {{0.f, 0.f}, {120.f, 24.f}};
   SyncDropdown(dropdown, std::vector<std::string>{"VSync", "30 FPS"}, 0);
   CHECK(!Elm::BuildDropdownButtonItems(dropdown, Elm::DropdownStyle{}, 0.3f, 1).empty());
 }

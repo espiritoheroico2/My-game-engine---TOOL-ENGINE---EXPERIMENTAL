@@ -122,6 +122,17 @@ void TestHomeAndEndWithSelection() {
     CHECK(e.Caret() == 4);
 }
 
+void TestMoveCaretToUsesUtf8Boundaries() {
+    current = "TestMoveCaretToUsesUtf8Boundaries";
+    TextEditState e("aéz");
+    e.MoveCaretTo(2);
+    CHECK(e.Caret() == 1);          // deslocamento dentro do codepoint volta ao inicio dele
+    e.MoveCaretTo(3, true);
+    CHECK(e.Caret() == 3 && e.Anchor() == 1);
+    e.MoveCaretTo(100);
+    CHECK(e.Caret() == e.Text().size());
+}
+
 void TestTextIsNeverChangedByReadingOrIdleFrames() {
     current = "TestTextIsNeverChangedByReadingOrIdleFrames";
     // Regressao do bug "campo apagando sozinho": so operacoes explicitas mudam o texto. Mil quadros de leitura
@@ -155,6 +166,7 @@ int main() {
     TestSelectAllCopyCutPaste();
     TestUndoRestoresPreviousState();
     TestHomeAndEndWithSelection();
+    TestMoveCaretToUsesUtf8Boundaries();
     TestTextIsNeverChangedByReadingOrIdleFrames();
     std::printf("text edit: %d/%d checks passed\n", run - failed, run);
     return failed == 0 ? 0 : 1;

@@ -16,6 +16,7 @@
 #include "SpriteUi/Elements/RadioButton.hpp"
 #include "SpriteUi/Elements/Slider.hpp"
 #include "SpriteUi/Elements/TabBar.hpp"
+#include "SpriteUi/Widgets/Controls.hpp"
 
 #include <array>
 #include <cstddef>

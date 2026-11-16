@@ -141,6 +141,12 @@ void TextEditState::MoveEnd(bool extend) noexcept {
     SetCaret(text_.size(), extend);
 }
 
+void TextEditState::MoveCaretTo(std::size_t byteOffset, bool extend) noexcept {
+    byteOffset = std::min(byteOffset, text_.size());
+    while (byteOffset > 0 && byteOffset < text_.size() && IsContinuation(text_[byteOffset])) --byteOffset;
+    SetCaret(byteOffset, extend);
+}
+
 void TextEditState::SelectAll() noexcept {
     anchor_ = 0;
     caret_ = text_.size();

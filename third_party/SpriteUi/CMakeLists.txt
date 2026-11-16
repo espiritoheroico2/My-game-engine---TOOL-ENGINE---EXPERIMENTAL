@@ -236,6 +236,10 @@ if(SPRITEUI_BUILD_TESTS)
     target_link_libraries(spriteui_text_edit_tests PRIVATE SpriteUi::SpriteUI)
     add_test(NAME SpriteUI.TextEdit COMMAND spriteui_text_edit_tests)
 
+    add_executable(spriteui_menubar_tests tests/test_menubar.cpp)
+    target_link_libraries(spriteui_menubar_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.MenuBar COMMAND spriteui_menubar_tests)
+
     if(SPRITEUI_WITH_TEXT_STB)
         add_executable(spriteui_truetype_tests tests/test_truetype_atlas.cpp)
         target_link_libraries(spriteui_truetype_tests PRIVATE SpriteUi::TextStb)

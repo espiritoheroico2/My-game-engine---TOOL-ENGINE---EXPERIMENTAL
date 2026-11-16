@@ -45,6 +45,7 @@ public:
     void MoveRight(bool extend = false) noexcept;
     void MoveHome(bool extend = false) noexcept;
     void MoveEnd(bool extend = false) noexcept;
+    void MoveCaretTo(std::size_t byteOffset, bool extend = false) noexcept;
     void SelectAll() noexcept;
 
     // Limite de pontos de desfazer guardados.

@@ -1966,7 +1966,7 @@ void drawSettings(Editor& ed) {
 
 void openSettings(Editor& ed, int tab) { ed.showSettings = true; ed.settingsTab = tab; ed.focusSettings = 3; }
 
-// Barra de menus principal (SpriteUI, mainmenu_panel.hpp). Estado que ela mostra: cada marca le um flag do Editor.
+// Estado da barra de menus principal SpriteUI. Cada marca le um flag do Editor.
 editor::mainmenu::MenuState menuStateOf(Editor& ed) {
   editor::mainmenu::MenuState s;
   s.playing = ed.playing;
@@ -1995,7 +1995,7 @@ editor::mainmenu::MenuState menuStateOf(Editor& ed) {
   return s;
 }
 
-// Faixa do topo reservada para o encaixe das janelas nao passar por baixo da barra (os textos sao do painel).
+// O DockSpace ainda e do ImGui; reserva-se a faixa para o menu renderizado pelo SpriteUI.
 void reserveMenuBarStrip() {
   ImGuiViewport* vp = ImGui::GetMainViewport();
   const ImGuiWindowFlags fl = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings;
@@ -2621,6 +2621,15 @@ int main(int argc, char** argv) {
       SettingsEditorTarget target{ed};
       editor::settings_changes::ApplyChanges(target, requests);
     }
+    if (menuPanel) {
+      std::vector<editor::mainmenu::Request> menuRequests;
+      menuPanel->setState(menuStateOf(ed), [](const char* text) { return T(text); });
+      if (!menuPanel->draw(renderer, window, ImGui::GetFrameHeight(), menuRequests)) {
+        tool::logError(std::string("Menu bar SpriteUI render failed: ") + SDL_GetError());
+        menuPanel.reset();
+      }
+      for (const editor::mainmenu::Request& request : menuRequests) applyMenuRequest(ed, quit, request);
+    }
     if (consolePanel && ed.showConsole) {   // por cima do ImGui, como o Profiler
       const editor::console_panel::Source source{ed.console, ed.consoleSerial, tool::debug().count(tool::Severity::Error),
                                                  tool::debug().count(tool::Severity::Warning)};
@@ -2637,15 +2646,6 @@ int main(int argc, char** argv) {
         tool::logError(std::string("Status bar SpriteUI render failed: ") + SDL_GetError());
         statusPanel.reset();
       }
-    }
-    if (menuPanel) {
-      std::vector<editor::mainmenu::Request> menuRequests;
-      menuPanel->setState(menuStateOf(ed), [](const char* s) { return T(s); });
-      if (!menuPanel->draw(renderer, window, ImGui::GetFrameHeight(), menuRequests)) {
-        tool::logError(std::string("Menu bar SpriteUI render failed: ") + SDL_GetError());
-        menuPanel.reset();
-      }
-      for (const editor::mainmenu::Request& request : menuRequests) applyMenuRequest(ed, quit, request);
     }
     if (!headless && !playerMode && ed.showSpriteUiDiagnostics) {
       const auto stats = ed.prof.stats();
