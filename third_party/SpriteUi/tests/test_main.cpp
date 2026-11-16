@@ -1,4 +1,6 @@
 #include "SpriteUi/SpriteUi.hpp"
+#include "SpriteUi/Text/BitmapRasterPolicy.hpp"
+#include "SpriteUi/Widgets/TextField.hpp"
 
 #include "TestHarness.hpp"
 #include "TestSuites.hpp"
@@ -468,7 +470,7 @@ void TestReviewRegressions() {
         UILayoutRect rect{{0, 0}, {100, 20}, true, false};
         const auto items = GenerateTextRenderItems(layout, rect, {1, 1, 1, 1}, 1, NoClipIndex, 0.0f, 0, UIHandle{7, 1});
         CHECK(RenderExtractor{}.Build(1, items).instances.size() == 1);
-        CHECK(items[0].flags == Rendering::FlagMsdfText);
+        CHECK(items[0].flags == Rendering::FlagBitmapText);
         const auto bitmapItems = GenerateTextRenderItems(
             layout, rect, {1, 1, 1, 1}, 1, NoClipIndex, 0.0f, 0,
             UIHandle{7, 1}, Rendering::FlagBitmapText);
@@ -935,6 +937,10 @@ static void TestFontMetricsAndTextLayout() {
     metrics.descent = -200.0f;
     metrics.lineGap = 200.0f;
     CHECK(metrics.IsValid());
+    CHECK(ChooseBitmapRasterPixelSize(16.0f, 1.0f) == 24u);
+    CHECK(ChooseBitmapRasterPixelSize(16.0f, 2.0f) == 48u);
+    CHECK(ChooseBitmapRasterPixelSize(16.0f, 3.0f) == 64u);
+    CHECK(ChooseBitmapRasterPixelSize(16.0f, 0.0f) == 24u);
     CHECK(Near(metrics.GetScale(), 0.02f));
     CHECK(Near(metrics.GetLineHeight(), 1200.0f));
 
@@ -1004,8 +1010,20 @@ static void TestFontMetricsAndTextLayout() {
     auto renderItems = GenerateTextRenderItems(layout, rect, {1, 1, 1, 1}, 5);
     CHECK(renderItems.size() == 3);
     CHECK(renderItems[0].textureSlice == 5);
-    CHECK(renderItems[0].flags == 0x2);
+    CHECK(renderItems[0].flags == Rendering::FlagBitmapText);
     CHECK(Near(renderItems[0].layout.resolvedPosition.x, 100.0f + layout.quads[0].bounds.position.x));
+
+    Widgets::TextField field{"ABC"};
+    field.SetFocus(true);
+    Widgets::TextFieldStyle fieldStyle;
+    fieldStyle.paddingX = 0.0f;
+    field.PointerDown({0.0f, 5.0f}, {100.0f, 30.0f}, layout, fieldStyle);
+    field.PointerMove({30.0f, 5.0f}, {100.0f, 30.0f}, layout, fieldStyle);
+    CHECK(field.Edit().HasSelection());
+    field.PointerUp();
+    const std::size_t caretAfterRelease = field.Edit().Caret();
+    field.PointerMove({0.0f, 5.0f}, {100.0f, 30.0f}, layout, fieldStyle);
+    CHECK(field.Edit().Caret() == caretAfterRelease);
 }
 
 static void TestWidgetsAndWindowInteraction() {

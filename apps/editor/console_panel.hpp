@@ -48,7 +48,7 @@ struct Theme {
   static constexpr float kMinHeight = 220.f;
   static constexpr float kMaxHeight = 380.f;
   static constexpr float kHeightShare = 0.42f;    // fracao da altura da janela, dentro de kMin/kMaxHeight
-  static constexpr float kPad = 10.f;
+  static constexpr float kPad = sui::kPanelPadding;
   static constexpr float kHeaderH = 34.f;         // titulo e X
   static constexpr float kRowH = 30.f;            // barra de botoes, barra de filtros e linha de comando
   static constexpr float kBtnH = 24.f;

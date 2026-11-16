@@ -519,6 +519,8 @@ bool gInspectorSpriteOn = false;     // o painel SpriteUI existe
 bool gInspectorFrame = false;        // a janela ImGui do Inspector esta aberta neste quadro
 editor::sui::Box gInspectorOrigin;   // canto do bloco SpriteUI na tela (preenchido no quadro)
 editor::sui::Box gInspectorVisible;  // parte do bloco que cabe na janela ImGui (a janela rola e corta)
+bool gProfilerFrame = false;         // a janela ImGui do Profiler esta visivel neste quadro
+editor::sui::Box gProfilerRect;       // area de conteudo da janela dockavel Profiler
 
 // Dados do objeto selecionado para o painel. Os ponteiros valem neste quadro.
 editor::inspector_panel::Context inspectorContext(Editor& ed) {
@@ -610,6 +612,23 @@ void drawInspectorBlock(Editor& ed) {
   const float bottom = std::min(origin.y + h, wpos.y + wsize.y);
   gInspectorOrigin = {origin.x, origin.y, avail, h};
   gInspectorVisible = {origin.x, top, avail, bottom - top};
+}
+
+void drawProfilerFrame(Editor& ed) {
+  gProfilerFrame = false;
+  if (!ed.showProfiler) return;
+  ImGui::SetNextWindowSize({editor::profiler_panel::Theme::kWidth, 360.f}, ImGuiCond_FirstUseEver);
+  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+  if (!ImGui::Begin(W("Profiler", "prof").c_str(), &ed.showProfiler, flags)) {
+    ImGui::End();
+    return;
+  }
+  const ImVec2 origin = ImGui::GetCursorScreenPos();
+  const ImVec2 avail = ImGui::GetContentRegionAvail();
+  gProfilerRect = {origin.x, origin.y, avail.x, avail.y};
+  ImGui::Dummy(avail);
+  gProfilerFrame = true;
+  ImGui::End();
 }
 #endif
 
@@ -2105,13 +2124,15 @@ void buildDefaultLayout(ImGuiID dock, const ImVec2& size) {
   ImGuiID center = dock;
   const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.18f, nullptr, &center);
   const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.26f, nullptr, &center);
+  ImGuiID rightBottom = 0;
+  const ImGuiID rightTop = ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.58f, nullptr, &rightBottom);
   const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.30f, nullptr, &center);
   ImGuiID leftBottom = 0;
   const ImGuiID leftTop = ImGui::DockBuilderSplitNode(left, ImGuiDir_Up, 0.60f, nullptr, &leftBottom);
   ImGui::DockBuilderDockWindow("###hier", leftTop);
   ImGui::DockBuilderDockWindow("###scenes", leftBottom);
-  ImGui::DockBuilderDockWindow("###insp", right);
-  ImGui::DockBuilderDockWindow("###settings", right);
+  ImGui::DockBuilderDockWindow("###insp", rightTop);
+  ImGui::DockBuilderDockWindow("###settings", rightBottom);
   ImGui::DockBuilderDockWindow("###narr", bottom);
   ImGui::DockBuilderDockWindow("###prof", bottom);
   ImGui::DockBuilderDockWindow("###cons", bottom);
@@ -2129,7 +2150,8 @@ void saveSettings(Editor& ed) {
   j.set("graphicsApi", ed.apiRequested);
   j.set("resMode", ed.resMode); j.set("customW", ed.customW); j.set("customH", ed.customH); j.set("pixelFilter", ed.pixelFilter); j.set("fpsMode", ed.fpsMode);
   j.set("upscaleMode", ed.upscaleMode); j.set("aaMode", ed.aaMode);
-  j.set("lockInterface", ed.lockInterface); j.set("dockWithShift", ed.dockWithShift); j.set("dockLockV2", true);
+  j.set("lockInterface", ed.lockInterface); j.set("dockWithShift", ed.dockWithShift);
+  j.set("dockLockV2", true); j.set("dockLockV3", true);
   j.set("renderScaleSet", ed.renderScaleSet); if (ed.renderScaleSet) j.set("renderScale", static_cast<double>(ed.renderScale));
   j.set("lastScene", ed.sceneInfo.name);
   { std::error_code ec; j.set("lastProject", std::filesystem::absolute(ed.project.root, ec).string()); }
@@ -2149,9 +2171,10 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
       ed.customW = static_cast<int>(editor::ser::num(*j, "customW", 1280.f)); ed.customH = static_cast<int>(editor::ser::num(*j, "customH", 720.f));
       ed.pixelFilter = editor::ser::flag(*j, "pixelFilter", false); ed.fpsMode = std::clamp(static_cast<int>(editor::ser::num(*j, "fpsMode", 4.f)), 0, 4);
       ed.upscaleMode = std::clamp(static_cast<int>(editor::ser::num(*j, "upscaleMode", 2.f)), 0, 3); ed.aaMode = std::clamp(static_cast<int>(editor::ser::num(*j, "aaMode", 0.f)), 0, 1);
-      // Migracao unica (dockLockV2): arquivos antigos gravaram lockInterface=false por padrao; com a interface travada
-      // como padrao, janelas nao saem mais do encaixe. Depois disso, a escolha salva pelo usuario e respeitada.
-      ed.lockInterface = j->has("dockLockV2") ? editor::ser::flag(*j, "lockInterface", true) : true;
+      // Arquivos anteriores podiam gravar a trava automaticamente; abre destravado uma vez para permitir resize/docking.
+      ed.lockInterface = editor::ser::flag(*j, "dockLockV3", false)
+          ? editor::ser::flag(*j, "lockInterface", false)
+          : false;
       ed.dockWithShift = editor::ser::flag(*j, "dockWithShift", false);
       if (editor::ser::flag(*j, "renderScaleSet", false)) { ed.renderScaleSet = true; ed.renderScale = std::clamp(editor::ser::num(*j, "renderScale", 1.f), 0.25f, 2.f); }
       api = static_cast<int>(editor::ser::num(*j, "graphicsApi", 0.f)); lastScene = (*j)["lastScene"].asString(); lastProject = (*j)["lastProject"].asString();
@@ -2194,9 +2217,15 @@ void loadUiFont(ImGuiIO& io) {
   static const ImWchar extra[] = {0x0100, 0x017F, 0x0370, 0x03FF, 0x0400, 0x04FF, 0};
   gb.AddRanges(extra);
   gb.BuildRanges(&ranges);
+  ImFontConfig fontConfig;
+  fontConfig.SizePixels = 18.f;
+  fontConfig.OversampleH = 3;
+  fontConfig.OversampleV = 2;
+  fontConfig.PixelSnapH = false;
   std::error_code ec;
   for (const char* p : candidates)
-    if (std::filesystem::exists(p, ec) && io.Fonts->AddFontFromFileTTF(p, 15.f, nullptr, ranges.Data)) return;
+    if (std::filesystem::exists(p, ec) && io.Fonts->AddFontFromFileTTF(p, fontConfig.SizePixels, &fontConfig, ranges.Data)) return;
+  io.Fonts->AddFontDefault(&fontConfig);
 }
 
 int main(int argc, char** argv) {
@@ -2307,7 +2336,7 @@ int main(int argc, char** argv) {
 #ifdef TOOL_WITH_SPRITEUI
     if (!useImGuiStart) {
       ToolEngine::SpriteUi::Text::TruetypeAtlas atlas;
-      if (editor::start::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", atlas)) {
+      if (editor::start::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", atlas, SDL_GetWindowDisplayScale(window))) {
         editor::start::Model model(lastProject, editor::defaultProjectsFolder(lastProject));
         startDone = editor::start::RunStartScreen(window, renderer, model, atlas,
                                                   editor::defaultProjectsFolder(lastProject), closed);
@@ -2379,7 +2408,9 @@ int main(int argc, char** argv) {
   ToolEngine::SpriteUi::Text::TruetypeAtlas uiAtlas;
   editor::sui::SpriteUiSdlRenderer uiRenderer;
   // O modo --player tambem carrega a fonte: a janela do jogo desenha o texto da UI com ela (mesma fonte do editor).
-  const bool fontReady = !headless && editor::sui::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", uiAtlas) && uiRenderer.uploadAtlas(renderer, uiAtlas);
+  const bool fontReady = !headless &&
+      editor::sui::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", uiAtlas, SDL_GetWindowDisplayScale(window)) &&
+      uiRenderer.uploadAtlas(renderer, uiAtlas);
   const bool uiReady = fontReady && !playerMode;
   // Janelas do editor em SpriteUI. Sem a fonte, elas nao aparecem (nao ha caminho ImGui de reserva).
   std::unique_ptr<editor::profiler_panel::ProfilerPanel> profPanel;
@@ -2437,7 +2468,6 @@ int main(int argc, char** argv) {
     int nEvents = 0;
 #ifdef TOOL_WITH_SPRITEUI
     spriteUiDiagnostics.beginFrame();
-    if (profPanel) profPanel->beginFrame();
 #endif
     while (SDL_PollEvent(&e)) {
       // Movimento do mouse sem botao (so passar por cima) nao conta como atividade: senao a cena nunca fica ociosa
@@ -2446,7 +2476,7 @@ int main(int argc, char** argv) {
 #ifdef TOOL_WITH_SPRITEUI
       const bool spriteUiHandled =
           spriteUiDiagnostics.handleEvent(e, ed.showSpriteUiDiagnostics);
-      const bool profHandled = profPanel && profPanel->handleEvent(e, ed.showProfiler);   // roda e X do painel do Profiler
+      const bool profHandled = profPanel && profPanel->handleEvent(e, ed.showProfiler, gProfilerFrame);
       const bool helpHandled = helpPanel && helpPanel->handleEvent(e, window, editor::helpState().open);   // janela Help SpriteUI
       const editor::testmap::Action testMapAction = testMapPanel ? testMapPanel->handleEvent(e, editor::testMapState().open, editor::testMapState().side) : editor::testmap::Action::None;
       if (testMapAction == editor::testmap::Action::Generate) testMapGenerate = true;
@@ -2529,6 +2559,7 @@ int main(int argc, char** argv) {
       if (ed.showHierarchy) drawHierarchy(ed);
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showInspector) drawInspector(ed);
+      if (profPanel) drawProfilerFrame(ed);
       ed_::scriptWindowUi(ed); // janela de edicao de script (fora do Inspector)
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showScene) drawSceneWindow(ed, renderer);
@@ -2559,9 +2590,9 @@ int main(int argc, char** argv) {
     drawViewPanels(ed, renderer);   // Scene e Jogo em SpriteUI: por cima do ImGui
 #ifdef TOOL_WITH_SPRITEUI
     const double nowSec = static_cast<double>(SDL_GetTicksNS()) * 1e-9;
-    if (profPanel && ed.showProfiler) {   // por cima do ImGui: desenhado depois do RenderDrawData, no mesmo renderer
+    if (profPanel && ed.showProfiler && gProfilerFrame) {
       if (profPanel->due(nowSec)) profPanel->refresh(nowSec, ed.prof, fillProfilerExtras(ed));   // so 4 vezes por segundo
-      if (!profPanel->draw(renderer, window, ed.showProfiler)) {
+      if (!profPanel->draw(renderer, gProfilerRect)) {
         tool::logError(std::string("Profiler SpriteUI render failed: ") + SDL_GetError());
         ed.showProfiler = false;
       }

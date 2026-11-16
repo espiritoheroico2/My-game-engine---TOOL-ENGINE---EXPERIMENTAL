@@ -83,7 +83,7 @@ struct Editor {
   bool showEditorInfo = false, showExport = false;   // File > Editor info / Export game
   bool resetLayout = false;
   unsigned sceneLoads = 0;          // conta aberturas de cena: os avisos de desempenho esperam o carregamento acabar
-  bool lockInterface = true;   // Interface travada: abas/janelas nao saem do encaixe e os divisores nao se mexem (menu Interface)
+  bool lockInterface = false;  // A interface inicia destravada; o usuario pode trava-la pelo menu Interface.
   bool dockWithShift = false;  // encaixar/desencaixar janelas so segurando Shift (evita encaixes acidentais)
   bool showCulled = false;     // Scene: mostra em vermelho os objetos que a camera de jogo nao desenha
   bool logKeys = false;        // depuracao: escreve no Console cada tecla e texto digitado
@@ -285,6 +285,13 @@ struct Editor {
     if (glCtx) { SDL_GL_DestroyContext(glCtx); glCtx = nullptr; }
     if (gpuWin) { SDL_DestroyWindow(gpuWin); gpuWin = nullptr; }
     apiActive = 0;
+    for (int i = 0; i < 2; ++i) {
+      gpuPixels[i].clear();
+      gpuPixW[i] = gpuPixH[i] = 0;
+    }
+    sigGpuValid = false;
+    psigGpuValid = false;
+    gpuBadFrames = 0;
   }
   // Troca a API grafica em execucao; se falhar, volta para o renderizador em CPU e mostra o motivo.
   void applyApi(int choice) {

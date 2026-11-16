@@ -1,6 +1,6 @@
 #pragma once
 
-// Painel do Profiler feito com SpriteUI. Substitui a janela ImGui "Profiler" (ver kProfilerUsesSpriteUi em main.cpp).
+// Conteudo do Profiler feito com SpriteUI e hospedado na janela dockavel ImGui do editor.
 //
 // O que aparece vem do modelo (profiler_model.hpp): ele decide as linhas, os numeros, a escala dos graficos e a
 // taxa de atualizacao. Este arquivo so faz layout, medida de texto e retangulos.
@@ -8,21 +8,19 @@
 // Como funciona:
 //   refresh(): roda o modelo e reconstroi o conteudo em coordenadas locais da lista (retangulos e textos ja
 //              medidos). So e chamado quando due() diz que o proximo refresh chegou (4 vezes por segundo).
-//   draw():    posiciona o painel, aplica a rolagem, recorta o que esta visivel e desenha com o SpriteUiSdlRenderer.
+//   draw():    usa a area da janela hospedeira, aplica a rolagem e desenha com o SpriteUiSdlRenderer.
 //              Por quadro nada e medido de novo: so os itens guardados sao deslocados.
 //
-// Layout: painel a direita, largura fixa, com cabecalho (titulo e X) e lista com rolagem (roda do mouse).
+// Layout: a janela hospedeira fornece titulo, docking, resize e fechamento; o conteudo tem rolagem propria.
 // Ligacao com o SDL: spriteui_host.hpp (SpriteUiSdlRenderer, LoadTextAtlas). Fonte: assets/fonts/Xmind-Regular.ttf.
 // Padrao de uso da SpriteUI: start_screen_spriteui.hpp (LayoutTree para os nos com clique; addDecorations para texto e retangulos).
 //
-// Interacao nesta etapa: roda do mouse sobre o painel (rola a lista) e o X (fecha: visible = false).
-// Os eventos que caem no painel nao chegam ao ImGui (handleEvent devolve true), para o ImGui nao reagir por baixo.
+// A roda sobre o conteudo rola a lista. Eventos de ponteiro seguem para o ImGui para foco e docking funcionarem.
 #include "i18n.hpp"
 #include "profiler.hpp"
 #include "profiler_model.hpp"
 #include "spriteui_host.hpp"
 
-#include "SpriteUi/Input/InputRouter.hpp"
 #include "SpriteUi/Layout/LayoutBridge.hpp"
 #include "SpriteUi/Layout/LayoutTree.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
@@ -49,15 +47,10 @@ namespace ST = ToolEngine::SpriteUi::Text;
 namespace pm = editor::profiler_model;
 
 struct Theme {
-  static constexpr float kWidth = 420.f;          // largura fixa do painel (px)
-  static constexpr float kMargin = 12.f;          // distancia da borda direita e do topo da janela
-  static constexpr float kTop = 36.f;             // abaixo da barra de menu do editor
-  static constexpr float kPad = 16.f;             // margem lateral do conteudo
-  static constexpr float kHeaderH = 36.f;
-  static constexpr float kCloseSize = 24.f;
+  static constexpr float kWidth = 420.f;          // largura inicial recomendada (px)
+  static constexpr float kPad = sui::kPanelPadding; // margem lateral do conteudo
   static constexpr float kScrollLane = 12.f;      // reserva a direita da lista para a barra de rolagem
   static constexpr float kScrollW = 4.f;
-  static constexpr float kTitleFont = 16.f;
   static constexpr float kHeadingFont = 14.f;
   static constexpr float kFont = 13.f;
   static constexpr float kSmallFont = 11.f;
@@ -66,7 +59,6 @@ struct Theme {
   static constexpr float kBarH = 8.f;
   static constexpr float kGraphH = 56.f;
   static constexpr float kGap = 8.f;
-  static constexpr float kMinViewport = 80.f;
   static constexpr float kWheelStep = 48.f;       // px por passo da roda do mouse
 };
 
@@ -89,8 +81,6 @@ struct Colors {
   SU::Vec4 graphA = Srgb(0.30f, 0.70f, 0.98f);    // grafico 0: tempo de quadro
   SU::Vec4 graphB = Srgb(0.95f, 0.62f, 0.25f);    // grafico 1: trabalho da CPU
   SU::Vec4 scroll = Srgb(0.45f, 0.48f, 0.55f, 0.75f);
-  SU::Vec4 closeIdle = Srgb(0.20f, 0.22f, 0.27f);
-  SU::Vec4 closeHover = Srgb(0.62f, 0.22f, 0.22f);
 };
 
 // Um retangulo ou um texto ja medido, em coordenadas locais da lista (sem rolagem).
@@ -108,7 +98,6 @@ class ProfilerPanel {
   // `sdl` e o renderizador compartilhado das janelas SpriteUI (o atlas ja foi enviado por quem o criou).
   ProfilerPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : atlas_{atlas}, sdl_{sdl} {
     buildTree();
-    closeText_ = layoutOf("X", Theme::kFont);
   }
   ProfilerPanel(const ProfilerPanel&) = delete;
   ProfilerPanel& operator=(const ProfilerPanel&) = delete;
@@ -122,91 +111,38 @@ class ProfilerPanel {
     rebuild();
   }
 
-  // Chamar uma vez por quadro de eventos, antes de handleEvent.
-  void beginFrame() { pressed_ = released_ = false; }
-
-  // Retorna true quando o evento e do painel (o editor nao o passa ao ImGui). `visible` = ed.showProfiler.
-  bool handleEvent(const SDL_Event& e, bool& visible) {
-    if (!visible) return false;
-    switch (e.type) {
-      case SDL_EVENT_MOUSE_WHEEL:
-        if (!contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
-        scroll_ = std::clamp(scroll_ - e.wheel.y * Theme::kWheelStep, 0.f, maxScroll_);
-        return true;
-      case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        if (e.button.button != SDL_BUTTON_LEFT || !contains(e.button.x, e.button.y)) return false;
-        pressed_ = true;
-        downOnPanel_ = true;
-        return true;
-      case SDL_EVENT_MOUSE_BUTTON_UP:
-        if (e.button.button != SDL_BUTTON_LEFT || !downOnPanel_) return false;
-        downOnPanel_ = false;
-        released_ = true;
-        return true;
-      case SDL_EVENT_MOUSE_MOTION:
-        return contains(e.motion.x, e.motion.y);
-      default:
-        return false;
-    }
+  // So consome a roda dentro do conteudo. Cliques e movimentos precisam chegar a janela hospedeira.
+  bool handleEvent(const SDL_Event& e, bool visible, bool hostVisible) {
+    if (!visible || !hostVisible) return false;
+    if (e.type != SDL_EVENT_MOUSE_WHEEL || !contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
+    scroll_ = std::clamp(scroll_ - e.wheel.y * Theme::kWheelStep, 0.f, maxScroll_);
+    return true;
   }
 
-  // Calcula o quadro e desenha. Retorna false so em falha do SDL. Fecha o painel (visible = false) pelo X.
-  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool& visible) {
-    if (!visible) {
-      resetInteraction();
-      return true;
-    }
-    if (!renderer || !window) return false;
-    int ww = 0, wh = 0;
-    if (!SDL_GetWindowSize(window, &ww, &wh)) return false;
-    if (ww <= 0 || wh <= 0) {   // janela minimizada: nada a desenhar, sem tratar como erro
+  // Desenha dentro da area de conteudo da janela hospedeira. Retorna false so em falha do SDL.
+  bool draw(SDL_Renderer* renderer, sui::Box bounds) {
+    if (!renderer) return false;
+    if (bounds.w <= 0.f || bounds.h <= 0.f) {
       hasPacket_ = false;
       return true;
     }
 
-    // Geometria: a lista ocupa o conteudo, ate o limite da janela; o resto rola.
-    const float panelW = std::max(160.f, std::min(Theme::kWidth, static_cast<float>(ww) - 2.f * Theme::kMargin));
-    const float maxViewport = std::max(Theme::kMinViewport, static_cast<float>(wh) - Theme::kTop - Theme::kHeaderH - Theme::kMargin);
-    viewportH_ = std::min(contentH_, maxViewport);
+    const float panelW = bounds.w;
+    const float panelH = bounds.h;
+    const float panelX = bounds.x;
+    const float panelY = bounds.y;
+    if (std::abs(panelW - contentWidth_) > 0.5f) {
+      contentWidth_ = panelW;
+      rebuild();
+    }
+    viewportH_ = panelH;
     maxScroll_ = std::max(0.f, contentH_ - viewportH_);
     scroll_ = std::clamp(scroll_, 0.f, maxScroll_);
-    const float panelH = Theme::kHeaderH + viewportH_;
-    const float panelX = static_cast<float>(ww) - panelW - Theme::kMargin;
-    const float panelY = Theme::kTop;
     panelBounds_ = {panelX, panelY, panelW, panelH};
     setSize(panel_, panelW, panelH);
-    setSize(list_, panelW, viewportH_);
     tree_.Layout({{panelX, panelY}, {panelW, panelH}});
 
-    // Ponteiro e roteamento: so o X e clicavel (o resto e leitura e rolagem).
-    float mx = 0.f, my = 0.f;
-    const SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mx, &my);
     auto scene = bridge_.Extract(tree_);
-    SU::Input::UIInputSnapshot input;
-    input.pointerPositionLogical = {mx, my};
-    input.pointerDeltaLogical = hasPointer_ ? SU::Vec2{mx - lastX_, my - lastY_} : SU::Vec2{};
-    input.primaryDown = (mouse & SDL_BUTTON_LMASK) != 0;
-    input.primaryPressed = pressed_;
-    input.primaryReleased = released_;
-    input.windowFocused = true;
-    input.frameId = ++frameId_;
-    lastX_ = mx;
-    lastY_ = my;
-    hasPointer_ = true;
-
-    const auto events = router_.Process(input, scene.hitTargets);
-    pressed_ = released_ = false;
-    for (const auto& event : events) {
-      if (event.type == SU::Input::UIEventType::Click && event.target == close_) {
-        visible = false;
-        resetInteraction();
-        return true;
-      }
-    }
-    updateVisuals(router_.GetState().hoveredEntity);
-    for (auto& item : scene.renderItems) {
-      if (const auto* visual = bridge_.GetVisual(item.handle)) item.tintPremultipliedLinear = visual->tintPremultipliedLinear;
-    }
 
     // Conteudo: retangulos e textos guardados, deslocados pela rolagem e recortados na lista.
     hasPacket_ = false;
@@ -219,7 +155,7 @@ class ProfilerPanel {
     appendContent(extra, list, listClip);
     appendFrameDecorations(extra, listClip);
     scene.renderItems.insert(scene.renderItems.end(), extra.begin(), extra.end());
-    packet_ = extractor_.Build(frameId_, scene.renderItems, nullptr, clips);
+    packet_ = extractor_.Build(++frameId_, scene.renderItems, nullptr, clips);
     hasPacket_ = SR::IsFramePacketValid(packet_);
     return sdl_.draw(renderer, packet_);
   }
@@ -228,43 +164,21 @@ class ProfilerPanel {
   [[nodiscard]] float scroll() const { return scroll_; }
   [[nodiscard]] float contentHeight() const { return contentH_; }
   [[nodiscard]] bool hasPacket() const { return hasPacket_; }
-  [[nodiscard]] bool hasCapture() const { return router_.GetState().capturedEntity.IsValid(); }
 
  private:
-  // ---------- Arvore de layout: painel (cabecalho + lista) ----------
+  // ---------- Arvore de layout: painel e lista ----------
   void buildTree() {
     SU::FlexItem panel;
     panel.width = {SU::SizeMode::Fixed, Theme::kWidth};
-    panel.height = {SU::SizeMode::Fixed, Theme::kHeaderH};
+    panel.height = {SU::SizeMode::Fixed, 1.f};
     panel.direction = SU::LayoutDirection::Column;
     panel.alignItems = SU::AlignItems::Stretch;
     panel_ = tree_.Create({}, panel);
 
-    SU::FlexItem header;
-    header.width = {SU::SizeMode::Percent, 1.f};
-    header.height = {SU::SizeMode::Fixed, Theme::kHeaderH};
-    header.shrink = 0.f;
-    header.direction = SU::LayoutDirection::Row;
-    header.alignItems = SU::AlignItems::Center;
-    header.padding = {Theme::kPad, 0.f, 8.f, 0.f};
-    const auto headerHandle = tree_.Create(panel_, header);
-
-    SU::FlexItem spacer;   // ocupa o espaco do titulo (o titulo e desenhado por cima)
-    spacer.width = {SU::SizeMode::Flex, 1.f};
-    spacer.grow = 1.f;
-    spacer.height = {SU::SizeMode::Fixed, Theme::kHeaderH};
-    titleSpacer_ = tree_.Create(headerHandle, spacer);
-
-    SU::FlexItem close;
-    close.width = {SU::SizeMode::Fixed, Theme::kCloseSize};
-    close.height = {SU::SizeMode::Fixed, Theme::kCloseSize};
-    close.shrink = 0.f;
-    close_ = tree_.Create(headerHandle, close);
-    header_ = headerHandle;
-
     SU::FlexItem list;
     list.width = {SU::SizeMode::Percent, 1.f};
-    list.height = {SU::SizeMode::Fixed, 0.f};
+    list.height = {SU::SizeMode::Flex, 1.f};
+    list.grow = 1.f;
     list.shrink = 0.f;
     list_ = tree_.Create(panel_, list);
 
@@ -273,31 +187,16 @@ class ProfilerPanel {
     panelVisual.interactable = false;
     panelVisual.clipOverflow = true;
     bridge_.SetVisual(panel_, panelVisual);
-    updateVisuals({});
+    builtWidth_ = Theme::kWidth;
   }
 
   void setSize(SU::UIHandle handle, float width, float height) {
-    auto* el = tree_.Get(handle);
-    if (!el) return;
-    SU::FlexItem style = el->node.style;
+    auto* element = tree_.Get(handle);
+    if (!element) return;
+    SU::FlexItem style = element->node.style;
     style.width.value = width;
     style.height.value = height;
     tree_.SetStyle(handle, style);
-  }
-
-  void updateVisuals(SU::UIHandle hovered) {
-    SU::ElementVisual v;
-    v.tintPremultipliedLinear = hovered == close_ ? colors_.closeHover : colors_.closeIdle;
-    v.zOrder = 0.f;
-    v.focusable = true;
-    bridge_.SetVisual(close_, v);
-  }
-
-  void resetInteraction() {
-    router_.Reset();
-    hasPointer_ = false;
-    hasPacket_ = false;
-    pressed_ = released_ = downOnPanel_ = false;
   }
 
   bool contains(float x, float y) const {
@@ -382,7 +281,7 @@ class ProfilerPanel {
     prims_.clear();
     texts_.clear();
     const float x0 = Theme::kPad;
-    const float inner = std::max(40.f, Theme::kWidth - 2.f * Theme::kPad - Theme::kScrollLane);
+    const float inner = std::max(0.f, contentWidth_ - 2.f * Theme::kPad - Theme::kScrollLane);
     const float x1 = x0 + inner;
     const float lhFont = lineHeight(Theme::kFont);
     const float lhSmall = lineHeight(Theme::kSmallFont);
@@ -416,13 +315,18 @@ class ProfilerPanel {
           addText(x0, y, r.text, Theme::kSmallFont, colors_.textDim, inner - maxW - 10.f);
           y += lhSmall + 4.f;
           addSolid(x0, y, inner, Theme::kGraphH, colors_.graphBg, 0.1f);
+          for (int line = 1; line < 4; ++line) {
+            const float gridY = y + Theme::kGraphH * static_cast<float>(line) / 4.f;
+            addSolid(x0, gridY, inner, 1.f, colors_.divider, 0.15f);
+          }
           if (r.graph >= 0 && r.graph < pm::kGraphCount) {
             const float* samples = model_.graph(r.graph);
             const float scale = model_.graphScale(r.graph);
             const float colW = inner / static_cast<float>(model_.graphSamples());
             const SU::Vec4 colour = r.graph == 0 ? colors_.graphA : colors_.graphB;
             for (int s = 0; s < model_.graphSamples(); ++s) {
-              const float frac = scale > 0.f ? std::clamp(samples[s] / scale, 0.f, 1.f) : 0.f;
+              const float sample = std::isfinite(samples[s]) ? samples[s] : 0.f;
+              const float frac = scale > 0.f && std::isfinite(scale) ? std::clamp(sample / scale, 0.f, 1.f) : 0.f;
               const float h = frac * Theme::kGraphH;
               if (h >= 0.5f) addSolid(x0 + static_cast<float>(s) * colW, y + Theme::kGraphH - h, std::max(1.f, colW), h, colour, 0.2f);
             }
@@ -434,11 +338,13 @@ class ProfilerPanel {
         case pm::RowKind::Bar: {
           // Rotulo, barra e valor na mesma linha. A barra preenche `fraction` (0..1).
           const float ty = y + (rowH - lhFont) * 0.5f;
-          addText(x0, ty, r.text, Theme::kFont, colors_.text, Theme::kLabelW);
+          const float labelW = std::min(Theme::kLabelW, inner * 0.48f);
+          const float valueW = std::min(Theme::kBarValueW, inner * 0.24f);
+          addText(x0, ty, r.text, Theme::kFont, colors_.text, labelW);
           const std::string value = r.cellCount > 0 ? trimmed(r.cells[0].value) : std::string();
-          addText(x1, ty, value, Theme::kFont, colors_.text, Theme::kBarValueW, true);
-          const float trackX = x0 + Theme::kLabelW + 8.f;
-          const float trackW = inner - Theme::kLabelW - 8.f - Theme::kBarValueW - 8.f;
+          addText(x1, ty, value, Theme::kFont, colors_.text, valueW, true);
+          const float trackX = x0 + labelW + 8.f;
+          const float trackW = inner - labelW - 8.f - valueW - 8.f;
           const float trackY = y + (rowH - Theme::kBarH) * 0.5f;
           addSolid(trackX, trackY, trackW, Theme::kBarH, colors_.track, 0.2f);
           addSolid(trackX, trackY, trackW * std::clamp(r.fraction, 0.f, 1.f), Theme::kBarH, colors_.barFill, 0.3f);
@@ -470,13 +376,13 @@ class ProfilerPanel {
       }
     }
     contentH_ = y + Theme::kPad * 0.5f;
-    titleLayout_ = layoutOf(T("Profiler"), Theme::kTitleFont);
+    builtWidth_ = contentWidth_;
   }
 
   // ---------- Quadro: retangulos e textos da lista (deslocados pela rolagem) ----------
   void appendContent(std::vector<SR::UIRenderItem>& out, const SU::Rect& list, std::uint32_t clip) {
     const float top = list.position.y;
-    const float bottom = list.position.y + viewportH_;
+    const float bottom = list.position.y + list.size.y;
     const float ox = list.position.x;
     const float oy = list.position.y - scroll_;
     std::uint64_t paint = 1000;
@@ -496,30 +402,13 @@ class ProfilerPanel {
     }
   }
 
-  // Titulo, X e barra de rolagem: sempre no lugar, por quadro (dependem do no e da rolagem).
+  // Barra de rolagem: sempre no lugar, por quadro (depende do viewport e da rolagem).
   void appendFrameDecorations(std::vector<SR::UIRenderItem>& out, std::uint32_t listClip) {
-    const SU::Rect header = nodeRect(header_);
-    const float lhTitle = titleLayout_.lineHeight;
-    {
-      SU::UILayoutRect box;
-      box.resolvedPosition = {header.position.x + Theme::kPad, header.position.y + (header.size.y - lhTitle) * 0.5f};
-      box.resolvedSize = {titleLayout_.size.x, titleLayout_.size.y};
-      auto items = ST::GenerateTextRenderItems(titleLayout_, box, colors_.text, kAtlasSlice, SR::NoClipIndex, 0.9f, 900, header_, 0u);
-      out.insert(out.end(), items.begin(), items.end());
-    }
-    {
-      const SU::Rect c = nodeRect(close_);
-      SU::UILayoutRect box;
-      box.resolvedPosition = {c.position.x + (c.size.x - closeText_.size.x) * 0.5f, c.position.y + (c.size.y - closeText_.lineHeight) * 0.5f};
-      box.resolvedSize = {closeText_.size.x, closeText_.size.y};
-      auto items = ST::GenerateTextRenderItems(closeText_, box, colors_.text, kAtlasSlice, SR::NoClipIndex, 0.95f, 950, close_, 0u);
-      out.insert(out.end(), items.begin(), items.end());
-    }
-    if (contentH_ > viewportH_ + 0.5f) {
+    if (contentH_ > viewportH_ + 0.5f && viewportH_ > 8.f) {
       const SU::Rect list = nodeRect(list_);
       const float trackH = std::max(1.f, viewportH_ - 8.f);
-      const float thumbH = std::max(24.f, trackH * viewportH_ / contentH_);
-      const float thumbY = list.position.y + 4.f + (maxScroll_ > 0.f ? (scroll_ / maxScroll_) * (trackH - thumbH) : 0.f);
+      const float thumbH = std::min(trackH, std::max(24.f, trackH * viewportH_ / contentH_));
+      const float thumbY = list.position.y + 4.f + (maxScroll_ > 0.f ? (scroll_ / maxScroll_) * std::max(0.f, trackH - thumbH) : 0.f);
       out.push_back(solidItem(list.position.x + list.size.x - Theme::kScrollW - 4.f, thumbY, Theme::kScrollW, thumbH, colors_.scroll, 0.4f, listClip, 990));
     }
   }
@@ -545,23 +434,19 @@ class ProfilerPanel {
 
   SU::LayoutTree tree_;
   SU::LayoutSceneBridge bridge_;
-  SU::Input::UIEventRouter router_;
   SR::RenderExtractor extractor_;
   SR::FramePacket packet_;
-  SU::UIHandle panel_{}, header_{}, titleSpacer_{}, close_{}, list_{};
+  SU::UIHandle panel_{}, list_{};
 
   std::vector<Prim> prims_;
   std::vector<ST::TextLayoutResult> texts_;
-  ST::TextLayoutResult titleLayout_;
-  ST::TextLayoutResult closeText_;
 
   struct Bounds { float x = 0.f, y = 0.f, w = 0.f, h = 0.f; };
   float contentH_ = 0.f, viewportH_ = 0.f, maxScroll_ = 0.f, scroll_ = 0.f;
+  float contentWidth_ = Theme::kWidth, builtWidth_ = Theme::kWidth;
   Bounds panelBounds_{};
-  float lastX_ = 0.f, lastY_ = 0.f;
   std::uint64_t frameId_ = 0;
-  bool pressed_ = false, released_ = false, downOnPanel_ = false;
-  bool hasPointer_ = false, hasPacket_ = false;
+  bool hasPacket_ = false;
 };
 
 }  // namespace editor::profiler_panel

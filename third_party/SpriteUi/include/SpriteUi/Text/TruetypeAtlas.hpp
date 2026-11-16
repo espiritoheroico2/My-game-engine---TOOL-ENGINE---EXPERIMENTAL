@@ -10,7 +10,7 @@
 //
 // Convencoes iguais as do DebugShaper: xAdvance e planeBounds em unidades de fonte com
 // metrics.unitsPerEm = 1000; planeBounds = [x0, y0, x1, y1] com y para cima a partir da linha de base;
-// uvRect = [u0, v0, u1, v1] normalizado no atlas.
+// uvRect = [u0, v0, largura, altura] normalizado no atlas.
 
 #include "SpriteUi/Text/FontMetrics.hpp"
 #include "SpriteUi/Text/GlyphInstance.hpp"

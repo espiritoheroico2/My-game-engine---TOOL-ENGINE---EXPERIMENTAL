@@ -55,7 +55,7 @@ namespace Wd = ToolEngine::SpriteUi::Widgets;
 namespace Elm = ToolEngine::SpriteUi::Elements;
 
 inline constexpr float kToolbarH = 30.f;
-inline constexpr float kPad = 8.f;
+inline constexpr float kPad = sui::kPanelPadding;
 inline constexpr float kFont = 13.f;
 inline constexpr float kBtnH = 22.f;
 inline constexpr float kFloatH = 28.f;
@@ -225,6 +225,10 @@ private:
     switch (ev.kind) {
       case In::Kind::Move:
         mouse_ = p;
+        if (floatDragging_) {
+          floatOffset_.x = floatDragOrigin_.x + p.x - floatDragStart_.x - (img.x + kFloatMargin);
+          floatOffset_.y = floatDragOrigin_.y + p.y - floatDragStart_.y - (img.y + img.h - kFloatMargin - kFloatH);
+        }
         if (sliderDrag_) setSnapFromX(p.x, out);
         break;
       case In::Kind::Escape:
@@ -241,6 +245,7 @@ private:
         if (ev.button == SDL_BUTTON_LEFT) {
           dragging_ = false;
           sliderDrag_ = false;
+          floatDragging_ = false;
         }
         if (ev.button == SDL_BUTTON_RIGHT && rightDown_) {
           rightDown_ = false;
@@ -269,11 +274,10 @@ private:
       press(*b, v, out);
       return;
     }
-    if (img.contains(p.x, p.y)) {
-      if (v.freeFly) return;
-      if (startGizmo(p, v)) return;
-      const Probe hit = v.probe ? v.probe(p) : Probe{};
-      if (hit.found) out.select = hit.id;
+    if (floatDragHandle_.contains(p.x, p.y)) {
+      floatDragging_ = true;
+      floatDragStart_ = p;
+      floatDragOrigin_ = {floatRect_.x, floatRect_.y};
       return;
     }
     if (sliderBox_.contains(p.x, p.y)) {
@@ -281,7 +285,14 @@ private:
       setSnapFromX(p.x, out);
       return;
     }
-    if (floatRect_.contains(p.x, p.y)) return;   // fundo da barra flutuante: nao chega a cena
+    if (floatRect_.contains(p.x, p.y)) return;
+    if (img.contains(p.x, p.y)) {
+      if (v.freeFly) return;
+      if (startGizmo(p, v)) return;
+      const Probe hit = v.probe ? v.probe(p) : Probe{};
+      if (hit.found) out.select = hit.id;
+      return;
+    }
   }
 
   // Clique num botao da barra ou da barra flutuante.
@@ -510,10 +521,13 @@ private:
 
   void buildFloatingBar(const Values& v, const sui::Box& img, view::ShapeList& out) {
     if (img.w < 120.f || img.h < 60.f) return;
-    const float y = img.y + img.h - kFloatMargin - kFloatH;
-    const float x0 = img.x + kFloatMargin;
+    const float width = floatingBarWidth(v);
+    const float x0 = std::clamp(img.x + kFloatMargin + floatOffset_.x, img.x + 4.f,
+                                std::max(img.x + 4.f, img.x + img.w - width - 4.f));
+    const float y = std::clamp(img.y + img.h - kFloatMargin - kFloatH + floatOffset_.y, img.y + 4.f,
+                               std::max(img.y + 4.f, img.y + img.h - kFloatH - 4.f));
     view::ShapeList bar;
-    float x = x0 + 8.f;
+    float x = x0 + 26.f;
     const float by = y + (kFloatH - kBtnH) * 0.5f;
     const int mode = std::clamp(v.gizmoMode, 0, 2);
     addButton(bar, x, by, kBtnH, T("Move (W)"), Btn::Mode0, mode == 0, true, 8.f);
@@ -536,8 +550,33 @@ private:
     addButton(bar, x, by, kBtnH, T("Snap to contact"), Btn::SnapContact, false, v.sel.present && !v.sel.locked, 8.f);
     const float right = x - 4.f + 8.f;
     floatRect_ = {x0, y, right - x0, kFloatH};
+    floatDragHandle_ = {x0 + 2.f, y + 3.f, 18.f, kFloatH - 6.f};
     out.panel({x0, y}, {right, y + kFloatH}, 6.f, view::Rgba(14, 19, 28, 230), kPanelEdge);
+    for (int i = 0; i < 3; ++i) {
+      const float gx = floatDragHandle_.x + 5.f + static_cast<float>(i) * 4.f;
+      bar.line({gx, y + 9.f}, {gx, y + 19.f}, 1.5f, kTextDim);
+    }
     out.append(bar);
+  }
+
+  float floatingBarWidth(const Values& v) const {
+    float cursor = 26.f;
+    const auto addWidth = [&](const std::string& label, float pad) {
+      cursor += painter_.measure(label, kFont) + 2.f * pad + 4.f;
+    };
+    addWidth(T("Move (W)"), 8.f);
+    addWidth(T("Rotate (E)"), 8.f);
+    addWidth(T("Scale (R)"), 8.f);
+    cursor += 4.f;
+    addWidth(T("Magnet"), 8.f);
+    cursor += 4.f;
+    addWidth(v.localSpace ? T("Local (Q)") : T("World (Q)"), 8.f);
+    cursor += 4.f + kSliderW + 6.f;
+    char val[32];
+    std::snprintf(val, sizeof val, "%.2f m", static_cast<double>(v.snapStep));
+    cursor += painter_.measure(val, kFont) + 10.f;
+    addWidth(T("Snap to contact"), 8.f);
+    return cursor + 4.f;
   }
 
   // Menu de contexto (modelo Wd::MenuControl): fundo de painel, linhas e destaque.
@@ -581,6 +620,10 @@ private:
   vm::DragStart start_{};
   std::string readout_;
   bool sliderDrag_ = false;
+  bool floatDragging_ = false;
+  vm::Pixel floatOffset_{};
+  vm::Pixel floatDragStart_{};
+  vm::Pixel floatDragOrigin_{};
   bool rightDown_ = false;
   vm::Pixel rightStart_{};
 
@@ -593,6 +636,7 @@ private:
   std::vector<Button> buttons_;
   sui::Box sliderBox_{};
   sui::Box floatRect_{};   // fundo da barra flutuante (o clique nele nao vai para a cena)
+  sui::Box floatDragHandle_{};
 
   view::ShapePainter painter_;
   sui::SpriteUiSdlRenderer& sdl_;

@@ -130,8 +130,8 @@ bool BuildTruetypeAtlas(
             glyph.planeBounds[3] = -y0 * toUnits;
             glyph.uvRect[0] = static_cast<float>(cursorX) / out.width;
             glyph.uvRect[1] = static_cast<float>(cursorY) / out.height;
-            glyph.uvRect[2] = static_cast<float>(cursorX + w) / out.width;
-            glyph.uvRect[3] = static_cast<float>(cursorY + h) / out.height;
+            glyph.uvRect[2] = static_cast<float>(w) / out.width;
+            glyph.uvRect[3] = static_cast<float>(h) / out.height;
 
             cursorX += w + pad;
             rowHeight = std::max(rowHeight, h);

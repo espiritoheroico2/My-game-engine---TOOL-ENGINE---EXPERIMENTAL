@@ -8,6 +8,7 @@
 //  - A SpriteUI continua independente da engine; quem liga os dois e o editor (este arquivo e apps/editor).
 #include "SpriteUi/Rendering/DrawList.hpp"
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
+#include "SpriteUi/Text/BitmapRasterPolicy.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
 
@@ -162,14 +163,14 @@ class SpriteUiSdlRenderer {
 
 
 // Carrega a fonte e monta o atlas de glifos (ASCII, Latin-1 e Latin Extended-A, para o portugues).
-inline bool LoadTextAtlas(const std::string& fontPath, ST::TruetypeAtlas& out) {
+inline bool LoadTextAtlas(const std::string& fontPath, ST::TruetypeAtlas& out, float displayScale = 1.f) {
   std::ifstream file(fontPath, std::ios::binary);
   if (!file) return false;
   std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   ST::TruetypeAtlasConfig cfg;
-  cfg.rasterPixelSize = 32.f;
-  cfg.atlasWidth = 1024;
-  cfg.atlasHeight = 1024;
+  cfg.rasterPixelSize = static_cast<float>(ST::ChooseBitmapRasterPixelSize(16.f, displayScale));
+  cfg.atlasWidth = cfg.rasterPixelSize >= 64.f ? 2048u : 1024u;
+  cfg.atlasHeight = cfg.atlasWidth;
   cfg.firstCodepoint = 0x20;
   cfg.lastCodepoint = 0x17F;
   return ST::BuildTruetypeAtlas(bytes, cfg, out);

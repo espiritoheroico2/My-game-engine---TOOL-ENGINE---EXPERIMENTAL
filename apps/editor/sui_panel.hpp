@@ -28,6 +28,8 @@ namespace SU = ToolEngine::SpriteUi;
 namespace SR = ToolEngine::SpriteUi::Rendering;
 namespace ST = ToolEngine::SpriteUi::Text;
 
+inline constexpr float kPanelPadding = 14.f;
+
 inline constexpr std::uint32_t kAtlasSlice = 1u;   // textureSlice dos glifos (0 = pixel branco)
 
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {

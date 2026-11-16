@@ -78,7 +78,8 @@ struct Values {
 
 struct Metrics {
     static constexpr float kStripH = 30.f;
-    static constexpr float kPad = 12.f;
+    static constexpr float kPad = sui::kPanelPadding;
+    static constexpr float kStripArrowW = 24.f;
     static constexpr float kLabelW = 190.f;
     static constexpr float kControlW = 260.f;
     static constexpr float kRowH = 26.f;
@@ -202,7 +203,7 @@ class SettingsPanel {
 
     // ---------- Faixa de abas ----------
     void layoutStrip() {
-        tabs_.border = rectOf(0.f, 0.f, rect_.w, Metrics::kStripH);
+        tabs_.border = rectOf(Metrics::kStripArrowW, 0.f, stripViewportWidth(), Metrics::kStripH);
         strip_.addSolid(0.f, 0.f, rect_.w, Metrics::kStripH, panelColor_, 0.1f);
         for (std::size_t i = 0; i < tabs_.control.labels.size(); ++i) {
             const SU::Rect r = Elm::TabRect(tabs_, i);
@@ -210,7 +211,16 @@ class SettingsPanel {
             strip_.addText(r.position.x + (r.size.x - labelW) * 0.5f, r.position.y + 7.f, tabs_.control.labels[i], Metrics::kFont,
                            theme_.text, r.size.x);
         }
+        const bool canScrollLeft = tabs_.scrollX > 0.f;
+        const bool canScrollRight = tabs_.scrollX < stripMaxScroll();
+        strip_.addSolid(0.f, 0.f, Metrics::kStripArrowW, Metrics::kStripH, btnColor_, 0.3f);
+        strip_.addSolid(rect_.w - Metrics::kStripArrowW, 0.f, Metrics::kStripArrowW, Metrics::kStripH, btnColor_, 0.3f);
+        strip_.addText(8.f, 7.f, "<", Metrics::kFont, canScrollLeft ? theme_.text : theme_.textDim, 10.f);
+        strip_.addText(rect_.w - Metrics::kStripArrowW + 8.f, 7.f, ">", Metrics::kFont,
+                       canScrollRight ? theme_.text : theme_.textDim, 10.f);
     }
+
+    [[nodiscard]] float stripViewportWidth() const { return std::max(0.f, rect_.w - 2.f * Metrics::kStripArrowW); }
 
     // Largura do conteudo das abas (sem a rolagem da faixa). Cada aba ocupa tabWidth; a folga separa as vizinhas.
     [[nodiscard]] float stripContentWidth() const {
@@ -220,9 +230,11 @@ class SettingsPanel {
     }
 
     void clampStrip() {
-        const float maxX = std::max(0.f, stripContentWidth() - rect_.w);
+        const float maxX = stripMaxScroll();
         tabs_.scrollX = std::clamp(tabs_.scrollX, 0.f, maxX);
     }
+
+    [[nodiscard]] float stripMaxScroll() const { return std::max(0.f, stripContentWidth() - stripViewportWidth()); }
 
     // Quando a aba ativa muda, a faixa rola ate ela aparecer. Depois disso, a roda do mouse manda.
     void revealActiveTab() {
@@ -233,8 +245,8 @@ class SettingsPanel {
         const float right = left + tabs_.tabWidth;
         if (left - tabs_.scrollX < tabs_.stripPadding) {
             tabs_.scrollX = left - tabs_.stripPadding;
-        } else if (right - tabs_.scrollX > rect_.w - tabs_.stripPadding) {
-            tabs_.scrollX = right - rect_.w + tabs_.stripPadding;
+        } else if (right - tabs_.scrollX > stripViewportWidth() - tabs_.stripPadding) {
+            tabs_.scrollX = right - stripViewportWidth() + tabs_.stripPadding;
         }
         clampStrip();
     }
@@ -516,6 +528,16 @@ class SettingsPanel {
     }
 
     bool stripPointer(Elm::PointerPhase phase, const SU::Vec2& p) {
+        if (phase == Elm::PointerPhase::Up && p.x < Metrics::kStripArrowW) {
+            tabs_.scrollX -= 3.f * (tabs_.tabWidth + tabs_.tabGap);
+            clampStrip();
+            return true;
+        }
+        if (phase == Elm::PointerPhase::Up && p.x >= rect_.w - Metrics::kStripArrowW) {
+            tabs_.scrollX += 3.f * (tabs_.tabWidth + tabs_.tabGap);
+            clampStrip();
+            return true;
+        }
         const Elm::TabEvents ev = tabs_.OnPointer(event(phase, p, tabs_.border));
         if (ev.changed) pending_.push_back({sc::Field::Tab, static_cast<int>(tabs_.control.activeIndex), 0.f, false});
         return true;

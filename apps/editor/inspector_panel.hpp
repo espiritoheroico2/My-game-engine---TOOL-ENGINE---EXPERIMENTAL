@@ -98,7 +98,7 @@ struct Hooks {
 
 // Metricas do painel, em pixels logicos.
 struct Metrics {
-    static constexpr float kPad = 8.f;
+    static constexpr float kPad = sui::kPanelPadding;
     static constexpr float kIndent = 12.f;
     static constexpr float kHeadH = 24.f;
     static constexpr float kRowH = 24.f;
@@ -865,6 +865,18 @@ class InspectorPanel {
             applyDrop(c, phase, p);
             return true;
         }
+        if (field_kind_ != FieldKind::None && field_kind_ != FieldKind::Hex && field_.DraggingSelection()) {
+            if (phase == Elm::PointerPhase::Move) {
+                const ST::TextLayoutResult lay = canvas_.layout(field_.Edit().Text(), Metrics::kFont);
+                field_.PointerMove(SU::Vec2{p.x - field_box_.position.x, p.y - field_box_.position.y},
+                                  SU::Vec2{field_box_.size.x, field_box_.size.y}, lay, fieldStyle(field_box_));
+                return true;
+            }
+            if (phase == Elm::PointerPhase::Up) {
+                field_.PointerUp();
+                return true;
+            }
+        }
         // Seletor de cor aberto: arrastes na area e nos campos.
         if (popup_.open) {
             if (contains(popup_.box, p)) {
@@ -955,6 +967,18 @@ class InspectorPanel {
             field_.PointerDown(SU::Vec2{p.x - layout.hexField.position.x, p.y - layout.hexField.position.y}, layout.hexField.size, lay,
                                fieldStyle(layout.hexField));
             return;
+        }
+        if (field_kind_ == FieldKind::Hex && field_.DraggingSelection()) {
+            if (phase == Elm::PointerPhase::Move) {
+                const ST::TextLayoutResult lay = canvas_.layout(field_.Edit().Text(), Metrics::kFont);
+                field_.PointerMove(SU::Vec2{p.x - layout.hexField.position.x, p.y - layout.hexField.position.y}, layout.hexField.size,
+                                  lay, fieldStyle(layout.hexField));
+                return;
+            }
+            if (phase == Elm::PointerPhase::Up) {
+                field_.PointerUp();
+                return;
+            }
         }
         if (phase == Elm::PointerPhase::Down || phase == Elm::PointerPhase::Move) {
             bool changed = false;

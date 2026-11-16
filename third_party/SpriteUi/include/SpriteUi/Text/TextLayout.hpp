@@ -123,6 +123,7 @@ struct TextLayoutResult {
     Vec2 localPos) noexcept;
 
 // Converts layout quads into standard UIRenderItem entries for GPU extraction.
+// Coverage atlases default to bitmap sampling; select FlagMsdfText explicitly for an MSDF atlas.
 [[nodiscard]] std::vector<Rendering::UIRenderItem> GenerateTextRenderItems(
     const TextLayoutResult& layout,
     const UILayoutRect& rect,
@@ -132,6 +133,6 @@ struct TextLayoutResult {
     float zOrder = 0.0f,
     std::uint64_t basePaintOrder = 0,
     UIHandle owner = {}, // Handle valido e obrigatorio para o RenderExtractor aceitar os itens.
-    std::uint32_t renderFlags = Rendering::FlagMsdfText);
+    std::uint32_t renderFlags = Rendering::FlagBitmapText);
 
 } // namespace ToolEngine::SpriteUi::Text

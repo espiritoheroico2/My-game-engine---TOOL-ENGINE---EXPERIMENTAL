@@ -10,6 +10,14 @@
 - Peso do repositorio: `build_log.txt` (log gerado pelo build do Windows) saiu do repositorio e foi para o `.gitignore`. Lista completa e itens que dependem de decisao em `docs/REPO_WEIGHT.md`.
 - Shaders: GLSL commitado conferido contra o HLSL (em sincronia, 23 arquivos). `build_glsl.py --check` agora compara bytes. O PBR esta com 9 buffers uniformes dinamicos no Vulkan (o limite do driver e 8): o resource extra e o `ObjectBuffer` lido pelo PS para a neblina. Analise e correcao proposta em `docs/SHADER_AUDIT.md` (nao aplicada).
 
+**Estabilidade da interface e renderizacao (em andamento)**
+- SpriteUI agora trata os atlas TrueType de cobertura como bitmap por padrao; MSDF precisa ser selecionado explicitamente. A rasterizacao do editor usa buckets ajustados ao DPI da janela (24 a 256 px) e amplia o atlas quando necessario. A fonte ImGui usa 18 px e oversampling 3x2.
+- Trocar a API grafica limpa os readbacks assincronos e invalida as assinaturas de sombras da GPU. Enquanto o novo backend ainda nao entrega um quadro, a vista usa a renderizacao CPU em vez de reutilizar pixels do backend anterior.
+- Hierarchy ganhou menu contextual nativo (foco, renomear, duplicar, excluir, ocultar e travar); campos do Inspector agora mantem a selecao de texto durante arraste.
+- Settings mostra setas para navegar pelas abas ocultas. O layout padrao separa Inspector e Settings verticalmente. A barra flutuante da Scene ganhou uma alca de arraste e os cliques no slider deixam de ser consumidos pela imagem da cena.
+- Hierarchy, Inspector, Settings, Scene, Game, Console, Help e Profiler compartilham margem interna de 14 px. Os graficos do Profiler mostram linhas de referencia e ignoram amostras nao finitas.
+- A migracao do editor para SpriteUI continua parcial; as secoes indicadas como ImGui em `docs/UI.md` ainda nao foram convertidas.
+
 **Pendente (nesta versao)**
 - SpriteUI sobre DX11: nao iniciado. O preset `editor-gpu-dx11` existe para o renderer 3D; nao ha teste de SpriteUI nele.
 - Resto da migracao do editor de ImGui para SpriteUI (a tela inicial e a primeira).

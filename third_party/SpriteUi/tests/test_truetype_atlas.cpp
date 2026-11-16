@@ -70,9 +70,15 @@ void TestLetterGeometry() {
     CHECK(g.planeBounds[2] > g.planeBounds[0]);          // Largura positiva.
     CHECK(g.planeBounds[3] > g.planeBounds[1]);          // Altura positiva, y para cima.
     CHECK(g.planeBounds[1] > -60.0f);                    // 'A' encosta na linha de base (tolerancia de arredondamento de pixel).
-    CHECK(g.uvRect[0] >= 0.0f && g.uvRect[2] <= 1.0f);
-    CHECK(g.uvRect[1] >= 0.0f && g.uvRect[3] <= 1.0f);
-    CHECK(g.uvRect[2] > g.uvRect[0] && g.uvRect[3] > g.uvRect[1]);
+    CHECK(g.uvRect[0] >= 0.0f && g.uvRect[2] > 0.0f);
+    CHECK(g.uvRect[1] >= 0.0f && g.uvRect[3] > 0.0f);
+    CHECK(g.uvRect[0] + g.uvRect[2] <= 1.0f);
+    CHECK(g.uvRect[1] + g.uvRect[3] <= 1.0f);
+    const float rasterScale = 48.0f / atlas.metrics.unitsPerEm;
+    const float expectedWidth = (g.planeBounds[2] - g.planeBounds[0]) * rasterScale / atlas.width;
+    const float expectedHeight = (g.planeBounds[3] - g.planeBounds[1]) * rasterScale / atlas.height;
+    CHECK(std::abs(g.uvRect[2] - expectedWidth) < 1e-5f);
+    CHECK(std::abs(g.uvRect[3] - expectedHeight) < 1e-5f);
 
     const auto g_it = atlas.glyphs.find('g');
     CHECK(g_it != atlas.glyphs.end());

@@ -20,6 +20,17 @@ Janela ancorável com abas **Aparência**, **Idioma** e **Gráficos** (a antiga 
 ## Outras melhorias
 Estilo com mais respiro e cantos arredondados, barra de status (API, FPS, entidades, erros, idioma), menu Opções, abas com realce, fonte nítida.
 
+## Estabilização da interface (0.7.19, em andamento)
+- Os painéis SpriteUI usam um atlas TrueType de cobertura em modo bitmap. A resolução de rasterização acompanha o DPI da janela, com buckets de 24–256 px; o atlas passa a 2048² nos buckets de 64 px ou maiores. Não é um atlas MSDF.
+- A janela Hierarchy tem menu contextual para focar, renomear, duplicar, excluir, ocultar/mostrar e travar/destravar objetos. No Inspector, arrastar dentro de um campo mantém a seleção de texto.
+- A faixa de abas de Settings tem setas laterais além da rolagem pela roda. O layout redefinido coloca Settings abaixo do Inspector, em uma divisão vertical à direita.
+- A barra flutuante da Scene pode ser movida pela alça de três traços. O slider de snap recebe o mouse antes da seleção de objetos na imagem.
+- Os painéis Hierarchy, Inspector, Settings, Scene, Game, Console, Help e Profiler usam margem interna comum de 14 px. O Profiler desenha linhas-guia nos gráficos.
+- A troca de API invalida buffers de readback e mapas de sombra específicos da GPU. A CPU continua exibindo a vista enquanto o novo backend prepara seu primeiro readback.
+- A fonte ImGui usa 18 px com oversampling horizontal 3x e vertical 2x; os atlas SpriteUI são rasterizados conforme o DPI.
+
+Esta entrega não conclui a remoção do ImGui: Narrative, Assets, Scenes e várias seções do Inspector/Settings ainda dependem dele.
+
 ## Linha de comando (testes/capturas)
 `tool_editor --lang en --theme Brasa --tab 1 --api vulkan`
 

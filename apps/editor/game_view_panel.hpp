@@ -45,7 +45,7 @@ namespace SR = ToolEngine::SpriteUi::Rendering;
 namespace Elm = ToolEngine::SpriteUi::Elements;
 
 inline constexpr float kToolbarH = 30.f;
-inline constexpr float kPad = 8.f;
+inline constexpr float kPad = sui::kPanelPadding;
 inline constexpr float kFont = 13.f;
 inline constexpr float kBtnH = 22.f;
 inline constexpr std::uint32_t kFirstCellSlot = 1;   // slot 0 e da Scene (SpriteUiSdlRenderer::setView)

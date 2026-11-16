@@ -41,13 +41,23 @@ public:
     [[nodiscard]] TextEditState& Edit() noexcept { return edit_; }
     [[nodiscard]] const TextEditState& Edit() const noexcept { return edit_; }
     [[nodiscard]] bool Focused() const noexcept { return focused_; }
-    void SetFocus(bool focused) noexcept { focused_ = focused; }
+    void SetFocus(bool focused) noexcept {
+        focused_ = focused;
+        if (!focused) selectionDragging_ = false;
+    }
 
     void PointerDown(Vec2 localPoint, Vec2 size, const Text::TextLayoutResult& layout, const TextFieldStyle& style) {
-        const float verticalPadding = std::max(0.0f, (size.y - layout.lineHeight) * 0.5f);
-        const Vec2 textPoint{localPoint.x - std::max(0.0f, style.paddingX), localPoint.y - verticalPadding};
-        edit_.MoveCaretTo(Text::FindInsertionOffset(layout, textPoint));
+        moveCaret(localPoint, size, layout, style, false);
+        selectionDragging_ = focused_;
     }
+
+    void PointerMove(Vec2 localPoint, Vec2 size, const Text::TextLayoutResult& layout, const TextFieldStyle& style) {
+        if (selectionDragging_ && focused_) moveCaret(localPoint, size, layout, style, true);
+    }
+
+    void PointerUp() noexcept { selectionDragging_ = false; }
+
+    [[nodiscard]] bool DraggingSelection() const noexcept { return selectionDragging_; }
 
     [[nodiscard]] std::vector<Rendering::UIRenderItem> Build(
         Rect bounds,
@@ -117,6 +127,12 @@ public:
     }
 
 private:
+    void moveCaret(Vec2 localPoint, Vec2 size, const Text::TextLayoutResult& layout, const TextFieldStyle& style, bool extend) {
+        const float verticalPadding = std::max(0.0f, (size.y - layout.lineHeight) * 0.5f);
+        const Vec2 textPoint{localPoint.x - std::max(0.0f, style.paddingX), localPoint.y - verticalPadding};
+        edit_.MoveCaretTo(Text::FindInsertionOffset(layout, textPoint), extend);
+    }
+
     static Rendering::UIRenderItem Solid(
         Rect bounds, Vec4 color, const TextFieldRenderTarget& target, std::uint32_t clip, std::uint64_t paint)
     {
@@ -134,6 +150,7 @@ private:
 
     TextEditState edit_;
     bool focused_ = false;
+    bool selectionDragging_ = false;
 };
 
 } // namespace ToolEngine::SpriteUi::Widgets

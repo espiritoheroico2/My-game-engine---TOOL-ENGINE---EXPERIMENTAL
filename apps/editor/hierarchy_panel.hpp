@@ -79,7 +79,7 @@ struct Metrics {
     static constexpr float kToolbarH = 30.f;
     static constexpr float kRowH = 22.f;
     static constexpr float kIndent = 14.f;        // recuo por nivel da arvore
-    static constexpr float kPad = 6.f;
+    static constexpr float kPad = sui::kPanelPadding;
     static constexpr float kExpander = 10.f;      // area do sinal + / -
     static constexpr float kIcon = 10.f;
     static constexpr float kToggle = 16.f;        // olho V (visivel) e cadeado L (travado), em px
@@ -88,6 +88,7 @@ struct Metrics {
     static constexpr float kBtnPad = 10.f;
     static constexpr float kBtnGap = 6.f;
     static constexpr float kMenuW = 200.f;
+    static constexpr float kContextMenuW = 190.f;
     static constexpr float kFont = 13.f;
     static constexpr float kSmallFont = 11.f;
     static constexpr float kWheelRows = 3.f;      // linhas por giro da roda
@@ -133,7 +134,9 @@ class HierarchyPanel {
         if (!visible_) return false;
         switch (e.type) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                return e.button.button == SDL_BUTTON_LEFT ? onDown(e.button.x, e.button.y, e.button.timestamp / 1000000u) : contains(e.button.x, e.button.y);
+                if (e.button.button == SDL_BUTTON_LEFT) return onDown(e.button.x, e.button.y, e.button.timestamp / 1000000u);
+                if (e.button.button == SDL_BUTTON_RIGHT) return onRightDown(e.button.x, e.button.y);
+                return contains(e.button.x, e.button.y);
             case SDL_EVENT_MOUSE_MOTION:
                 return onMotion(e.motion.x, e.motion.y);
             case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -234,8 +237,24 @@ class HierarchyPanel {
         return index < kCreateCount ? index : -1;
     }
 
+    [[nodiscard]] int contextItemAt(float x, float y) const {
+        if (!contextOpen_) return -1;
+        const sui::Box menu = contextMenuBox();
+        const float lx = x - rect_.x;
+        const float ly = y - rect_.y;
+        if (!menu.contains(lx, ly)) return -1;
+        const int index = static_cast<int>((ly - menu.y) / Metrics::kRowH);
+        return index < kContextCount ? index : -1;
+    }
+
     [[nodiscard]] sui::Box menuBox() const {
         return {createX_, Metrics::kToolbarH, Metrics::kMenuW, Metrics::kRowH * kCreateCount};
+    }
+
+    [[nodiscard]] sui::Box contextMenuBox() const {
+        const float h = Metrics::kRowH * kContextCount;
+        return {std::clamp(contextX_, 0.f, std::max(0.f, rect_.w - Metrics::kContextMenuW)),
+                std::clamp(contextY_, 0.f, std::max(0.f, rect_.h - h)), Metrics::kContextMenuW, h};
     }
 
     // Caixas V e L no lado direito de uma linha. Retorna o indice da caixa (0 = V, 1 = L) ou -1.
@@ -279,10 +298,18 @@ class HierarchyPanel {
             focused_ = false;
             if (renaming_) commitRename();
             menuOpen_ = false;
+            contextOpen_ = false;
             return false;
         }
         focused_ = true;
         if (renaming_ && !renameField().contains(x - rect_.x, y - rect_.y)) commitRename();
+        if (contextOpen_) {
+            const int item = contextItemAt(x, y);
+            contextOpen_ = false;
+            if (item >= 0) applyContextAction(item);
+            else return onDown(x, y, ticks);
+            return true;
+        }
         if (menuOpen_) {
             const int item = menuItemAt(x, y);
             menuOpen_ = false;
@@ -321,10 +348,47 @@ class HierarchyPanel {
         return true;
     }
 
+    bool onRightDown(float x, float y) {
+        if (!contains(x, y)) {
+            focused_ = false;
+            if (renaming_) commitRename();
+            menuOpen_ = false;
+            contextOpen_ = false;
+            return false;
+        }
+        focused_ = true;
+        menuOpen_ = false;
+        contextOpen_ = false;
+        if (renaming_ && !renameField().contains(x - rect_.x, y - rect_.y)) commitRename();
+        const std::size_t row = rowAt(x, y);
+        if (row == npos) return true;
+        contextTarget_ = model_.IdOfRow(row);
+        contextX_ = x - rect_.x;
+        contextY_ = y - rect_.y;
+        hoverContextItem_ = -1;
+        if (model_.Selected() != contextTarget_) applyOutcome(model_.Select(contextTarget_));
+        contextOpen_ = true;
+        return true;
+    }
+
+    void applyContextAction(int item) {
+        if (contextTarget_ == hm::NoId) return;
+        switch (item) {
+            case 0: pending_.push_back(Action{Act::Activate, contextTarget_}); break;
+            case 1: beginRename(contextTarget_); break;
+            case 2: pending_.push_back(Action{Act::Duplicate, contextTarget_}); break;
+            case 3: pending_.push_back(Action{Act::Delete, contextTarget_}); break;
+            case 4: pending_.push_back(Action{Act::ToggleHidden, contextTarget_}); break;
+            case 5: pending_.push_back(Action{Act::ToggleLocked, contextTarget_}); break;
+            default: break;
+        }
+    }
+
     bool onMotion(float x, float y) {
         const bool dragging = drag_.Phase() != Dd::DragPhase::Idle;
         if (dragging) (void)drag_.PointerMove(SU::Vec2{x - rect_.x, y - rect_.y}, buildTargets());
         if (contains(x, y)) hoverRow_ = rowAt(x, y);
+        if (contextOpen_) hoverContextItem_ = contextItemAt(x, y);
         return dragging || contains(x, y);
     }
 
@@ -381,6 +445,7 @@ class HierarchyPanel {
             case SDLK_ESCAPE:
                 if (drag_.Phase() != Dd::DragPhase::Idle) drag_.Cancel();
                 menuOpen_ = false;
+                contextOpen_ = false;
                 return true;
             default: return false;
         }
@@ -600,17 +665,35 @@ class HierarchyPanel {
     // Menu "+ Create": so existe com o botao aberto. Fica acima da lista (canvas proprio).
     void buildOverlay() {
         overlay_.clear();
-        if (!menuOpen_) return;
-        const sui::Box menu = menuBox();
-        overlay_.addSolid(menu.x, menu.y, menu.w, menu.h, colors_.menu, 0.6f);
-        for (int i = 0; i < kCreateCount; ++i) {
-            const float y = menu.y + static_cast<float>(i) * Metrics::kRowH;
-            const float textY = y + (Metrics::kRowH - overlay_.lineHeight(Metrics::kFont)) * 0.5f;
-            overlay_.addText(menu.x + Metrics::kPad, textY, T(kCreateLabels[i]), Metrics::kFont, theme_.text, menu.w - 2.f * Metrics::kPad);
+        if (menuOpen_) {
+            const sui::Box menu = menuBox();
+            overlay_.addSolid(menu.x, menu.y, menu.w, menu.h, colors_.menu, 0.6f);
+            for (int i = 0; i < kCreateCount; ++i) {
+                const float y = menu.y + static_cast<float>(i) * Metrics::kRowH;
+                const float textY = y + (Metrics::kRowH - overlay_.lineHeight(Metrics::kFont)) * 0.5f;
+                overlay_.addText(menu.x + Metrics::kPad, textY, T(kCreateLabels[i]), Metrics::kFont, theme_.text,
+                                 menu.w - 2.f * Metrics::kPad);
+            }
+        }
+        if (contextOpen_) {
+            static constexpr const char* labels[kContextCount] = {"Focus", "Rename", "Duplicate", "Delete", "Hide / Show",
+                                                                  "Lock / Unlock"};
+            const sui::Box menu = contextMenuBox();
+            overlay_.addSolid(menu.x, menu.y, menu.w, menu.h, colors_.menu, 0.7f);
+            for (int i = 0; i < kContextCount; ++i) {
+                const float y = menu.y + static_cast<float>(i) * Metrics::kRowH;
+                if (i == hoverContextItem_) {
+                    overlay_.addSolid(menu.x + 2.f, y + 1.f, menu.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, 0.72f);
+                }
+                const float textY = y + (Metrics::kRowH - overlay_.lineHeight(Metrics::kFont)) * 0.5f;
+                overlay_.addText(menu.x + Metrics::kPad, textY, T(labels[i]), Metrics::kFont, theme_.text,
+                                 menu.w - 2.f * Metrics::kPad);
+            }
         }
     }
 
     static constexpr std::size_t npos = static_cast<std::size_t>(-1);
+    static constexpr int kContextCount = 6;
 
     sui::Canvas toolbar_;
     sui::Canvas list_;
@@ -633,6 +716,11 @@ class HierarchyPanel {
     std::vector<std::pair<sui::Box, Button>> buttons_;
     float createX_ = 0.f;
     bool menuOpen_ = false;
+    bool contextOpen_ = false;
+    hm::Id contextTarget_ = hm::NoId;
+    float contextX_ = 0.f;
+    float contextY_ = 0.f;
+    int hoverContextItem_ = -1;
     bool focused_ = false;
     bool renaming_ = false;
     hm::Id renameId_ = hm::NoId;
