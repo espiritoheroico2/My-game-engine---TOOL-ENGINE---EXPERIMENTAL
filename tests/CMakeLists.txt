@@ -1,5 +1,5 @@
 add_executable(tool_tests main.cpp test_core.cpp test_debug.cpp test_ecs.cpp test_events.cpp test_scene.cpp
-  test_input.cpp test_audio.cpp test_backends.cpp test_render.cpp test_json.cpp test_narrative.cpp test_mod.cpp test_net.cpp test_pack.cpp test_assets_smoke.cpp test_import_models.cpp test_physics.cpp)
+  test_input.cpp test_audio.cpp test_backends.cpp test_render.cpp test_json.cpp test_narrative.cpp test_mod.cpp test_net.cpp test_pack.cpp test_assets_smoke.cpp test_import_models.cpp test_physics.cpp test_project_paths.cpp)
 target_link_libraries(tool_tests PRIVATE tool::scene tool::platform tool::audio tool::render tool::narrative tool::mod tool::net tool::pack tool::assets tool::physics)
 if(TOOL_WITH_SDL3)
   target_link_libraries(tool_tests PRIVATE tool::platform_sdl3)

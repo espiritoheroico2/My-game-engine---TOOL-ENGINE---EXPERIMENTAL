@@ -10,6 +10,7 @@
 #pragma once
 #include "components.hpp"
 #include "image_io.hpp"
+#include "project_paths.hpp"
 #include "skybox.hpp"
 #include "tool/assets/import.hpp"
 #include "tool/audio/decode.hpp"
@@ -66,14 +67,9 @@ public:
     fs::create_directories(assetsDir() / "Scripts", ec);
     fs::create_directories(scenesDir(), ec);
   }
-  // Caminho relativo ao projeto ("Assets/x.glb") -> caminho real. Retorna vazio se tentar escapar da pasta.
-  fs::path resolve(const std::string& rel) const {
-    if (rel.empty()) return {};
-    const fs::path p = fs::path(rel).lexically_normal();
-    if (p.is_absolute() || p.has_root_name()) return {};
-    for (auto& part : p) if (part == "..") return {};
-    return root / p;
-  }
+  // Caminho relativo ao projeto ("Assets/x.glb") -> caminho real. Retorna vazio se tentar escapar da pasta,
+  // por ".." ou por link simbolico apontando para fora (F-12). Ver project_paths.hpp (inclui a limitacao TOCTOU).
+  fs::path resolve(const std::string& rel) const { return projpath::resolveInside(root, rel); }
   std::string relative(const fs::path& p) const {
     std::error_code ec;
     return fs::relative(p, root, ec).generic_string();
