@@ -34,22 +34,26 @@ layout(location = 5) flat out vec4 _entryPointOutput_baseColor;
 layout(location = 6) flat out vec4 _entryPointOutput_material;
 layout(location = 7) flat out vec4 _entryPointOutput_texInfo;
 layout(location = 8) flat out vec3 _entryPointOutput_emissive;
+layout(location = 9) flat out vec4 _entryPointOutput_fogColor;
+layout(location = 10) flat out vec4 _entryPointOutput_fogParams;
 
 mat4 spvWorkaroundRowMajor(mat4 wrap) { return wrap; }
 
 void main_inner()
 {
-    vec4 _255 = vec4(i_pos, 1.0) * spvWorkaroundRowMajor(_32.world);
-    gl_Position = _255 * spvWorkaroundRowMajor(_67.viewProj);
-    _entryPointOutput_worldPos = _255.xyz;
+    vec4 _269 = vec4(i_pos, 1.0) * spvWorkaroundRowMajor(_32.world);
+    gl_Position = _269 * spvWorkaroundRowMajor(_67.viewProj);
+    _entryPointOutput_worldPos = _269.xyz;
     _entryPointOutput_normal = normalize(i_normal * mat3(spvWorkaroundRowMajor(_32.world)[0].xyz, spvWorkaroundRowMajor(_32.world)[1].xyz, spvWorkaroundRowMajor(_32.world)[2].xyz));
     _entryPointOutput_uv = i_uv;
-    _entryPointOutput_toCam = _67.cameraPos - _255.xyz;
-    _entryPointOutput_viewDepth = -(_255 * spvWorkaroundRowMajor(_67.view)).z;
+    _entryPointOutput_toCam = _67.cameraPos - _269.xyz;
+    _entryPointOutput_viewDepth = -(_269 * spvWorkaroundRowMajor(_67.view)).z;
     _entryPointOutput_baseColor = _32.baseColor;
     _entryPointOutput_material = vec4(_32.metallic, _32.roughness, _32.receiveShadow, 0.0);
     _entryPointOutput_texInfo = _32.texInfo;
     _entryPointOutput_emissive = _32.emissive.xyz;
+    _entryPointOutput_fogColor = _32.fogColor;
+    _entryPointOutput_fogParams = _32.fogParams;
 }
 
 

@@ -2,6 +2,21 @@
 
 ## 0.7.19-beta (em andamento)
 
+**Sessao de manutencao (SpriteUI, fonte, shaders, repositorio)**
+- Tela inicial do editor (criar/abrir projeto) agora e desenhada com SpriteUI, no lugar do dialogo ImGui. O dialogo antigo continua disponivel com `--imgui-start`, e tambem e usado se a fonte nao for encontrada. Codigo: `apps/editor/start_screen_model.hpp` (estado e acoes, sem SDL/ImGui) e `apps/editor/start_screen_spriteui.hpp` (layout, roteamento de clique, adaptador SDL).
+- Correcao de UV no SpriteUI da tela inicial: o UV de cada canto sai do `uvRect` do sprite (`uvAt` em `start_screen_spriteui.hpp`).
+- Fonte: `assets/fonts/Xmind-Regular.ttf` (licenca SIL Open Font License 1.1, texto em `assets/fonts/OFL-Xmind.txt`), usada no SpriteUI pelo atlas de glifos.
+- Teste: alvo `editor_start_screen_model_tests` (ctest `Editor.StartScreenModel`), sem janela. Cobre digitacao, backspace, selecionar tudo, erro ao abrir e criacao de projeto.
+- Peso do repositorio: `build_log.txt` (log gerado pelo build do Windows) saiu do repositorio e foi para o `.gitignore`. Lista completa e itens que dependem de decisao em `docs/REPO_WEIGHT.md`.
+- Shaders: GLSL commitado conferido contra o HLSL (em sincronia, 23 arquivos). `build_glsl.py --check` agora compara bytes. O PBR esta com 9 buffers uniformes dinamicos no Vulkan (o limite do driver e 8): o resource extra e o `ObjectBuffer` lido pelo PS para a neblina. Analise e correcao proposta em `docs/SHADER_AUDIT.md` (nao aplicada).
+
+**Pendente (nesta versao)**
+- SpriteUI sobre DX11: nao iniciado. O preset `editor-gpu-dx11` existe para o renderer 3D; nao ha teste de SpriteUI nele.
+- Resto da migracao do editor de ImGui para SpriteUI (a tela inicial e a primeira).
+- Limite de 8 buffers dinamicos no Vulkan (PBR com 9): correcao proposta, nao aplicada e nao verificada em runtime. DX12 com o mesmo HLSL nao foi testado nesta sessao.
+- Janelas de encaixe (docking) com testes em janela real: os testes sao headless (Xvfb/lavapipe).
+- Botao Browse da tela inicial: nao testado em ambiente sem janela; o caminho com dialogo do sistema nao e coberto pelo teste.
+
 **Emissao e bloom**
 - Inspector > Emission: novo campo "Enable emission". So objetos com ele ligado emitem (cor extra e brilho). Cenas antigas com intensidade de emissao acima de 0 continuam emitindo.
 - Bloom so segue a emissao: objetos claros sem emissao nao brilham mais. O limiar (Bloom threshold) saiu da interface, porque nao tem mais efeito.

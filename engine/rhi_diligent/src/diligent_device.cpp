@@ -177,7 +177,8 @@ public:
     gp.InputLayout.NumElements = static_cast<dl::Uint32>(elems.size());
     pci.pVS = vs; pci.pPS = ps;
     // DYNAMIC em todos os recursos. O Vulkan conta cada cbuffer por estagio, e algumas GPUs aceitam so 8 buffers
-    // uniformes dinamicos. O PBR respeita isso porque o PS nao le FrameBuffer/ObjectBuffer (ver assets/shaders/pbr.hlsl).
+    // uniformes dinamicos. O PBR esta em 9 hoje: o PS le fogColor/fogParams de ObjectBuffer (b6), alem do VS
+    // (ver docs/SHADER_AUDIT.md e assets/shaders/pbr.hlsl).
     // Trocar o tipo para MUTABLE quebrou sombras e texturas no gpu_test_vulkan: nao use essa via.
     pci.PSODesc.ResourceLayout.DefaultVariableType = dl::SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC;
     dl::RefCntAutoPtr<dl::IPipelineState> pso;

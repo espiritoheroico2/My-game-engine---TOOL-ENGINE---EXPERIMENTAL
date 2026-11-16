@@ -8,7 +8,7 @@ Pipeline (o mesmo caminho que os drivers de shader usam, sem depender do traduto
 Saida: assets/shaders/glsl/<nome>.<estagio>.430.glsl (o Diligent carrega com ShaderLang::GLSL, entrada "main").
 
 Uso: python3 tools/shaders/build_glsl.py [--check]
-  --check so verifica se os GLSL commitados estao em dia (sai com 1 se algum falta ou esta antigo).
+  --check regenera tudo em pasta temporaria e compara byte a byte com os GLSL commitados (sai com 1 se algum falta ou difere).
 Requer: glslangValidator e spirv-cross no PATH (apt install glslang-tools spirv-cross).
 """
 import os, re, subprocess, sys, tempfile, hashlib
@@ -16,6 +16,7 @@ import os, re, subprocess, sys, tempfile, hashlib
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SHADERS = os.path.join(ROOT, "assets", "shaders")
 OUT = os.path.join(SHADERS, "glsl")
+LP_OUT = os.path.join(SHADERS, "lightprism", "glsl")
 
 # (arquivo HLSL, estagio, entry HLSL, nome de saida)
 JOBS = [
@@ -99,13 +100,13 @@ def run(cmd):
     return r.stdout + r.stderr
 
 
-def build(hlsl, stage, entry, name, tmp):
+def build(hlsl, stage, entry, name, tmp, out=OUT):
     src = os.path.join(tmp, name + ".hlsl")
     with open(src, "w", encoding="utf-8") as f:
         f.write(flatten(os.path.join(SHADERS, hlsl)))
     spv = os.path.join(tmp, name + ".spv")
     run(["glslangValidator", "-D", "-V", "-S", stage, "-e", entry, "-o", spv, src])
-    glsl = os.path.join(OUT, f"{name}.430.glsl")
+    glsl = os.path.join(out, f"{name}.430.glsl")
     # saida: <nome>.430.glsl, com <nome> = pbr.vs, pbr.ps, bloom.thr, ... (como os arquivos ja existentes)
     run(["spirv-cross", "--version", "430", "--no-es", "--output", glsl, spv])
     fix_names(glsl)
@@ -118,39 +119,49 @@ def build(hlsl, stage, entry, name, tmp):
     return glsl
 
 
-def build_compute(hlsl, entry, tmp):
+def build_compute(hlsl, entry, tmp, out=LP_OUT):
     stem = os.path.basename(hlsl).replace(".compute.hlsl", "")
     src = os.path.join(tmp, f"{stem}.{entry}.hlsl")
     with open(src, "w", encoding="utf-8") as f:
         f.write(flatten(os.path.join(SHADERS, hlsl)))
     spv = os.path.join(tmp, f"{stem}.{entry}.spv")
     run(["glslangValidator", "-D", "-V", "-S", "comp", "-e", entry, "-o", spv, src])
-    out = os.path.join(SHADERS, "lightprism", "glsl", f"{stem}.{entry}.430.glsl")
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    run(["spirv-cross", "--version", "430", "--no-es", "--output", out, spv])
-    fix_names(out)
-    return out
+    dst = os.path.join(out, f"{stem}.{entry}.430.glsl")
+    os.makedirs(out, exist_ok=True)
+    run(["spirv-cross", "--version", "430", "--no-es", "--output", dst, spv])
+    fix_names(dst)
+    return dst
 
 
 def main():
     check = "--check" in sys.argv
-    os.makedirs(OUT, exist_ok=True)
-    bad = []
     with tempfile.TemporaryDirectory() as tmp:
+        # --check gera tudo numa pasta temporaria e compara byte a byte com o que esta commitado
+        out_dir = os.path.join(tmp, "glsl") if check else OUT
+        lp_dir = os.path.join(tmp, "lightprism_glsl") if check else LP_OUT
+        os.makedirs(out_dir, exist_ok=True)
+        work = os.path.join(tmp, "work")
+        os.makedirs(work, exist_ok=True)
+        generated = []
         for hlsl, stage, entry, name in JOBS:
-            out = os.path.join(OUT, f"{name}.430.glsl")
-            if check:
-                if not os.path.exists(out):
-                    bad.append(out)
-                continue
-            build(hlsl, stage, entry, name, tmp)
-            print("ok", os.path.relpath(out, ROOT))
+            generated.append(build(hlsl, stage, entry, name, work, out_dir))
+            if not check: print("ok", os.path.relpath(generated[-1], ROOT))
+        for hlsl, entry in COMPUTE_JOBS:
+            generated.append(build_compute(hlsl, entry, work, lp_dir))
+            if not check: print("ok", os.path.relpath(generated[-1], ROOT))
         if not check:
-            for hlsl, entry in COMPUTE_JOBS:
-                print("ok", os.path.relpath(build_compute(hlsl, entry, tmp), ROOT))
-    if check and bad:
-        print("GLSL faltando/desatualizado:", *bad, sep="\n  ")
-        sys.exit(1)
+            return
+        bad = []
+        for gen in generated:
+            committed = os.path.join(LP_OUT if gen.startswith(lp_dir) else OUT, os.path.basename(gen))
+            if not os.path.exists(committed):
+                bad.append(os.path.relpath(committed, ROOT) + " (falta)")
+            elif open(gen, "rb").read() != open(committed, "rb").read():
+                bad.append(os.path.relpath(committed, ROOT) + " (diferente do HLSL atual)")
+        if bad:
+            print("GLSL desatualizado:", *bad, sep="\n  ")
+            sys.exit(1)
+        print("GLSL em dia com os HLSL (%d arquivos)" % len(generated))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,604 @@
+#pragma once
+
+// Janela Scene em SpriteUI. A moldura (titulo, foco, docking e o "?") e do ImGui, como nas outras janelas; a area
+// da cena e da SpriteUI. A imagem sai pelo elemento Image da biblioteca (modo Esticar); por cima, a grade, os objetos
+// cortados, o gizmo, a barra de ferramentas, a barra flutuante e o menu de contexto do objeto. Regras e contas ficam
+// em scene_view_model.hpp; o que o painel precisa do Editor chega em Values (um quadro) e o que ele pede volta em
+// Requests. O painel nunca grava na cena.
+//
+// Exemplo: o gizmo de mover segue a Caixa azul. Com a Caixa selecionada e a ponta do eixo X arrastada 40 px, o
+// painel calcula o novo X com scene_view_model::dragEdit e devolve a posicao em Requests; o Editor grava e
+// desfaz como antes.
+//
+// Os eventos de mouse e teclado entram em uma fila (handleEvent) e sao tratados em draw, com os dados do quadro
+// atual. handleEvent nunca consome o evento: o ImGui continua recebendo tudo (arrastar do painel Assets, navegacao
+// com o botao direito e do meio, roda do mouse).
+//
+// Como funciona:
+//   handleEvent: guarda o evento na fila (mouse, Esc para fechar o menu).
+//   draw:        trata a fila (botoes, gizmo, menu), monta as formas e desenha: imagem, sobreposicoes, barras e menu.
+
+#include "i18n.hpp"
+#include "scene_transform_menu.hpp"
+#include "scene_view_model.hpp"
+#include "spriteui_host.hpp"
+#include "sui_panel.hpp"
+#include "view_painter.hpp"
+#include "view_shapes.hpp"
+
+#include "SpriteUi/Elements/Image.hpp"
+#include "SpriteUi/Rendering/DrawList.hpp"
+#include "SpriteUi/Widgets/Menu.hpp"
+
+#include <SDL3/SDL.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <functional>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace editor::scene_view_panel {
+
+namespace vm = editor::scene_view_model;
+namespace stm = editor::scene_transform_menu;
+namespace view = editor::view;
+namespace SU = ToolEngine::SpriteUi;
+namespace ST = ToolEngine::SpriteUi::Text;
+namespace SR = ToolEngine::SpriteUi::Rendering;
+namespace Wd = ToolEngine::SpriteUi::Widgets;
+namespace Elm = ToolEngine::SpriteUi::Elements;
+
+inline constexpr float kToolbarH = 30.f;
+inline constexpr float kPad = 8.f;
+inline constexpr float kFont = 13.f;
+inline constexpr float kBtnH = 22.f;
+inline constexpr float kFloatH = 28.f;
+inline constexpr float kFloatMargin = 10.f;
+inline constexpr float kSliderW = 110.f;
+inline constexpr float kRowH = 22.f;
+inline constexpr float kSepH = 7.f;
+inline constexpr float kMenuW = 210.f;
+inline constexpr float kClickSlop = 4.f;   // botao direito sem arrastar (px): abre o menu de contexto
+inline constexpr std::uint32_t kSceneSlot = 0;   // slot de textura da cena (SpriteUiSdlRenderer::setView)
+
+// Cores (mesmos valores do ImGui antigo, em RGBA 0..255).
+inline constexpr view::Color kPanelFill = view::Rgba(14, 19, 28, 250);
+inline constexpr view::Color kPanelEdge = view::Rgba(51, 61, 77);
+inline constexpr view::Color kButtonFill = view::Rgba(33, 41, 54);
+inline constexpr view::Color kButtonOn = view::Rgba(51, 92, 133);
+inline constexpr view::Color kText = view::Rgba(233, 234, 238);
+inline constexpr view::Color kTextDim = view::Rgba(143, 144, 153);
+inline constexpr view::Color kHighlight = view::Rgba(255, 235, 90);
+
+// O que o Editor sabe de um objeto sob o mouse. O painel so guarda o id e devolve nos pedidos.
+struct Probe {
+  bool found = false;
+  std::uint64_t id = 0;
+  std::string name;
+  bool locked = false;
+  bool hidden = false;
+};
+
+// Acoes do menu de contexto da cena (o alvo e o id do objeto do clique).
+enum class CtxAct : std::uint8_t { Inspector, Focus, Duplicate, Delete, SnapToContact, ToggleHidden, ToggleLocked };
+
+// Objeto selecionado neste quadro. present = ha Transform e o objeto esta vivo.
+struct Selection {
+  bool present = false;
+  bool locked = false;
+  bool hasParent = false;
+  std::array<float, 3> pos{}, rot{}, scale{1.f, 1.f, 1.f};
+  tool::Vec3 worldPos{};
+  tool::Mat4 world{};       // matriz de mundo do objeto (eixos do espaco Local)
+  tool::Mat4 parentInv{};   // inversa da matriz de mundo do pai (so com hasParent)
+};
+
+// Dados do Editor para um quadro. Ordem de pintura por cima da imagem: particulas (below), grade (grid), objetos
+// cortados, icones e fisica (above), e por ultimo o gizmo, que o painel desenha sozinho.
+struct Values {
+  bool shown = false;
+  tool::Camera cam{};
+  SDL_Texture* texture = nullptr;   // imagem renderizada da cena (nullptr: marcador de erro)
+  float texW = 1.f, texH = 1.f;
+  bool playing = false, paused = false, freeFly = false, ctrlDown = false;
+  bool showGrid = false, showGizmos = false, showCulled = false, showPostFx = false;
+  int gizmoMode = 0;
+  bool localSpace = false;   // Q: gizmo e arrasto seguem os eixos do objeto (false = eixos do mundo)
+  bool snapOn = false;
+  float snapStep = 0.25f;
+  Selection sel;
+  view::ShapeList below;
+  view::ShapeList grid;   // vazio quando a grade esta desligada
+  view::ShapeList above;
+  std::function<Probe(vm::Pixel)> probe;
+};
+
+// Pedidos ao Editor. Cada campo so vem preenchido quando algo mudou neste quadro.
+struct Requests {
+  bool playToggle = false, pauseToggle = false, stepOnce = false, snapToContact = false;
+  std::optional<bool> grid, gizmos, culled, postFx, snapOn, localSpace;
+  std::optional<int> gizmoMode;
+  std::optional<float> snapStep;
+  std::optional<std::uint64_t> select;
+  std::optional<std::array<float, 3>> pos, rot, scale;   // arrasto do gizmo: Transform novo do quadro
+  std::optional<std::pair<CtxAct, std::uint64_t>> ctx;   // item escolhido no menu de contexto
+};
+
+// Retangulo da imagem (sem a barra) em coordenadas da janela.
+inline sui::Box imageArea(sui::Box rect) { return {rect.x, rect.y + kToolbarH, rect.w, std::max(0.f, rect.h - kToolbarH)}; }
+
+class ScenePanel {
+public:
+  ScenePanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : painter_{atlas}, sdl_{sdl} {}
+  ScenePanel(const ScenePanel&) = delete;
+  ScenePanel& operator=(const ScenePanel&) = delete;
+
+  // Guarda o evento para o proximo draw. Sempre false: o evento segue para o ImGui.
+  bool handleEvent(const SDL_Event& e) {
+    switch (e.type) {
+      case SDL_EVENT_MOUSE_MOTION: queue_.push_back({In::Kind::Move, 0, e.motion.x, e.motion.y}); break;
+      case SDL_EVENT_MOUSE_BUTTON_DOWN: queue_.push_back({In::Kind::Down, e.button.button, e.button.x, e.button.y}); break;
+      case SDL_EVENT_MOUSE_BUTTON_UP: queue_.push_back({In::Kind::Up, e.button.button, e.button.x, e.button.y}); break;
+      case SDL_EVENT_KEY_DOWN:
+        if (!e.key.repeat && e.key.key == SDLK_ESCAPE) queue_.push_back({In::Kind::Escape, 0, 0.f, 0.f});
+        break;
+      default: break;
+    }
+    return false;
+  }
+
+  // Desenha a janela na area `rect` (coordenadas da janela). Os pedidos saem em `out`.
+  bool draw(SDL_Renderer* renderer, sui::Box rect, const Values& v, Requests& out) {
+    rect_ = rect;
+    visible_ = v.shown;
+    if (!visible_) {
+      queue_.clear();
+      ctx_.Close();
+      dragging_ = false;
+      return true;
+    }
+    const sui::Box img = imageArea(rect);
+    for (const In& ev : queue_) process(ev, v, img, out);
+    queue_.clear();
+    if (dragging_) updateDrag(v, out);
+
+    view::ShapeList overlay;
+    if (img.w >= 1.f && img.h >= 1.f) {
+      const vm::Projection proj = vm::Projection::make(v.cam, areaOf(img));
+      overlay.append(v.below);
+      overlay.append(v.grid);
+      overlay.append(v.above);
+      if (v.showGizmos && !v.playing && v.sel.present) addGizmo(v, proj, overlay);
+    }
+    view::ShapeList chrome;
+    buildToolbar(v, chrome);
+    buildFloatingBar(v, img, chrome);
+    buildPopup(img, chrome);
+    if (dragging_) chrome.text({mouse_.x + 14.f, mouse_.y + 12.f}, readout_, kFont, kHighlight);
+
+    const std::vector<SR::ClipRectGPU> clips{{rect.x, rect.y, rect.x + rect.w, rect.y + rect.h},
+                                             {img.x, img.y, img.x + img.w, img.y + img.h}};
+    view::PaintList list;
+    list.owner = sui::handleFor(0);
+    list.items.push_back(sui::Canvas::solidItem(rect.x, rect.y, rect.w, rect.h, view::premultiplied(kPanelFill), 0.f, list.owner, 0u, list.paint++));
+    appendImage(v, img, list);
+    painter_.append(overlay, 1u, list);
+    painter_.append(chrome, 0u, list);
+
+    sdl_.setView(kSceneSlot, v.texture);
+    return view::drawPaintList(renderer, sdl_, extractor_, packet_, frameId_, clips, list);
+  }
+
+  // Ponteiro sobre a imagem da cena no ultimo quadro (o ImGui nao sabe mais disso).
+  [[nodiscard]] bool hovered() const { return visible_ && imageArea(rect_).contains(mouse_.x, mouse_.y); }
+  [[nodiscard]] bool dragging() const { return dragging_; }
+
+private:
+  struct In {
+    enum class Kind : std::uint8_t { Move, Down, Up, Escape };
+    Kind kind = Kind::Move;
+    int button = 0;
+    float x = 0.f, y = 0.f;
+  };
+
+  // Botoes da barra e da barra flutuante. O id diz o que o clique faz.
+  enum class Btn : std::uint8_t { PlayStop, Pause, Step, Grid, Gizmos, Culled, PostFx, Mode0, Mode1, Mode2, Magnet, Space, SnapContact };
+  struct Button {
+    sui::Box box;
+    Btn id;
+    bool enabled;
+  };
+  struct CtxSlot {
+    CtxAct act;
+    bool valid;
+  };
+
+  // ---------- Entrada (roda em draw, com os dados do quadro) ----------
+  void process(const In& ev, const Values& v, const sui::Box& img, Requests& out) {
+    const vm::Pixel p{ev.x, ev.y};
+    switch (ev.kind) {
+      case In::Kind::Move:
+        mouse_ = p;
+        if (sliderDrag_) setSnapFromX(p.x, out);
+        break;
+      case In::Kind::Escape:
+        ctx_.Close();
+        break;
+      case In::Kind::Down:
+        if (ev.button == SDL_BUTTON_LEFT) onLeftDown(p, v, img, out);
+        else if (ev.button == SDL_BUTTON_RIGHT) {
+          rightDown_ = true;
+          rightStart_ = p;
+        }
+        break;
+      case In::Kind::Up:
+        if (ev.button == SDL_BUTTON_LEFT) {
+          dragging_ = false;
+          sliderDrag_ = false;
+        }
+        if (ev.button == SDL_BUTTON_RIGHT && rightDown_) {
+          rightDown_ = false;
+          const float dx = p.x - rightStart_.x, dy = p.y - rightStart_.y;
+          if (dx * dx + dy * dy < kClickSlop * kClickSlop && img.contains(p.x, p.y) && !v.freeFly) openMenu(p, v, out);
+        }
+        break;
+    }
+    mouse_ = p;
+  }
+
+  void onLeftDown(vm::Pixel p, const Values& v, const sui::Box& img, Requests& out) {
+    if (ctx_.IsOpen()) {   // menu aberto: clique numa linha escolhe; fora dele, fecha e segue o clique
+      const int row = rowAt(p);
+      if (row >= 0) {
+        if (ctx_.Click(0, static_cast<std::size_t>(row)) == Wd::MenuEvent::Activated) {
+          const std::size_t idx = ctx_.ActivationPath().front();
+          if (idx < ctxActs_.size() && ctxActs_[idx].valid) out.ctx = std::make_pair(ctxActs_[idx].act, ctxTarget_);
+        }
+        ctx_.Close();
+        return;
+      }
+      ctx_.Close();
+    }
+    if (const std::optional<Btn> b = buttonAt(p)) {
+      press(*b, v, out);
+      return;
+    }
+    if (img.contains(p.x, p.y)) {
+      if (v.freeFly) return;
+      if (startGizmo(p, v)) return;
+      const Probe hit = v.probe ? v.probe(p) : Probe{};
+      if (hit.found) out.select = hit.id;
+      return;
+    }
+    if (sliderBox_.contains(p.x, p.y)) {
+      sliderDrag_ = true;
+      setSnapFromX(p.x, out);
+      return;
+    }
+    if (floatRect_.contains(p.x, p.y)) return;   // fundo da barra flutuante: nao chega a cena
+  }
+
+  // Clique num botao da barra ou da barra flutuante.
+  void press(Btn b, const Values& v, Requests& out) {
+    switch (b) {
+      case Btn::PlayStop: out.playToggle = true; break;
+      case Btn::Pause: out.pauseToggle = true; break;
+      case Btn::Step: out.stepOnce = true; break;
+      case Btn::Grid: out.grid = !v.showGrid; break;
+      case Btn::Gizmos: out.gizmos = !v.showGizmos; break;
+      case Btn::Culled: out.culled = !v.showCulled; break;
+      case Btn::PostFx: out.postFx = !v.showPostFx; break;
+      case Btn::Mode0: out.gizmoMode = 0; break;
+      case Btn::Mode1: out.gizmoMode = 1; break;
+      case Btn::Mode2: out.gizmoMode = 2; break;
+      case Btn::Magnet: out.snapOn = !v.snapOn; break;
+      case Btn::Space: out.localSpace = !v.localSpace; break;
+      case Btn::SnapContact: out.snapToContact = true; break;
+    }
+  }
+
+  // Comeca o arrasto se o mouse esta sobre uma alca do gizmo do objeto selecionado.
+  bool startGizmo(vm::Pixel p, const Values& v) {
+    if (!v.showGizmos || v.playing || !v.sel.present || v.sel.locked) return false;
+    const vm::Projection proj = vm::Projection::make(v.cam, areaOf(imageArea(rect_)));
+    const vm::Gizmo g = gizmoOf(v);
+    vm::Pixel center{};
+    if (!proj.point(v.sel.worldPos, center)) return false;
+    const vm::Mode mode = modeOf(v);
+    vm::Gizmo at = g;
+    at.center = center;
+    const vm::Handle hot = vm::hitTest(proj, at, mode, p);
+    if (hot == vm::Handle::None) return false;
+    start_ = {};
+    start_.mode = mode;
+    start_.handle = hot;
+    start_.pos = v.sel.pos;
+    start_.rot = v.sel.rot;
+    start_.scale = v.sel.scale;
+    start_.mouse0 = p;
+    start_.startWorld = v.sel.worldPos;
+    start_.angle0 = std::atan2(p.y - center.y, p.x - center.x);
+    start_.gizmo = at;
+    start_.eye = v.cam.eye;
+    start_.worldAxes = !v.localSpace;
+    start_.hasParent = v.sel.hasParent;
+    start_.parentInv = v.sel.parentInv;
+    dragging_ = true;
+    return true;
+  }
+
+  // Quadro de arrasto: o Transform novo sai em Requests, so quando o resultado muda.
+  void updateDrag(const Values& v, Requests& out) {
+    vm::DragFrame f;
+    f.mouse = mouse_;
+    f.snap = v.ctrlDown || v.snapOn;
+    f.snapStep = v.snapStep;
+    f.proj = vm::Projection::make(v.cam, areaOf(imageArea(rect_)));
+    const vm::DragResult r = vm::dragEdit(start_, f);
+    if (!r.changed) return;
+    out.pos = r.pos;
+    out.rot = r.rot;
+    out.scale = r.scale;
+    readout_ = r.readout;
+  }
+
+  // Menu de contexto do objeto sob o mouse. Sem objeto, nao abre nada.
+  void openMenu(vm::Pixel p, const Values& v, Requests& out) {
+    const Probe hit = v.probe ? v.probe(p) : Probe{};
+    if (!hit.found) return;
+    out.select = hit.id;
+    ctxTarget_ = hit.id;
+    std::vector<Wd::MenuItem> items;
+    ctxActs_.clear();
+    auto add = [&](std::string label, std::string shortcut, bool disabled, bool hasAct, CtxAct act) {
+      Wd::MenuItem it;
+      it.label = std::move(label);
+      it.shortcut = std::move(shortcut);
+      it.disabled = disabled;
+      items.push_back(std::move(it));
+      ctxActs_.push_back({act, hasAct});
+    };
+    auto sep = [&]() {
+      Wd::MenuItem it;
+      it.kind = Wd::MenuItemKind::Separator;
+      items.push_back(it);
+      ctxActs_.push_back({CtxAct::Inspector, false});
+    };
+    add(hit.name.empty() ? T("(unnamed)") : hit.name, "", true, false, CtxAct::Inspector);
+    sep();
+    add(T("Edit in Inspector"), "", false, true, CtxAct::Inspector);
+    add(T("Focus"), "", false, true, CtxAct::Focus);
+    add(T("Duplicate"), "", false, true, CtxAct::Duplicate);
+    add(T("Delete"), "Del", hit.locked, true, CtxAct::Delete);
+    sep();
+    add(T("Snap to contact"), "", hit.locked, true, CtxAct::SnapToContact);
+    sep();
+    add(hit.hidden ? T("Show") : T("Hide"), "", false, true, CtxAct::ToggleHidden);
+    add(hit.locked ? T("Unlock") : T("Lock"), "", false, true, CtxAct::ToggleLocked);
+    ctxPos_ = p;
+    ctx_.Open(items);
+  }
+
+  // ---------- Geometria ----------
+  [[nodiscard]] static vm::Area areaOf(const sui::Box& img) { return {img.x, img.y, img.w, img.h}; }
+  [[nodiscard]] vm::Gizmo gizmoOf(const Values& v) const {
+    vm::Gizmo g;
+    g.origin = v.sel.worldPos;
+    g.len = vm::axisLength(g.origin, v.cam.eye);
+    g.axes = v.localSpace ? vm::localAxes(v.sel.world) : vm::worldAxes();
+    return g;
+  }
+  [[nodiscard]] static vm::Mode modeOf(const Values& v) { return static_cast<vm::Mode>(std::clamp(v.gizmoMode, 0, 2)); }
+
+  [[nodiscard]] std::optional<Btn> buttonAt(vm::Pixel p) const {
+    for (const Button& b : buttons_) {
+      if (b.enabled && b.box.contains(p.x, p.y)) return b.id;
+    }
+    return std::nullopt;
+  }
+
+  // Linha do menu sob o ponto, ou -1. Cada item e uma linha; separadores tem altura propria e nao sao clicaveis.
+  [[nodiscard]] int rowAt(vm::Pixel p) const {
+    for (std::size_t i = 0; i < menuRows_.size(); ++i) {
+      if (menuRows_[i].second && menuRows_[i].first.contains(p.x, p.y)) return static_cast<int>(i);
+    }
+    return -1;
+  }
+
+  void setSnapFromX(float x, Requests& out) {
+    const float t = std::clamp((x - sliderBox_.x) / std::max(1.f, sliderBox_.w), 0.f, 1.f);
+    out.snapStep = stm::snapStepFromSlider(t);
+  }
+
+  // ---------- Montagem das formas ----------
+  // Gizmo do objeto selecionado, so do modo ativo: eixos (linhas), anel (linhas) ou pontas com quadrado (escala).
+  // Mover: cada ponta tem duas linhas em V (seta). Escala: quadrado na ponta. Centro: quadrado branco.
+  void addGizmo(const Values& v, const vm::Projection& proj, view::ShapeList& out) const {
+    vm::Gizmo g = gizmoOf(v);
+    if (!proj.point(g.origin, g.center)) return;
+    const vm::Mode mode = modeOf(v);
+    const vm::Handle shown = dragging_ ? start_.handle : hotHandle(proj, g, mode);
+    for (const vm::Stroke& s : vm::strokes(proj, g, mode, shown)) out.line(s.a, s.b, s.highlighted ? 3.5f : 2.5f, handleColor(s.handle, s.highlighted));
+    if (mode != vm::Mode::Rotate) {
+      for (int i = 0; i < 3; ++i) {
+        vm::Pixel tip{};
+        if (!proj.point(g.origin + g.axes[static_cast<std::size_t>(i)] * g.len, tip)) continue;
+        const vm::Handle h = static_cast<vm::Handle>(i);
+        const view::Color col = handleColor(h, shown == h);
+        if (mode == vm::Mode::Move) addArrowHead(out, g.center, tip, col);
+        else out.rectFilled({tip.x - 5.f, tip.y - 5.f}, {tip.x + 5.f, tip.y + 5.f}, col);
+      }
+    }
+    const view::Color c = mode == vm::Mode::Scale && shown == vm::Handle::Center ? kHighlight : view::Rgba(255, 255, 255, 220);
+    out.rectFilled({g.center.x - 3.f, g.center.y - 3.f}, {g.center.x + 3.f, g.center.y + 3.f}, c);
+  }
+
+  // Ponta de seta: duas linhas saindo da ponta, para tras e para os lados (V).
+  static void addArrowHead(view::ShapeList& out, vm::Pixel from, vm::Pixel tip, view::Color col) {
+    const float dx = tip.x - from.x, dy = tip.y - from.y, l = std::max(1.f, std::hypot(dx, dy));
+    const float ux = dx / l, uy = dy / l;
+    const vm::Pixel back{tip.x - ux * 10.f, tip.y - uy * 10.f};
+    out.line(tip, {back.x - uy * 5.f, back.y + ux * 5.f}, 2.5f, col);
+    out.line(tip, {back.x + uy * 5.f, back.y - ux * 5.f}, 2.5f, col);
+  }
+
+  // Alca sob o mouse (so com o mouse na imagem, fora de arrasto e fora do modo de jogo: ver addGizmo).
+  [[nodiscard]] vm::Handle hotHandle(const vm::Projection& proj, const vm::Gizmo& g, vm::Mode mode) const {
+    if (!hovered()) return vm::Handle::None;
+    return vm::hitTest(proj, g, mode, mouse_);
+  }
+
+  static view::Color handleColor(vm::Handle h, bool highlighted) {
+    if (highlighted) return kHighlight;
+    switch (h) {
+      case vm::Handle::X: return view::Rgba(235, 70, 70);
+      case vm::Handle::Y: return view::Rgba(90, 220, 90);
+      case vm::Handle::Z: return view::Rgba(80, 120, 245);
+      default: return view::Rgba(230, 230, 230);
+    }
+  }
+
+  // Imagem da cena pelo elemento Image da biblioteca, modo Esticar (a textura cobre a area da imagem).
+  void appendImage(const Values& v, const sui::Box& img, view::PaintList& list) const {
+    Elm::ImageSource src;
+    src.textureSlice = sui::kViewSliceBase + kSceneSlot;
+    src.textureSize = {v.texW, v.texH};
+    src.loaded = v.texture != nullptr;
+    src.fit = Elm::ImageFit::Stretch;
+    const SU::Rect content{{img.x, img.y}, {img.w, img.h}};
+    const std::vector<SR::UIRenderItem> built =
+        Elm::BuildImageSourceItems(list.owner, content, src, {1.f, 1.f, 1.f, 1.f}, Elm::ImageStyle{}, 1u, 0.f, list.paint);
+    list.paint += built.size() + 1;
+    list.items.insert(list.items.end(), built.begin(), built.end());
+  }
+
+  // ---------- Barra de ferramentas (topo) e barra flutuante (embaixo, sobre a imagem) ----------
+  // Botao: retangulo com texto centrado; ativo (ou ligado) = cor de destaque. Largura pelo texto + margem.
+  void addButton(view::ShapeList& out, float& cursor, float y, float h, const std::string& label, Btn id, bool active, bool enabled, float pad) {
+    const float w = painter_.measure(label, kFont) + pad * 2.f;
+    const sui::Box b{cursor, y, w, h};
+    out.rectFilled({b.x, b.y}, {b.x + b.w, b.y + b.h}, active ? kButtonOn : kButtonFill, 4.f);
+    out.text({b.x + b.w * 0.5f, b.y + (b.h - kFont) * 0.5f}, label, kFont, kText, true);
+    buttons_.push_back({b, id, enabled});
+    cursor += w + 4.f;
+  }
+
+  void buildToolbar(const Values& v, view::ShapeList& out) {
+    buttons_.clear();
+    float x = rect_.x + kPad;
+    const float y = rect_.y + (kToolbarH - kBtnH) * 0.5f;
+    addButton(out, x, y, kBtnH, v.playing ? T("Stop") : T("Play"), Btn::PlayStop, v.playing, true, 9.f);
+    if (v.playing) {
+      addButton(out, x, y, kBtnH, v.paused ? T("Resume") : T("Pause"), Btn::Pause, v.paused, true, 9.f);
+      if (v.paused) addButton(out, x, y, kBtnH, T("Step"), Btn::Step, false, true, 9.f);
+    }
+    x += 6.f;
+    addButton(out, x, y, kBtnH, T("Grid"), Btn::Grid, v.showGrid, true, 9.f);
+    addButton(out, x, y, kBtnH, T("Gizmos"), Btn::Gizmos, v.showGizmos, true, 9.f);
+    addButton(out, x, y, kBtnH, T("Culled"), Btn::Culled, v.showCulled, true, 9.f);
+    addButton(out, x, y, kBtnH, T("Post-fx"), Btn::PostFx, v.showPostFx, true, 9.f);
+    const std::string hint = v.freeFly ? T("FREE NAVIGATION: WASD move, Q/E down/up, Shift fast, wheel speed, Alt/Esc exit")
+                                       : T("right: orbit | middle: pan | wheel: zoom | Alt: free navigation | double-click in Hierarchy: focus");
+    out.text({x + 8.f, rect_.y + (kToolbarH - kFont) * 0.5f}, hint, kFont, kTextDim, false, std::max(0.f, rect_.x + rect_.w - kPad - x - 16.f));
+  }
+
+  void buildFloatingBar(const Values& v, const sui::Box& img, view::ShapeList& out) {
+    if (img.w < 120.f || img.h < 60.f) return;
+    const float y = img.y + img.h - kFloatMargin - kFloatH;
+    const float x0 = img.x + kFloatMargin;
+    view::ShapeList bar;
+    float x = x0 + 8.f;
+    const float by = y + (kFloatH - kBtnH) * 0.5f;
+    const int mode = std::clamp(v.gizmoMode, 0, 2);
+    addButton(bar, x, by, kBtnH, T("Move (W)"), Btn::Mode0, mode == 0, true, 8.f);
+    addButton(bar, x, by, kBtnH, T("Rotate (E)"), Btn::Mode1, mode == 1, true, 8.f);
+    addButton(bar, x, by, kBtnH, T("Scale (R)"), Btn::Mode2, mode == 2, true, 8.f);
+    x += 4.f;
+    addButton(bar, x, by, kBtnH, T("Magnet"), Btn::Magnet, v.snapOn, true, 8.f);
+    x += 4.f;
+    addButton(bar, x, by, kBtnH, v.localSpace ? T("Local (Q)") : T("World (Q)"), Btn::Space, v.localSpace, true, 8.f);
+    x += 4.f;
+    sliderBox_ = {x, y + (kFloatH - 8.f) * 0.5f, kSliderW, 8.f};
+    const float t = stm::sliderFromSnapStep(v.snapStep);
+    bar.rectFilled({sliderBox_.x, sliderBox_.y}, {sliderBox_.x + sliderBox_.w, sliderBox_.y + sliderBox_.h}, view::Rgba(20, 24, 32), 4.f);
+    bar.rectFilled({sliderBox_.x, sliderBox_.y}, {sliderBox_.x + sliderBox_.w * t, sliderBox_.y + sliderBox_.h}, view::Rgba(90, 150, 220), 4.f);
+    char val[32];
+    std::snprintf(val, sizeof val, "%.2f m", static_cast<double>(v.snapStep));
+    const float valX = sliderBox_.x + sliderBox_.w + 6.f;
+    bar.text({valX, y + (kFloatH - kFont) * 0.5f}, val, kFont, kText);
+    x = valX + painter_.measure(val, kFont) + 10.f;
+    addButton(bar, x, by, kBtnH, T("Snap to contact"), Btn::SnapContact, false, v.sel.present && !v.sel.locked, 8.f);
+    const float right = x - 4.f + 8.f;
+    floatRect_ = {x0, y, right - x0, kFloatH};
+    out.panel({x0, y}, {right, y + kFloatH}, 6.f, view::Rgba(14, 19, 28, 230), kPanelEdge);
+    out.append(bar);
+  }
+
+  // Menu de contexto (modelo Wd::MenuControl): fundo de painel, linhas e destaque.
+  void buildPopup(const sui::Box& img, view::ShapeList& out) {
+    menuRows_.clear();
+    if (!ctx_.IsOpen()) return;
+    const auto& items = ctx_.Items(0);
+    float h = 0.f;
+    for (const auto& it : items) h += it.kind == Wd::MenuItemKind::Separator ? kSepH : kRowH;
+    const float x = std::max(img.x + 4.f, std::min(ctxPos_.x, img.x + img.w - kMenuW - 4.f));
+    const float y = std::max(img.y + 4.f, std::min(ctxPos_.y, img.y + img.h - h - 4.f));
+    out.panel({x, y}, {x + kMenuW, y + h}, 4.f, view::Rgba(12, 16, 24, 250), kPanelEdge);
+    const std::size_t hi = ctx_.Highlighted(0);
+    float row = y;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+      const Wd::MenuItem& it = items[i];
+      if (it.kind == Wd::MenuItemKind::Separator) {
+        out.line({x + 6.f, row + kSepH * 0.5f}, {x + kMenuW - 6.f, row + kSepH * 0.5f}, 1.f, kPanelEdge);
+        menuRows_.push_back({{x, row, kMenuW, kSepH}, false});
+        row += kSepH;
+        continue;
+      }
+      const bool enabled = !it.disabled;
+      if (i == hi && enabled) out.rectFilled({x + 2.f, row + 1.f}, {x + kMenuW - 2.f, row + kRowH - 1.f}, kButtonOn, 3.f);
+      out.text({x + 10.f, row + (kRowH - kFont) * 0.5f}, it.label, kFont, enabled ? kText : view::Rgba(120, 122, 130));
+      if (!it.shortcut.empty()) {
+        out.text({x + kMenuW - 10.f - painter_.measure(it.shortcut, kFont), row + (kRowH - kFont) * 0.5f}, it.shortcut, kFont, kTextDim);
+      }
+      menuRows_.push_back({{x, row, kMenuW, kRowH}, enabled});
+      row += kRowH;
+    }
+  }
+
+  // ---------- Estado ----------
+  sui::Box rect_{};
+  bool visible_ = false;
+  vm::Pixel mouse_{};
+  std::vector<In> queue_;
+
+  bool dragging_ = false;
+  vm::DragStart start_{};
+  std::string readout_;
+  bool sliderDrag_ = false;
+  bool rightDown_ = false;
+  vm::Pixel rightStart_{};
+
+  Wd::MenuControl ctx_;
+  std::vector<CtxSlot> ctxActs_;
+  std::vector<std::pair<sui::Box, bool>> menuRows_;
+  std::uint64_t ctxTarget_ = 0;
+  vm::Pixel ctxPos_{};
+
+  std::vector<Button> buttons_;
+  sui::Box sliderBox_{};
+  sui::Box floatRect_{};   // fundo da barra flutuante (o clique nele nao vai para a cena)
+
+  view::ShapePainter painter_;
+  sui::SpriteUiSdlRenderer& sdl_;
+  SR::RenderExtractor extractor_;
+  SR::FramePacket packet_;
+  std::uint64_t frameId_ = 0;
+};
+
+}  // namespace editor::scene_view_panel

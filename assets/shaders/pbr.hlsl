@@ -3,9 +3,9 @@
 // Registradores (unicos por tipo): t0 AlbedoMap; t1/t2 luzes pontuais/spot; t3..t6 mapas de sombra das cascatas;
 // t8/t9 clusters (LightGrid, LightIndexList); b0 Globals; b1 sol; b2 CSM; b3 ambiente (IBL SH9); b4 FrameBuffer (so VS);
 // b5 ClusterGrid; b6 ObjectBuffer (so VS); b7 PointShadowCB; t10..t13 mapas de sombra de pontuais/spot.
-// LIMITE DE BUFFERS: o Vulkan conta cada cbuffer por estagio (VS e PS). Com b4 e b6 no PS, o pipeline somava 10 buffers
-// dinamicos e o driver (8) recusava. Por isso o PS nao le b4/b6: o VS calcula o que ele precisa e passa por interpolacao
-// (valores por objeto com nointerpolation). Assim o total e 2 (VS) + 6 (PS) = 8.
+// LIMITE DE BUFFERS: o pipeline soma os cbuffers dos dois estagios (VS + PS) e o Vulkan aceita 8 UBO dinamicos.
+// Contagem medida no SPIR-V (VS: b4, b6 = 2; PS: b0,b1,b2,b3,b5,b7 + b6 = 7; total 9). Para caber em 8, a neblina
+// (fogColor/fogParams, constantes por objeto) vai do VS para o PS por nointerpolation, e o PS NAO le b6: total 2 + 6 = 8.
 #define LP_ENABLE_CSM
 #define LP_ENABLE_POINT_SHADOWS // sombras de pontuais/spot da engine (lightprism/Common/PointShadow.hlsli)
 #include "lightprism/Common/ClusterLighting.hlsli"
@@ -43,6 +43,8 @@ struct VSOut {
   nointerpolation float4 material  : TEXCOORD6; // x = metallic, y = roughness, z = receiveShadow
   nointerpolation float4 texInfo   : TEXCOORD7;
   nointerpolation float3 emissive  : TEXCOORD8;
+  nointerpolation float4 fogColor  : TEXCOORD9;  // neblina: vem do VS para o PS nao ler b6 (limite de UBO)
+  nointerpolation float4 fogParams : TEXCOORD10;
 };
 
 VSOut VSMain(VSIn i) {
@@ -58,6 +60,8 @@ VSOut VSMain(VSIn i) {
   o.material = float4(metallic, roughness, receiveShadow, 0.0f);
   o.texInfo = texInfo;
   o.emissive = emissive.rgb;
+  o.fogColor = fogColor;
+  o.fogParams = fogParams;
   return o;
 }
 
@@ -109,10 +113,10 @@ float4 PSMain(VSOut i) : SV_Target {
   // Luzes do sol, pontuais e spot: pelos clusters (e pelas cascatas do sol).
   color += EvaluateClusteredLights(s, i.worldPos, i.clip.xy, i.viewDepth, receive);
   color += i.emissive;   // emissao do proprio objeto: nao recebe AO nem sombra; o bloom usa o brilho depois do tone mapping
-  if (fogParams.z > 0.0) { // neblina por distancia: mistura com a cor da neblina, linear, antes do tone mapping
+  if (i.fogParams.z > 0.0) { // neblina por distancia: mistura com a cor da neblina, linear, antes do tone mapping
     float d = length(i.toCam);
-    float f = saturate((d - fogParams.x) / max(fogParams.y - fogParams.x, 0.001)) * fogParams.z;
-    color = lerp(color, fogColor.rgb, f);
+    float f = saturate((d - i.fogParams.x) / max(i.fogParams.y - i.fogParams.x, 0.001)) * i.fogParams.z;
+    color = lerp(color, i.fogColor.rgb, f);
   }
   return float4(ToneMapACESFilm(color), i.baseColor.a);   // alfa so da cor do material (a mascara do ceu depende disso)
 }

@@ -229,6 +229,9 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 - [ ] Newtoon com configurações 2D (travar eixo Z, colisores 2D)
 
 ### Interface
+- [x] Tela inicial (criar/abrir projeto) no SpriteUI, com fonte Xmind (OFL); dialogo ImGui com `--imgui-start`
+- [ ] Migracao do resto do editor de ImGui para SpriteUI
+- [ ] Teste do botao Browse e do encaixe (docking) em janela real
 - [ ] Fontes `.ttf` importadas para o projeto e escolha de fonte da UI
 - [ ] Imagens na UI — agora possivel (texturas prontas)
 - [ ] Aninhamento de elementos de UI

@@ -89,8 +89,8 @@ public:
   void shutdown() { release(); }
 
   // shaderDir = pasta "assets/shaders" (pbr.hlsl + lightprism/). `lp` = dispositivo da Light Prism sobre o mesmo RHI
-  // (rhi::createLightPrismDevice). Sem ele, ou no OpenGL (ainda sem a versao GLSL da iluminacao), o init falha e o
-  // editor volta para o renderizador em CPU.
+  // (rhi::createLightPrismDevice). Sem ele (backend sem Diligent), o init falha e o editor volta para o renderizador
+  // em CPU. No OpenGL os shaders PBR usam o GLSL 430 de glsl/ (mk abaixo); o init nao falha por isso.
   bool init(rhi::IDevice& dev, std::unique_ptr<LightPrism::IGraphicsDevice> lp, const std::string& shaderDir, u32 w, u32 h) {
     release();
     if (!lp) { debug().report("TOOL-E142", Severity::Error, "dispositivo Light Prism indisponivel (backend sem Diligent)"); return false; }

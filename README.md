@@ -11,6 +11,7 @@ Engine 3D leve, multi-API, em C++20. Estrutura pensada para o **Visual Studio Co
 
 ## Abrir o editor (caminho direto)
 - Windows: dois cliques em `build_editor.bat` (qualquer Visual Studio recente com "Desenvolvimento para desktop com C++"). Linux/macOS: `./build_editor.sh`.
+- A tela inicial (criar/abrir projeto) usa SpriteUI. Para voltar ao dialogo antigo do ImGui: `--imgui-start`.
 - Sem Git, Ninja ou internet para o build legado (dependências embutidas em `third_party/`). O painel experimental SpriteUI e habilitado por padrao e e obtido pelo CMake; para build offline, configure com `-DTOOL_WITH_SPRITEUI=OFF`. Passo a passo: `COMO_COMPILAR.txt` / `HOW_TO_BUILD.txt`.
 
 ## Linha de comando (núcleo e testes)
@@ -37,7 +38,9 @@ docs/           notas de construção
 ```
 Dependências apontam sempre para baixo: scene → events/ecs → debug → core.
 
-Status: **0.7.19-beta (em andamento)** - veja `docs/CHANGELOG.md`, `docs/LIGHT_PRISM.md`, `docs/UI_SPRITE_PLAN.md`, `docs/SCRIPT_ERRORS.md`, `docs/LIGHTING_REVIEW.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/NEXT_STEPS.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`.
+Status: **0.7.19-beta (em andamento)** - veja `docs/CHANGELOG.md`, `docs/LIGHT_PRISM.md`, `docs/UI_SPRITE_PLAN.md`, `docs/SCRIPT_ERRORS.md`, `docs/LIGHTING_REVIEW.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/NEXT_STEPS.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`, `docs/REPO_WEIGHT.md` (peso do repositorio), `docs/SHADER_AUDIT.md` (shaders GLSL/HLSL e limite de buffers do Vulkan).
+
+O que ficou pendente, e o que foi feito na ultima sessao: ver a secao *0.7.19-beta (em andamento)* em `docs/CHANGELOG.md`.
 
 **Novidades da 0.7.9-beta (erros de script):** verificador de scripts enquanto voce digita (linha e trecho), erros de execucao com linha, try/catch, avisos para objeto inexistente e NaN, e filtros no Console. Codigos em `docs/SCRIPT_ERRORS.md`.
 

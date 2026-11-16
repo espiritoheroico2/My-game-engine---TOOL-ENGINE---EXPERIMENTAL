@@ -20,12 +20,32 @@
 #include "extra_ui.hpp"
 #include "fx.hpp"
 #include "i18n.hpp"
+#include "profiler_model.hpp"
 #include "project_dialog.hpp"
 #include "selftest.hpp"
 #include "viewport_tools.hpp"
 #include "script_window.hpp"
+#include "mainmenu_model.hpp"
 #ifdef TOOL_WITH_SPRITEUI
+#include "mainmenu_panel.hpp"
 #include "spriteui_diagnostics.hpp"
+#include "start_screen_spriteui.hpp"
+#include "profiler_panel.hpp"
+#include "statusbar_panel.hpp"
+#include "help_panel.hpp"
+#include "test_map_panel.hpp"
+#include "console_model.hpp"
+#include "console_panel.hpp"
+#include "hierarchy_panel.hpp"
+#include "inspector_panel.hpp"
+#include "settings_changes.hpp"
+#include "settings_panel.hpp"
+#ifdef TOOL_WITH_SPRITEUI
+#include "scene_view_panel.hpp"
+#include "game_view_panel.hpp"
+#include "view_overlays.hpp"
+#endif
+#include "settings_model.hpp"
 #endif
 
 #include "backends/imgui_impl_sdl3.h"
@@ -220,7 +240,127 @@ bool rowIcon(const char* id, int kind, bool on, const char* tip) {
   return clicked;
 }
 
+#ifdef TOOL_WITH_SPRITEUI
+// Janela Hierarchy em SpriteUI (hierarchy_panel.hpp). O ImGui so cria a moldura da janela (titulo, X e posicao);
+// a lista, a selecao e o arraste sao do painel. Os pedidos do painel sao aplicados aqui, na cena.
+bool gHierarchySpriteOn = false;   // o painel SpriteUI existe
+bool gHierarchyFrame = false;      // a janela ImGui esta aberta neste quadro
+editor::sui::Box gHierarchyRect;   // area do conteudo, em pixels da janela
+
+// Id do objeto para o modelo: geracao e indice juntos (um objeto apagado e recriado tem outro id).
+editor::hierarchy_model::Id hierarchyKey(tool::Entity e) {
+  return (static_cast<editor::hierarchy_model::Id>(e.generation) << 32) | e.index;
+}
+tool::Entity hierarchyEntity(editor::hierarchy_model::Id id) {
+  tool::Entity e{};
+  e.index = static_cast<decltype(e.index)>(id & 0xFFFFFFFFu);
+  e.generation = static_cast<decltype(e.generation)>(id >> 32);
+  return e;
+}
+
+editor::hierarchy_model::Kind hierarchyKindOf(tool::World& w, tool::Entity e) {
+  using K = editor::hierarchy_model::Kind;
+  if (w.has<ed_::CameraComp>(e)) return K::Camera;
+  if (w.has<ed_::GlobalLight>(e) || w.has<ed_::LightComp>(e)) return K::Light;
+  if (w.has<ed_::AudioSource>(e)) return K::Audio;
+  if (w.has<ed_::ParticleComp>(e)) return K::Particles;
+  if (w.has<ed_::UiCanvas>(e)) return K::Ui;
+  return K::Object;
+}
+
+// Lista de objetos do quadro (pai, nome, tipo, ocultar e travar) e a selecao do Editor.
+editor::hierarchy_panel::Source hierarchySource(Editor& ed) {
+  tool::World& w = ed.scene.world();
+  editor::hierarchy_panel::Source src;
+  w.eachEntity([&](tool::Entity e) {
+    editor::hierarchy_model::Item item;
+    item.id = hierarchyKey(e);
+    const tool::Entity par = ed.parentOf(e);
+    item.parent = w.alive(par) ? hierarchyKey(par) : editor::hierarchy_model::NoId;
+    const auto* nm = w.get<ed_::Name>(e);
+    item.label = nm ? std::string(nm->text) : std::string(T("(unnamed)"));
+    item.kind = hierarchyKindOf(w, e);
+    item.hidden = w.has<ed_::Inactive>(e);
+    item.locked = w.has<ed_::Locked>(e);
+    src.items.push_back(std::move(item));
+  });
+  src.selected = w.alive(ed.selected) ? hierarchyKey(ed.selected) : editor::hierarchy_model::NoId;
+  return src;
+}
+
+// Menu "+ Create": mesmos objetos do menu do ImGui, na mesma ordem de editor::hierarchy_panel::kCreateLabels.
+void createFromHierarchyMenu(Editor& ed, int kind) {
+  switch (kind) {
+    case 0: ed.selected = ed.make("Empty"); break;
+    case 1: ed.selected = ed.makeMesh("Cube", 0, 0, 0.5f, 0); break;
+    case 2: ed.selected = ed.makeMesh("Sphere", 1, 0, 0.5f, 0); break;
+    case 3: ed.selected = ed.makeMesh("Plane", 2, 0, 0, 0); break;
+    case 4: ed.selected = ed.makeCamera(false); break;
+    case 5: ed.selected = ed.makeCamera(true); break;
+    case 6: ed.selected = ed.makeGlobalLight(); break;
+    case 7: ed.selected = ed.makePointLight(); break;
+    case 8: ed.selected = ed.makeAudio(""); break;
+    default: break;
+  }
+}
+
+void applyHierarchyRequests(Editor& ed, const editor::hierarchy_panel::Requests& reqs) {
+  using A = editor::hierarchy_panel::Act;
+  tool::World& w = ed.scene.world();
+  for (const editor::hierarchy_panel::Action& a : reqs) {
+    const tool::Entity e = hierarchyEntity(a.id);
+    const bool alive = w.alive(e);
+    const bool locked = alive && w.has<ed_::Locked>(e);
+    switch (a.act) {
+      case A::Select: ed.selected = alive ? e : tool::Entity{}; break;
+      case A::Activate: if (alive) ed.focusOn(e); break;
+      case A::Reparent: {
+        const tool::Entity parent = hierarchyEntity(a.parent);
+        if (alive && w.alive(parent) && !locked) ed.setParent(e, parent, true);
+        break;
+      }
+      case A::Detach: if (alive && !locked) ed.setParent(e, tool::Entity{}, true); break;
+      case A::ToggleHidden:
+        if (!alive) break;
+        if (w.has<ed_::Inactive>(e)) w.remove<ed_::Inactive>(e);
+        else w.add<ed_::Inactive>(e, ed_::Inactive{});
+        break;
+      case A::ToggleLocked:
+        if (!alive) break;
+        if (w.has<ed_::Locked>(e)) w.remove<ed_::Locked>(e);
+        else w.add<ed_::Locked>(e, ed_::Locked{});
+        break;
+      case A::Rename:
+        if (alive && !a.text.empty()) if (auto* nm = w.get<ed_::Name>(e)) ed_::ser::copyStr(nm->text, sizeof nm->text, a.text.c_str());
+        break;
+      case A::Duplicate: if (alive) ed.selected = ed.duplicate(e); break;
+      case A::Delete:
+        if (!alive) break;
+        if (locked) ed.statusLine = T("Object is locked: unlock it (padlock) before deleting.");
+        else ed.destroy(e);
+        break;
+      case A::Create: createFromHierarchyMenu(ed, a.kind); break;
+    }
+  }
+}
+
+// Moldura ImGui da Hierarchy: cria a janela e mede a area do conteudo (abaixo da barra de titulo).
+void drawHierarchyFrame(Editor& ed) {
+  gHierarchyFrame = ImGui::Begin(W("Hierarchy", "hier").c_str(), &ed.showHierarchy);
+  if (gHierarchyFrame) {
+    const ImVec2 pos = ImGui::GetWindowPos();
+    const ImVec2 size = ImGui::GetWindowSize();
+    const float titleH = ImGui::GetFrameHeight();
+    gHierarchyRect = {pos.x, pos.y + titleH, size.x, size.y - titleH};
+  }
+  ImGui::End();
+}
+#endif
+
 void drawHierarchy(Editor& ed) {
+#ifdef TOOL_WITH_SPRITEUI
+  if (gHierarchySpriteOn) { drawHierarchyFrame(ed); return; }
+#endif
   if (!ImGui::Begin(W("Hierarchy", "hier").c_str(), &ed.showHierarchy)) { ImGui::End(); return; }
   editor::helpIcon("objects");
   tool::World& w = ed.scene.world();
@@ -370,185 +510,131 @@ void drawHierarchy(Editor& ed) {
 }
 
 // --- Inspetor --------------------------------------------------------------------------------------------------
-// Inspetor: helpers de layout. Linha X/Y/Z colorida (rotulo a esquerda), secoes que podem ser abertas/fechadas em massa.
-bool vec3Row(const char* label, float* v, float speed, const char* fmt) {
-  ImGui::PushID(label);
-  ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(label);
-  ImGui::SameLine(92.f);
-  const float w = (ImGui::GetContentRegionAvail().x - 2.f * ImGui::GetStyle().ItemSpacing.x) / 3.f;
-  static const ImVec4 axis[3] = {{0.95f, 0.38f, 0.38f, 1.f}, {0.50f, 0.85f, 0.45f, 1.f}, {0.42f, 0.62f, 1.f, 1.f}};
-  static const char* names[3] = {"X", "Y", "Z"};
-  bool changed = false;
-  for (int i = 0; i < 3; ++i) {
-    if (i) ImGui::SameLine();
-    ImGui::PushID(i);
-    ImGui::AlignTextToFramePadding(); ImGui::TextColored(axis[i], "%s", names[i]); ImGui::SameLine(0.f, 4.f);
-    ImGui::SetNextItemWidth(w - 18.f);
-    changed |= ImGui::DragFloat("##v", &v[i], speed, 0.f, 0.f, fmt);
-    ImGui::PopID();
+// Componentes do objeto (nome, Transform, Mesh Renderer, Light, Global Light, Camera, Audio Source) em SpriteUI
+// (inspector_panel.hpp). Logo abaixo, no mesmo ImGui, seguem as secoes que ainda sao ImGui (fisica, voxel, UI,
+// particulas, recursos, script, tags) e o rodape. O bloco SpriteUI reserva a sua altura com um Dummy do ImGui.
+#ifdef TOOL_WITH_SPRITEUI
+editor::inspector_panel::InspectorPanel* gInspectorPanel = nullptr;   // o painel existe (dono: main)
+bool gInspectorSpriteOn = false;     // o painel SpriteUI existe
+bool gInspectorFrame = false;        // a janela ImGui do Inspector esta aberta neste quadro
+editor::sui::Box gInspectorOrigin;   // canto do bloco SpriteUI na tela (preenchido no quadro)
+editor::sui::Box gInspectorVisible;  // parte do bloco que cabe na janela ImGui (a janela rola e corta)
+
+// Dados do objeto selecionado para o painel. Os ponteiros valem neste quadro.
+editor::inspector_panel::Context inspectorContext(Editor& ed) {
+  editor::inspector_panel::Context c;
+  tool::World& w = ed.scene.world();
+  c.hasObject = w.alive(ed.selected);
+  if (!c.hasObject) return c;
+  const tool::Entity e = ed.selected;
+  c.entityIndex = e.index;
+  c.entityGeneration = e.generation;
+  c.active = !w.has<ed_::Inactive>(e);
+  c.locked = w.has<ed_::Locked>(e);
+  c.name = w.get<ed_::Name>(e);
+  c.transform = w.get<ed_::Transform>(e);
+  c.mesh = w.get<ed_::MeshRenderer>(e);
+  c.overrides = w.get<ed_::PartOverrides>(e);
+  if (c.mesh && c.mesh->shape == 3 && c.mesh->node >= 0) {   // no de modelo: nomes das partes
+    if (const auto* lm = ed.lib.model(c.mesh->model); lm && static_cast<size_t>(c.mesh->node) < lm->data.nodes.size()) {
+      for (int pi : lm->data.nodes[static_cast<size_t>(c.mesh->node)].parts) {
+        c.parts.emplace_back(pi, lm->data.parts[static_cast<size_t>(pi)].name);
+      }
+    }
   }
-  ImGui::PopID();
-  return changed;
-}
-int gSecMode = 0;   // aplicado neste quadro: 1 = abrir todas as secoes, -1 = fechar todas
-int gSecNext = 0;   // pedido pelo rodape; vale no quadro seguinte
-bool secHeader(const char* label, ImGuiTreeNodeFlags fl = 0) {
-  if (gSecMode) ImGui::SetNextItemOpen(gSecMode > 0, ImGuiCond_Always);
-  return ImGui::CollapsingHeader(label, fl);
+  c.light = w.get<ed_::LightComp>(e);
+  c.global = w.get<ed_::GlobalLight>(e);
+  c.camera = w.get<ed_::CameraComp>(e);
+  c.principal = ed.isPrincipal(e);
+  c.principalCount = ed.principalCameras().size();
+  c.splitVertical = ed.sceneInfo.splitVertical;
+  c.audio = w.get<ed_::AudioSource>(e);
+  return c;
 }
 
+// Acoes com efeito fora do objeto. Cada uma faz o mesmo que o ImGui fazia antes da troca.
+editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
+  editor::inspector_panel::Hooks h;
+  h.assets = [&ed](ed_::AssetKind k) { return assetsOfKind(ed, k); };
+  h.assetChosen = [&ed](ed_::AssetKind, const std::string& rel) {   // mesma regra do assetField do ImGui
+    if (!rel.empty()) ed.assignAsset(rel);
+    ed.lib.invalidate(rel);
+  };
+  h.previewSound = [&ed](const std::string& rel) { ed.previewSound(rel); };
+  h.stopSound = [&ed] { ed.mixer.stop(ed.previewVoice); };
+  h.hasNamed = [&ed](const std::string& name) { tool::Entity found = ed.selected; return ed.findNamed(name, found); };
+  h.setActive = [&ed](bool on) {
+    tool::World& w = ed.scene.world();
+    if (on) { if (w.has<ed_::Inactive>(ed.selected)) w.remove<ed_::Inactive>(ed.selected); }
+    else if (!w.has<ed_::Inactive>(ed.selected)) w.add<ed_::Inactive>(ed.selected, ed_::Inactive{});
+  };
+  h.setLocked = [&ed](bool on) {
+    tool::World& w = ed.scene.world();
+    if (on) w.add<ed_::Locked>(ed.selected, ed_::Locked{});
+    else w.remove<ed_::Locked>(ed.selected);
+  };
+  h.setPrincipal = [&ed](bool on) { ed.setPrincipal(ed.selected, on); };
+  h.setSplitVertical = [&ed](bool vertical) { ed.sceneInfo.splitVertical = vertical; };
+  h.setPartOverride = [&ed](int pi, bool on) {   // material editado por parte de um modelo importado
+    tool::World& w = ed.scene.world();
+    const auto* mr = w.get<ed_::MeshRenderer>(ed.selected);
+    if (!mr) return;
+    const auto* lm = ed.lib.model(mr->model);
+    if (!lm || pi < 0 || static_cast<size_t>(pi) >= lm->data.parts.size()) return;
+    const auto& part = lm->data.parts[static_cast<size_t>(pi)];
+    auto* po = w.get<ed_::PartOverrides>(ed.selected);
+    if (on) {
+      if (!po) { w.add<ed_::PartOverrides>(ed.selected, ed_::PartOverrides{}); po = w.get<ed_::PartOverrides>(ed.selected); }
+      for (const auto& it : po->items) if (it.part == pi) return;
+      ed_::PartOverride ov;
+      ov.part = pi;
+      ov.color[0] = part.material.albedo.x; ov.color[1] = part.material.albedo.y; ov.color[2] = part.material.albedo.z;
+      ov.roughness = part.material.roughness; ov.metallic = part.material.metallic;
+      po->items.push_back(ov);
+    } else if (po) {
+      po->items.erase(std::remove_if(po->items.begin(), po->items.end(), [&](const ed_::PartOverride& it) { return it.part == pi; }), po->items.end());
+    }
+  };
+  return h;
+}
+
+// Bloco SpriteUI: prepara os controles, reserva a altura no ImGui e guarda a parte visivel dentro da janela.
+void drawInspectorBlock(Editor& ed) {
+  const float avail = ImGui::GetContentRegionAvail().x;
+  const float h = gInspectorPanel->prepare(inspectorContext(ed), inspectorHooks(ed), avail);
+  const ImVec2 origin = ImGui::GetCursorScreenPos();
+  ImGui::Dummy({avail, h});
+  const ImVec2 wpos = ImGui::GetWindowPos();
+  const ImVec2 wsize = ImGui::GetWindowSize();
+  const float top = std::max(origin.y, wpos.y + ImGui::GetFrameHeight());   // abaixo da barra de titulo
+  const float bottom = std::min(origin.y + h, wpos.y + wsize.y);
+  gInspectorOrigin = {origin.x, origin.y, avail, h};
+  gInspectorVisible = {origin.x, top, avail, bottom - top};
+}
+#endif
+
 void drawInspector(Editor& ed) {
-  gSecMode = gSecNext; gSecNext = 0;
+#ifdef TOOL_WITH_SPRITEUI
+  gInspectorFrame = false;
+#endif
   if (!ImGui::Begin(W("Inspector", "insp").c_str(), &ed.showInspector)) { ImGui::End(); return; }
   editor::helpIcon("objects");
   tool::World& w = ed.scene.world();
-  if (!w.alive(ed.selected)) { ImGui::TextDisabled("%s", T("no object selected")); ImGui::End(); return; }
-  ImGui::TextDisabled("%s", F("Entity %u (generation %u)", ed.selected.index, ed.selected.generation).c_str());
-  if (auto* n = w.get<ed_::Name>(ed.selected)) ImGui::InputText(T("Name"), n->text, sizeof n->text);
-  { bool active = !w.has<ed_::Inactive>(ed.selected);
-    if (ImGui::Checkbox(T("Active"), &active)) { if (active) { if (w.has<ed_::Inactive>(ed.selected)) w.remove<ed_::Inactive>(ed.selected); } else if (!w.has<ed_::Inactive>(ed.selected)) w.add<ed_::Inactive>(ed.selected, ed_::Inactive{}); }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Inactive objects are not drawn, simulated or lit, and their Tools do not run.")); }
-  ImGui::SameLine(); { bool lk = w.has<ed_::Locked>(ed.selected);
-    if (ImGui::Checkbox(T("Locked (editor only)"), &lk)) { if (lk) w.add<ed_::Locked>(ed.selected, ed_::Locked{}); else w.remove<ed_::Locked>(ed.selected); }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Locked objects can't be moved, edited or deleted in the editor. The game is not affected."));
+#ifdef TOOL_WITH_SPRITEUI
+  gInspectorFrame = true;
+  if (gInspectorSpriteOn) drawInspectorBlock(ed);
+  const bool textInImGui = !gInspectorSpriteOn;   // sem SpriteUI, a janela mostra o aviso sozinha
+#else
+  const bool textInImGui = true;
+#endif
+  if (!w.alive(ed.selected)) {
+    if (textInImGui) ImGui::TextDisabled("%s", T("no object selected"));
+    ImGui::End();
+    return;
   }
-  // Travado: o resto do Inspector fica so de leitura (o checkbox acima continua funcionando).
+  // Travado: as secoes de ImGui abaixo ficam so de leitura (o bloco SpriteUI cuida do proprio estado).
   const bool lockedNow = w.has<ed_::Locked>(ed.selected);
   ImGui::BeginDisabled(lockedNow);
-  if (auto* t = w.get<ed_::Transform>(ed.selected)) {
-    vec3Row(T("Position"), t->pos, 0.05f, "%.2f"); vec3Row(T("Rotation"), t->rot, 0.5f, "%.1f"); vec3Row(T("Scale"), t->scale, 0.01f, "%.2f");
-  }
-  if (auto* mr = w.get<ed_::MeshRenderer>(ed.selected)) {
-    if (secHeader("Mesh Renderer", ImGuiTreeNodeFlags_DefaultOpen)) {
-    const std::string shapes = std::string(T("Cube")) + '\0' + T("Sphere") + '\0' + T("Plane") + '\0' + T("Model") + '\0' + T("Cylinder") + '\0' +
-                               T("Cone") + '\0' + T("Capsule") + '\0' + T("Wheel") + '\0' + T("Triangle prism") + '\0' + T("Hexagon prism") + '\0';
-    ImGui::Combo(T("Shape"), &mr->shape, shapes.c_str());
-    if (mr->shape == 3 && assetField(ed, T("Model file"), mr->model, sizeof mr->model, ed_::AssetKind::Model)) ed.lib.invalidate(mr->model);
-    if (mr->shape == 3 && !mr->model[0]) ImGui::TextDisabled("%s", T("Import a .glb/.gltf/.fbx in Assets and pick it here."));
-    if (assetField(ed, T("Texture"), mr->texture, sizeof mr->texture, ed_::AssetKind::Image)) ed.lib.invalidate(mr->texture);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Image in Assets (PNG, JPG, BMP, TGA) used as the colour of the object. Multiplies the Color."));
-    if (mr->shape == 3 && mr->node >= 0) { // no de modelo: cada parte tem o seu material (do arquivo ou sobreposto aqui)
-      ImGui::TextDisabled("%s", T("Imported node. Each part keeps its file material unless you override it below."));
-      if (const auto* lm = ed.lib.model(mr->model); lm && static_cast<size_t>(mr->node) < lm->data.nodes.size()) {
-        for (int pi : lm->data.nodes[static_cast<size_t>(mr->node)].parts) {
-          const auto& part = lm->data.parts[static_cast<size_t>(pi)];
-          ImGui::PushID(pi);
-          auto* po = w.get<ed_::PartOverrides>(ed.selected);
-          auto findOv = [&]() -> ed_::PartOverride* { if (po) for (auto& it : po->items) if (it.part == pi) return &it; return nullptr; };
-          bool on = findOv() != nullptr;
-          ImGui::Separator();
-          ImGui::Text("%s", part.name.empty() ? T("Part") : part.name.c_str());
-          if (ImGui::Checkbox(T("Override material"), &on)) {
-            if (on && !findOv()) {
-              if (!po) { w.add<ed_::PartOverrides>(ed.selected, ed_::PartOverrides{}); po = w.get<ed_::PartOverrides>(ed.selected); }
-              ed_::PartOverride ov; ov.part = pi;
-              ov.color[0] = part.material.albedo.x; ov.color[1] = part.material.albedo.y; ov.color[2] = part.material.albedo.z;
-              ov.roughness = part.material.roughness; ov.metallic = part.material.metallic;
-              po->items.push_back(ov);
-            } else if (!on && po) {
-              po->items.erase(std::remove_if(po->items.begin(), po->items.end(), [&](const ed_::PartOverride& it) { return it.part == pi; }), po->items.end());
-            }
-          }
-          if (ed_::PartOverride* ov = findOv()) {
-            ImGui::ColorEdit3(T("Color"), ov->color);
-            ImGui::SliderFloat(T("Roughness"), &ov->roughness, 0.05f, 1.f); ImGui::SliderFloat(T("Metallic"), &ov->metallic, 0.f, 1.f);
-          } else {
-            ImGui::TextDisabled("%s", T("File material"));
-          }
-          ImGui::PopID();
-        }
-      }
-    } else {
-    ImGui::ColorEdit3(T("Color"), mr->color);
-    ImGui::SliderFloat(T("Roughness"), &mr->roughness, 0.05f, 1.f); ImGui::SliderFloat(T("Metallic"), &mr->metallic, 0.f, 1.f);
-    }
-    // Emissao: so com "Enable emission" ligado. Com o bloom ligado (Settings > Lighting), so o que emite brilha.
-    ImGui::SliderFloat(T("Opacity"), &mr->opacity, 0.f, 1.f, "%.2f");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("1 = solid. Lower values make the object transparent: it is drawn after the solid objects and blended over them. Transparent objects do not cast shadows."));
-    ImGui::Checkbox(T("Enable emission"), &mr->emissionOn);
-    ImGui::BeginDisabled(!mr->emissionOn);
-    ImGui::ColorEdit3(T("Emission color"), mr->emissive);
-    ImGui::SliderFloat(T("Emission intensity"), &mr->emissiveIntensity, 0.f, 50.f, "%.1f");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Makes this object emit light. With Settings > Lighting > Bloom on, only emitting objects glow. 0 = does not emit."));
-    ImGui::EndDisabled();
-    // Neblina: so com "Enable fog" ligado. Escurece/clareia o objeto para a cor da neblina conforme a distancia da camera.
-    ImGui::Checkbox(T("Enable fog"), &mr->fogOn);
-    ImGui::BeginDisabled(!mr->fogOn);
-    ImGui::ColorEdit3(T("Fog color"), mr->fogColor);
-    ImGui::SliderFloat(T("Fog amount"), &mr->fogAmount, 0.f, 1.f, "%.2f");
-    ImGui::DragFloat(T("Fog start"), &mr->fogStart, 0.5f, 0.f, 1000.f, "%.1f");
-    ImGui::DragFloat(T("Fog end"), &mr->fogEnd, 0.5f, 0.f, 1000.f, "%.1f");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Fades the object towards the fog color with distance from the camera: nothing before Fog start, full amount after Fog end."));
-    ImGui::EndDisabled();
-    ImGui::Checkbox(T("Cast shadow"), &mr->castShadow); ImGui::SameLine(); ImGui::Checkbox(T("Receive shadow"), &mr->receiveShadow);
-    }
-  }
-  if (auto* lc = w.get<ed_::LightComp>(ed.selected)) {
-    if (secHeader(T("Light source"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    const std::string types = std::string(T("Directional")) + '\0' + T("Point") + '\0' + "Spot" + '\0';
-    int ty = static_cast<int>(lc->light.type); if (ImGui::Combo(T("Type"), &ty, types.c_str())) lc->light.type = static_cast<tool::LightType>(ty);
-    ImGui::ColorEdit3(T("Light color"), &lc->light.color.x); ImGui::DragFloat(T("Intensity"), &lc->light.intensity, 0.1f, 0.f, 200.f); ImGui::DragFloat(T("Range"), &lc->light.range, 0.1f, 0.1f, 200.f);
-    // Sincronia com o Transform: a direcao segue a rotacao do objeto (ou do objeto com o nome digitado).
-    ImGui::Checkbox(T("Sync rotation with Transform"), &lc->syncRot);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("The light points along the object's -Y axis after its rotation (or the object named below)."));
-    ImGui::InputText(T("Object name to follow"), lc->target, sizeof lc->target);
-    if (lc->target[0]) { tool::Entity found = ed.selected; if (!ed.findNamed(lc->target, found))ImGui::TextColored(ImVec4(1.f, 0.6f, 0.3f, 1.f), "%s", T("No object with this name: uses this object.")); }
-    ImGui::BeginDisabled(lc->syncRot);
-    ImGui::DragFloat3(T("Direction"), &lc->light.direction.x, 0.02f);
-    ImGui::EndDisabled();
-    if (lc->light.type != tool::LightType::Directional) {
-      ImGui::Checkbox(T("Cast shadow"), &lc->light.castShadow);
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Point and spot lights with this on get shadows. Settings > Lighting sets how many (the nearest to the camera)."));
-    }
-    }
-  }
-  if (auto* g = w.get<ed_::GlobalLight>(ed.selected)) {
-    if (secHeader(T("Global Light (sun)"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::ColorEdit3(T("Light color"), g->color);
-    ImGui::DragFloat(T("Intensity"), &g->intensity, 0.05f, 0.f, 20.f);
-    ImGui::SliderFloat(T("Direction (azimuth)"), &g->azimuth, 0.f, 360.f, "%.0f deg");
-    ImGui::SliderFloat(T("Height (elevation)"), &g->elevation, -10.f, 90.f, "%.0f deg");
-    ImGui::ColorEdit3(T("Ambient light"), g->ambient);
-    ImGui::Checkbox(T("Sun casts shadows"), &g->castShadow);
-    ImGui::Checkbox(T("Dynamic (day/night cycle while playing)"), &g->dynamic);
-    if (g->dynamic) ImGui::DragFloat(T("Speed (deg/s)"), &g->speed, 0.5f, 0.f, 360.f);
-    ImGui::TextDisabled("%s", T("Only the first Global Light in the scene is used."));
-    }
-  }
-  if (auto* c = w.get<ed_::CameraComp>(ed.selected)) {
-    if (secHeader(T("Camera"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::Checkbox(T("2D camera (orthographic)"), &c->ortho2D);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("No perspective: objects keep their size with distance. Use it for 2D games. Field of view is ignored."));
-    if (c->ortho2D) ImGui::DragFloat(T("Visible height (world units)"), &c->orthoSize, 0.1f, 0.5f, 500.f, "%.1f");
-    else ImGui::SliderFloat(T("Field of view"), &c->fovDeg, 10.f, 120.f, "%.0f deg");
-    ImGui::DragFloat(T("Near"), &c->nearZ, 0.01f, 0.01f, 10.f); ImGui::DragFloat(T("Far"), &c->farZ, 1.f, 1.f, 5000.f);
-    bool pr = ed.isPrincipal(ed.selected);
-    if (ImGui::Checkbox(T("Principal (active game camera)"), &pr)) ed.setPrincipal(ed.selected, pr);
-    if (pr) {
-      const size_t n = ed.principalCameras().size();
-      if (n >= 2) ImGui::TextColored({0.6f, 0.9f, 0.6f, 1.f}, "%s", F("%zu Principal cameras: split screen is on.", n).c_str());
-      const std::string modes = std::string(T("Vertical split (side by side)")) + '\0' + T("Horizontal split (top / bottom)") + '\0';
-      int sv = ed.sceneInfo.splitVertical ? 0 : 1;
-      if (ImGui::Combo(T("Split screen"), &sv, modes.c_str())) ed.sceneInfo.splitVertical = sv == 0;  // valor unico: vale para todas as Principais
-      ImGui::TextDisabled("%s", T("Shared by every Principal camera: changing it here changes it for all."));
-      if (n > 2) ImGui::TextColored({1.f, .8f, .3f, 1.f}, "%s", T("More than two Principal cameras: only the first two are shown."));
-    }
-    ImGui::Checkbox(T("Sound ear (audio listener)"), &c->soundEar);
-    if (c->soundEar) ImGui::SliderFloat(T("Master volume"), &c->earVolume, 0.f, 2.f);
-    if (ImGui::TreeNode(T("Post-processing (this camera)"))) { postFxUi(c->post, true); ImGui::TreePop(); }
-    }
-  }
-  if (auto* a = w.get<ed_::AudioSource>(ed.selected)) {
-    if (secHeader(T("Audio Source"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    if (assetField(ed, T("Sound file"), a->clip, sizeof a->clip, ed_::AssetKind::Audio)) ed.lib.invalidate(a->clip);
-    ImGui::SliderFloat(T("Volume"), &a->volume, 0.f, 2.f);
-    ImGui::Checkbox(T("Loop"), &a->loop); ImGui::SameLine(); ImGui::Checkbox(T("Play on start"), &a->playOnStart);
-    ImGui::Checkbox(T("3D sound (needs a Sound Ear)"), &a->spatial);
-    if (a->spatial) { ImGui::DragFloat(T("Min distance"), &a->minDistance, 0.1f, 0.1f, 100.f); ImGui::DragFloat(T("Max distance"), &a->maxDistance, 0.5f, 1.f, 1000.f); }
-    if (ImGui::Button(T("Preview"))) { if (a->clip[0]) ed.previewSound(a->clip); }
-    ImGui::SameLine(); if (ImGui::Button(T("Stop"))) ed.mixer.stop(ed.previewVoice);
-    }
-  }
   editor::physicsUi(ed);
   editor::toolsUi(ed);
   editor::voxelUi(ed);
@@ -557,102 +643,24 @@ void drawInspector(Editor& ed) {
   editor::addResourceUi(ed);
   scriptUi(ed);
   tagsUi(ed);
-  // Rodape: adicionar componente (mesmo menu do "Add New"), abrir/fechar todas as secoes.
+  // Rodape: adicionar componente (mesmo menu do "Add New"), abrir/fechar todas as secoes de componente.
   ImGui::Separator();
   if (ImGui::Button(T("Add Component"))) ImGui::OpenPopup("addres");
-  ImGui::SameLine(); if (ImGui::Button(T("Collapse All"))) gSecNext = -1;
-  ImGui::SameLine(); if (ImGui::Button(T("Open All"))) gSecNext = 1;
+#ifdef TOOL_WITH_SPRITEUI
+  if (gInspectorPanel) {
+    ImGui::SameLine(); if (ImGui::Button(T("Collapse All"))) gInspectorPanel->setAllSections(false);
+    ImGui::SameLine(); if (ImGui::Button(T("Open All"))) gInspectorPanel->setAllSections(true);
+  }
+#endif
   ImGui::EndDisabled();
-  gSecMode = 0;
   ImGui::End();
 }
 
-void drawConsole(Editor& ed) {
-  if (!ImGui::Begin(W("Console", "cons").c_str(), &ed.showConsole)) { ImGui::End(); return; }
-  editor::helpIcon("start");
-  if (ImGui::Button(T("Clear"))) ed.console.clear();
-  ImGui::SameLine(); if (ImGui::Button(T("Check scripts"))) ed.checkAllScripts();
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Checks every script of the scene (syntax and common mistakes) and lists them here."));
-  ImGui::SameLine(); const bool copyNow = ImGui::Button(T("Copy"));
-  ImGui::SameLine(); ImGui::Text("%s", F("errors: %zu  warnings: %zu", tool::debug().count(tool::Severity::Error), tool::debug().count(tool::Severity::Warning)).c_str());
-  // Filtros: por nivel e por texto (ex.: "Cubo" mostra so o que fala do Cubo).
-  static bool showInfo = true, showWarn = true, showErr = true;
-  static char filt[128] = "";
-  ImGui::Checkbox(T("Info"), &showInfo); ImGui::SameLine();
-  ImGui::Checkbox(T("Warnings"), &showWarn); ImGui::SameLine();
-  ImGui::Checkbox(T("Errors"), &showErr); ImGui::SameLine();
-  ImGui::SetNextItemWidth(-1);
-  ImGui::InputTextWithHint("##logfilter", T("filter (e.g. object name or TOOL-S007)"), filt, sizeof filt);
-  ImGui::Separator();
-  // Procura sem diferenca de maiusculas
-  auto hasText = [](const std::string& m, const char* f) {
-    if (!f[0]) return true;
-    auto low = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
-    const std::string fl = [&] { std::string r; for (const char* q = f; *q; ++q) r += low(static_cast<unsigned char>(*q)); return r; }();
-    std::string ml; ml.reserve(m.size()); for (unsigned char c : m) ml += low(c);
-    return ml.find(fl) != std::string::npos;
-  };
-  std::string copied;
-  // A area do log reserva a linha de comando embaixo. Sem essa altura, o log ocupava tudo e o campo saia da tela.
-  const float cmdRow = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
-  ImGui::BeginChild("log", ImVec2(0, -cmdRow));
-  size_t rowId = 0;
-  for (auto& [lvl, msg] : ed.console) {
-    ImGui::PushID(static_cast<int>(rowId++));
-    const bool show = lvl == tool::LogLevel::Error ? showErr : lvl == tool::LogLevel::Warn ? showWarn : showInfo;
-    if (!show || !hasText(msg, filt)) { ImGui::PopID(); continue; }
-    if (copyNow) copied += msg + "\n";
-    const ImVec4 c = lvl == tool::LogLevel::Error ? ImVec4(1, .4f, .4f, 1) : lvl == tool::LogLevel::Warn ? ImVec4(1, .85f, .3f, 1) : ImGui::GetStyleColorVec4(ImGuiCol_Text);
-    ImGui::PushStyleColor(ImGuiCol_Text, c);
-    // Clicar numa linha "[Nome] ..." seleciona o objeto Nome na cena.
-    if (ImGui::Selectable(msg.c_str())) {
-      const size_t lb = msg.find('['), rb = msg.find(']');
-      if (lb != std::string::npos && rb != std::string::npos && rb > lb + 1) {
-        const tool::Entity e = ed.findByName(msg.substr(lb + 1, rb - lb - 1));
-        if (ed.scene.world().alive(e)) ed.selected = e;
-      }
-    }
-    ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered() && msg.find('[') != std::string::npos) ImGui::SetTooltip("%s", T("Click to select the object in the brackets."));
-    ImGui::PopID();
-  }
-  if (copyNow) ImGui::SetClipboardText(copied.c_str());
-  if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) ImGui::SetScrollHereY(1.f);
-  ImGui::EndChild();
-  // Linha de comando: "help", "test ECS: 10000", "clear". Setas Cima/Baixo mostram os comandos anteriores.
-  struct CmdHistory {
-    std::vector<std::string> items; int pos = -1;
-    static int callback(ImGuiInputTextCallbackData* d) {
-      auto* h = static_cast<CmdHistory*>(d->UserData);
-      if (d->EventFlag != ImGuiInputTextFlags_CallbackHistory || h->items.empty()) return 0;
-      const int before = h->pos;
-      if (d->EventKey == ImGuiKey_UpArrow) { if (h->pos == -1) h->pos = static_cast<int>(h->items.size()) - 1; else if (h->pos > 0) --h->pos; }
-      else if (d->EventKey == ImGuiKey_DownArrow && h->pos != -1) { if (++h->pos >= static_cast<int>(h->items.size())) h->pos = -1; }
-      if (before != h->pos) {
-        const std::string s = h->pos >= 0 ? h->items[static_cast<size_t>(h->pos)] : std::string();
-        d->DeleteChars(0, d->BufTextLen); d->InsertChars(0, s.c_str());
-      }
-      return 0;
-    }
-  };
-  static char cmdBuf[256] = "";
-  static CmdHistory hist;
-  const float runW = ImGui::CalcTextSize(T("Run")).x + ImGui::GetStyle().FramePadding.x * 2.f;
-  ImGui::SetNextItemWidth(-(runW + ImGui::GetStyle().ItemSpacing.x));
-  const bool enter = ImGui::InputTextWithHint("##consolecmd", "test ECS: 10000   (help)", cmdBuf, sizeof cmdBuf,
-                                              ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory, CmdHistory::callback, &hist);
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Type a command and press Enter. Up/Down: previous commands. Try 'help'."));
-  if (enter) ImGui::SetKeyboardFocusHere(-1); // mantem o foco para digitar o proximo
-  ImGui::SameLine();
-  if ((ImGui::Button(T("Run")) || enter) && cmdBuf[0]) {
-    const std::string cmd = cmdBuf;
-    if (hist.items.empty() || hist.items.back() != cmd) hist.items.push_back(cmd);
-    if (hist.items.size() > 100) hist.items.erase(hist.items.begin());
-    hist.pos = -1;
-    editor::runConsoleCommand(ed, cmd);
-    cmdBuf[0] = 0;
-  }
-  ImGui::End();
+// Clicar numa linha "[Nome] ..." seleciona o objeto Nome na cena (nome vazio: nada).
+void selectObjectNamed(Editor& ed, const std::string& name) {
+  if (name.empty()) return;
+  const tool::Entity e = ed.findByName(name);
+  if (ed.scene.world().alive(e)) ed.selected = e;
 }
 
 // Janela de recurso ainda nao pronto: mostra o aviso e nada mais (Edit Mesh e Paint Mesh).
@@ -665,87 +673,69 @@ void drawFeatureStub(Editor& ed, const char* title, const char* text, bool* open
   ImGui::End();
 }
 
-void drawProfiler(Editor& ed) {
-  if (!ImGui::Begin(W("Profiler", "prof").c_str(), &ed.showProfiler)) { ImGui::End(); return; }
-  editor::helpIcon("profiler");
-  using editor::Zone;
-  editor::FrameProfiler& p = ed.prof;
-  const auto st = p.stats();
-  ImGui::Text("%s", F("%.0f FPS   avg %.2f ms   min %.2f   max %.2f", static_cast<double>(st.fps), static_cast<double>(st.avg), static_cast<double>(st.min), static_cast<double>(st.max)).c_str());
-  ImGui::Text("%s", F("1%% low: %.0f FPS (p99 %.2f ms)   jitter: %.2f ms", static_cast<double>(st.low1), static_cast<double>(st.p99), static_cast<double>(st.jitter)).c_str());
-  ImGui::Checkbox(T("Pause graph"), &p.paused);
-  static float buf[editor::FrameProfiler::kHistory];
-  p.ordered(p.frameMs, buf);
-  ImGui::PlotLines("##frames", buf, editor::FrameProfiler::kHistory, 0, F("frame time (ms), last %d frames", editor::FrameProfiler::kHistory).c_str(), 0.f, std::max(16.7f, st.max * 1.1f), ImVec2(-1, 70));
-  ImGui::Text("%s", F("CPU work only (no VSync wait): avg %.2f ms   jitter %.2f ms", static_cast<double>(st.workAvg), static_cast<double>(st.workJitter)).c_str());
-  p.ordered(p.workMs, buf);
-  ImGui::PlotLines("##work", buf, editor::FrameProfiler::kHistory, 0, T("CPU work per frame (ms)"), 0.f, std::max(4.f, st.workAvg * 2.f), ImVec2(-1, 50));
-  if (ImGui::CollapsingHeader(T("Time per zone (average ms)"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    if (ImGui::BeginTable("zones", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-      for (int z = 0; z < static_cast<int>(Zone::Count); ++z) {
-        const float a = p.zoneAvg(static_cast<Zone>(z));
-        ImGui::TableNextRow(); ImGui::TableNextColumn(); ImGui::TextUnformatted(T(editor::zoneName(static_cast<Zone>(z))));
-        ImGui::TableNextColumn(); ImGui::Text("%.2f", static_cast<double>(a));
-        ImGui::TableNextColumn(); ImGui::ProgressBar(st.avg > 0 ? std::min(1.f, a / st.avg) : 0.f, ImVec2(-1, 0), "");
-      }
-      ImGui::EndTable();
-    }
-    ImGui::TextDisabled("%s", F("measured CPU work: %.2f ms of %.2f ms (excluding idle wait, frame limit and VSync)", static_cast<double>(st.workAvg), static_cast<double>(st.avg)).c_str());
+#ifdef TOOL_WITH_SPRITEUI
+editor::statusbar::Info statusBarInfo(Editor& ed) {
+  editor::statusbar::Info info;
+  info.api = ed.apiStatus;
+  info.frameMs = tool::debug().lastFrameMs();
+  info.scene = ed.sceneInfo.name;
+  info.entities = ed.scene.world().liveCount();
+  info.errors = tool::debug().count(tool::Severity::Error);
+  info.warnings = tool::debug().count(tool::Severity::Warning);
+  info.statusLine = ed.statusLine;
+  info.language = editor::I18n::get().code();
+  return info;
+}
+#endif
+
+#ifdef TOOL_WITH_SPRITEUI
+// Pedidos do painel SpriteUI do Console (o painel nao conhece o Editor). Aplicados depois do desenho.
+void applyConsoleRequests(Editor& ed, const editor::console_panel::Requests& req) {
+  if (req.clear) {
+    ed.console.clear();
+    ++ed.consoleSerial;
   }
-  if (ImGui::CollapsingHeader(T("Rendering"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    const auto& c = p.last;
-    ImGui::Text("%s", F("API: %s", ed.apiStatus.c_str()).c_str());
-    ImGui::Text("%s", F("views: %u   pixels: %.2f M   objects drawn: %u", c.views, static_cast<double>(c.pixels) / 1e6, c.draws).c_str());
-    ImGui::Text("%s", F("triangles: %llu   shadow casters: %u   shadow triangles (CPU): %llu   shadow map reused: %u   culled: %u", c.tris, c.shadowCasters, c.shadowTris, c.shadowReused, c.culled).c_str());
-    {
-      const auto q = tool::makeQuality(ed.sceneInfo.render.lighting);
-      const auto& lf = ed.lightRig.frame();
-      ImGui::Text("%s", F("Light Prism: shadows %s (%u cascades x %u px)   lights dropped by budget: %u   post-processing: %s",
-                          lf.shadows() ? "on" : "off", static_cast<unsigned>(q.csmCascades), static_cast<unsigned>(q.shadowMapResolution),
-                          static_cast<unsigned>(lf.droppedLights), ed.sceneInfo.render.post.active() ? "on" : "off").c_str());
-    }
-    if (ed.gpuDev) { const auto g = ed.gpuDev->frameStats(); ImGui::Text("%s", F("GPU: %u draws, %u triangles, %u uploads, %u pipeline switches", g.draws, g.triangles, g.bufferUploads, g.pipelineSwitches).c_str()); }
+  if (req.checkScripts) ed.checkAllScripts();
+  if (!req.command.empty()) editor::runConsoleCommand(ed, req.command);
+  selectObjectNamed(ed, req.select);
+}
+#endif
+
+// Dados que o Profiler nao conhece (API, luz, GPU, cena): entram no modelo do painel SpriteUI a cada refresh.
+editor::profiler_model::Extras fillProfilerExtras(Editor& ed) {
+  editor::profiler_model::Extras x;
+  x.api = ed.apiStatus;
+  x.adapter = ed.gpuDev ? ed.gpuDev->deviceName() : std::string("(software renderer)");
+  x.hasGpu = ed.gpuDev != nullptr;
+  if (ed.gpuDev) {
+    const auto g = ed.gpuDev->frameStats();
+    x.gpuDraws = static_cast<unsigned>(g.draws);
+    x.gpuTriangles = static_cast<unsigned>(g.triangles);
+    x.gpuUploads = static_cast<unsigned>(g.bufferUploads);
+    x.gpuPipelineSwitches = static_cast<unsigned>(g.pipelineSwitches);
   }
-  if (ImGui::CollapsingHeader(T("System: CPU, RAM, VRAM and cache"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    const editor::SysSnapshot& sy = p.sys.get();
-    if (!sy.cpuName.empty()) ImGui::TextDisabled("%s", sy.cpuName.c_str());
-    if (sy.cpuOk) {
-      ImGui::Text("CPU total: %.0f%%   cores in use: %d of %d (in use = above 25%%)", static_cast<double>(sy.cpuTotal), sy.coresBusy, sy.coresOnline);
-      ImGui::ProgressBar(sy.cpuTotal / 100.f, ImVec2(-1, 0));
-      ImGui::Text("editor (this process): %.1f%% of all cores", static_cast<double>(sy.editorCpu));
-      if (!sy.core.empty() && ImGui::TreeNode("per core")) {
-        for (size_t i = 0; i < sy.core.size(); ++i) {
-          ImGui::Text("core %zu", i); ImGui::SameLine(90);
-          ImGui::SetNextItemWidth(-1);
-          ImGui::ProgressBar(sy.core[i] / 100.f, ImVec2(-1, 0), F("%.0f%%", static_cast<double>(sy.core[i])).c_str());
-        }
-        ImGui::TreePop();
-      }
-    } else {
-      ImGui::TextDisabled("%s", T("CPU: measuring..."));
-    }
-    if (sy.ramOk) ImGui::Text("%s", F("RAM (system): %.0f of %.0f MB in use   editor: %.0f MB (peak %.0f)", sy.ramUsedMB, sy.ramTotalMB, p.memoryMB, p.peakMemoryMB).c_str());
-    else ImGui::TextDisabled("%s", T("RAM (system): not available on this platform"));
-    if (sy.vramOk) ImGui::Text("%s", F("VRAM (this process, as the driver reports): %.0f of %.0f MB budget", sy.vramUsedMB, sy.vramBudgetMB).c_str());
-    else ImGui::TextDisabled("%s", (std::string(T("VRAM")) + ": " + sy.vramNote).c_str());
-    if (ImGui::TreeNode(T("Cache sizes"))) {
-      for (const auto& c : sy.caches) ImGui::Text("%s", F("L%d %s: %llu KB, line %u bytes", c.level, c.type.c_str(), static_cast<unsigned long long>(c.sizeKB), c.lineBytes).c_str());
-      if (sy.caches.empty()) ImGui::TextDisabled("%s", sy.cacheNote.c_str());
-      ImGui::TextDisabled("%s", T("Hit rate is not measured: it needs hardware counters (perf / VTune)."));
-      ImGui::TreePop();
-    }
-  }
-  if (ImGui::CollapsingHeader(T("Scene and memory"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    const auto s = ed.scene.stats();
-    ImGui::Text("%s", F("live entities: %zu   DeleteAndReuse pool: dormant=%zu reused=%zu freed=%zu", ed.scene.world().liveCount(), ed.scene.dormantCount(), s.reused, s.freed).c_str());
-    ImGui::Text("%s", F("loaded models: %zu   sounds: %zu   tags: %zu", ed.lib.meshCount(), ed.lib.soundCount(), ed.scene.tags().size()).c_str());
-    ImGui::Text("%s", p.memoryMB > 0 ? F("process memory: %.0f MB (peak %.0f MB)", p.memoryMB, p.peakMemoryMB).c_str() : T("process memory: not available on this platform"));
-    ImGui::Text("%s", F("errors: %zu  warnings: %zu", tool::debug().count(tool::Severity::Error), tool::debug().count(tool::Severity::Warning)).c_str());
-  }
-  ImGui::End();
+  const auto q = tool::makeQuality(ed.sceneInfo.render.lighting);
+  const auto& lf = ed.lightRig.frame();
+  x.lightShadows = lf.shadows();
+  x.lightCascades = static_cast<unsigned>(q.csmCascades);
+  x.lightShadowRes = static_cast<unsigned>(q.shadowMapResolution);
+  x.lightDropped = static_cast<unsigned>(lf.droppedLights);
+  x.postOn = ed.sceneInfo.render.post.active();
+  const auto s = ed.scene.stats();
+  x.entities = ed.scene.world().liveCount();
+  x.dormant = ed.scene.dormantCount();
+  x.reused = s.reused;
+  x.freed = s.freed;
+  x.meshes = ed.lib.meshCount();
+  x.sounds = ed.lib.soundCount();
+  x.tags = ed.scene.tags().size();
+  x.errors = static_cast<unsigned>(tool::debug().count(tool::Severity::Error));
+  x.warnings = static_cast<unsigned>(tool::debug().count(tool::Severity::Warning));
+  return x;
 }
 
 // --- Janelas de visualizacao (Scene e Game) -------------------------------------------------------------------
+#ifndef TOOL_WITH_SPRITEUI   // desenho ImGui da Scene e do Jogo (a build SpriteUI usa view_overlays.hpp)
 // Grid no plano Y=0 (linhas de 1 m, destaque a cada 5 m) + eixos X (vermelho), Y (verde), Z (azul).
 void drawGrid(ImDrawList* dl, const ViewXf& v) {
   // Grid infinito: as linhas acompanham a camera (o passo cresce com a altura) e a vista corta o excesso.
@@ -846,7 +836,10 @@ void playButton(Editor& ed) {
     if (ed.paused) { ImGui::SameLine(); if (ImGui::Button(T("Step"))) ed.stepOnce = true; }
   }
 }
+#endif  // !TOOL_WITH_SPRITEUI
 
+#ifndef TOOL_WITH_SPRITEUI
+// Build sem SpriteUI: Scene e Jogo so com ImGui. Na build SpriteUI, as janelas sao scene_view_panel / game_view_panel.
 void drawSceneView(Editor& ed, SDL_Renderer* sdl) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
   if (!ImGui::Begin(W("Scene", "view").c_str(), &ed.showScene)) { ImGui::End(); ImGui::PopStyleVar(); return; }
@@ -1079,7 +1072,402 @@ void drawGameView(Editor& ed, SDL_Renderer* sdl, bool player = false) {
   }
   ImGui::End();
 }
+#endif  // !TOOL_WITH_SPRITEUI
 
+
+#ifdef TOOL_WITH_SPRITEUI
+// Janelas Scene e Jogo em SpriteUI (scene_view_panel.hpp, game_view_panel.hpp). O ImGui cria a janela (titulo, foco,
+// docking, o "?") e mede a area; o painel desenha imagem, barra e sobreposicoes depois do ImGui. Sem a fonte, a
+// janela nao aparece (como as outras janelas SpriteUI).
+//
+// Exemplo: a Scene calcula a selecao e a grade no quadro, o painel desenha e devolve o que o usuario pediu
+// (`Requests`), e applySceneRequests aplica no Editor. Assim a regra de edicao fica em um lugar so.
+namespace scene_panel = editor::scene_view_panel;
+namespace game_panel = editor::game_view_panel;
+namespace vm = editor::scene_view_model;
+namespace gm = editor::game_view_model;
+namespace vo = editor::view_overlays;
+using ImageFit = ToolEngine::SpriteUi::Elements::ImageFit;
+
+editor::scene_view_panel::ScenePanel* gScenePanel = nullptr;   // dono: main (unique_ptr)
+editor::game_view_panel::GamePanel* gGamePanel = nullptr;
+bool gSceneFrame = false;   // a janela Scene foi desenhada neste quadro
+bool gGameFrame = false;
+editor::sui::Box gSceneRect;   // area da janela (pixels da janela)
+editor::sui::Box gGameRect;
+scene_panel::Values gSceneValues;   // montado no quadro, desenhado depois do ImGui
+game_panel::Values gGameValues;
+
+void beginViewsFrame() { gSceneFrame = gGameFrame = false; }
+
+// Entidade <-> id de 64 bits (o painel so guarda o id).
+std::uint64_t packEntity(tool::Entity e) { return (static_cast<std::uint64_t>(e.index) << 32) | e.generation; }
+tool::Entity unpackEntity(std::uint64_t id) {
+  return tool::Entity{static_cast<std::uint32_t>(id >> 32), static_cast<std::uint32_t>(id & 0xffffffffu)};
+}
+
+scene_panel::Selection sceneSelection(Editor& ed) {
+  scene_panel::Selection s;
+  auto& w = ed.scene.world();
+  if (!w.alive(ed.selected)) return s;
+  const auto* t = w.get<ed_::Transform>(ed.selected);
+  if (!t) return s;
+  s.present = true;
+  s.locked = w.has<ed_::Locked>(ed.selected);
+  for (std::size_t i = 0; i < 3; ++i) {
+    s.pos[i] = t->pos[i];
+    s.rot[i] = t->rot[i];
+    s.scale[i] = t->scale[i];
+  }
+  s.worldPos = ed.worldPos(ed.selected);
+  s.world = ed.worldMat(ed.selected);
+  const tool::Entity par = ed.parentOf(ed.selected);
+  s.hasParent = w.alive(par);
+  s.parentInv = s.hasParent ? editor::inverseAffine(ed.worldMat(par)) : tool::Mat4{};
+  return s;
+}
+
+// Objeto sob o mouse: raio; sem acerto, o centro mais proximo (luzes, cameras, vazios). Mesma regra de antes.
+tool::Entity pickSceneAt(Editor& ed, const tool::Camera& cam, editor::sui::Box img, vm::Pixel mp) {
+  const ImVec2 origin(img.x, img.y), size(img.w, img.h), at(mp.x, mp.y);
+  tool::Entity hit = editor::pickByRay(ed, editor::rayFromScreen(cam, origin, size, at));
+  if (ed.scene.world().alive(hit)) return hit;
+  const vm::Projection proj = vm::Projection::make(cam, {img.x, img.y, img.w, img.h});
+  float best = 28.f;
+  ed.scene.world().eachEntity([&](tool::Entity e) {
+    const auto* t = ed.scene.world().get<ed_::Transform>(e);
+    if (!t) return;
+    const auto* m = ed.scene.world().get<ed_::MeshRenderer>(e);
+    if (m && m->shape == 2) return;   // o chao nao disputa o clique
+    vm::Pixel sp{};
+    if (!proj.point({t->pos[0], t->pos[1], t->pos[2]}, sp)) return;
+    const float d = std::hypot(sp.x - mp.x, sp.y - mp.y);
+    if (d < best) { best = d; hit = e; }
+  });
+  return hit;
+}
+
+// O que tem sob o mouse na Scene (botao direito): id, nome e marcas do objeto.
+scene_panel::Probe sceneProbe(Editor& ed, const tool::Camera& cam, editor::sui::Box img, vm::Pixel p) {
+  scene_panel::Probe r;
+  const tool::Entity e = pickSceneAt(ed, cam, img, p);
+  auto& w = ed.scene.world();
+  if (!w.alive(e)) return r;
+  r.found = true;
+  r.id = packEntity(e);
+  if (const auto* nm = w.get<ed_::Name>(e)) r.name = nm->text;
+  r.locked = w.has<ed_::Locked>(e);
+  r.hidden = w.has<ed_::Inactive>(e);
+  return r;
+}
+
+// Monta os dados da Scene do quadro: flags, selecao, particulas (abaixo), grade, cortados e icones (acima).
+void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img, SDL_Texture* tex, int tw, int th) {
+  scene_panel::Values v;
+  v.shown = true;
+  v.cam = cam;
+  v.texture = tex;
+  v.texW = static_cast<float>(tw);
+  v.texH = static_cast<float>(th);
+  v.playing = ed.playing;
+  v.paused = ed.paused;
+  v.freeFly = ed.freeFly;
+  v.ctrlDown = ImGui::GetIO().KeyCtrl;
+  v.showGrid = ed.showGridScene;
+  v.showGizmos = ed.showGizmos;
+  v.showCulled = ed.showCulled;
+  v.showPostFx = ed.showPostInScene;
+  v.gizmoMode = ed.gizmoMode;
+  v.localSpace = ed.gizmoLocal;
+  v.snapOn = ed.snapOn;
+  v.snapStep = ed.snapStep;
+  v.sel = sceneSelection(ed);
+  v.probe = [&ed, cam, img](vm::Pixel p) { return sceneProbe(ed, cam, img, p); };
+  const vm::Projection proj = vm::Projection::make(cam, {img.x, img.y, img.w, img.h});
+  vo::buildParticles(ed, cam, img, ed.selected, v.below);
+  if (ed.showGridScene) vo::buildGrid(cam, proj, v.grid);
+  if (ed.showCulled) vo::buildCulled(ed, proj, img, v.above);
+  if (ed.showGizmos) {
+    vo::buildSceneIcons(ed, proj, v.above);
+    vo::buildPhysics(ed, proj, v.above);
+  }
+  gSceneValues = std::move(v);
+}
+
+// Item do menu de contexto da Scene (botao direito sobre um objeto).
+void applySceneContext(Editor& ed, scene_panel::CtxAct act, tool::Entity e) {
+  auto& w = ed.scene.world();
+  if (!w.alive(e)) return;
+  const bool locked = w.has<ed_::Locked>(e), hidden = w.has<ed_::Inactive>(e);
+  switch (act) {
+    case scene_panel::CtxAct::Inspector: ed.showInspector = true; break;
+    case scene_panel::CtxAct::Focus: ed.focusOn(e); break;
+    case scene_panel::CtxAct::Duplicate: ed.selected = ed.duplicate(e); break;
+    case scene_panel::CtxAct::Delete:
+      if (locked) ed.statusLine = T("Object is locked: unlock it (padlock) before deleting.");
+      else ed.destroy(e);
+      break;
+    case scene_panel::CtxAct::SnapToContact:
+      if (!locked && !snapToContact(ed, e)) ed.statusLine = T("Nothing to snap to here");
+      break;
+    case scene_panel::CtxAct::ToggleHidden:
+      if (hidden) w.remove<ed_::Inactive>(e); else w.add<ed_::Inactive>(e, ed_::Inactive{});
+      break;
+    case scene_panel::CtxAct::ToggleLocked:
+      if (locked) w.remove<ed_::Locked>(e); else w.add<ed_::Locked>(e, ed_::Locked{});
+      break;
+  }
+}
+
+// Pedidos da Scene: aplicados no Editor com as mesmas regras de antes (botoes, flags, arrasto, menu de contexto).
+void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
+  auto& w = ed.scene.world();
+  if (r.playToggle) { if (ed.playing) ed.stopPlay(); else ed.startPlay(); }
+  if (r.pauseToggle) ed.paused = !ed.paused;
+  if (r.stepOnce) ed.stepOnce = true;
+  if (r.grid) ed.showGridScene = *r.grid;
+  if (r.gizmos) ed.showGizmos = *r.gizmos;
+  if (r.culled) ed.showCulled = *r.culled;
+  if (r.postFx) ed.showPostInScene = *r.postFx;
+  if (r.gizmoMode) ed.gizmoMode = *r.gizmoMode;
+  if (r.localSpace) ed.gizmoLocal = *r.localSpace;
+  if (r.snapOn) ed.snapOn = *r.snapOn;
+  if (r.snapStep) ed.snapStep = *r.snapStep;
+  if (r.select && w.alive(unpackEntity(*r.select))) ed.selected = unpackEntity(*r.select);
+  if (w.alive(ed.selected)) {
+    if (auto* t = w.get<ed_::Transform>(ed.selected)) {
+      for (std::size_t i = 0; i < 3; ++i) {
+        if (r.pos) t->pos[i] = (*r.pos)[i];
+        if (r.rot) t->rot[i] = (*r.rot)[i];
+        if (r.scale) t->scale[i] = (*r.scale)[i];
+      }
+    }
+  }
+  if (r.snapToContact && !snapToContact(ed, ed.selected)) ed.statusLine = T("Nothing to snap to here");
+  if (r.ctx) applySceneContext(ed, r.ctx->first, unpackEntity(r.ctx->second));
+}
+
+void applyGameRequests(Editor& ed, const game_panel::Requests& r) {
+  if (r.playToggle) { if (ed.playing) ed.stopPlay(); else ed.startPlay(); }
+  if (r.pauseToggle) ed.paused = !ed.paused;
+  if (r.stepOnce) ed.stepOnce = true;
+  for (const std::string& a : r.uiActions) ed.uiEvents.push_back(a);
+}
+
+// Teclas do menu da Scene: W, E, R trocam o modo do gizmo; Q alterna mundo e local. A regra fica em scene_transform_menu.
+void sceneMenuKeys(Editor& ed) {
+  namespace stm = editor::scene_transform_menu;
+  const std::pair<ImGuiKey, stm::Action> keys[] = {
+      {ImGuiKey_W, stm::Action::Move}, {ImGuiKey_E, stm::Action::Rotate}, {ImGuiKey_R, stm::Action::Scale}, {ImGuiKey_Q, stm::Action::ToggleSpace}};
+  for (const auto& [key, action] : keys) {
+    if (ImGui::IsKeyPressed(key, false)) stm::applyAction(action, ed.gizmoMode, ed.gizmoLocal);
+  }
+}
+
+// Teclado e navegacao da Scene. Alt = navegacao livre (WASD); fora dela, W/E/R/Q mudam o menu do gizmo e o botao
+// direito/meio movem a camera. Quem consome o clique no gizmo e o painel, entao aqui so vale fora do arrasto.
+void sceneKeysAndNavigation(Editor& ed, bool hovered) {
+  ImGuiIO& io = ImGui::GetIO();
+  const bool typing = io.WantTextInput;
+  const bool focused = hovered || ImGui::IsWindowFocused();
+  if (!typing && focused && ImGui::IsKeyPressed(ImGuiKey_LeftAlt, false)) { ed.toggleFreeFly(); ed.flyChanged = true; }
+  if (ed.freeFly) {
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) { ed.toggleFreeFly(); ed.flyChanged = true; return; }
+    const float dt = std::min(0.1f, io.DeltaTime);
+    ed.flyLook(ed.mouseDX, ed.mouseDY);
+    ed.mouseDX = ed.mouseDY = 0.f;
+    auto key = [](ImGuiKey k) { return ImGui::IsKeyDown(k) ? 1.f : 0.f; };
+    ed.flyMove(dt, key(ImGuiKey_W) - key(ImGuiKey_S), key(ImGuiKey_D) - key(ImGuiKey_A), key(ImGuiKey_E) - key(ImGuiKey_Q), io.KeyShift);
+    if (io.MouseWheel != 0.f) ed.flySpeed = std::clamp(ed.flySpeed * (1.f + io.MouseWheel * 0.15f), 0.5f, 80.f);
+    return;
+  }
+  if (!typing && focused) sceneMenuKeys(ed);
+  // O arrasto da camera so vale se o botao foi pressionado DENTRO desta vista (um clique que vem de outro painel
+  // nao gira a camera sozinho).
+  static bool navRight = false, navMid = false;
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) navRight = true;
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) navMid = true;
+  if (!ImGui::IsMouseDown(ImGuiMouseButton_Right)) navRight = false;
+  if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle)) navMid = false;
+  if (!hovered || gScenePanel->dragging()) return;
+  if (navRight && ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
+    ed.yaw -= io.MouseDelta.x * 0.008f;
+    ed.pitch = std::clamp(ed.pitch + io.MouseDelta.y * 0.008f, -1.5f, 1.5f);
+  }
+  if (navMid && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+    const tool::Camera cam = ed.sceneCamera();
+    const tool::Vec3 f = tool::normalize(cam.target - cam.eye), r = tool::normalize(tool::cross(f, {0, 1, 0})), u = tool::cross(r, f);
+    const float k = ed.dist * 0.0016f;
+    ed.target = ed.target - r * (io.MouseDelta.x * k) + u * (io.MouseDelta.y * k);
+  }
+  ed.dist = std::clamp(ed.dist - io.MouseWheel * ed.dist * 0.1f, 1.5f, 200.f);
+}
+
+// Textura da Scene: renderiza (ou reusa, com a cena ociosa) no tamanho da imagem.
+SDL_Texture* updateSceneTexture(Editor& ed, SDL_Renderer* sdl, const tool::Camera& cam, int w, int h, int& tw, int& th) {
+  const int rw = std::max(64, static_cast<int>(static_cast<float>(w) * ed.renderScale));
+  const int rh = std::max(36, static_cast<int>(static_cast<float>(h) * ed.renderScale));
+  const bool soft = ed.softScaling();   // upscaling/AA por software: a textura tem o tamanho da janela
+  tw = soft ? w : rw;
+  th = soft ? h : rh;
+  const bool reuse = ed.viewsIdle() && ed.sceneTex.tex && ed.sceneTex.w == tw && ed.sceneTex.h == th;
+  if (!reuse) {
+    const tool::u8* raw = ed.renderView(cam, rw, rh, true, editor::Zone::SceneRender, ed.showPostInScene ? &ed.sceneInfo.render.post : nullptr);
+    const tool::u8* pixels = soft ? ed.finishView(ed.sceneUp, raw, rw, rh, w, h) : raw;
+    ed.sceneTex.ensure(sdl, tw, th);
+    if (ed.sceneTex.tex) SDL_UpdateTexture(ed.sceneTex.tex, nullptr, pixels, tw * 4);
+  }
+  if (ed.sceneTex.tex) SDL_SetTextureScaleMode(ed.sceneTex.tex, soft ? SDL_SCALEMODE_NEAREST : (ed.pixelFilter ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR));
+  return ed.sceneTex.tex;
+}
+
+void drawSceneSui(Editor& ed, SDL_Renderer* sdl) {
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  const bool open = ImGui::Begin(W("Scene", "view").c_str(), &ed.showScene);
+  ImGui::PopStyleVar();
+  if (!open) { ImGui::End(); return; }
+  editor::helpIcon("scene");
+  const ImVec2 origin = ImGui::GetCursorScreenPos(), avail = ImGui::GetContentRegionAvail();
+  gSceneFrame = true;
+  gSceneRect = {origin.x, origin.y, avail.x, avail.y};
+  const editor::sui::Box img = scene_panel::imageArea(gSceneRect);
+  const tool::Camera cam = ed.sceneCamera();
+  sceneKeysAndNavigation(ed, gScenePanel->hovered());
+  int tw = 0, th = 0;
+  SDL_Texture* tex = updateSceneTexture(ed, sdl, cam, std::clamp(static_cast<int>(img.w), 64, 1920), std::clamp(static_cast<int>(img.h), 64, 1080), tw, th);
+  // soltar um modelo/som do painel Assets cria o objeto na cena: a area da imagem e um alvo invisivel do ImGui
+  ImGui::SetCursorScreenPos(ImVec2(img.x, img.y));
+  ImGui::InvisibleButton("##scenedrop", ImVec2(img.w, img.h));
+  if (ImGui::BeginDragDropTarget()) {
+    if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_PATH")) ed_::instantiateAsset(ed, static_cast<const char*>(p->Data));
+    ImGui::EndDragDropTarget();
+  }
+  buildSceneValues(ed, cam, img, tex, tw, th);
+  ImGui::End();
+}
+
+// Textura de uma camera do jogo: renderiza (ou reusa) e sobe para o SDL_Texture da celula.
+SDL_Texture* updateGameTexture(Editor& ed, SDL_Renderer* sdl, std::size_t i, const tool::Camera& cam, const tool::PostFx& fx,
+                               int w, int h, int rw, int rh, bool soft, int& tw, int& th) {
+  tw = soft ? w : rw;
+  th = soft ? h : rh;
+  const bool reuse = ed.viewsIdle() && ed.gameTex[i].tex && ed.gameTex[i].w == tw && ed.gameTex[i].h == th;
+  if (!reuse) {
+    const tool::u8* raw = ed.renderView(cam, rw, rh, false, editor::Zone::GameRender, &fx);
+    const tool::u8* pixels = soft ? ed.finishView(ed.gameUp[i], raw, rw, rh, w, h) : raw;
+    ed.gameTex[i].ensure(sdl, tw, th);
+    if (ed.gameTex[i].tex) SDL_UpdateTexture(ed.gameTex[i].tex, nullptr, pixels, tw * 4);
+  }
+  if (ed.gameTex[i].tex) SDL_SetTextureScaleMode(ed.gameTex[i].tex, soft ? SDL_SCALEMODE_NEAREST : (ed.pixelFilter ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR));
+  return ed.gameTex[i].tex;
+}
+
+// Uma celula (uma camera principal): imagem, grade e sobreposicoes. Com resolucao fixa, a imagem ocupa so o
+// retangulo de letreiro dentro da celula (sem barras pretas no desenho, o painel faz o Contain).
+void buildGameCell(Editor& ed, SDL_Renderer* sdl, std::size_t i, tool::Entity e, const gm::Rect& cell, bool fill, game_panel::Cell& out) {
+  auto* t = ed.scene.world().get<ed_::Transform>(e);
+  auto* c = ed.scene.world().get<ed_::CameraComp>(e);
+  if (!t || !c) return;
+  const int w = std::clamp(static_cast<int>(cell.w), 32, 1920), h = std::clamp(static_cast<int>(cell.h), 32, 1080);
+  int rw = std::max(32, static_cast<int>(static_cast<float>(w) * ed.renderScale));
+  int rh = std::max(18, static_cast<int>(static_cast<float>(h) * ed.renderScale));
+  const bool fixedRes = !fill && ed.fixedRes(rw, rh);   // resolucao fixa: a imagem mantem a proporcao (Contain)
+  const tool::Camera cam = ed.cameraFor(e);
+  const tool::PostFx fx = tool::combinePostFx(ed.sceneInfo.render.post, c->post);
+  int tw = 0, th = 0;
+  out.texture = updateGameTexture(ed, sdl, i, cam, fx, w, h, rw, rh, ed.softScaling() && !fixedRes, tw, th);
+  out.box = cell;
+  out.texW = static_cast<float>(fixedRes ? rw : tw);
+  out.texH = static_cast<float>(fixedRes ? rh : th);
+  out.fit = fixedRes ? ImageFit::Contain : ImageFit::Stretch;
+  const gm::Rect img = fixedRes ? gm::letterbox(cell, static_cast<float>(rw), static_cast<float>(rh)) : cell;
+  const editor::sui::Box imgBox{img.x, img.y, img.w, img.h};
+  if (ed.showGridGame) vo::buildGrid(cam, vm::Projection::make(cam, {img.x, img.y, img.w, img.h}), out.overlay);
+  vo::buildParticles(ed, cam, imgBox, tool::Entity{}, out.overlay);
+  vo::buildUi(ed, e, imgBox, ed.playing, gGamePanel->hoverHit(i), gGamePanel->pressedHit(i), out);
+}
+
+void drawGameSui(Editor& ed, SDL_Renderer* sdl, bool player) {
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  bool open = false;
+  if (player) {   // jogo exportado (--player): janela cheia, sem barra
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->Pos);
+    ImGui::SetNextWindowSize(vp->Size);
+    open = ImGui::Begin("##player", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                             ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoDocking);
+  } else {
+    open = ImGui::Begin(W("Game", "game").c_str(), &ed.showGame);
+    if (open) editor::helpIcon("start");
+  }
+  ImGui::PopStyleVar();
+  if (!open) { ImGui::End(); return; }
+  const ImVec2 origin = ImGui::GetCursorScreenPos(), avail = ImGui::GetContentRegionAvail();
+  gGameFrame = true;
+  gGameRect = {origin.x, origin.y, avail.x, avail.y};
+  const editor::sui::Box area = player ? gGameRect
+      : editor::sui::Box{origin.x, origin.y + game_panel::kToolbarH, avail.x, std::max(0.f, avail.y - game_panel::kToolbarH)};
+  const auto cams = ed.principalCameras();
+  game_panel::Values v;
+  v.shown = true;
+  v.player = player;
+  v.playing = ed.playing;
+  v.paused = ed.paused;
+  if (cams.empty()) {
+    v.message = T("No camera has the 'Principal' tag. Create a camera (Hierarchy > + Create > Main Camera) or tick 'Principal' on a camera in the Inspector.");
+  } else {
+    const std::size_t n = std::min<std::size_t>(2, cams.size());
+    const bool vertical = ed.sceneInfo.splitVertical;
+    v.cameraLabel = F("Principal cameras: %zu%s", cams.size(), cams.size() >= 2 ? (vertical ? " (vertical split)" : " (horizontal split)") : "");
+    const std::vector<gm::Rect> cells = gm::splitCells({area.x, area.y, area.w, area.h}, n, vertical, 2.f);
+    const bool fill = n == 2 && ed.sceneInfo.splitFill;   // split "preencher": cada metade usa a propria area
+    for (std::size_t i = 0; i < n; ++i) {
+      game_panel::Cell out;
+      buildGameCell(ed, sdl, i, cams[i], cells[i], fill, out);
+      v.cells.push_back(std::move(out));
+    }
+  }
+  gGameValues = std::move(v);
+  ImGui::End();
+}
+
+// Na build SpriteUI, a janela so existe com o painel (a fonte carregou). Sem fonte, nada e desenhado.
+void drawSceneWindow(Editor& ed, SDL_Renderer* sdl) {
+  if (gScenePanel) drawSceneSui(ed, sdl);
+}
+void drawGameWindow(Editor& ed, SDL_Renderer* sdl, bool player) {
+  if (gGamePanel) drawGameSui(ed, sdl, player);
+}
+
+// Depois do RenderDrawData: os paineis desenham por cima e devolvem os pedidos do quadro. Sem quadro (janela
+// fechada), o painel recebe Values vazio e so solta o estado.
+void drawViewPanels(Editor& ed, SDL_Renderer* sdl) {
+  const scene_panel::Values noScene;
+  const game_panel::Values noGame;
+  if (gScenePanel) {
+    scene_panel::Requests req;
+    if (!gScenePanel->draw(sdl, gSceneRect, gSceneFrame ? gSceneValues : noScene, req)) tool::logError(std::string("Scene SpriteUI render failed: ") + SDL_GetError());
+    applySceneRequests(ed, req);
+  }
+  if (gGamePanel) {
+    game_panel::Requests req;
+    if (!gGamePanel->draw(sdl, gGameRect, gGameFrame ? gGameValues : noGame, req)) tool::logError(std::string("Game SpriteUI render failed: ") + SDL_GetError());
+    applyGameRequests(ed, req);
+  }
+}
+
+// Eventos: os paineis veem tudo, sem consumir (o ImGui continua recebendo o mouse e o teclado).
+void forwardViewEvent(const SDL_Event& e) {
+  if (gScenePanel) gScenePanel->handleEvent(e);
+  if (gGamePanel) gGamePanel->handleEvent(e);
+}
+#else
+void beginViewsFrame() {}
+void drawSceneWindow(Editor& ed, SDL_Renderer* sdl) { drawSceneView(ed, sdl); }
+void drawGameWindow(Editor& ed, SDL_Renderer* sdl, bool player) { drawGameView(ed, sdl, player); }
+void drawViewPanels(Editor&, SDL_Renderer*) {}
+void forwardViewEvent(const SDL_Event&) {}
+#endif  // TOOL_WITH_SPRITEUI
 
 void drawGraphicsTab(Editor& ed) {
   ImGui::Text("%s", F("Active API: %s", ed.apiStatus.c_str()).c_str());
@@ -1141,8 +1529,8 @@ void drawGraphicsTab(Editor& ed) {
     auto& L = ed.sceneInfo.render.lighting; bool sc = false;
     sc |= ImGui::Checkbox(T("Enable shadows"), &L.shadows);
     const std::string q = std::string(T("Low (512)")) + '\0' + T("Medium (1024)") + '\0' + T("High (2048)") + '\0' + T("Ultra (4096)") + '\0';
-    int qi = L.shadowMapResolution <= 512 ? 0 : L.shadowMapResolution <= 1024 ? 1 : L.shadowMapResolution <= 2048 ? 2 : 3;
-    if (ImGui::Combo(T("Shadow quality"), &qi, q.c_str())) { L.shadowMapResolution = 512u << qi; L.custom = true; sc = true; } // trocar a resolucao sai do preset
+    int qi = ::editor::settings_model::ShadowQualityIndex(L.shadowMapResolution);
+    if (ImGui::Combo(T("Shadow quality"), &qi, q.c_str())) { L.shadowMapResolution = ::editor::settings_model::ShadowResolution(qi); L.custom = true; sc = true; } // trocar a resolucao sai do preset
     if (sc) ed.settingsDirty = true;
   }
   ImGui::Text("%s", F("Adapter: %s", ed.gpuDev ? ed.gpuDev->deviceName().c_str() : "(software renderer)").c_str());
@@ -1162,8 +1550,8 @@ void drawGameTab(Editor& ed) {
   ImGui::TextDisabled("%s", T("The grid is an editor aid: it only appears in the Game window if you turn it on here."));
   ImGui::SeparatorText(T("Split screen"));
   const std::string modes = std::string(T("Vertical split (side by side)")) + '\0' + T("Horizontal split (top / bottom)") + '\0';
-  int sv = ed.sceneInfo.splitVertical ? 0 : 1;
-  if (ImGui::Combo(T("Split screen"), &sv, modes.c_str())) ed.sceneInfo.splitVertical = sv == 0;
+  int sv = ::editor::settings_model::SplitIndex(ed.sceneInfo.splitVertical);
+  if (ImGui::Combo(T("Split screen"), &sv, modes.c_str())) ed.sceneInfo.splitVertical = ::editor::settings_model::SplitIsVertical(sv);
   ImGui::TextDisabled("%s", T("Used when two cameras have the 'Principal' tag. Saved with the scene."));
   if (ImGui::Checkbox(T("Fill each half (no black bars)"), &ed.sceneInfo.splitFill)) ed.settingsDirty = true;
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Each camera renders into its whole half, so a 16:9 resolution no longer leaves black bars. The camera keeps its vertical field of view; the sides are cropped."));
@@ -1440,19 +1828,131 @@ void drawProjectTab(Editor& ed) {
   if (c) ed.projSettings.save(ed.project);
 }
 
+#ifdef TOOL_WITH_SPRITEUI
+// Janela Configuracoes em SpriteUI (settings_panel.hpp): a faixa de abas e a aba Graficos. As outras abas seguem
+// no ImGui, abaixo da faixa. Os pedidos do painel sao gravados no Editor aqui (mesmas regras da aba no ImGui).
+bool gSettingsSpriteOn = false;   // o painel SpriteUI existe
+bool gSettingsFrame = false;      // a janela ImGui esta aberta neste quadro
+editor::sui::Box gSettingsRect;   // area da janela (faixa e conteudo), em pixels
+
+// Quais APIs de render estao compiladas (o radio so mostra essas).
+std::array<bool, editor::settings_bridge::kApiCount> settingsApiBuilt() {
+  std::array<bool, editor::settings_bridge::kApiCount> built{};
+  built[0] = true;   // Software (CPU) existe sempre
+#ifdef TOOL_EDITOR_GPU
+  for (auto b : tool::rhi::compiledBackends()) {
+    if (b == tool::rhi::Backend::Vulkan) built[1] = true;
+    else if (b == tool::rhi::Backend::GLES) built[2] = true;
+    else if (b == tool::rhi::Backend::D3D12) built[3] = true;
+    else if (b == tool::rhi::Backend::D3D11) built[4] = true;
+  }
+#endif
+  return built;
+}
+
+editor::settings_panel::Values settingsValues(Editor& ed) {
+  editor::settings_panel::Values v;
+  auto& L = ed.sceneInfo.render.lighting;
+  v.tab = ed.settingsTab < 0 ? 0 : ed.settingsTab;
+  v.api = ed.apiRequested;
+  v.apiBuilt = settingsApiBuilt();
+  v.apiStatus = F("Active API: %s", ed.apiStatus.c_str());
+  v.resMode = ed.resMode;
+  v.customW = ed.customW;
+  v.customH = ed.customH;
+  int fw = 0, fh = 0;
+  v.fixedSize = ed.fixedRes(fw, fh);
+  v.fixedW = fw;
+  v.fixedH = fh;
+  v.renderScale = ed.renderScale;
+  v.upscale = ed.upscaleMode;
+  v.aa = ed.aaMode;
+  v.pixelFilter = ed.pixelFilter;
+  v.fps = ed.fpsMode;
+  v.shadows = L.shadows;
+  v.shadowQuality = ::editor::settings_model::ShadowQualityIndex(L.shadowMapResolution);
+  v.adapter = F("Adapter: %s", ed.gpuDev ? ed.gpuDev->deviceName().c_str() : "(software renderer)");
+  v.pixelsLine = F("Pixels per frame: %.2f M (all views)", static_cast<double>(ed.prof.last.pixels) / 1e6);
+  v.gpuErrorLine = F("Consecutive GPU error frames: %d / 5 (then the editor falls back to the CPU renderer)", ed.gpuBadFrames);
+  if (ed.gpuDev) {
+    const auto s = ed.gpuDev->frameStats();
+    v.gpuStatsLine = F("GPU: %u draws, %u triangles, %u uploads/frame", s.draws, s.triangles, s.bufferUploads);
+  }
+  return v;
+}
+
+// Alvo dos pedidos da janela Configuracoes (settings_changes.hpp): cada metodo grava um campo no Editor com a mesma
+// regra que a aba tinha no ImGui (marca o modo de janela como sujo, troca de API pelo applyApi etc.).
+struct SettingsEditorTarget {
+  Editor& ed;
+  int apiRequested() const { return ed.apiRequested; }
+  void setTab(int i) { ed.settingsTab = i; }
+  void applyApi(int api) { ed.applyApi(api); ed.settingsDirty = true; }
+  void setResMode(int i) { ed.resMode = i; ed.settingsDirty = true; }
+  void setCustomW(int w) { ed.customW = w; ed.settingsDirty = true; }
+  void setCustomH(int h) { ed.customH = h; ed.settingsDirty = true; }
+  void setRenderScale(float s) { ed.renderScale = s; ed.renderScaleSet = true; ed.settingsDirty = true; }
+  void setUpscale(int i) { ed.upscaleMode = i; ed.settingsDirty = true; }
+  void setAa(int i) { ed.aaMode = i; ed.settingsDirty = true; }
+  void setPixelFilter(bool on) { ed.pixelFilter = on; ed.settingsDirty = true; }
+  void setFps(int i) { ed.fpsMode = i; ed.fpsDirty = true; ed.settingsDirty = true; }
+  void setShadows(bool on) { ed.sceneInfo.render.lighting.shadows = on; ed.settingsDirty = true; }
+  void setShadowQuality(int i) {
+    auto& L = ed.sceneInfo.render.lighting;
+    L.shadowMapResolution = ::editor::settings_model::ShadowResolution(i);
+    L.custom = true;
+    ed.settingsDirty = true;
+  }
+};
+
+#endif
+
+// Conteudo de uma aba do ImGui (as abas em SpriteUI passam por aqui so se o ImGui precisar desenhar).
+void drawSettingsTabBody(Editor& ed, int i) {
+  if (i == 0) drawAppearanceTab(ed);
+  else if (i == 1) drawLanguageTab(ed);
+  else if (i == 2) drawGraphicsTab(ed);
+  else if (i == 3) drawGameTab(ed);
+  else if (i == 4) drawLightingTab(ed);
+  else if (i == 5) drawTagsTab(ed);
+  else if (i == 6) drawProjectTab(ed);
+  else editor::drawPhysicsTab(ed);
+}
+
 void drawSettings(Editor& ed) {
+#ifdef TOOL_WITH_SPRITEUI
+  gSettingsFrame = false;
+#endif
   ImGui::SetNextWindowSize({460, 480}, ImGuiCond_FirstUseEver);
   if (ed.focusSettings > 0 && --ed.focusSettings == 0) ImGui::SetNextWindowFocus();
   if (!ImGui::Begin(W("Settings", "settings").c_str(), &ed.showSettings)) { ImGui::End(); return; }
   editor::helpIcon("profiler");
+#ifdef TOOL_WITH_SPRITEUI
+  if (gSettingsSpriteOn) {   // faixa de abas e aba Graficos em SpriteUI; as outras abas seguem aqui, abaixo da faixa
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    gSettingsFrame = true;
+    gSettingsRect = {origin.x, origin.y, avail.x, avail.y};
+    ImGui::Dummy({avail.x, editor::settings_panel::Metrics::kStripH});
+    const int tab = ed.settingsTab < 0 ? 0 : ed.settingsTab;
+    if (tab != editor::settings_panel::kGraphicsTab) {
+      ImGui::BeginChild("tabbody");
+      ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
+      drawSettingsTabBody(ed, tab);
+      ImGui::PopItemWidth();
+      ImGui::EndChild();
+    }
+    ImGui::End();
+    return;
+  }
+#endif
   if (ImGui::BeginTabBar("settingsTabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
-    const char* names[] = {"Appearance", "Language", "Graphics", "Game", "Lighting", "Tags", "Project", "Physics"};
-    for (int i = 0; i < 8; ++i) {
-      const std::string label = std::string(T(names[i])) + "###tab" + std::to_string(i);
+    for (int i = 0; i < ::editor::settings_model::kTabCount; ++i) {
+      const std::string label = std::string(T(::editor::settings_model::kTabNames[i])) + "###tab" + std::to_string(i);
       if (ImGui::BeginTabItem(label.c_str(), nullptr, ed.settingsTab == i ? ImGuiTabItemFlags_SetSelected : 0)) {
         ImGui::BeginChild("tabbody");
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
-        if (i == 0) drawAppearanceTab(ed); else if (i == 1) drawLanguageTab(ed); else if (i == 2) drawGraphicsTab(ed); else if (i == 3) drawGameTab(ed); else if (i == 4) drawLightingTab(ed); else if (i == 5) drawTagsTab(ed); else if (i == 6) drawProjectTab(ed); else editor::drawPhysicsTab(ed);
+        drawSettingsTabBody(ed, i);
         ImGui::PopItemWidth();
         ImGui::EndChild();
         ImGui::EndTabItem();
@@ -1466,93 +1966,101 @@ void drawSettings(Editor& ed) {
 
 void openSettings(Editor& ed, int tab) { ed.showSettings = true; ed.settingsTab = tab; ed.focusSettings = 3; }
 
-void drawMenu(Editor& ed, bool& quit) {
-  if (!ImGui::BeginMainMenuBar()) return;
-  if (ImGui::BeginMenu(T("File"))) {
-    if (ImGui::MenuItem(T("New scene..."))) { ed.showScenes = true; editor::ui().openNewScene = true; }
-    if (ImGui::MenuItem(T("Save scene"), "Ctrl+S")) ed.saveScene();
-    if (ImGui::MenuItem(T("Import asset..."))) SDL_ShowOpenFileDialog([](void*, const char* const* files, int) { if (files) for (; *files; ++files) editor::queueImport(*files); }, nullptr, nullptr, nullptr, 0, nullptr, true);
-    ImGui::Separator();
-    if (ImGui::MenuItem(T("New narrative graph"))) ed.narrative.newGraph();
-    if (ImGui::MenuItem(T("Save graph"))) ed.narrative.save();
-    ImGui::Separator();
-    if (ImGui::MenuItem(T("Settings..."))) openSettings(ed, 0);
-    if (ImGui::MenuItem(T("Editor info..."))) ed.showEditorInfo = true;
-    if (ImGui::MenuItem(T("Export game..."))) ed.showExport = true;
-    if (ImGui::MenuItem(T("Quit"))) quit = true;
-    ImGui::EndMenu();
-  }
-  if (ImGui::BeginMenu(T("Edit"))) {
-    if (ImGui::MenuItem(T("Undo"), "Ctrl+Z", false, ed.undoStack.canUndo() && !ed.playing)) ed.undo();
-    if (ImGui::MenuItem(T("Redo"), "Ctrl+Y", false, ed.undoStack.canRedo() && !ed.playing)) ed.redo();
-    ImGui::EndMenu();
-  }
-  if (ImGui::BeginMenu(T("Window"))) {
-    ImGui::MenuItem(T("Hierarchy"), nullptr, &ed.showHierarchy); ImGui::MenuItem(T("Inspector"), nullptr, &ed.showInspector); ImGui::MenuItem("Console", nullptr, &ed.showConsole);
-    ImGui::MenuItem("Profiler", nullptr, &ed.showProfiler); ImGui::MenuItem(T("Edit Mesh"), nullptr, &ed.showEditMesh); ImGui::MenuItem(T("Paint Mesh"), nullptr, &ed.showPaintMesh); ImGui::MenuItem(T("Scene"), nullptr, &ed.showScene); ImGui::MenuItem(T("Game"), nullptr, &ed.showGame);
-    ImGui::MenuItem("Assets", nullptr, &ed.showAssets); ImGui::MenuItem(T("Scenes"), nullptr, &ed.showScenes);
-    ImGui::MenuItem(T("Settings"), nullptr, &ed.showSettings);
-    ImGui::MenuItem(T("Narrative Controller"), nullptr, &ed.showNarrative);
-    ImGui::MenuItem(T("Input Map"), nullptr, &ed.showInputMap);
-#ifdef TOOL_WITH_SPRITEUI
-    ImGui::MenuItem(T("SpriteUI diagnostics"), nullptr, &ed.showSpriteUiDiagnostics);
-#endif
-    ImGui::MenuItem(T("Help"), "F1", &editor::helpState().open); ImGui::Separator();
-    if (ImGui::MenuItem(T("Reset layout"))) ed.resetLayout = true;
-    ImGui::EndMenu();
-  }
-  if (ImGui::BeginMenu(T("Interface"))) {
-    ImGui::MenuItem(T("Lock interface"), nullptr, &ed.lockInterface);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Locks the layout: tabs and windows can't be dragged out of the docks, and the splitters don't move. Use Reset layout to change it again."));
-    ImGui::MenuItem(T("Dock only while holding Shift"), nullptr, &ed.dockWithShift);
-    ImGui::MenuItem(T("Log keyboard events (debug)"), nullptr, &ed.logKeys);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Writes each key press, release and typed text to the Console. Use it to find the key that erases text."));
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Hold Shift to dock or undock a window. Stops windows from detaching by accident when you click."));
-    ImGui::Separator();
-    if (ImGui::MenuItem(T("Reset layout"))) ed.resetLayout = true;
-    ImGui::EndMenu();
-  }
-  if (ImGui::BeginMenu(T("Options"))) {
-    if (ImGui::MenuItem(T("Appearance and colors..."))) openSettings(ed, 0);
-    if (ImGui::MenuItem(T("Language..."))) openSettings(ed, 1);
-    if (ImGui::MenuItem(T("Graphics API..."))) openSettings(ed, 2);
-    if (ImGui::MenuItem(T("Game view (grid, split)..."))) openSettings(ed, 3);
-    if (ImGui::MenuItem(T("Lighting and shadows..."))) openSettings(ed, 4);
-    if (ImGui::MenuItem(T("Tags..."))) openSettings(ed, 5);
-    if (ImGui::MenuItem(T("Project and export preset..."))) openSettings(ed, 6);
-    if (ImGui::MenuItem(T("Physics (world gravity)..."))) openSettings(ed, 7);
-    ImGui::EndMenu();
-  }
-  ImGui::SameLine(ImGui::GetWindowWidth() * 0.5f - 30.f);
-  if (ImGui::SmallButton(ed.playing ? T("Stop") : T("Play"))) { if (ed.playing) ed.stopPlay(); else ed.startPlay(); }
-  if (ed.playing) { ImGui::SameLine(); if (ImGui::SmallButton(ed.paused ? T("Resume") : T("Pause"))) ed.paused = !ed.paused; }
-  ImGui::EndMainMenuBar();
+// Barra de menus principal (SpriteUI, mainmenu_panel.hpp). Estado que ela mostra: cada marca le um flag do Editor.
+editor::mainmenu::MenuState menuStateOf(Editor& ed) {
+  editor::mainmenu::MenuState s;
+  s.playing = ed.playing;
+  s.paused = ed.paused;
+  s.canUndo = ed.undoStack.canUndo();
+  s.canRedo = ed.undoStack.canRedo();
+  s.hierarchy = ed.showHierarchy;
+  s.inspector = ed.showInspector;
+  s.console = ed.showConsole;
+  s.profiler = ed.showProfiler;
+  s.editMesh = ed.showEditMesh;
+  s.paintMesh = ed.showPaintMesh;
+  s.scene = ed.showScene;
+  s.game = ed.showGame;
+  s.assets = ed.showAssets;
+  s.scenes = ed.showScenes;
+  s.settings = ed.showSettings;
+  s.narrative = ed.showNarrative;
+  s.inputMap = ed.showInputMap;
+  s.spriteUiDiagnostics = ed.showSpriteUiDiagnostics;
+  s.help = editor::helpState().open;
+  s.lockInterface = ed.lockInterface;
+  s.dockWithShift = ed.dockWithShift;
+  s.logKeys = ed.logKeys;
+  s.language = editor::I18n::get().code();
+  return s;
 }
 
-// Barra de status: API, FPS, cena, entidades, erros e idioma.
-void drawStatusBar(Editor& ed) {
+// Faixa do topo reservada para o encaixe das janelas nao passar por baixo da barra (os textos sao do painel).
+void reserveMenuBarStrip() {
+  ImGuiViewport* vp = ImGui::GetMainViewport();
+  const ImGuiWindowFlags fl = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings;
+  if (ImGui::BeginViewportSideBar("##menubar", vp, ImGuiDir_Up, ImGui::GetFrameHeight(), fl)) ImGui::End();
+}
+
+// Janelas e opcoes que a barra liga e desliga. false se o pedido nao for uma delas.
+bool toggleFromMenu(Editor& ed, editor::mainmenu::Command c) {
+  using C = editor::mainmenu::Command;
+  bool* flag = nullptr;
+  switch (c) {
+    case C::ToggleHierarchy: flag = &ed.showHierarchy; break;
+    case C::ToggleInspector: flag = &ed.showInspector; break;
+    case C::ToggleConsole: flag = &ed.showConsole; break;
+    case C::ToggleProfiler: flag = &ed.showProfiler; break;
+    case C::ToggleEditMesh: flag = &ed.showEditMesh; break;
+    case C::TogglePaintMesh: flag = &ed.showPaintMesh; break;
+    case C::ToggleScene: flag = &ed.showScene; break;
+    case C::ToggleGame: flag = &ed.showGame; break;
+    case C::ToggleAssets: flag = &ed.showAssets; break;
+    case C::ToggleScenes: flag = &ed.showScenes; break;
+    case C::ToggleSettings: flag = &ed.showSettings; break;
+    case C::ToggleNarrative: flag = &ed.showNarrative; break;
+    case C::ToggleInputMap: flag = &ed.showInputMap; break;
+    case C::ToggleSpriteUiDiagnostics: flag = &ed.showSpriteUiDiagnostics; break;
+    case C::ToggleHelp: flag = &editor::helpState().open; break;
+    case C::ToggleLockInterface: flag = &ed.lockInterface; break;
+    case C::ToggleDockWithShift: flag = &ed.dockWithShift; break;
+    case C::ToggleLogKeys: flag = &ed.logKeys; break;
+    default: return false;
+  }
+  *flag = !*flag;
+  return true;
+}
+
+// Executa o pedido de um item ou botao da barra de menus.
+void applyMenuRequest(Editor& ed, bool& quit, const editor::mainmenu::Request& req) {
+  using C = editor::mainmenu::Command;
+  if (toggleFromMenu(ed, req.command)) return;
+  switch (req.command) {
+    case C::NewScene: ed.showScenes = true; editor::ui().openNewScene = true; break;
+    case C::SaveScene: ed.saveScene(); break;
+    case C::ImportAsset: SDL_ShowOpenFileDialog([](void*, const char* const* files, int) { if (files) for (; *files; ++files) editor::queueImport(*files); }, nullptr, nullptr, nullptr, 0, nullptr, true); break;
+    case C::NewNarrative: ed.narrative.newGraph(); break;
+    case C::SaveNarrative: ed.narrative.save(); break;
+    case C::Settings: openSettings(ed, req.tab); break;
+    case C::EditorInfo: ed.showEditorInfo = true; break;
+    case C::ExportGame: ed.showExport = true; break;
+    case C::Quit: quit = true; break;
+    case C::Undo: ed.undo(); break;
+    case C::Redo: ed.redo(); break;
+    case C::ResetLayout: ed.resetLayout = true; break;
+    case C::Play: ed.startPlay(); break;
+    case C::Stop: ed.stopPlay(); break;
+    case C::Pause: ed.paused = !ed.paused; break;
+    default: break;
+  }
+}
+
+// Barra de status: o texto e desenhado pelo painel SpriteUI (statusbar_panel.hpp), depois do ImGui.
+// O ImGui so reserva a faixa de baixo para o encaixe das janelas nao passar por ela.
+void reserveStatusBarStrip() {
   ImGuiViewport* vp = ImGui::GetMainViewport();
   const ImGuiWindowFlags fl = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar;
-  if (ImGui::BeginViewportSideBar("##status", vp, ImGuiDir_Down, ImGui::GetFrameHeight(), fl)) {
-    if (ImGui::BeginMenuBar()) {
-      const float ms = static_cast<float>(tool::debug().lastFrameMs());
-      ImGui::Text("%s", F("API: %s", ed.apiStatus.c_str()).c_str());
-      ImGui::Separator();
-      ImGui::Text("%.0f FPS", ms > 0 ? static_cast<double>(1000.f / ms) : 0.0);
-      ImGui::Separator();
-      ImGui::Text("%s", F("scene: %s", ed.sceneInfo.name.c_str()).c_str());
-      ImGui::Separator();
-      ImGui::Text("%s", F("entities: %zu", ed.scene.world().liveCount()).c_str());
-      ImGui::Separator();
-      ImGui::TextColored(tool::debug().count(tool::Severity::Error) ? ImVec4(1, .4f, .4f, 1) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled), "%s",
-                         F("errors: %zu  warnings: %zu", tool::debug().count(tool::Severity::Error), tool::debug().count(tool::Severity::Warning)).c_str());
-      if (!ed.statusLine.empty()) { ImGui::Separator(); ImGui::TextDisabled("%s", ed.statusLine.c_str()); }
-      ImGui::SameLine(ImGui::GetWindowWidth() - 150);
-      ImGui::TextDisabled("%s", editor::I18n::get().code().c_str());
-      ImGui::EndMenuBar();
-    }
-    ImGui::End();
-  }
+  if (ImGui::BeginViewportSideBar("##status", vp, ImGuiDir_Down, ImGui::GetFrameHeight(), fl)) ImGui::End();
 }
 
 // Interface travada: tira de todos os nos do encaixe a permissao de desencaixar (abas/janelas viram fixas), de
@@ -1707,6 +2215,8 @@ int main(int argc, char** argv) {
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--project") == 0) projectArg = argv[i + 1];
   if ((ecsCount > 0 || voxelCount > 0 || mapSide > 0) && projectArg.empty()) { std::fprintf(stderr, "--ecs/--voxel precisam de --project <pasta de teste> (nao grava o projeto)\n"); return 1; }
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--api") == 0) startApi = std::strcmp(argv[i + 1], "vulkan") == 0 ? 1 : std::strcmp(argv[i + 1], "opengl") == 0 ? 2 : std::strcmp(argv[i + 1], "d3d12") == 0 ? 3 : std::strcmp(argv[i + 1], "d3d11") == 0 ? 4 : 0;
+  bool useImGuiStart = false;   // --imgui-start: dialogo de inicio antigo (ImGui); padrao: tela SpriteUI
+  for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--imgui-start") == 0) useImGuiStart = true; if (std::strcmp(argv[i], "--test-map") == 0) ed_::openTestMap(); }   // --test-map: captura de tela
   for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--play") == 0) startPlaying = true; if (std::strcmp(argv[i], "--selftest") == 0) selfTest = true; if (std::strcmp(argv[i], "--player") == 0) playerMode = true; }
   std::string startLang, startTheme, startScene, focusWin, selectName; int startTab = -1; bool showInputMapAtStart = false; std::string narrativeFile;
   for (int i = 1; i + 1 < argc; ++i) {
@@ -1760,7 +2270,9 @@ int main(int argc, char** argv) {
     for (auto& f : ed.theme.files) if (startTheme == f.name) ed.theme.load(f.path);
   }
   tool::Logger::get().setSink([&](tool::LogLevel l, std::string_view m) {
-    ed.console.emplace_back(l, std::string(m)); if (ed.console.size() > 1000) ed.console.pop_front();
+    ed.console.emplace_back(l, std::string(m));
+    if (ed.console.size() > editor::console_model::kMaxEntries) ed.console.pop_front();
+    ++ed.consoleSerial;
     std::fprintf(l >= tool::LogLevel::Warn ? stderr : stdout, "[%s] %.*s\n", tool::toString(l), static_cast<int>(m.size()), m.data());
   });
   tool::logInfo("Editor started.");
@@ -1790,7 +2302,22 @@ int main(int argc, char** argv) {
     const std::string loc = editor::defaultProjectsFolder(lastProject);
     std::snprintf(dlg.location, sizeof dlg.location, "%s", loc.c_str());
     bool closed = false;
-    while (!dlg.done && !closed) {
+    std::filesystem::path startRoot;
+    bool startDone = false;
+#ifdef TOOL_WITH_SPRITEUI
+    if (!useImGuiStart) {
+      ToolEngine::SpriteUi::Text::TruetypeAtlas atlas;
+      if (editor::start::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", atlas)) {
+        editor::start::Model model(lastProject, editor::defaultProjectsFolder(lastProject));
+        startDone = editor::start::RunStartScreen(window, renderer, model, atlas,
+                                                  editor::defaultProjectsFolder(lastProject), closed);
+        startRoot = model.result();
+      } else {
+        std::fprintf(stderr, "Fonte da tela de inicio nao encontrada (assets/fonts/Xmind-Regular.ttf); usando o ImGui.\n");
+      }
+    }
+#endif
+    while (!startDone && !dlg.done && !closed) {
       SDL_Event ev;
       while (SDL_PollEvent(&ev)) {
         ImGui_ImplSDL3_ProcessEvent(&ev);
@@ -1810,7 +2337,7 @@ int main(int argc, char** argv) {
       SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
       return 0;
     }
-    ed.project.root = dlg.result;
+    ed.project.root = startDone ? startRoot : dlg.result;
     saveSettings(ed); // lembra o projeto para o proximo "Abrir ultimo projeto"
   }
   ed.project.ensure();
@@ -1848,6 +2375,49 @@ int main(int argc, char** argv) {
   bool benchArmed = false;
 #ifdef TOOL_WITH_SPRITEUI
   editor::SpriteUiDiagnostics spriteUiDiagnostics;
+  // Fonte e renderizador unicos das janelas SpriteUI. Sem a fonte, as janelas ficam na versao ImGui.
+  ToolEngine::SpriteUi::Text::TruetypeAtlas uiAtlas;
+  editor::sui::SpriteUiSdlRenderer uiRenderer;
+  // O modo --player tambem carrega a fonte: a janela do jogo desenha o texto da UI com ela (mesma fonte do editor).
+  const bool fontReady = !headless && editor::sui::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", uiAtlas) && uiRenderer.uploadAtlas(renderer, uiAtlas);
+  const bool uiReady = fontReady && !playerMode;
+  // Janelas do editor em SpriteUI. Sem a fonte, elas nao aparecem (nao ha caminho ImGui de reserva).
+  std::unique_ptr<editor::profiler_panel::ProfilerPanel> profPanel;
+  if (uiReady) profPanel = std::make_unique<editor::profiler_panel::ProfilerPanel>(uiAtlas, uiRenderer);
+  std::unique_ptr<editor::statusbar::StatusBarPanel> statusPanel;
+  if (uiReady) statusPanel = std::make_unique<editor::statusbar::StatusBarPanel>(uiAtlas, uiRenderer);
+  const bool statusSpriteOn = statusPanel != nullptr;
+  std::unique_ptr<editor::mainmenu::MainMenuPanel> menuPanel;
+  if (uiReady) menuPanel = std::make_unique<editor::mainmenu::MainMenuPanel>(uiAtlas, uiRenderer);
+  const bool menuSpriteOn = menuPanel != nullptr;
+  std::unique_ptr<editor::help::HelpPanel> helpPanel;
+  if (uiReady) helpPanel = std::make_unique<editor::help::HelpPanel>(uiAtlas, uiRenderer);
+  std::unique_ptr<editor::testmap::TestMapPanel> testMapPanel;
+  if (uiReady) testMapPanel = std::make_unique<editor::testmap::TestMapPanel>(uiAtlas, uiRenderer);
+  bool testMapGenerate = false;   // o botao "Generate map" so marca; o mapa e gerado depois do quadro
+  std::unique_ptr<editor::console_panel::ConsolePanel> consolePanel;
+  if (uiReady) consolePanel = std::make_unique<editor::console_panel::ConsolePanel>(uiAtlas, uiRenderer);
+  std::unique_ptr<editor::hierarchy_panel::HierarchyPanel> hierPanel;
+  if (uiReady) hierPanel = std::make_unique<editor::hierarchy_panel::HierarchyPanel>(uiAtlas, uiRenderer);
+  gHierarchySpriteOn = hierPanel != nullptr;
+  std::unique_ptr<editor::settings_panel::SettingsPanel> settingsPanel;
+  if (uiReady) settingsPanel = std::make_unique<editor::settings_panel::SettingsPanel>(uiAtlas, uiRenderer);
+  gSettingsSpriteOn = settingsPanel != nullptr;
+  std::unique_ptr<editor::inspector_panel::InspectorPanel> inspPanel;
+  if (uiReady) inspPanel = std::make_unique<editor::inspector_panel::InspectorPanel>(uiAtlas, uiRenderer);
+  gInspectorPanel = inspPanel.get();
+#ifdef TOOL_WITH_SPRITEUI
+  std::unique_ptr<editor::scene_view_panel::ScenePanel> scenePanel;
+  std::unique_ptr<editor::game_view_panel::GamePanel> gamePanel;
+  if (uiReady) scenePanel = std::make_unique<editor::scene_view_panel::ScenePanel>(uiAtlas, uiRenderer);
+  if (fontReady) gamePanel = std::make_unique<editor::game_view_panel::GamePanel>(uiAtlas, uiRenderer);
+  gScenePanel = scenePanel.get();
+  gGamePanel = gamePanel.get();
+#endif
+  gInspectorSpriteOn = inspPanel != nullptr;
+#else
+  const bool statusSpriteOn = false;
+  const bool menuSpriteOn = false;
 #endif
   while (!quit) {
     const Uint64 frameStart = SDL_GetTicksNS();
@@ -1867,6 +2437,7 @@ int main(int argc, char** argv) {
     int nEvents = 0;
 #ifdef TOOL_WITH_SPRITEUI
     spriteUiDiagnostics.beginFrame();
+    if (profPanel) profPanel->beginFrame();
 #endif
     while (SDL_PollEvent(&e)) {
       // Movimento do mouse sem botao (so passar por cima) nao conta como atividade: senao a cena nunca fica ociosa
@@ -1875,7 +2446,17 @@ int main(int argc, char** argv) {
 #ifdef TOOL_WITH_SPRITEUI
       const bool spriteUiHandled =
           spriteUiDiagnostics.handleEvent(e, ed.showSpriteUiDiagnostics);
-      if (!spriteUiHandled) ImGui_ImplSDL3_ProcessEvent(&e);
+      const bool profHandled = profPanel && profPanel->handleEvent(e, ed.showProfiler);   // roda e X do painel do Profiler
+      const bool helpHandled = helpPanel && helpPanel->handleEvent(e, window, editor::helpState().open);   // janela Help SpriteUI
+      const editor::testmap::Action testMapAction = testMapPanel ? testMapPanel->handleEvent(e, editor::testMapState().open, editor::testMapState().side) : editor::testmap::Action::None;
+      if (testMapAction == editor::testmap::Action::Generate) testMapGenerate = true;
+      const bool menuHandled = menuPanel && menuPanel->handleEvent(e);
+      const bool consoleHandled = consolePanel && consolePanel->handleEvent(e, ed.showConsole);
+      const bool hierHandled = hierPanel && hierPanel->handleEvent(e);
+      const bool setHandled = settingsPanel && settingsPanel->handleEvent(e);
+      const bool inspHandled = inspPanel && inspPanel->handleEvent(e);
+      forwardViewEvent(e);   // paineis Scene e Jogo: veem o evento, sem consumir
+      if (!spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !menuHandled && testMapAction == editor::testmap::Action::None) ImGui_ImplSDL3_ProcessEvent(&e);
 #else
       ImGui_ImplSDL3_ProcessEvent(&e);
 #endif
@@ -1928,11 +2509,12 @@ int main(int argc, char** argv) {
       if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y) || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z)) ed.redo();
     }
     ed.undoTick(ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsKeyDown(ImGuiKey_Delete) || ed.freeFly); // fim de interacao = novo passo do historico
+    beginViewsFrame();
     if (playerMode) {
-      drawGameView(ed, renderer, true);
+      drawGameWindow(ed, renderer, true);
     } else {
-      drawMenu(ed, quit);
-      drawStatusBar(ed);
+      if (menuSpriteOn) reserveMenuBarStrip();
+      if (statusSpriteOn) reserveStatusBarStrip();
       if (!focusWin.empty() && frame == 24) ImGui::SetWindowFocus(("###" + focusWin).c_str());
       const ImGuiID dock = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
       if (ed.resetLayout || ImGui::DockBuilderGetNode(dock) == nullptr || ImGui::DockBuilderGetNode(dock)->IsLeafNode()) {
@@ -1948,12 +2530,9 @@ int main(int argc, char** argv) {
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showInspector) drawInspector(ed);
       ed_::scriptWindowUi(ed); // janela de edicao de script (fora do Inspector)
-      ed_::testMapWindow(ed);  // mapa de teste de chunks (menu Criar)
       if (focusTabs) ImGui::SetNextWindowFocus();
-      if (ed.showScene) drawSceneView(ed, renderer);
-      if (ed.showGame) drawGameView(ed, renderer);
-      if (ed.showConsole) drawConsole(ed);
-      if (ed.showProfiler) drawProfiler(ed);
+      if (ed.showScene) drawSceneWindow(ed, renderer);
+      if (ed.showGame) drawGameWindow(ed, renderer, false);
       if (ed.showEditMesh) drawFeatureStub(ed, T("Edit Mesh"), T("Edit the 3D model of an object: move vertices, faces and edges. In development."), &ed.showEditMesh);
       if (ed.showPaintMesh) drawFeatureStub(ed, T("Paint Mesh"), T("Paint colors and textures directly on the 3D model. In development."), &ed.showPaintMesh);
       if (focusTabs) ImGui::SetNextWindowFocus();
@@ -1962,7 +2541,6 @@ int main(int argc, char** argv) {
       if (ed.showSettings) drawSettings(ed);
       if (ed.showNarrative) ed.narrative.draw(&ed.showNarrative);
       if (ed.showInputMap) editor::drawInputMap(ed, &ed.showInputMap);
-      if (editor::helpState().open) editor::drawHelp(ed, &editor::helpState().open);
       if (ed.showEditorInfo) editor::drawEditorInfo(ed, &ed.showEditorInfo);
       if (ed.showExport) editor::drawExport(ed, &ed.showExport);
     }
@@ -1978,7 +2556,97 @@ int main(int argc, char** argv) {
     { const ImVec4 bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg); SDL_SetRenderDrawColor(renderer, static_cast<Uint8>(bg.x * 255), static_cast<Uint8>(bg.y * 255), static_cast<Uint8>(bg.z * 255), 255); }
     SDL_RenderClear(renderer);
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
+    drawViewPanels(ed, renderer);   // Scene e Jogo em SpriteUI: por cima do ImGui
 #ifdef TOOL_WITH_SPRITEUI
+    const double nowSec = static_cast<double>(SDL_GetTicksNS()) * 1e-9;
+    if (profPanel && ed.showProfiler) {   // por cima do ImGui: desenhado depois do RenderDrawData, no mesmo renderer
+      if (profPanel->due(nowSec)) profPanel->refresh(nowSec, ed.prof, fillProfilerExtras(ed));   // so 4 vezes por segundo
+      if (!profPanel->draw(renderer, window, ed.showProfiler)) {
+        tool::logError(std::string("Profiler SpriteUI render failed: ") + SDL_GetError());
+        ed.showProfiler = false;
+      }
+    }
+    if (helpPanel) {   // por cima do Profiler; o "?" e F1 abrem o topico em helpState().pending
+      editor::HelpState& help = editor::helpState();
+      if (!help.pending.empty()) {
+        helpPanel->openTopic(help.pending);
+        help.pending.clear();
+      }
+      if (!helpPanel->draw(renderer, window, help.open, editor::helpIsPt())) {
+        tool::logError(std::string("Help SpriteUI render failed: ") + SDL_GetError());
+        helpPanel.reset();
+      }
+    }
+    if (testMapPanel) {
+      editor::TestMapState& testMap = editor::testMapState();
+      if (!testMapPanel->draw(renderer, window, testMap.open, testMap.side, editor::I18n::get().code())) {
+        tool::logError(std::string("Test map SpriteUI render failed: ") + SDL_GetError());
+        testMapPanel.reset();
+      }
+      if (testMapGenerate) {
+        testMapGenerate = false;
+        const int made = ed.generateChunkMap(testMap.side);
+        tool::logInfo("Test map: " + std::to_string(made) + " chunks");
+      }
+    }
+    if (hierPanel) {   // Hierarchy: lista desenhada pelo painel SpriteUI, por cima da moldura ImGui
+      const bool shown = ed.showHierarchy && gHierarchyFrame;
+      editor::hierarchy_panel::Requests requests;
+      const editor::hierarchy_panel::Source source = shown ? hierarchySource(ed) : editor::hierarchy_panel::Source{};
+      if (!hierPanel->draw(renderer, window, gHierarchyRect, shown, source, requests)) {
+        tool::logError(std::string("Hierarchy SpriteUI render failed: ") + SDL_GetError());
+        hierPanel.reset();
+        gHierarchySpriteOn = false;
+      }
+      applyHierarchyRequests(ed, requests);
+    }
+    if (inspPanel) {   // Inspector: componentes do objeto, no bloco reservado pelo ImGui (drawInspectorBlock)
+      const bool shown = ed.showInspector && gInspectorFrame;
+      if (!inspPanel->draw(renderer, gInspectorOrigin, gInspectorVisible, shown)) {
+        tool::logError(std::string("Inspector SpriteUI render failed: ") + SDL_GetError());
+        inspPanel.reset();
+        gInspectorPanel = nullptr;
+        gInspectorSpriteOn = false;
+      }
+    }
+    if (settingsPanel) {   // Configuracoes: faixa de abas e aba Graficos por cima da janela ImGui
+      const bool shown = ed.showSettings && gSettingsFrame;
+      editor::settings_changes::Requests requests;
+      const editor::settings_panel::Values values = shown ? settingsValues(ed) : editor::settings_panel::Values{};
+      if (!settingsPanel->draw(renderer, gSettingsRect, shown, values, requests)) {
+        tool::logError(std::string("Settings SpriteUI render failed: ") + SDL_GetError());
+        settingsPanel.reset();
+        gSettingsSpriteOn = false;
+      }
+      SettingsEditorTarget target{ed};
+      editor::settings_changes::ApplyChanges(target, requests);
+    }
+    if (consolePanel && ed.showConsole) {   // por cima do ImGui, como o Profiler
+      const editor::console_panel::Source source{ed.console, ed.consoleSerial, tool::debug().count(tool::Severity::Error),
+                                                 tool::debug().count(tool::Severity::Warning)};
+      editor::console_panel::Requests requests;
+      if (!consolePanel->draw(renderer, window, ed.showConsole, source, requests)) {
+        tool::logError(std::string("Console SpriteUI render failed: ") + SDL_GetError());
+        ed.showConsole = false;
+      }
+      applyConsoleRequests(ed, requests);
+    }
+    if (statusPanel) {   // por ultimo: a barra fica por cima do Profiler e da Ajuda (mesmo renderer, depois do RenderDrawData)
+      const ImVec2 viewport = ImGui::GetMainViewport()->Size;
+      if (!statusPanel->draw(renderer, statusBarInfo(ed), [](const char* s) { return T(s); }, nowSec, viewport.x, viewport.y, ImGui::GetFrameHeight())) {
+        tool::logError(std::string("Status bar SpriteUI render failed: ") + SDL_GetError());
+        statusPanel.reset();
+      }
+    }
+    if (menuPanel) {
+      std::vector<editor::mainmenu::Request> menuRequests;
+      menuPanel->setState(menuStateOf(ed), [](const char* s) { return T(s); });
+      if (!menuPanel->draw(renderer, window, ImGui::GetFrameHeight(), menuRequests)) {
+        tool::logError(std::string("Menu bar SpriteUI render failed: ") + SDL_GetError());
+        menuPanel.reset();
+      }
+      for (const editor::mainmenu::Request& request : menuRequests) applyMenuRequest(ed, quit, request);
+    }
     if (!headless && !playerMode && ed.showSpriteUiDiagnostics) {
       const auto stats = ed.prof.stats();
       if (!spriteUiDiagnostics.draw(
@@ -2035,6 +2703,14 @@ int main(int argc, char** argv) {
   ed.shutdownGpu();
   ImGui_ImplSDLRenderer3_Shutdown(); ImGui_ImplSDL3_Shutdown();
   ImNodes::DestroyContext(); ImGui::DestroyContext();
+#ifdef TOOL_WITH_SPRITEUI
+  profPanel.reset();
+  menuPanel.reset();
+  statusPanel.reset();
+  helpPanel.reset();
+  testMapPanel.reset();
+  uiRenderer.destroy();   // a textura do atlas e destruida antes do renderer SDL
+#endif
   SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
   std::printf("editor exited after %d frames\n", frame);
   return 0;

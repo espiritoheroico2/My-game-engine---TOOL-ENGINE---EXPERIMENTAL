@@ -55,60 +55,6 @@ inline void helpIcon(const char* topic) {
 
 inline bool helpIsPt() { return I18n::get().code().rfind("pt", 0) == 0; }
 
-inline void drawHelp(Editor& ed, bool* open) {
-  (void)ed;
-  HelpState& hs = helpState();
-  if (!hs.pending.empty()) { hs.topic = hs.pending; hs.pending.clear(); ImGui::SetNextWindowFocus(); }
-  ImGui::SetNextWindowSize({820, 520}, ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin(W("Help", "help").c_str(), open)) { ImGui::End(); return; }
-  const auto& topics = helpTopics(); const bool pt = helpIsPt();
-  static char filter[48] = "";
-  ImGui::BeginChild("helplist", ImVec2(230, 0), ImGuiChildFlags_Borders);
-  ImGui::SetNextItemWidth(-1); ImGui::InputTextWithHint("##hf", T("search..."), filter, sizeof filter);
-  const std::string f = filter;
-  auto lower = [](std::string s) { for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; };
-  const std::string fl = lower(f);
-  const char* group = "";
-  for (const HelpTopic& t : topics) {
-    const std::string title = pt ? t.titlePt : t.titleEn;
-    if (!fl.empty() && lower(title).find(fl) == std::string::npos && lower(pt ? t.bodyPt : t.bodyEn).find(fl) == std::string::npos) continue;
-    if (std::strcmp(group, t.group) != 0) { group = t.group; ImGui::SeparatorText(T(group)); }
-    if (ImGui::Selectable(title.c_str(), hs.topic == t.id)) hs.topic = t.id;
-  }
-  ImGui::EndChild(); ImGui::SameLine();
-  ImGui::BeginChild("helpbody", ImVec2(0, 0), ImGuiChildFlags_Borders);
-  const HelpTopic* cur = &topics.front(); for (const HelpTopic& t : topics) if (hs.topic == t.id) cur = &t;
-  ImGui::PushFont(nullptr); ImGui::TextColored({0.55f, 0.8f, 1.f, 1.f}, "%s", pt ? cur->titlePt : cur->titleEn); ImGui::PopFont();
-  ImGui::Separator();
-  // renderiza a marcacao simples
-  const std::string body = pt ? cur->bodyPt : cur->bodyEn;
-  size_t pos = 0; std::vector<std::string> code; bool inCode = false; int codeId = 0;
-  while (pos <= body.size()) {
-    size_t e = body.find('\n', pos); if (e == std::string::npos) e = body.size();
-    const std::string line = body.substr(pos, e - pos); pos = e + 1;
-    if (line.rfind("```", 0) == 0) {
-      if (!inCode) { inCode = true; code.clear(); }
-      else {
-        inCode = false; const float lh = ImGui::GetTextLineHeightWithSpacing();
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.09f, 0.11f, 1.f));
-        ImGui::BeginChild(("code" + std::to_string(codeId++)).c_str(), ImVec2(0, std::min(360.f, lh * static_cast<float>(code.size()) + 16.f)), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-        for (auto& c : code) ImGui::TextColored({0.75f, 0.95f, 0.75f, 1.f}, "%s", c.c_str());
-        ImGui::EndChild(); ImGui::PopStyleColor();
-        std::string all; for (auto& c : code) all += c + "\n";
-        if (ImGui::SmallButton((std::string(T("Copy code")) + "##c" + std::to_string(codeId)).c_str())) ImGui::SetClipboardText(all.c_str());
-        ImGui::Spacing();
-      }
-      continue;
-    }
-    if (inCode) { code.push_back(line); continue; }
-    if (line.rfind("# ", 0) == 0) { ImGui::Spacing(); ImGui::SeparatorText(line.c_str() + 2); }
-    else if (line.rfind("- ", 0) == 0) { ImGui::Bullet(); ImGui::TextWrapped("%s", line.c_str() + 2); }
-    else if (!line.empty()) ImGui::TextWrapped("%s", line.c_str());
-  }
-  ImGui::EndChild();
-  ImGui::End();
-}
-
 // ====================================================================================================== EDIT EXTERNAL
 // Abre um arquivo do projeto no editor de codigo escolhido em Settings > Project. NUNCA usa shell nem "abrir com o programa
 // padrao": no Windows o padrao de .js e o Windows Script Host, que EXECUTARIA o script. Roda `editor arquivo` direto.
@@ -590,24 +536,5 @@ struct TestMapState { bool open = false; int side = 32; };
 inline TestMapState& testMapState() { static TestMapState s; return s; }
 inline void openTestMap() { testMapState().open = true; }
 
-inline void testMapWindow(Editor& ed) {
-  auto& S = testMapState();
-  if (!S.open) return;
-  ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin(T("Test map of chunks"), &S.open, ImGuiWindowFlags_AlwaysAutoResize)) { ImGui::End(); return; }
-  ImGui::TextWrapped("%s", T("Creates a square map of terrain chunks (16 x 16 x 16 blocks each) centered at the origin. It replaces the chunks already in the scene. Each chunk is one object, so the cost grows with the square of the side: use Settings > Render > Draw distance to see only what is near the camera."));
-  ImGui::Spacing();
-  ImGui::SliderInt(T("Chunks per side"), &S.side, 1, 256);
-  const long long chunks = static_cast<long long>(S.side) * S.side;
-  const long long blocks = static_cast<long long>(S.side) * 16;
-  ImGui::Text("%s: %lld   |   %s: %lld x %lld", T("Chunks"), chunks, T("Size in blocks"), blocks, blocks);
-  if (chunks > 4096) ImGui::TextColored({1.f, .8f, .3f, 1.f}, "%s", T("Large map: expect a slow generation and a heavy scene."));
-  ImGui::Spacing();
-  if (ImGui::Button(T("Generate map"), ImVec2(160, 0))) {
-    const int made = ed.generateChunkMap(S.side);
-    tool::logInfo("Test map: " + std::to_string(made) + " chunks");
-  }
-  ImGui::End();
-}
 
 } // namespace editor

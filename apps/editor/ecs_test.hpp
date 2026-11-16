@@ -112,7 +112,7 @@ inline void runConsoleCommand(Editor& ed, const std::string& raw) {
     tool::logInfo("scripts       -> verifica os scripts de todos os objetos da cena (erros e avisos com linha)");
     return;
   }
-  if (c == "clear") { ed.console.clear(); return; }
+  if (c == "clear") { ed.console.clear(); ++ed.consoleSerial; return; }
   if (c == "scripts") { ed.checkAllScripts(); return; }
   if (c.rfind("test ecs", 0) == 0) {
     size_t i = 8;

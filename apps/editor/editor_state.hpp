@@ -41,6 +41,8 @@
 
 #include <cstring>
 #include <array>
+
+#include "settings_model.hpp"
 #include <deque>
 #include <memory>
 #include <unordered_map>
@@ -68,6 +70,7 @@ struct Editor {
   tool::Scene scene;
   tool::Entity selected;
   std::deque<std::pair<tool::LogLevel, std::string>> console;
+  std::uint64_t consoleSerial = 0;   // cresce a cada mudanca no log (o painel SpriteUI refaz a lista so nesse caso)
   std::vector<float> frameHistory = std::vector<float>(120, 0.f);
   ::editor::NarrativePanel narrative;
   std::unique_ptr<tool::rhi::IDevice> device = tool::rhi::createNullDevice();
@@ -149,6 +152,7 @@ struct Editor {
   bool showPostInScene = true; // aplicar o pos-processamento GLOBAL tambem na janela Scene
   // Gizmo de transformacao (Scene): 0 = mover (W), 1 = rotacionar (E), 2 = escalar (R); espaco global/local nao e usado (eixos do mundo)
   int gizmoMode = 0;
+  bool gizmoLocal = false;   // Q: gizmo na Scene pelos eixos do objeto (Local) ou do mundo
   bool snapOn = false;       // ima da barra flutuante: o gizmo encaixa na grade de snapStep (igual a Ctrl ao arrastar)
   float snapStep = 0.25f;    // passo da grade do ima, em metros
   // Desfazer/Refazer (undo.hpp). `interactingPrev` detecta o fim de uma interacao do usuario.
@@ -255,13 +259,8 @@ struct Editor {
   bool fpsDirty = true;
   int gpuBadFrames = 0;
   // Tamanho fixo escolhido (retorna false se o modo e "acompanha a janela").
-  bool fixedRes(int& w, int& h) const {
-    static const int P[4][2] = {{640, 360}, {1280, 720}, {1920, 1080}, {2560, 1440}};
-    if (resMode >= 1 && resMode <= 4) { w = P[resMode - 1][0]; h = P[resMode - 1][1]; return true; }
-    if (resMode == 5) { w = std::clamp(customW, 160, 3840); h = std::clamp(customH, 90, 2160); return true; }
-    return false;
-  }
-  float defaultScale() const { return apiActive == 0 ? 0.5f : 1.f; }
+  bool fixedRes(int& w, int& h) const { return ::editor::settings_model::FixedGameSize(resMode, customW, customH, w, h); }
+  float defaultScale() const { return ::editor::settings_model::DefaultRenderScale(apiActive == 0); }
   std::string apiStatus = "Software (CPU)";
   std::unique_ptr<tool::rhi::IDevice> gpuDev;
   tool::GpuRenderer gpu;

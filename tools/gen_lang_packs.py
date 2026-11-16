@@ -79,6 +79,8 @@ Applies to every camera. A camera can add to it or replace it (Inspector > Camer
 Move (W)	Mover (W)	Mover (W)
 Rotate (E)	Girar (E)	Rotar (E)
 Scale (R)	Escalar (R)	Escalar (R)
+World (Q)	Mundo (Q)	Mundo (Q)
+Local (Q)	Local (Q)	Local (Q)
 FREE NAVIGATION: WASD move, Q/E down/up, Shift fast, wheel speed, Alt/Esc exit	NAVEGAÇÃO LIVRE: WASD anda, Q/E desce/sobe, Shift rápido, roda muda a velocidade, Alt/Esc sai	NAVEGACIÓN LIBRE: WASD mueve, Q/E baja/sube, Shift rápido, rueda cambia velocidad, Alt/Esc sale
 right: orbit | middle: pan | wheel: zoom | Alt: free navigation | double-click in Hierarchy: focus	direito: orbitar | meio: mover | roda: zoom | Alt: navegação livre | duplo clique na Hierarquia: focar	derecho: orbitar | medio: mover | rueda: zoom | Alt: navegación libre | doble clic en Jerarquía: enfocar
 Focus	Focar	Enfocar

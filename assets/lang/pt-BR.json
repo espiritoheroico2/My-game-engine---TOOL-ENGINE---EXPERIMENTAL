@@ -73,6 +73,8 @@
   "Move (W)": "Mover (W)",
   "Rotate (E)": "Girar (E)",
   "Scale (R)": "Escalar (R)",
+  "World (Q)": "Mundo (Q)",
+  "Local (Q)": "Local (Q)",
   "FREE NAVIGATION: WASD move, Q/E down/up, Shift fast, wheel speed, Alt/Esc exit": "NAVEGAÇÃO LIVRE: WASD anda, Q/E desce/sobe, Shift rápido, roda muda a velocidade, Alt/Esc sai",
   "right: orbit | middle: pan | wheel: zoom | Alt: free navigation | double-click in Hierarchy: focus": "direito: orbitar | meio: mover | roda: zoom | Alt: navegação livre | duplo clique na Hierarquia: focar",
   "Focus": "Focar",
