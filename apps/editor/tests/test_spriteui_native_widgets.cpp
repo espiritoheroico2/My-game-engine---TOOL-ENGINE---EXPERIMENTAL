@@ -20,7 +20,7 @@ void testColorPicker() {
     ColorPickerControl picker;
     assert(picker.SetColor({1.0f, 0.0f, 0.0f, 1.0f}));
     assert(picker.ChannelText(ColorChannel::Red) == "255");
-    assert(picker.ChannelText(ColorChannel::Green) == "  0");
+    assert(picker.ChannelText(ColorChannel::Green) == "0");
     assert(picker.DragHue(1.0f / 3.0f));
     Vec4 color = picker.Sample();
     assert(near(color.x, 0.0f) && near(color.y, 1.0f) && near(color.z, 0.0f));
