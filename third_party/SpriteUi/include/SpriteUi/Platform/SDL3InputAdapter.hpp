@@ -34,10 +34,11 @@ public:
     [[nodiscard]] bool ProcessEvent(const SDL_Event& event);
 
     // Consume accumulated event deltas and edge transitions for one UI frame.
-    [[nodiscard]] Input::UIInputSnapshot BuildSnapshot(std::uint64_t frameId) noexcept;
+    [[nodiscard]] Input::UIInputSnapshot BuildSnapshot(
+        std::uint64_t frameId, double frameTimeSeconds) noexcept;
     // Consume a mouse snapshot plus snapshots for active SDL touch contacts.
     [[nodiscard]] std::vector<Input::UIInputSnapshot> BuildPointerSnapshots(
-        std::uint64_t frameId);
+        std::uint64_t frameId, double frameTimeSeconds);
 
     // Consume the first navigation command received since the previous call.
     [[nodiscard]] Input::UINavigationCommand ConsumeNavigationCommand() noexcept;

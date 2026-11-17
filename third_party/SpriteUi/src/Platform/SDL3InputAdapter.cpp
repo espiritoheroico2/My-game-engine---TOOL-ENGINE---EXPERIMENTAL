@@ -211,7 +211,8 @@ bool SDL3InputAdapter::ProcessEvent(const SDL_Event& event) {
     }
 }
 
-Input::UIInputSnapshot SDL3InputAdapter::BuildSnapshot(std::uint64_t frameId) noexcept {
+Input::UIInputSnapshot SDL3InputAdapter::BuildSnapshot(
+    std::uint64_t frameId, double frameTimeSeconds) noexcept {
     Input::UIInputSnapshot snapshot;
     snapshot.pointerPositionLogical = pointerPosition_;
     snapshot.pointerDeltaLogical = pointerDelta_;
@@ -222,6 +223,7 @@ Input::UIInputSnapshot SDL3InputAdapter::BuildSnapshot(std::uint64_t frameId) no
     snapshot.primaryReleased = primaryReleased_ && windowFocused_;
     snapshot.windowFocused = windowFocused_;
     snapshot.frameId = frameId;
+    snapshot.frameTimeSeconds = frameTimeSeconds;
 
     pointerDelta_ = {};
     wheelDelta_ = {};
@@ -231,10 +233,10 @@ Input::UIInputSnapshot SDL3InputAdapter::BuildSnapshot(std::uint64_t frameId) no
 }
 
 std::vector<Input::UIInputSnapshot> SDL3InputAdapter::BuildPointerSnapshots(
-    std::uint64_t frameId) {
+    std::uint64_t frameId, double frameTimeSeconds) {
     std::vector<Input::UIInputSnapshot> snapshots;
     snapshots.reserve(touchPointers_.size() + 1u);
-    snapshots.push_back(BuildSnapshot(frameId));
+    snapshots.push_back(BuildSnapshot(frameId, frameTimeSeconds));
 
     for (auto it = touchPointers_.begin(); it != touchPointers_.end();) {
         TouchPointerState& pointer = it->second;
@@ -248,6 +250,7 @@ std::vector<Input::UIInputSnapshot> SDL3InputAdapter::BuildPointerSnapshots(
         snapshot.pointerCancelled = pointer.cancelled || !windowFocused_;
         snapshot.windowFocused = windowFocused_;
         snapshot.frameId = frameId;
+        snapshot.frameTimeSeconds = frameTimeSeconds;
         snapshots.push_back(snapshot);
 
         pointer.delta = {};

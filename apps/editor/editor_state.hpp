@@ -9,6 +9,7 @@
 #pragma once
 #include "components.hpp"
 #include "voxel.hpp"
+#include "chunk_cache.hpp"
 #include "narrative_panel.hpp"
 #include "profiler.hpp"
 #include "perf_warnings.hpp"
@@ -23,7 +24,9 @@
 #include "theme.hpp"
 #include "undo.hpp"
 #include "tool/audio/decode.hpp"
+#if defined(TOOL_HAS_MINIAUDIO)
 #include "tool/audio/miniaudio_device.hpp"
+#endif
 #include "tool/render/gpu_renderer.hpp"
 #include "tool/render/occlusion.hpp"
 #include "tool/render/postfx.hpp"
@@ -107,17 +110,34 @@ struct Editor {
   // Nivel de detalhe: esfera de baixa resolucao (8x5 = ~80 triangulos contra ~576) para objetos longe da camera.
   tool::Mesh sphereFar = tool::Mesh::sphere(0.5f, 8, 5);
   // Malhas dos chunks de blocos, por entidade. Refeitas so quando a revisao do chunk muda.
-  std::unordered_map<uint64_t, std::unique_ptr<ChunkMeshes>> chunkCache_;
+  // F-08: ao passar de chunkCacheMax, remove so o lote menos usado recentemente (ver chunk_cache.hpp),
+  // em vez de limpar o cache inteiro (que forcava reconstruir todas as malhas no quadro seguinte).
+  struct ChunkCacheEntry { std::unique_ptr<ChunkMeshes> mesh; uint64_t lastUsed = 0; };
+  std::unordered_map<uint64_t, ChunkCacheEntry> chunkCache_;
+  size_t chunkCacheMax = 8192;   // teto configuravel de malhas de chunk em memoria
+  uint64_t chunkUseTick_ = 0;    // relogio monotonico por acesso (refina um "ultimo quadro usado")
+  // Chamada depois de marcar a entrada em uso: a mais recente nunca e removida (alvo >= 1), entao a
+  // referencia devolvida por chunkMeshesOf continua valida.
+  void evictChunkCache() {
+    const size_t n = chunkcache::evictionCount(chunkCache_.size(), std::max<size_t>(chunkCacheMax, 1));
+    if (n == 0) return;
+    std::vector<std::pair<uint64_t, uint64_t>> entries;
+    entries.reserve(chunkCache_.size());
+    for (const auto& [key, entry] : chunkCache_) entries.push_back({key, entry.lastUsed});
+    for (uint64_t key : chunkcache::leastRecent(std::move(entries), n)) chunkCache_.erase(key);
+  }
   // A malha e refeita quando o proprio chunk OU um vizinho muda (o carimbo junta as revisoes de todos).
   ChunkMeshes& chunkMeshesOf(tool::Entity e, const VoxelChunk& c, const ChunkNeighbors& nb = ChunkNeighbors{}) {
-    if (chunkCache_.size() > 8192) chunkCache_.clear();   // teto: entidades apagadas nao vazam para sempre
     const uint64_t key = (static_cast<uint64_t>(e.generation) << 32) | e.index;
-    auto& p = chunkCache_[key];
-    if (!p) p = std::make_unique<ChunkMeshes>();
+    auto& entry = chunkCache_[key];
+    if (!entry.mesh) entry.mesh = std::make_unique<ChunkMeshes>();
+    entry.lastUsed = ++chunkUseTick_;
+    evictChunkCache();
+    ChunkMeshes& p = *entry.mesh;
     uint64_t stamp = c.revision * 1000003ull + static_cast<uint64_t>(c.cell * 1000.f);
     for (const VoxelChunk* n : nb) stamp = stamp * 1315423911ull + (n ? n->revision + 1ull : 0ull);
-    if (!p->built || p->stamp != stamp || p->cell != c.cell) { buildChunkMeshes(c, *p, nb); p->stamp = stamp; p->cell = c.cell; }
-    return *p;
+    if (!p.built || p.stamp != stamp || p.cell != c.cell) { buildChunkMeshes(c, p, nb); p.stamp = stamp; p.cell = c.cell; }
+    return p;
   }
   // Cria um chunk de blocos. `terrain` = preenche com o terreno de teste. A origem fica na quina (0,0,0) do chunk.
   tool::Entity makeVoxel(const char* name, int cx, int cz, bool terrain) {
@@ -220,7 +240,9 @@ struct Editor {
   void applyInputMap() { inputMap.apply(input); }
   float sunRuntime = 0.f;
   tool::Mixer mixer;
+#if defined(TOOL_HAS_MINIAUDIO)
   std::unique_ptr<tool::MiniaudioDevice> audioDev;
+#endif
   bool audioTried = false, audioOk = false;
   tool::VoiceId previewVoice{};
 
@@ -1003,8 +1025,12 @@ public:
   void ensureAudio() {
     if (audioTried) return;
     audioTried = true;
+#if defined(TOOL_HAS_MINIAUDIO)
     audioDev = std::make_unique<tool::MiniaudioDevice>();
     audioOk = audioDev->start(mixer);
+#else
+    audioOk = false;   // build sem miniaudio: sem dispositivo, sem som, editor segue normalmente
+#endif
     if (!audioOk) tool::logWarn("No audio output device available: sound is disabled.");
   }
   // O "ouvido": camera Principal marcada como Sound Ear, senao qualquer camera com Sound Ear, senao a camera da janela Scene.

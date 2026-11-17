@@ -10,7 +10,7 @@ the optional Doxygen target with `SPRITEUI_BUILD_DOCS=ON`.
 | Core | `SpriteUi/Core/*.hpp` | Handles, math, transforms, invalidation bits |
 | Input | `SpriteUi/Input/*.hpp` | Single/multi-pointer routing, semantic navigation, hit targets |
 | Layout | `SpriteUi/Layout/*.hpp` | Flex layout, entity tree, scene-to-render bridge |
-| Widgets | `SpriteUi/Widgets/*.hpp` | Logical controls, menus, trees, text editing, virtual lists, docking, graphs, popups |
+| Widgets | `SpriteUi/Widgets/*.hpp` | Logical controls, virtual lists, docking, graphs, popups |
 | Animation | `SpriteUi/Animation/ToonMotion.hpp` | Runtime tweens and keyframe timeline sampling/playback |
 | Binding | `SpriteUi/Binding/ValueBinding.hpp` | Typed value-change detection |
 | Text | `SpriteUi/Text/*.hpp` | Shaping contract, line breaking, layout, caret, text cache |
@@ -45,14 +45,6 @@ define which pointer is allowed to own keyboard focus. The SDL3 adapter's `Build
 translates mouse and active finger contacts, assigns per-contact pointer IDs, and marks cancelled
 fingers without manufacturing clicks. Applications that keep using the legacy `BuildSnapshot`
 continue to receive mouse-only input.
-
-## Menus
-
-`Widgets::MenuBar` provides menu state, header and popup layout, pointer hit testing, Alt activation,
-keyboard navigation, disabled-item handling, and action-selection events. The host supplies
-`MenuBarEntry`/`MenuItem` data and measured header widths, then renders the returned rectangles using
-its normal SpriteUI text and rendering pipeline. The widget has no dependency on SDL, ImGui, or a
-specific renderer.
 
 ## Rendering and alpha
 

@@ -1,5 +1,6 @@
 #include "test.hpp"
 #include <atomic>
+#include <stdexcept>
 #include "tool/ecs/world.hpp"
 
 using namespace tool;
@@ -149,6 +150,19 @@ TEST(ecs_parallel_each_matches_each) {
   CHECK(w.count<Vel>() == static_cast<size_t>(N - (N + 2) / 3));
 }
 
+// F-07: storageCount inclui dormentes; activeCount e count (alias) nao.
+TEST(ecs_counts_distinguish_dormant_and_active) {
+  World w;
+  Entity a = w.create(), b = w.create(), c = w.create(), gone = w.create();
+  w.add<Pos>(a); w.add<Pos>(b); w.add<Pos>(c); w.add<Pos>(gone);
+  w.setDormant(b, true);
+  w.destroy(gone);                                 // destruido: componente removido
+  CHECK(w.storageCount<Pos>() == 3);               // a, b (dormente) e c
+  CHECK(w.activeCount<Pos>() == 2);                // a e c
+  CHECK(w.count<Pos>() == w.activeCount<Pos>());   // alias
+  CHECK(w.activeCount<Vel>() == 0 && w.storageCount<Vel>() == 0);  // tipo sem storage
+}
+
 TEST(ecs_simulating_flag_default_and_toggle) {
   World w;
   Entity e = w.create();
@@ -160,4 +174,32 @@ TEST(ecs_simulating_flag_default_and_toggle) {
   w.destroy(e);
   Entity f = w.create();
   CHECK(w.isSimulating(f));       // indice reaproveitado volta ao padrao
+}
+
+// F-02: add() recusa handle invalido (default, destruido, obsoleto apos reuso do indice).
+TEST(ecs_add_rejects_invalid_handles) {
+  World w;
+  bool threw = false;
+  try { w.add<Pos>(Entity{}, 1.f, 2.f); } catch (const std::invalid_argument&) { threw = true; }
+  CHECK(threw);                                   // handle default
+
+  Entity a = w.create();
+  w.destroy(a);
+  threw = false;
+  try { w.add<Pos>(a, 1.f, 2.f); } catch (const std::invalid_argument&) { threw = true; }
+  CHECK(threw);                                   // destruido
+  CHECK(w.tryAdd<Pos>(a, 1.f, 2.f) == nullptr);
+
+  Entity b = w.create();                          // reaproveita o indice de a com nova geracao
+  CHECK(b.index == a.index && b.generation != a.generation);
+  threw = false;
+  try { w.add<Pos>(a, 9.f, 9.f); } catch (const std::invalid_argument&) { threw = true; }
+  CHECK(threw);                                   // obsoleto apos reuso
+  CHECK(!w.has<Pos>(b));                          // a entidade atual nao foi contaminada
+  CHECK(w.tryAdd<Pos>(a, 9.f) == nullptr);
+  CHECK(!w.has<Pos>(b));
+
+  Pos* p = w.tryAdd<Pos>(b, 3.f, 4.f);            // handle valido: funciona e devolve o componente
+  CHECK(p != nullptr && p->x == 3.f && p->y == 4.f);
+  CHECK(w.add<Vel>(b, 1.f, 1.f).x == 1.f);        // add valido continua sem lancar
 }

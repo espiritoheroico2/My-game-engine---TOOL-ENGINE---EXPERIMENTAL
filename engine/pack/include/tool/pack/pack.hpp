@@ -11,6 +11,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tool::pack {
@@ -26,13 +27,39 @@ constexpr u32 kVersion = 1;
 constexpr size_t kMaxEntries = 1u << 20;
 constexpr size_t kMaxPath = 256;
 
+// Unica regra de caminho virtual do pacote. Usada pelo Builder ao adicionar e pelo Reader ao abrir,
+// porque um pacote recebido de fonte nao confiavel nao precisa ter sido gerado pelo Builder.
+// Regras (fail-closed):
+//   - nao vazio e com no maximo kMaxPath bytes;
+//   - sem barra inicial (caminho absoluto);
+//   - sem '\' e sem ':' (evita separador Windows e caminhos com unidade, como "C:/x" ou "C:arq");
+//   - sem bytes de controle, incluindo NUL;
+//   - sem segmentos vazios ("a//b" e barra final "a/"), nem "." nem "..".
+// Observacao: "a..b" e um nome de arquivo valido e e aceito; antes a checagem era por substring "..".
+inline bool isSafePackPath(std::string_view path) {
+  if (path.empty() || path.size() > kMaxPath) return false;
+  if (path.front() == '/') return false;
+  for (const char c : path) {
+    const auto uc = static_cast<unsigned char>(c);
+    if (uc < 0x20 || uc == 0x7F || c == '\\' || c == ':') return false;
+  }
+  size_t begin = 0;
+  while (true) {
+    const size_t end = path.find('/', begin);
+    const std::string_view part = path.substr(begin, end == std::string_view::npos ? std::string_view::npos : end - begin);
+    if (part.empty() || part == "." || part == "..") return false;
+    if (end == std::string_view::npos) return true;
+    begin = end + 1;
+  }
+}
+
 struct Entry { std::string path; u64 offset = 0, size = 0; Sha256Digest hash{}; };
 
 class Builder {
 public:
-  // Caminhos normalizados e unicos; "../" e caminhos absolutos sao proibidos (path traversal).
+  // Caminhos unicos e validados por isSafePackPath (path traversal, absolutos, unidades Windows, NUL...).
   bool add(const std::string& path, std::vector<u8> data) {
-    if (path.empty() || path.size() > kMaxPath || path[0] == '/' || path.find("..") != std::string::npos || path.find('\\') != std::string::npos) {
+    if (!isSafePackPath(path)) {
       debug().report(code::kBadPack, Severity::Error, "caminho invalido no pacote: " + path); return false;
     }
     if (files_.count(path)) { debug().report(code::kBadPack, Severity::Error, "caminho duplicado: " + path); return false; }
@@ -107,6 +134,8 @@ public:
       u32 pl = 0; for (int k = 0; k < 4; ++k) pl |= static_cast<u32>(tab[q + static_cast<size_t>(k)]) << (8 * k); q += 4;
       if (pl == 0 || pl > kMaxPath || tn - q < static_cast<size_t>(pl) + 16 + 32) return fail("entrada invalida");
       Entry e; e.path.assign(reinterpret_cast<const char*>(tab + q), pl); q += pl;
+      // O mesmo validador do Builder: a tabela pode ter sido montada por qualquer um.
+      if (!isSafePackPath(e.path)) return fail("caminho inseguro na tabela");
       auto rd64 = [&]() { u64 v = 0; for (int k = 0; k < 8; ++k) v |= static_cast<u64>(tab[q + static_cast<size_t>(k)]) << (8 * k); q += 8; return v; };
       e.offset = rd64(); e.size = rd64();
       std::memcpy(e.hash.data(), tab + q, 32); q += 32;

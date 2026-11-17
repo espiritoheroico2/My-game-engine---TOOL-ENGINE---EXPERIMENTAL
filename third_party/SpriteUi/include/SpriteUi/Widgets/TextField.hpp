@@ -1,156 +1,92 @@
 #pragma once
 
+// Campo de texto de uma linha (widget generico). Sem ImGui, SDL ou JSON: entrada por chamadas, saida por
+// UIRenderItem e ClipRectGPU, como os demais widgets da biblioteca.
+//
+// Responsabilidades:
+//  - Edicao e selecao: delegadas a TextEditState (TextEdit.hpp). O campo so muda o texto por essa classe.
+//  - Rolagem horizontal: o deslocamento segue o caret (digitacao, clique, Home/End). Sem foco, o campo
+//    mostra o inicio do texto (rolagem zero).
+//  - Recorte: texto, selecao e caret saem recortados a caixa do campo. O recorte entra no vetor de clips
+//    do chamador, e os itens apontam para ele pelo clipIndex.
+//  - Layout: o chamador faz shaping e layout do texto com a fonte indicada em TextFieldStyle::fontId e
+//    entrega o TextLayoutResult. O campo nao conhece atlas nem fontes.
+//
+// Coordenadas: a caixa tem origem no canto superior esquerdo. O texto fica centralizado verticalmente e
+// comeca em paddingX menos a rolagem.
+
+#include "SpriteUi/Core/Handle.hpp"
 #include "SpriteUi/Core/Math.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
-#include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
+#include "SpriteUi/Widgets/Style.hpp"
 #include "SpriteUi/Widgets/TextEdit.hpp"
 
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace ToolEngine::SpriteUi::Widgets {
 
-struct TextFieldStyle {
-    Vec4 background{0.12f, 0.12f, 0.12f, 1.0f};
-    Vec4 focusBackground{0.16f, 0.16f, 0.16f, 1.0f};
-    Vec4 text{1.0f, 1.0f, 1.0f, 1.0f};
-    Vec4 selection{0.2f, 0.4f, 0.75f, 0.7f};
-    Vec4 caret{1.0f, 1.0f, 1.0f, 1.0f};
-    float paddingX = 6.0f;
-    float height = 28.0f;
-    float fontSize = 14.0f;
-};
-
+// Onde os itens sao registrados. O chamador preenche owner e textureSlice da fonte usada no layout.
 struct TextFieldRenderTarget {
-    UIHandle owner{};
-    std::uint32_t textureSlice = 0;
-    float zOrder = 0.0f;
-    std::uint64_t paintOrder = 0;
+    UIHandle owner{};                                          // Handle valido exigido pelo extrator.
+    std::uint32_t textureSlice = Rendering::WhiteTextureSlice; // Slice do atlas da fonte do texto.
+    std::uint32_t textRenderFlags = 0u;                        // 0 = atlas de alfa (sem MSDF).
+    float zOrder = 0.5f;                                       // Ordem entre os fundos (0) e a tela.
+    std::uint64_t paintOrder = 0;                              // Base; cada item sobe um.
 };
 
 class TextField {
-public:
+  public:
     TextField() = default;
-    explicit TextField(std::string text) : edit_{std::move(text)} {}
+    explicit TextField(std::string text);
 
     [[nodiscard]] TextEditState& Edit() noexcept { return edit_; }
     [[nodiscard]] const TextEditState& Edit() const noexcept { return edit_; }
+
+    // Foco. Ao perder o foco a rolagem volta a zero (o campo mostra o inicio do texto).
+    void SetFocus(bool focused) noexcept;
     [[nodiscard]] bool Focused() const noexcept { return focused_; }
-    void SetFocus(bool focused) noexcept {
-        focused_ = focused;
-        if (!focused) selectionDragging_ = false;
-    }
 
-    void PointerDown(Vec2 localPoint, Vec2 size, const Text::TextLayoutResult& layout, const TextFieldStyle& style) {
-        moveCaret(localPoint, size, layout, style, false);
-        selectionDragging_ = focused_;
-    }
+    // Deslocamento horizontal atual, em pixels de layout.
+    [[nodiscard]] float ScrollX() const noexcept { return scrollX_; }
 
-    void PointerMove(Vec2 localPoint, Vec2 size, const Text::TextLayoutResult& layout, const TextFieldStyle& style) {
-        if (selectionDragging_ && focused_) moveCaret(localPoint, size, layout, style, true);
-    }
+    // Largura util do texto: largura da caixa menos o recuo dos dois lados (nunca negativa).
+    [[nodiscard]] static float ViewportWidth(Vec2 boxSize, const TextFieldStyle& style) noexcept;
 
+    // Origem do texto em coordenadas locais da caixa, ja com a rolagem aplicada.
+    [[nodiscard]] Vec2 TextOrigin(Vec2 boxSize, const Text::TextLayoutResult& layout,
+                                  const TextFieldStyle& style) const noexcept;
+
+    // Atualiza a rolagem para que o caret (com a largura do caret) fique dentro da area util.
+    // Sem foco, zera a rolagem. A rolagem fica entre zero e o excedente do texto.
+    void FollowCaret(const Text::TextLayoutResult& layout, float viewportWidth, float caretWidth) noexcept;
+
+    // Clique (ou arrasto com extend): caret no offset mais proximo da posicao local, lendo a rolagem atual.
+    // Atualiza a rolagem depois de mover o caret.
+    void PointerDown(Vec2 localPos, Vec2 boxSize, const Text::TextLayoutResult& layout,
+                     const TextFieldStyle& style, bool extend = false);
+
+    // Arrasto para selecionar: PointerDown (com foco) inicia; PointerMove estende a selecao; PointerUp encerra.
+    // Perder o foco tambem encerra. Mantem a API que o editor usa desde a versao anterior da biblioteca.
+    void PointerMove(Vec2 localPos, Vec2 boxSize, const Text::TextLayoutResult& layout, const TextFieldStyle& style);
     void PointerUp() noexcept { selectionDragging_ = false; }
-
     [[nodiscard]] bool DraggingSelection() const noexcept { return selectionDragging_; }
 
-    [[nodiscard]] std::vector<Rendering::UIRenderItem> Build(
-        Rect bounds,
-        const Text::TextLayoutResult& textLayout,
-        const TextFieldStyle& style,
-        const TextFieldRenderTarget& target,
-        std::vector<Rendering::ClipRectGPU>& clips) const
-    {
-        std::vector<Rendering::UIRenderItem> items;
-        if (!IsFinite(bounds.position) || !IsFinite(bounds.size) || bounds.size.x <= 0.0f ||
-            bounds.size.y <= 0.0f || !target.owner.IsValid()) {
-            return items;
-        }
+    // Gera os itens do campo (fundo, selecao, texto, caret) e empilha um recorte da caixa em clips. Os itens
+    // de texto, selecao e caret usam esse recorte. Chama FollowCaret antes de gerar, entao o caret aparece.
+    // Retorna os itens na ordem de desenho; o recorte e o ultimo elemento de clips.
+    [[nodiscard]] std::vector<Rendering::UIRenderItem> Build(Rect box, const Text::TextLayoutResult& layout,
+                                                             const TextFieldStyle& style,
+                                                             const TextFieldRenderTarget& target,
+                                                             std::vector<Rendering::ClipRectGPU>& clips);
 
-        const auto colorFinite = [](Vec4 c) { return IsFinite(c); };
-        if (!colorFinite(style.background) || !colorFinite(style.focusBackground) ||
-            !colorFinite(style.text) || !colorFinite(style.selection) || !colorFinite(style.caret)) {
-            return items;
-        }
-        clips.push_back({bounds.position.x, bounds.position.y, bounds.position.x + bounds.size.x, bounds.position.y + bounds.size.y});
-        const std::uint32_t clip = static_cast<std::uint32_t>(clips.size() - 1);
-        std::uint64_t paint = target.paintOrder;
-        items.push_back(Solid(bounds, focused_ ? style.focusBackground : style.background, target, clip, paint++));
-
-        const float padding = std::max(0.0f, std::isfinite(style.paddingX) ? style.paddingX : 0.0f);
-        const float textY = bounds.position.y + std::max(0.0f, (bounds.size.y - textLayout.lineHeight) * 0.5f);
-        const Rect textBounds{{bounds.position.x + padding, textY},
-                              {std::max(0.0f, bounds.size.x - 2.0f * padding), textLayout.lineHeight}};
-        const auto caretRect = [&](std::size_t offset) {
-            Rect rect = Text::GetCaretRect(textLayout, static_cast<std::uint32_t>(offset));
-            rect.position += textBounds.position;
-            return rect;
-        };
-
-        if (focused_ && edit_.HasSelection()) {
-            const auto [begin, end] = edit_.SelectionRange();
-            const Rect a = caretRect(begin);
-            const Rect b = caretRect(end);
-            const float left = std::min(a.position.x, b.position.x);
-            const float right = std::max(a.position.x, b.position.x);
-            const float top = std::min(a.position.y, b.position.y);
-            const float bottom = std::max(a.position.y + a.size.y, b.position.y + b.size.y);
-            if (right > left && bottom > top) {
-                items.push_back(Solid(Rect{{left, top}, {right - left, bottom - top}}, style.selection, target, clip, paint++));
-            }
-        }
-
-        UILayoutRect textRect;
-        textRect.resolvedPosition = textBounds.position;
-        textRect.resolvedSize = textBounds.size;
-        std::vector<Rendering::UIRenderItem> glyphs = Text::GenerateTextRenderItems(
-            textLayout, textRect, style.text, target.textureSlice, clip, target.zOrder, paint, target.owner);
-        paint += glyphs.size() + 1;
-        items.insert(items.end(), glyphs.begin(), glyphs.end());
-
-        if (focused_) {
-            const Rect caret = caretRect(edit_.Caret());
-            const float caretWidth = 1.0f;
-            const float caretHeight = std::min(caret.size.y, std::max(0.0f, bounds.position.y + bounds.size.y - caret.position.y));
-            if (caretHeight > 0.0f && caret.position.x >= bounds.position.x &&
-                caret.position.x <= bounds.position.x + bounds.size.x) {
-                items.push_back(Solid(Rect{{caret.position.x, caret.position.y}, {caretWidth, caretHeight}},
-                                      style.caret, target, clip, paint));
-            }
-        }
-        return items;
-    }
-
-private:
-    void moveCaret(Vec2 localPoint, Vec2 size, const Text::TextLayoutResult& layout, const TextFieldStyle& style, bool extend) {
-        const float verticalPadding = std::max(0.0f, (size.y - layout.lineHeight) * 0.5f);
-        const Vec2 textPoint{localPoint.x - std::max(0.0f, style.paddingX), localPoint.y - verticalPadding};
-        edit_.MoveCaretTo(Text::FindInsertionOffset(layout, textPoint), extend);
-    }
-
-    static Rendering::UIRenderItem Solid(
-        Rect bounds, Vec4 color, const TextFieldRenderTarget& target, std::uint32_t clip, std::uint64_t paint)
-    {
-        Rendering::UIRenderItem item;
-        item.handle = target.owner;
-        item.layout.resolvedPosition = bounds.position;
-        item.layout.resolvedSize = bounds.size;
-        item.tintPremultipliedLinear = color;
-        item.textureSlice = Rendering::WhiteTextureSlice;
-        item.clipIndex = clip;
-        item.zOrder = target.zOrder;
-        item.paintOrder = paint;
-        return item;
-    }
-
+  private:
     TextEditState edit_;
     bool focused_ = false;
-    bool selectionDragging_ = false;
+    bool selectionDragging_ = false;   // true entre PointerDown com foco e PointerUp
+    float scrollX_ = 0.0f;
 };
 
 } // namespace ToolEngine::SpriteUi::Widgets

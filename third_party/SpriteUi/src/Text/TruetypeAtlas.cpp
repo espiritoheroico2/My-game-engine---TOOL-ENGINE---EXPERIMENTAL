@@ -1,6 +1,7 @@
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -46,6 +47,66 @@ bool IsControl(std::uint32_t codepoint) {
     return codepoint < 0x20 || codepoint == 0x7F;
 }
 
+// Leitura big-endian. O chamador garante que at + N esta dentro do buffer.
+std::uint32_t ReadBigEndian32(std::span<const std::uint8_t> bytes, std::size_t at) {
+    return (static_cast<std::uint32_t>(bytes[at]) << 24) | (static_cast<std::uint32_t>(bytes[at + 1]) << 16) |
+           (static_cast<std::uint32_t>(bytes[at + 2]) << 8) | static_cast<std::uint32_t>(bytes[at + 3]);
+}
+
+std::uint16_t ReadBigEndian16(std::span<const std::uint8_t> bytes, std::size_t at) {
+    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(bytes[at]) << 8) | bytes[at + 1]);
+}
+
+constexpr std::uint32_t kSfntVersion1 = 0x00010000;   // TrueType classico.
+constexpr std::uint32_t kTagTrue = 0x74727565;        // 'true' (TrueType da Apple).
+constexpr std::uint32_t kTagOtto = 0x4F54544F;        // 'OTTO' (OpenType com curvas CFF).
+constexpr std::uint32_t kTagTtcf = 0x74746366;        // 'ttcf' (colecao TrueType; usa o primeiro fonte).
+
+// Valida o cabecalho sfnt (ou TTC) e a tabela de tabelas do primeiro fonte. Entrega o offset do diretorio em
+// fontOffset. Todas as somas sao feitas em 64 bits: offset de 32 bits + comprimento de 32 bits nao estoura.
+// Exemplo: uma fonte cortada no meio do diretorio, ou com uma tabela apontando para o byte 4 GB, e recusada aqui,
+// antes de o stb_truetype ler qualquer coisa dela.
+bool ValidateFontDirectory(std::span<const std::uint8_t> bytes, std::size_t& fontOffset) {
+    const std::uint64_t size = bytes.size();
+    if (size < 12) return false;
+
+    const std::uint32_t header = ReadBigEndian32(bytes, 0);
+    std::uint64_t offset = 0;
+    if (header == kTagTtcf) {
+        if (size < 16) return false;
+        if (ReadBigEndian32(bytes, 8) == 0) return false;   // Colecao sem nenhum fonte.
+        offset = ReadBigEndian32(bytes, 12);                 // Offset do primeiro fonte.
+    } else if (header != kSfntVersion1 && header != kTagTrue && header != kTagOtto) {
+        return false;                                        // Cabecalho nao e de fonte: texto, imagem, lixo.
+    }
+    if (offset + 12 > size) return false;
+    if (offset > 0x7FFFFFFFu) return false;                  // stb_truetype recebe int.
+
+    const auto base = static_cast<std::size_t>(offset);
+    const std::uint64_t numTables = ReadBigEndian16(bytes, base + 4);
+    if (offset + 12 + 16 * numTables > size) return false;   // O diretorio inteiro precisa caber.
+
+    for (std::uint64_t i = 0; i < numTables; ++i) {
+        const std::size_t record = base + 12 + static_cast<std::size_t>(16 * i);
+        const std::uint64_t tableOffset = ReadBigEndian32(bytes, record + 8);
+        const std::uint64_t tableLength = ReadBigEndian32(bytes, record + 12);
+        if (tableOffset + tableLength > size) return false;  // Tabela que sai do arquivo.
+    }
+    fontOffset = base;
+    return true;
+}
+
+// Cobertura c vira c^gamma. Pixels zero continuam zero, entao a borda de padding nao ganha tinta.
+// Exemplo: gamma 0.5 transforma cobertura 0.25 em 0.5.
+void ApplyCoverageGamma(std::vector<std::uint8_t>& pixels, float gamma) {
+    std::array<std::uint8_t, 256> table{};
+    for (std::size_t i = 0; i < table.size(); ++i) {
+        const float c = static_cast<float>(i) / 255.0f;
+        table[i] = static_cast<std::uint8_t>(std::lround(std::pow(c, gamma) * 255.0f));
+    }
+    for (std::uint8_t& p : pixels) p = table[p];
+}
+
 } // namespace
 
 bool TruetypeAtlas::IsValid() const noexcept {
@@ -57,22 +118,34 @@ bool TruetypeAtlas::IsValid() const noexcept {
 bool BuildTruetypeAtlas(
     std::span<const std::uint8_t> fontBytes,
     const TruetypeAtlasConfig& config,
-    TruetypeAtlas& out) {
+    TruetypeAtlas& out,
+    const FontLoadPolicy& policy,
+    FontOrigin origin) {
     out = TruetypeAtlas{};
-    if (fontBytes.empty() || config.rasterPixelSize <= 0.0f || !std::isfinite(config.rasterPixelSize)) return false;
+    // Politica de origem e tamanho: antes de qualquer outra coisa, sem ler a fonte.
+    if (fontBytes.empty() || fontBytes.size() > policy.maxFontFileBytes) return false;
+    if (origin == FontOrigin::Untrusted && !policy.allowUntrustedFonts) return false;
+    if (config.rasterPixelSize <= 0.0f || !std::isfinite(config.rasterPixelSize)) return false;
     if (config.firstCodepoint > config.lastCodepoint || config.lastCodepoint > 0x10FFFF) return false;
     if (config.atlasWidth == 0 || config.atlasHeight == 0 || config.atlasWidth > 8192 || config.atlasHeight > 8192) return false;
+    if (!(config.coverageGamma > 0.0f) || !std::isfinite(config.coverageGamma)) return false;
 
-    // stb_truetype nao valida o tamanho nem o cabecalho: sem estas checagens, bytes que nao sao fonte
-    // leem fora do buffer. O cabecalho de tag tem 4 bytes e o offset da tabela de diretorio mais 12.
-    constexpr std::size_t kMinFontBytes = 12;
-    if (fontBytes.size() < kMinFontBytes) return false;
+    // Limites de configuracao. Tudo aqui roda antes de alocar out.pixels e antes de chamar stb_truetype.
+    if (config.maxGlyphCount == 0 || config.maxGlyphCount > kTruetypeMaxGlyphCountLimit) return false;
+    if (config.rasterPixelSize > kTruetypeMaxRasterPixelSize) return false;
+    if (config.padding > kTruetypeMaxPadding) return false;
+    // Intervalo em 64 bits: first <= last ja foi verificado, entao a subtracao nao estoura.
+    const std::uint64_t requestedGlyphs =
+        static_cast<std::uint64_t>(config.lastCodepoint) - config.firstCodepoint + 1u;
+    if (requestedGlyphs > config.maxGlyphCount) return false;
+
+    // stb_truetype nao valida o cabecalho nem as tabelas antes de ler: a validacao estrutural vem primeiro.
+    std::size_t fontOffset = 0;
+    if (!ValidateFontDirectory(fontBytes, fontOffset)) return false;
 
     stbtt_fontinfo info{};
     const unsigned char* data = fontBytes.data();
-    const int fontOffset = stbtt_GetFontOffsetForIndex(data, 0);
-    if (fontOffset < 0 || static_cast<std::size_t>(fontOffset) + kMinFontBytes > fontBytes.size()) return false;
-    if (!stbtt_InitFont(&info, data, fontOffset)) return false;
+    if (!stbtt_InitFont(&info, data, static_cast<int>(fontOffset))) return false;
 
     const float px = config.rasterPixelSize;
     const float scale = stbtt_ScaleForMappingEmToPixels(&info, px);
@@ -86,12 +159,14 @@ bool BuildTruetypeAtlas(
     out.pixels.assign(static_cast<std::size_t>(out.width) * out.height, 0);
     out.metrics.fontSize = kUnitsPerEm;
     out.metrics.unitsPerEm = kUnitsPerEm;
-    out.metrics.ascent = ascent * scale * toUnits;
-    out.metrics.descent = descent * scale * toUnits;
-    out.metrics.lineGap = std::max(0.0f, lineGap * scale * toUnits);
+    out.metrics.ascent = static_cast<float>(ascent) * scale * toUnits;
+    out.metrics.descent = static_cast<float>(descent) * scale * toUnits;
+    out.metrics.lineGap = std::max(0.0f, static_cast<float>(lineGap) * scale * toUnits);
     out.metrics.pxRange = 4.0f;
     out.metrics.atlasWidth = static_cast<float>(out.width);
     out.metrics.atlasHeight = static_cast<float>(out.height);
+    out.renderMetadata.mode = TextRenderMode::BitmapCoverage;   // Cobertura 8 bits: nunca MSDF.
+    out.renderMetadata.rasterPixelSize = static_cast<std::uint32_t>(std::lround(config.rasterPixelSize));
 
     const std::uint32_t pad = config.padding;
     std::uint32_t cursorX = pad, cursorY = pad, rowHeight = 0;
@@ -102,7 +177,7 @@ bool BuildTruetypeAtlas(
 
         int advance = 0, leftBearing = 0;
         stbtt_GetGlyphHMetrics(&info, glyphIndex, &advance, &leftBearing);
-        glyph.advance = advance * scale * toUnits;
+        glyph.advance = static_cast<float>(advance) * scale * toUnits;
 
         int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         stbtt_GetGlyphBitmapBox(&info, glyphIndex, scale, scale, &x0, &y0, &x1, &y1);
@@ -124,14 +199,14 @@ bool BuildTruetypeAtlas(
                                   static_cast<int>(out.width), scale, scale, glyphIndex);
 
             // Pixels com y para baixo a partir do topo; planeBounds usa y para cima a partir da linha de base.
-            glyph.planeBounds[0] = x0 * toUnits;
-            glyph.planeBounds[1] = -y1 * toUnits;
-            glyph.planeBounds[2] = x1 * toUnits;
-            glyph.planeBounds[3] = -y0 * toUnits;
-            glyph.uvRect[0] = static_cast<float>(cursorX) / out.width;
-            glyph.uvRect[1] = static_cast<float>(cursorY) / out.height;
-            glyph.uvRect[2] = static_cast<float>(w) / out.width;
-            glyph.uvRect[3] = static_cast<float>(h) / out.height;
+            glyph.planeBounds[0] = static_cast<float>(x0) * toUnits;
+            glyph.planeBounds[1] = -static_cast<float>(y1) * toUnits;
+            glyph.planeBounds[2] = static_cast<float>(x1) * toUnits;
+            glyph.planeBounds[3] = -static_cast<float>(y0) * toUnits;
+            glyph.uvRect[0] = static_cast<float>(cursorX) / static_cast<float>(out.width);
+            glyph.uvRect[1] = static_cast<float>(cursorY) / static_cast<float>(out.height);
+            glyph.uvRect[2] = static_cast<float>(cursorX + w) / static_cast<float>(out.width);
+            glyph.uvRect[3] = static_cast<float>(cursorY + h) / static_cast<float>(out.height);
 
             cursorX += w + pad;
             rowHeight = std::max(rowHeight, h);
@@ -143,6 +218,7 @@ bool BuildTruetypeAtlas(
         out = TruetypeAtlas{};
         return false;
     }
+    if (config.coverageGamma != 1.0f) ApplyCoverageGamma(out.pixels, config.coverageGamma);
     // Garante um fallback: se '?' nao esta no intervalo, usa o primeiro codepoint disponivel.
     if (out.glyphs.find(out.fallbackCodepoint) == out.glyphs.end()) {
         out.fallbackCodepoint = config.firstCodepoint;

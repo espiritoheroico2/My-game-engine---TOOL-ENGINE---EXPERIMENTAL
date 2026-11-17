@@ -20,7 +20,12 @@ struct UIInputSnapshot {
     bool pointerCancelled = false;
     bool windowFocused = true;
     std::uint64_t frameId = 0;
+    // Tempo do quadro informado pelo host, em segundos. O roteador nunca consulta o relogio do sistema.
+    double frameTimeSeconds = 0.0;
 };
+
+// Tempo que o ponteiro precisa ficar pressionado para o estado Hold valer.
+inline constexpr double kHoldDurationSeconds = 0.25;
 
 struct HitTarget {
     UIHandle handle{};
@@ -65,6 +70,8 @@ struct UIPointerRoutingState {
     UIHandle focusedEntity{};
     UIHandle hoveredEntity{};
     bool consumedThisFrame = false;
+    // Derivado de tempo: Pressed ha mais de kHoldDurationSeconds. Nao e um evento.
+    bool holdActive = false;
 };
 
 class UIEventRouter {
@@ -104,6 +111,7 @@ private:
         const HitTarget& target, std::span<const HitTarget> targets) noexcept;
 
     UIPointerRoutingState state_{};
+    double pressTimeSeconds_ = 0.0;
     std::uint64_t lastFrameId_ = 0;
     bool hasProcessedFrame_ = false;
 };

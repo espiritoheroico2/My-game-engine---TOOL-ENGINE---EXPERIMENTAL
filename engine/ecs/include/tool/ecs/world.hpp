@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <deque>
 #include <memory>
+#include <stdexcept>
 #include <typeinfo>
 #include <utility>
 #include <vector>
@@ -60,9 +61,15 @@ public:
   }
 
   // --- componentes ------------------------------------------------------------
+  // F-02: handle nulo, destruido ou obsoleto (indice reaproveitado) nao pode receber componente;
+  // gravar no indice contaminaria a entidade atual que ocupa o slot. add lanca; tryAdd devolve nullptr.
   template <class T, class... Args> T& add(Entity e, Args&&... args) {
-    auto& st = storage<T>();
-    return st.set(e.index, T{std::forward<Args>(args)...});
+    if (!alive(e)) throw std::invalid_argument("World::add: entidade invalida ou obsoleta");
+    return storage<T>().set(e.index, T{std::forward<Args>(args)...});
+  }
+  template <class T, class... Args> T* tryAdd(Entity e, Args&&... args) {
+    if (!alive(e)) return nullptr;
+    return &storage<T>().set(e.index, T{std::forward<Args>(args)...});
   }
   template <class T> bool has(Entity e) const {
     const auto* st = findStorage<T>();
@@ -136,11 +143,21 @@ public:
     });
   }
 
-  // Quantos componentes T existem (sem contar dormentes).
-  template <class T> size_t count() const {
+  // F-07: total de componentes T armazenados, INCLUINDO entidades dormentes.
+  template <class T> size_t storageCount() const {
     auto* st = findStorage<T>();
     return st ? st->size() : 0;
   }
+  // Componentes T em entidades vivas e nao dormentes (o que as consultas enxergam).
+  template <class T> size_t activeCount() const {
+    auto* st = findStorage<T>();
+    if (!st) return 0;
+    size_t n = 0;
+    for (u32 i : st->indices()) if (ids_.aliveIndex(i) && !dormant_[i]) ++n;
+    return n;
+  }
+  // Alias de activeCount<T>() (mantido por compatibilidade; antes contava dormentes).
+  template <class T> size_t count() const { return activeCount<T>(); }
 
   // Simulacao ligada/desligada por entidade (fisica e scripts podem pular as que estao longe da camera).
   // Diferente de dormant: a entidade continua visivel e nas consultas; so o sistema de simulacao a ignora.

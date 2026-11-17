@@ -1,6 +1,7 @@
 #include "SpriteUi/Input/InputRouter.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace ToolEngine::SpriteUi::Input {
 
@@ -27,7 +28,7 @@ const HitTarget* UIEventRouter::HitTest(
     if (!IsFinite(screenPosition)) return nullptr;
 
     for (const HitTarget& target : targets) {
-        if (!target.visible || !target.enabled || !target.handle.IsValid() ||
+        if (!target.visible || !target.handle.IsValid() ||
             !IsFinite(target.localSize) || target.localSize.x <= 0.0f ||
             target.localSize.y <= 0.0f || !target.localToScreen.IsFinite()) {
             continue;
@@ -181,7 +182,10 @@ std::vector<UIEvent> UIEventRouter::Process(
     }
 
     Vec2 hoveredLocal{};
-    const HitTarget* hovered = HitTest(targets, input.pointerPositionLogical, &hoveredLocal);
+    const HitTarget* topmost = HitTest(targets, input.pointerPositionLogical, &hoveredLocal);
+    // A disabled target covers the pointer but neither receives nor passes events on.
+    const bool coveredByDisabled = topmost && !topmost->enabled;
+    const HitTarget* hovered = coveredByDisabled ? nullptr : topmost;
     const UIHandle newHovered = hovered ? hovered->handle : InvalidUIHandle;
 
     if (newHovered != state_.hoveredEntity) {
@@ -189,11 +193,12 @@ std::vector<UIEvent> UIEventRouter::Process(
         if (hovered) PushEvent(events, UIEventType::PointerEnter, *hovered, input, hoveredLocal, {}, true);
         state_.hoveredEntity = newHovered;
     }
-    state_.consumedThisFrame = hovered && BlocksInput(*hovered, targets);
+    state_.consumedThisFrame = coveredByDisabled || (hovered && BlocksInput(*hovered, targets));
 
     if (input.primaryPressed) {
         if (hovered) {
             state_.capturedEntity = hovered->handle;
+            pressTimeSeconds_ = input.frameTimeSeconds;
             if (hovered->focusable && state_.focusedEntity != hovered->handle) {
                 if (oldFocus) PushEvent(events, UIEventType::FocusLost, *oldFocus, input, {});
                 state_.focusedEntity = hovered->handle;
@@ -240,6 +245,10 @@ std::vector<UIEvent> UIEventRouter::Process(
         state_.capturedEntity = InvalidUIHandle;
     }
 
+    const bool pressed = state_.capturedEntity.IsValid() && input.primaryDown;
+    state_.holdActive = pressed && std::isfinite(input.frameTimeSeconds) &&
+                        input.frameTimeSeconds - pressTimeSeconds_ >= kHoldDurationSeconds;
+
     if ((input.wheelDelta.x != 0.0f || input.wheelDelta.y != 0.0f) && hovered) {
         state_.consumedThisFrame = PushBubbledEvent(
             events, UIEventType::Wheel, *hovered, input, input.wheelDelta, targets) ||
@@ -250,6 +259,8 @@ std::vector<UIEvent> UIEventRouter::Process(
 }
 
 void UIEventRouter::Reset() noexcept {
+    pressTimeSeconds_ = 0.0;
+    state_.holdActive = false;
     state_.capturedEntity = InvalidUIHandle;
     state_.focusedEntity = InvalidUIHandle;
     state_.hoveredEntity = InvalidUIHandle;

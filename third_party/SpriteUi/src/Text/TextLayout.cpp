@@ -12,9 +12,10 @@ namespace ToolEngine::SpriteUi::Text {
 namespace {
 
 struct LayoutScale {
-    float font = 1.0f;       // font units -> layout units
+    float font = 1.0f; // font units -> layout units
     float lineHeight = 0.0f;
     float ascent = 0.0f;
+    float devicePixelScale = 0.0f; // 0 = sem alinhamento a pixel de tela
 };
 
 struct LineInfo {
@@ -33,20 +34,31 @@ struct LineInfo {
 }
 
 [[nodiscard]] LayoutScale ComputeScale(const FontMetrics& metrics, const TextLayoutConfig& config) noexcept {
-    const float fontSize = (config.fontSize > 0.0f && IsFinite(config.fontSize))
-        ? config.fontSize
-        : metrics.fontSize;
+    const float fontSize =
+        (config.fontSize > 0.0f && IsFinite(config.fontSize)) ? config.fontSize : metrics.fontSize;
     LayoutScale scale;
     scale.font = (metrics.unitsPerEm > 0.0f) ? (fontSize / metrics.unitsPerEm) : 1.0f;
-    const float multiplier = IsFinite(config.lineHeightMultiplier) ? std::max(0.1f, config.lineHeightMultiplier) : 1.0f;
+    const float multiplier =
+        IsFinite(config.lineHeightMultiplier) ? std::max(0.1f, config.lineHeightMultiplier) : 1.0f;
     scale.lineHeight = metrics.GetLineHeight() * scale.font * multiplier;
     scale.ascent = metrics.ascent * scale.font;
+    scale.devicePixelScale =
+        (config.devicePixelScale > 0.0f && IsFinite(config.devicePixelScale)) ? config.devicePixelScale : 0.0f;
     return scale;
+}
+
+// Arredonda um ponto logico para o pixel de tela mais proximo. Exemplo: com escala 1.5, 10.3 vira 10.0,
+// porque 10.3 * 1.5 = 15.45 arredonda para 15, e 15 / 1.5 = 10. Escala <= 0 devolve o ponto sem mexer.
+[[nodiscard]] Vec2 SnapToDevicePixels(Vec2 point, float devicePixelScale) noexcept {
+    if (devicePixelScale <= 0.0f) return point;
+    return {std::round(point.x * devicePixelScale) / devicePixelScale,
+            std::round(point.y * devicePixelScale) / devicePixelScale};
 }
 
 // Quad for one glyph whose pen is at penX on a line whose top is lineTop. glyph.yOffset (HarfBuzz
 // raises combining marks with it) shifts the box up; positive = up, like planeBounds.
-[[nodiscard]] GlyphQuad MakeQuad(const GlyphInstance& glyph, float penX, float lineTop, const LayoutScale& scale) noexcept {
+[[nodiscard]] GlyphQuad MakeQuad(const GlyphInstance& glyph, float penX, float lineTop,
+                                 const LayoutScale& scale) noexcept {
     GlyphQuad quad;
     quad.glyphId = glyph.glyphId;
     quad.clusterByteOffset = glyph.clusterByteOffset;
@@ -58,9 +70,11 @@ struct LineInfo {
     const float quadW = (glyph.planeBounds[2] - glyph.planeBounds[0]) * scale.font;
     const float quadH = (glyph.planeBounds[3] - glyph.planeBounds[1]) * scale.font;
     if (quadW > 0.0f && quadH > 0.0f && IsFinite(quadW) && IsFinite(quadH)) {
-        const float quadX = penX + FiniteOrZero(glyph.xOffset) * scale.font + glyph.planeBounds[0] * scale.font;
+        const float quadX =
+            penX + FiniteOrZero(glyph.xOffset) * scale.font + glyph.planeBounds[0] * scale.font;
         // Baseline is at lineTop + ascent; planeBounds[3] is the distance above the baseline.
-        const float quadY = lineTop + scale.ascent - (glyph.planeBounds[3] + FiniteOrZero(glyph.yOffset)) * scale.font;
+        const float quadY =
+            lineTop + scale.ascent - (glyph.planeBounds[3] + FiniteOrZero(glyph.yOffset)) * scale.font;
         quad.bounds = {{quadX, quadY}, {quadW, quadH}};
     } else {
         quad.bounds = {{penX, lineTop}, {0.0f, 0.0f}};
@@ -69,13 +83,8 @@ struct LineInfo {
 }
 
 // Shifts each line for Center/Right alignment and publishes the TextLine table.
-void FinalizeLines(
-    TextLayoutResult& result,
-    const std::vector<LineInfo>& lines,
-    const LayoutScale& scale,
-    const TextLayoutConfig& config,
-    float containerWidth)
-{
+void FinalizeLines(TextLayoutResult& result, const std::vector<LineInfo>& lines, const LayoutScale& scale,
+                   const TextLayoutConfig& config, float containerWidth) {
     result.lines.clear();
     result.lines.reserve(lines.size());
     for (const LineInfo& line : lines) {
@@ -109,20 +118,35 @@ void FinalizeLines(
     result.lineHeight = scale.lineHeight;
     result.containerWidth = containerWidth;
     result.alignment = config.alignment;
+    result.devicePixelScale = scale.devicePixelScale;
     result.lineCount = lines.size();
+}
+
+// Text without glyphs still has one (empty) line box. Without it an empty field has no line height, so its
+// caret would be zero tall; the box also keeps Center/Right alignment for the caret.
+TextLayoutResult MakeEmptyLayout(const FontMetrics& metrics, const TextLayoutConfig& config) {
+    TextLayoutResult result;
+    const LayoutScale scale = ComputeScale(metrics, config);
+    const float containerWidth =
+        (config.maxWidth > 0.0f && IsFinite(config.maxWidth)) ? config.maxWidth : 0.0f;
+    std::vector<LineInfo> lines(1);
+    lines[0].height = scale.lineHeight;
+    FinalizeLines(result, lines, scale, config, containerWidth);
+    result.size = {containerWidth, scale.lineHeight};
+    return result;
 }
 
 } // namespace
 
-TextLayoutResult LayoutText(
-    std::span<const GlyphInstance> shapedGlyphs,
-    const FontMetrics& metrics,
-    const TextLayoutConfig& config)
-{
-    TextLayoutResult result;
-    if (shapedGlyphs.empty() || !metrics.IsValid()) {
-        return result;
+TextLayoutResult LayoutText(std::span<const GlyphInstance> shapedGlyphs, const FontMetrics& metrics,
+                            const TextLayoutConfig& config) {
+    if (!metrics.IsValid()) {
+        return {};
     }
+    if (shapedGlyphs.empty()) {
+        return MakeEmptyLayout(metrics, config);
+    }
+    TextLayoutResult result;
 
     const LayoutScale scale = ComputeScale(metrics, config);
     result.lineHeight = scale.lineHeight;
@@ -181,8 +205,8 @@ TextLayoutResult LayoutText(
         if (line.endQuad > line.startQuad) {
             line.byteBegin = result.quads[line.startQuad].clusterByteOffset;
             line.byteEnd = (li + 1 < lines.size() && lines[li + 1].endQuad > lines[li + 1].startQuad)
-                ? result.quads[lines[li + 1].startQuad].clusterByteOffset
-                : result.quads[line.endQuad - 1].clusterByteOffset;
+                               ? result.quads[lines[li + 1].startQuad].clusterByteOffset
+                               : result.quads[line.endQuad - 1].clusterByteOffset;
         }
     }
 
@@ -193,14 +217,13 @@ TextLayoutResult LayoutText(
     return result;
 }
 
-TextLayoutResult LayoutText(
-    std::string_view utf8,
-    std::span<const GlyphInstance> shapedGlyphs,
-    const FontMetrics& metrics,
-    const TextLayoutConfig& config)
-{
-    if (shapedGlyphs.empty() || !metrics.IsValid()) {
+TextLayoutResult LayoutText(std::string_view utf8, std::span<const GlyphInstance> shapedGlyphs,
+                            const FontMetrics& metrics, const TextLayoutConfig& config) {
+    if (!metrics.IsValid()) {
         return {};
+    }
+    if (shapedGlyphs.empty()) {
+        return MakeEmptyLayout(metrics, config);
     }
     if (utf8.empty()) {
         return LayoutText(shapedGlyphs, metrics, config);
@@ -218,10 +241,11 @@ TextLayoutResult LayoutText(
     std::size_t previousCluster = 0;
     for (std::size_t g = 0; g < shapedGlyphs.size(); ++g) {
         const std::uint32_t offset = shapedGlyphs[g].clusterByteOffset;
-        const auto it = std::upper_bound(
-            clusters.begin(), clusters.end(), offset,
-            [](std::uint32_t value, const TextCluster& c) { return value < c.byteBegin; });
-        const std::size_t cluster = (it == clusters.begin()) ? 0 : static_cast<std::size_t>(it - clusters.begin()) - 1;
+        const auto it =
+            std::upper_bound(clusters.begin(), clusters.end(), offset,
+                             [](std::uint32_t value, const TextCluster& c) { return value < c.byteBegin; });
+        const std::size_t cluster =
+            (it == clusters.begin()) ? 0 : static_cast<std::size_t>(it - clusters.begin()) - 1;
         if (cluster < previousCluster) {
             return LayoutText(shapedGlyphs, metrics, config); // Not LTR-monotonic: out of scope.
         }
@@ -241,7 +265,8 @@ TextLayoutResult LayoutText(
         clusterAdvance[c] = sum;
     }
 
-    const bool constrained = config.wrap != TextWrap::None && config.maxWidth > 0.0f && IsFinite(config.maxWidth);
+    const bool constrained =
+        config.wrap != TextWrap::None && config.maxWidth > 0.0f && IsFinite(config.maxWidth);
     const float maxWidth = constrained ? config.maxWidth : 0.0f;
     constexpr float Epsilon = 1.0e-4f;
     constexpr std::size_t None = std::numeric_limits<std::size_t>::max();
@@ -265,8 +290,8 @@ TextLayoutResult LayoutText(
     while (i < clusterCount) {
         const std::size_t start = i;
         float content = 0.0f;
-        float pending = 0.0f;       // Width of spaces since the last non-space cluster (they hang).
-        float breakContent = 0.0f;  // Content width if we break at lastBreak.
+        float pending = 0.0f;      // Width of spaces since the last non-space cluster (they hang).
+        float breakContent = 0.0f; // Content width if we break at lastBreak.
         std::size_t lastBreak = None;
         std::size_t lineEnd = clusterCount;
         bool hasContent = false;
@@ -346,17 +371,15 @@ TextLayoutResult LayoutText(
         lineTop += scale.lineHeight;
     }
 
-    const float containerWidth = (config.maxWidth > 0.0f && IsFinite(config.maxWidth)) ? config.maxWidth : maxLineWidth;
+    const float containerWidth =
+        (config.maxWidth > 0.0f && IsFinite(config.maxWidth)) ? config.maxWidth : maxLineWidth;
     FinalizeLines(result, lines, scale, config, containerWidth);
     result.size = {containerWidth, lineTop};
     return result;
 }
 
-Vec2 GetCaretPosition(
-    const TextLayoutResult& layout,
-    std::uint32_t clusterByteOffset,
-    [[maybe_unused]] const FontMetrics& metrics) noexcept
-{
+Vec2 GetCaretPosition(const TextLayoutResult& layout, std::uint32_t clusterByteOffset,
+                      [[maybe_unused]] const FontMetrics& metrics) noexcept {
     if (layout.quads.empty()) {
         return {0.0f, 0.0f};
     }
@@ -375,10 +398,12 @@ Vec2 GetCaretPosition(
 namespace {
 
 // Index of the line that owns byteOffset: the LAST line whose byteBegin <= offset.
-[[nodiscard]] std::size_t FindLineForOffset(const TextLayoutResult& layout, std::uint32_t byteOffset) noexcept {
+[[nodiscard]] std::size_t FindLineForOffset(const TextLayoutResult& layout,
+                                            std::uint32_t byteOffset) noexcept {
     std::size_t line = 0;
     for (std::size_t i = 0; i < layout.lines.size(); ++i) {
-        if (layout.lines[i].byteBegin <= byteOffset && layout.lines[i].quadCount + (layout.lines[i].endsWithNewline ? 1u : 0u) > 0) {
+        if (layout.lines[i].byteBegin <= byteOffset &&
+            layout.lines[i].quadCount + (layout.lines[i].endsWithNewline ? 1u : 0u) > 0) {
             line = i;
         }
     }
@@ -393,10 +418,13 @@ namespace {
 
 [[nodiscard]] float VirtualLineX(const TextLayoutResult& layout) noexcept {
     switch (layout.alignment) {
-    case TextAlignment::Center: return layout.containerWidth * 0.5f;
-    case TextAlignment::Right:  return layout.containerWidth;
+    case TextAlignment::Center:
+        return layout.containerWidth * 0.5f;
+    case TextAlignment::Right:
+        return layout.containerWidth;
     case TextAlignment::Left:
-    default:                    return 0.0f;
+    default:
+        return 0.0f;
     }
 }
 
@@ -431,7 +459,8 @@ std::uint32_t FindInsertionOffset(const TextLayoutResult& layout, Vec2 localPos)
     const float y = IsFinite(localPos.y) ? localPos.y : 0.0f;
     const float x = IsFinite(localPos.x) ? localPos.x : 0.0f;
     const float maxIndex = static_cast<float>(layout.lines.size() - 1);
-    const std::size_t lineIndex = static_cast<std::size_t>(std::clamp(std::floor(y / height), 0.0f, maxIndex));
+    const std::size_t lineIndex =
+        static_cast<std::size_t>(std::clamp(std::floor(y / height), 0.0f, maxIndex));
     const TextLine& line = layout.lines[lineIndex];
 
     std::uint32_t bestOffset = line.byteBegin;
@@ -455,16 +484,16 @@ std::uint32_t FindInsertionOffset(const TextLayoutResult& layout, Vec2 localPos)
         previousOffset = quad.clusterByteOffset;
         hasPrevious = true;
     }
-    if (!line.endsWithNewline) {
+    // The end of a soft-wrapped line is also the start of the next line (byteEnd), and GetCaretRect draws
+    // that offset on the next line. So only the end of the text and the end before a newline are stops here.
+    const bool softWrapped = !line.endsWithNewline && lineIndex + 1 < layout.lines.size();
+    if (!line.endsWithNewline && !softWrapped) {
         consider(LineEndX(layout, line), line.byteEnd);
     }
     return anyStop ? bestOffset : line.byteBegin;
 }
 
-std::uint32_t FindClusterAtPosition(
-    const TextLayoutResult& layout,
-    Vec2 localPos) noexcept
-{
+std::uint32_t FindClusterAtPosition(const TextLayoutResult& layout, Vec2 localPos) noexcept {
     if (layout.quads.empty()) {
         return 0;
     }
@@ -486,17 +515,10 @@ std::uint32_t FindClusterAtPosition(
     return closestCluster;
 }
 
-std::vector<Rendering::UIRenderItem> GenerateTextRenderItems(
-    const TextLayoutResult& layout,
-    const UILayoutRect& rect,
-    Vec4 colorPremultiplied,
-    std::uint32_t atlasTextureSlice,
-    std::uint32_t clipIndex,
-    float zOrder,
-    std::uint64_t basePaintOrder,
-    UIHandle owner,
-    std::uint32_t renderFlags)
-{
+std::vector<Rendering::UIRenderItem>
+GenerateTextRenderItems(const TextLayoutResult& layout, const UILayoutRect& rect, Vec4 colorPremultiplied,
+                        std::uint32_t atlasTextureSlice, std::uint32_t clipIndex, float zOrder,
+                        std::uint64_t basePaintOrder, UIHandle owner, std::uint32_t renderFlags) {
     std::vector<Rendering::UIRenderItem> items;
     items.reserve(layout.quads.size());
 
@@ -508,7 +530,8 @@ std::vector<Rendering::UIRenderItem> GenerateTextRenderItems(
 
         Rendering::UIRenderItem item;
         item.handle = owner;
-        item.layout.resolvedPosition = rect.resolvedPosition + quad.bounds.position;
+        item.layout.resolvedPosition = SnapToDevicePixels(rect.resolvedPosition + quad.bounds.position,
+                                                          layout.devicePixelScale);
         item.layout.resolvedSize = quad.bounds.size;
         item.layout.visible = rect.visible;
 
@@ -519,10 +542,13 @@ std::vector<Rendering::UIRenderItem> GenerateTextRenderItems(
         item.transform.pivot = {0.0f, 0.0f};
         item.transform.scale = {1.0f, 1.0f};
 
+        // O atlas de glifos guarda uvRect como [u0, v0, u1, v1] (TruetypeAtlas.hpp). O item de desenho usa
+        // [u, v, largura, altura] (SpriteInstanceGPU.hpp). Sem a conversao, cada glifo amostrava a regiao
+        // errada. DebugShaper usa origem (0, 0), entao o resultado dele nao muda.
         item.uvRect[0] = quad.uvRect[0];
         item.uvRect[1] = quad.uvRect[1];
-        item.uvRect[2] = quad.uvRect[2];
-        item.uvRect[3] = quad.uvRect[3];
+        item.uvRect[2] = quad.uvRect[2] - quad.uvRect[0];
+        item.uvRect[3] = quad.uvRect[3] - quad.uvRect[1];
 
         item.tintPremultipliedLinear = colorPremultiplied;
         item.textureSlice = atlasTextureSlice;

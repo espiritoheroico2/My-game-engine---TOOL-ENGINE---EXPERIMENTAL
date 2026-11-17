@@ -42,6 +42,70 @@ TEST(pack_rejects_path_traversal_and_duplicates) {
   CHECK(b.add("ok", {1}) && !b.add("ok", {2}));
 }
 
+// Lista compartilhada de caminhos que NUNCA podem ser aceitos, pelo Builder nem pelo Reader.
+static const std::vector<std::string> kUnsafePaths = {
+    "../x", "a/../b", "..", "/root", "\\root", "C:/x", "C:arq", "a\\b", "a//b", "a/./b", "./x", "a/", "",
+    std::string("a\0b", 3), std::string("a\x01" "b", 3), std::string(kMaxPath + 1, 'a'),
+};
+
+TEST(pack_safe_path_rules) {
+  for (const auto& p : kUnsafePaths) CHECK(!isSafePackPath(p));
+  CHECK(isSafePackPath("a/b.txt"));
+  CHECK(isSafePackPath("x"));
+  CHECK(isSafePackPath("dir/sub/file.bin"));
+  CHECK(isSafePackPath("a..b"));                        // nome legitimo com dois pontos seguidos
+  CHECK(isSafePackPath(std::string(kMaxPath, 'a')));    // limite exato e aceito
+}
+
+TEST(pack_builder_rejects_every_unsafe_path) {
+  Quiet q; Builder b;
+  for (const auto& p : kUnsafePaths) CHECK(!b.add(p, {1}));
+  CHECK(b.add("ok/ok.bin", {1}));
+}
+
+// Monta um .tpak bruto com hash de tabela VALIDO. Simula pacote de origem nao confiavel:
+// o Builder nunca produziria estes caminhos, mas o Reader precisa recusa-los mesmo assim.
+namespace {
+void put32(std::vector<u8>& v, u32 x) { for (int i = 0; i < 4; ++i) v.push_back(static_cast<u8>(x >> (8 * i))); }
+void put64(std::vector<u8>& v, u64 x) { put32(v, static_cast<u32>(x)); put32(v, static_cast<u32>(x >> 32)); }
+std::vector<u8> rawPack(const std::vector<std::pair<std::string, std::vector<u8>>>& files) {
+  std::vector<u8> table, data;
+  u64 offset = 0;
+  for (const auto& [path, bytes] : files) {
+    put32(table, static_cast<u32>(path.size()));
+    table.insert(table.end(), path.begin(), path.end());
+    put64(table, offset); put64(table, bytes.size());
+    const auto h = sha256(bytes.data(), bytes.size());
+    table.insert(table.end(), h.begin(), h.end());
+    data.insert(data.end(), bytes.begin(), bytes.end());
+    offset += bytes.size();
+  }
+  std::vector<u8> out;
+  put32(out, kMagic); put32(out, kVersion); put32(out, static_cast<u32>(files.size())); put64(out, table.size());
+  const auto th = sha256(table.data(), table.size());
+  out.insert(out.end(), th.begin(), th.end());
+  out.insert(out.end(), table.begin(), table.end());
+  out.insert(out.end(), data.begin(), data.end());
+  return out;
+}
+} // namespace
+
+TEST(pack_reader_rejects_unsafe_paths_in_table) {
+  Quiet q;
+  // Controle: pacote bem formado com caminho seguro e aceito.
+  const auto good = rawPack({{"ok/file.bin", {1, 2, 3}}});
+  CHECK(Reader::open(good.data(), good.size()).has_value());
+  // Cada caminho inseguro, sozinho, em um pacote com hash de tabela valido, deve ser recusado.
+  for (const auto& p : kUnsafePaths) {
+    const auto bad = rawPack({{p, {9}}});
+    CHECK(!Reader::open(bad.data(), bad.size()).has_value());
+  }
+  CHECK(debug().hasCode(code::kBadPack));
+  // Caminho duplicado na tabela continua recusado.
+  const auto dup = rawPack({{"x", {1}}, {"x", {2}}});
+  CHECK(!Reader::open(dup.data(), dup.size()).has_value());
+}
+
 TEST(pack_detects_tampering) {
   Quiet q; Builder b; b.add("a", std::vector<u8>(100, 5)); b.add("b", std::vector<u8>(100, 6));
   std::vector<u8> p; Builder::Report r; b.build(p, r);

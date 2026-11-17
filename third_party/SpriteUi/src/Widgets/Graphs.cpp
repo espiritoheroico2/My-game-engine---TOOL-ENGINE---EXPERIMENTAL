@@ -15,7 +15,8 @@ std::size_t UIOscilloscopeGraph::SafeHead() const noexcept {
 }
 
 void UIOscilloscopeGraph::AddSample(float value) noexcept {
-    if (!IsFinite(value)) value = 0.0f;
+    // NaN e infinito nao entram no historico: nem como pico nem como zero na escala.
+    if (!IsFinite(value)) return;
     // The fields are public: never trust them for indexing.
     const std::size_t head = SafeHead();
     valueHistory[head] = value;

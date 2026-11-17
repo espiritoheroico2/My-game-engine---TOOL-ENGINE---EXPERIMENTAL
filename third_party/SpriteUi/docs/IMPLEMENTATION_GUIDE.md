@@ -28,9 +28,9 @@ adapters/toolengine/       adaptador header-only para o RHI da ToolEngine (opcio
 shaders/toolengine/        HLSL e GLSL 430 usados pelo adaptador (cópias de assets/shaders do engine: manter iguais)
 third_party/stb/           stb_truetype (opcional, para o atlas de texto)
 Fonts/Xmind/               fonte para testes e exemplos (OFL 1.1)
-tests/                     testes do núcleo (test_main, test_text_layout, test_truetype_atlas, ...) e visuais
+tests/                     testes do núcleo (test_main, test_text_layout, test_truetype_atlas, test_layout_patterns, ...) e visuais
 tests/package_consumer/    teste de consumo: o pacote instalado é usado por um projeto de fora
-docs/                      esta documentação e as de API
+docs/                      esta documentação, COMPOSITION.md (convenção de composição) e as de API
 ```
 
 Regra de fronteira: arquivos em `include/SpriteUi/` **não** podem incluir cabeçalhos de `adapters/`, de SDL, de Diligent
@@ -71,10 +71,10 @@ Cada camada tem um critério objetivo. "Passando" significa que o comando indica
 
 | Camada | O que verifica | Onde roda | Estado | Dor de ImGui relacionada |
 |---|---|---|---|---|
-| **L0 Núcleo** | Layout, Flex, roteamento de eventos, texto (medidas e quebra), docking (modelo) | `ctest` no pacote (`SpriteUI.CoreTests`) | **Passando: 819 verificações** | Base de tudo |
+| **L0 Núcleo** | Layout, Flex, roteamento de eventos, texto (medidas e quebra), docking (modelo) | `ctest` no pacote (`SpriteUI.CoreTests`, `SpriteUI.LayoutPatterns`) | **Passando: 844 verificações** no núcleo e **31** nos padrões de layout (`tests/test_layout_patterns.cpp`) | Base de tudo |
 | **L1 Texto (atlas)** | Atlas stb_truetype: cobertura, geometria do 'A', espaço sem área, clusters UTF-8, '?' de fallback, tab, controles, rejeição de entrada inválida, quebra de linha | `SpriteUI.TruetypeAtlas` (`SPRITEUI_WITH_TEXT_STB=ON`) | **Passando: 55/55** | Texto ruim |
 | **L2 Docking (modelo)** | Dividir nós, abas, soltar no centro, limites de divisão | `tests/test_main.cpp` (`TestTabsAndDocking`, testes de `UIDockNode`) | **Passando (parte do L0)** | Docking mal feito |
-| **L3 Docking (interação)** | Arrasto com limiar, zonas de soltura (borda = dividir, centro = aba, fora = flutuar), cancelamento, sem movimento sem entrada, janela presa na tela | `SpriteUI.DockInteraction` (`tests/test_dock_interaction.cpp`) | **Passando: 70/70** (controlador e aplicação na árvore). Ainda não testado com janelas reais nem ligado ao editor | Janelas bugando |
+| **L3 Docking (interação)** | Arrasto com limiar, zonas de soltura (borda = dividir, centro = aba, fora = flutuar), cancelamento, sem movimento sem entrada, janela presa na tela | `SpriteUI.DockInteraction` (`tests/test_dock_interaction.cpp`) | **Passando: 118/118** (controlador, aplicação na árvore e grupos de abas: uma janela só em uma aba, ativar por conteúdo). Ainda não testado com janelas reais nem ligado ao editor | Janelas bugando |
 | **L4 Campo de texto** | Caret, seleção, inserir/apagar, UTF-8 (apagar 'é' inteiro), Shift+setas, Home/End, Ctrl+A/C/X/V (via operações), Undo, texto persiste por 1000 quadros sem entrada | `SpriteUI.TextEdit` (`tests/test_text_edit.cpp`) | **Passando: 43/43** (modelo `TextEditState`). Ainda não ligado ao `UIEventRouter`, sem renderização do campo, sem clipboard do sistema | Campos apagando sozinho (regra do modelo coberta; integração pendente) |
 | **L5 Backend RHI (contrato)** | Pipeline e chamadas corretas sobre o dispositivo Null: lotes, recorte de área zero, ordem de uso, rejeição de estado inválido, cantos arredondados | `tool_tests` (`spriteui_rhi_*`, 4 testes) na engine | **Passando: 4/4** (dentro de 154/154) | Base de render |
 | **L6 Pixels GPU** | Sólido, recorte, blend premultiplicado, glifo com cobertura 255 e 128, fora do quad, fundo | `spriteui_gpu_test opengl` e `spriteui_gpu_test vulkan` (engine) | **Passando em OpenGL (Mesa) e Vulkan (lavapipe)** | Interface feia (base de cor e blend) |

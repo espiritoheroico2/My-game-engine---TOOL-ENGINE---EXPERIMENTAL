@@ -1,5 +1,7 @@
 #include "SpriteUi/Widgets/DockOps.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <utility>
 
@@ -68,12 +70,7 @@ bool RemoveFromDock(UIDockNode& root, UIHandle window) noexcept {
     if (!leaf) return false;
 
     if (leaf->tabs.TabCount() > 0) {
-        const auto& tabs = leaf->tabs.GetTabs();
-        std::size_t index = tabs.size();
-        for (std::size_t i = 0; i < tabs.size(); ++i) {
-            if (tabs[i].contentHandle == window) { index = i; break; }
-        }
-        if (index == tabs.size() || !leaf->tabs.RemoveTab(index)) return false;
+        if (!leaf->tabs.RemoveContent(window)) return false;
         if (leaf->tabs.TabCount() == 1) {
             // Uma aba so: volta a ser conteudo unico, sem grupo de abas.
             leaf->content = leaf->tabs.GetTabs()[0].contentHandle;
@@ -98,9 +95,9 @@ bool ApplyDropResult(UIDockNode& root, UIHandle window, const DockDropResult& dr
     case DockAction::Dock:
     case DockAction::Tab: {
         if (!drop.targetLeaf.IsValid()) return false;
-        if (drop.action == DockAction::Dock && drop.slot == DockSlot::None) return false;   // nada a encaixar
+        if (drop.action == DockAction::Dock && drop.slot == DockSlot::None) return false; // nada a encaixar
         UIDockNode* target = FindLeafContaining(root, drop.targetLeaf);
-        if (!target || LeafHolds(*target, window)) return false;   // alvo inexistente ou o proprio grupo
+        if (!target || LeafHolds(*target, window)) return false; // alvo inexistente ou o proprio grupo
 
         // Remover a janela pode colapsar o alvo. Por isso o alvo e buscado de novo pelo conteudo.
         (void)RemoveFromDock(root, window);
@@ -112,6 +109,17 @@ bool ApplyDropResult(UIDockNode& root, UIHandle window, const DockDropResult& dr
     }
     }
     return false;
+}
+
+bool DragSplitDivider(UIDockNode& node, float offsetPx, float minSidePx) noexcept {
+    if (!node.isSplit || !node.firstChild || !node.secondChild) return false;
+    if (!std::isfinite(offsetPx) || !std::isfinite(minSidePx) || minSidePx < 0.0f) return false;
+
+    const float length = node.splitDirection == LayoutDirection::Row ? node.bounds.size.x : node.bounds.size.y;
+    if (!std::isfinite(length) || length <= 0.0f || 2.0f * minSidePx > length) return false;
+
+    node.splitRatio = std::clamp(offsetPx, minSidePx, length - minSidePx) / length;
+    return true;
 }
 
 } // namespace ToolEngine::SpriteUi::Widgets

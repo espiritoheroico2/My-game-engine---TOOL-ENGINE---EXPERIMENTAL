@@ -53,7 +53,7 @@
 -- Platform: Windows-10.0.26300
 -- 64-bit:   TRUE
 -- Compiler: C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
--- Revision: SDL3-3.2.8-e8d1e39
+-- Revision: SDL3-3.2.8-c2cc5dc
 -- Vendor:   
 -- 
 -- Subsystems:
@@ -533,8 +533,8 @@ suppress it.
 -- Looking for pthread_create in pthread
 -- Looking for pthread_create in pthread - not found
 -- Found Threads: TRUE
--- Configuring done (181.3s)
--- Generating done (10.6s)
+-- Configuring done (142.0s)
+-- Generating done (11.0s)
 -- Build files have been written to: C:/Users/espir/Downloads/ACTToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/out
 Versão do MSBuild 18.11.1-1.26513.3+940033be3 para .NET Framework
 
@@ -854,8 +854,6 @@ Versão do MSBuild 18.11.1-1.26513.3+940033be3 para .NET Framework
   set_spec_constant_default_value_pass.cpp
   simplification_pass.cpp
   spread_volatile_semantics.cpp
-  ssa_rewrite_pass.cpp
-  strength_reduction_pass.cpp
 C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\DiligentCore\ThirdParty\SPIRV-Tools\source\util\small_vector.h(188,16): warning C5232: no C++20, essa comparação chama 'bool spvtools::utils::operator ==(const std::vector<uint32_t,std::allocator<uint32_t>> &,const spvtools::utils::SmallVector<uint32_t,2> &)' recursivamente [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\diligentcore-build\ThirdParty\SPIRV-Tools\source\opt\SPIRV-Tools-opt.vcxproj]
   (compilando o arquivo fonte '../../../../../../../third_party/DiligentCore/ThirdParty/SPIRV-Tools/source/opt/set_spec_constant_default_value_pass.cpp')
       C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\DiligentCore\ThirdParty\SPIRV-Tools\source\util\small_vector.h(188,16):
@@ -869,6 +867,8 @@ C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXP
               C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\DiligentCore\ThirdParty\SPIRV-Tools\source\opt\set_spec_constant_default_value_pass.cpp(304,9):
               veja a primeira referência a 'spvtools::utils::operator !=' em 'spvtools::opt::SetSpecConstantDefaultValuePass::Process'
   
+  ssa_rewrite_pass.cpp
+  strength_reduction_pass.cpp
   strip_debug_info_pass.cpp
   strip_nonsemantic_info_pass.cpp
   struct_cfg_analysis.cpp
@@ -1467,23 +1467,67 @@ C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXP
   LayoutTree.cpp
   LayoutBridge.cpp
   DebugShaper.cpp
+  FontAtlasCache.cpp
+  FontRegistry.cpp
   LineBreak.cpp
   TextLayout.cpp
+  TextLines.cpp
   Widgets.cpp
   VirtualList.cpp
   Docking.cpp
   DockInteraction.cpp
   DockOps.cpp
-  TextEdit.cpp
-  Graphs.cpp
-  Popup.cpp
   Gerando Código...
   Compilando...
-  UIConfig.cpp
+  TextEdit.cpp
+  Element.cpp
+  ElementTree.cpp
+  Label.cpp
+  PressGesture.cpp
+  Paint.cpp
+  Checkbox.cpp
+  Slider.cpp
+  Button.cpp
+  Controls.cpp
+  StylePresets.cpp
+  Graphs.cpp
+  WindowFrame.cpp
+  WindowFramePaint.cpp
+  WindowFrameTheme.cpp
+  Popup.cpp
+  FloatingWindows.cpp
+  RefreshPolicy.cpp
+  TreeView.cpp
+  Table.cpp
   Gerando Código...
+  Compilando...
+  ScrollBar.cpp
+  Menu.cpp
+  Tooltip.cpp
+  Modal.cpp
+  ColorPicker.cpp
+  ProgressBar.cpp
+  TextArea.cpp
+  DragDrop.cpp
+  UIConfig.cpp
+  RadioButton.cpp
+  Toggle.cpp
+  ListBox.cpp
+  Dropdown.cpp
+  TabBar.cpp
+  Window.cpp
+  Panel.cpp
+  MenuBar.cpp
+  Image.cpp
+  Graph.cpp
+  Gerando Código...
+  TextField.cpp
+  TextField.cpp
   SpriteUI.vcxproj -> C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\spriteui-build\Release\SpriteUI.lib
   Building Custom Rule C:/Users/espir/Downloads/ACTToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/third_party/SpriteUi/CMakeLists.txt
   TruetypeAtlas.cpp
+  TextShaper.cpp
+  Gerando Código...
   SpriteUI_TextStb.vcxproj -> C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\spriteui-build\Release\SpriteUI_TextStb.lib
   Building Custom Rule C:/Users/espir/Downloads/ACTToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/CMakeLists.txt
   imgui.cpp
@@ -1684,7 +1728,7 @@ C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
       C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\algorithm(4248,24):
       o contexto de instanciação do modelo (o mais antigo primeiro) é
-          C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\main.cpp(1618,50):
+          C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\main.cpp(1656,50):
           consulte a referência à instanciação '_OutIt std::transform<std::_String_iterator<std::_String_val<std::_Simple_types<_Elem>>>,std::_String_iterator<std::_String_val<std::_Simple_types<_Elem>>>,int(__cdecl *)(int)>(const _InIt,const _InIt,_OutIt,_Fn)' do modelo que está sendo compilada
           with
           [

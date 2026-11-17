@@ -8,8 +8,10 @@
 #include "tool/ecs/world.hpp"
 #include "tool/events/events.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -62,6 +64,9 @@ struct PoolStats {
 
 class Scene;
 
+// Wrapper NAO e proprietario da entidade: e um handle leve (cena + Entity). Copias do wrapper nao
+// controlam a vida do objeto; destroy() apaga a entidade via Scene e as copias ficam obsoletas
+// (valid() = false). Quem quer a limpeza completa (assinatura e pool) deve usar Scene::destroy.
 class ToolObject {
 public:
   ToolObject() = default;
@@ -135,7 +140,7 @@ public:
     const Entity e = o.entity();
     const auto sigIt = signatureByEntity_.find(e.index);
     if (sigIt == signatureByEntity_.end()) { // nao veio de um Blueprint: apaga normalmente
-      world_.destroy(e);
+      destroy(o);
       return;
     }
 
@@ -148,19 +153,50 @@ public:
 
   void deleteAndReuse(ToolObject o, double now) { recycle(o, now); }
 
+  // F-13: ponto UNICO de destruicao real de um objeto vivo. Apaga a entidade (nao vai ao pool) e
+  // remove a assinatura, para que um indice reaproveitado depois nao herde a assinatura antiga.
+  // Dormentes nao sao handles validos (ToolObject::valid), entao nunca chegam aqui: quem limpa o
+  // pool e collectPool/flushPool.
+  void destroy(ToolObject o) {
+    if (!o.valid()) return;
+    const Entity e = o.entity();
+    signatureByEntity_.erase(e.index);
+    world_.destroy(e);
+  }
+
   // Etapa de limpeza (chamar no fim do quadro): expira dormentes.
+  // Etapa 1: expira dormentes ociosos por tempo.
+  // Etapa 2: se ainda houver mais que maxPerSignature, libera SOMENTE o excedente,
+  // começando pelos mais antigos (menor `since`). Os demais continuam reutilizaveis.
   void collectPool(double now) {
     for (auto& [signature, entries] : pool_) {
       size_t write = 0;
       for (size_t read = 0; read < entries.size(); ++read) {
-        const bool idle = now - entries[read].since >= policy_.maxIdleSeconds;
-        const bool overSignature = entries.size() > policy_.maxPerSignature;
-        if (idle || overSignature) {
+        if (now - entries[read].since >= policy_.maxIdleSeconds) {
           freeDormant(entries[read]);
         } else {
           if (write != read) entries[write] = entries[read];
           ++write;
         }
+      }
+      entries.resize(write);
+
+      if (entries.size() <= policy_.maxPerSignature) continue;
+      const size_t excess = entries.size() - policy_.maxPerSignature;
+      std::vector<size_t> order(entries.size());
+      std::iota(order.begin(), order.end(), size_t{0});
+      std::stable_sort(order.begin(), order.end(),
+                       [&](size_t a, size_t b) { return entries[a].since < entries[b].since; });
+      std::vector<char> drop(entries.size(), 0);
+      for (size_t k = 0; k < excess; ++k) {
+        drop[order[k]] = 1;
+        freeDormant(entries[order[k]]);
+      }
+      write = 0;
+      for (size_t read = 0; read < entries.size(); ++read) {
+        if (drop[read]) continue;
+        if (write != read) entries[write] = entries[read];
+        ++write;
       }
       entries.resize(write);
     }
@@ -236,7 +272,7 @@ inline void ToolObject::addTag(TagId t) const {
 }
 inline bool ToolObject::hasTag(TagId t) const { return valid() && scene_->world().hasTag(e_, t); }
 inline void ToolObject::destroy() {
-  if (valid()) scene_->world().destroy(e_);
+  if (scene_) scene_->destroy(*this);
 }
 inline void ToolObject::recycle() {
   if (scene_) scene_->recycle(*this, scene_->clock());

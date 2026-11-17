@@ -7,9 +7,26 @@
 namespace ToolEngine::SpriteUi::Widgets {
 
 bool UITabGroupComponent::AddTab(std::string title, UIHandle contentHandle, bool closeable) {
-    if (!contentHandle.IsValid()) return false;
+    if (!contentHandle.IsValid() || IndexOf(contentHandle)) return false;
     tabs_.push_back(UITab{std::move(title), contentHandle, closeable});
     return true;
+}
+
+std::optional<std::size_t> UITabGroupComponent::IndexOf(UIHandle contentHandle) const noexcept {
+    for (std::size_t i = 0; i < tabs_.size(); ++i) {
+        if (tabs_[i].contentHandle == contentHandle) return i;
+    }
+    return std::nullopt;
+}
+
+bool UITabGroupComponent::RemoveContent(UIHandle contentHandle) {
+    const auto index = IndexOf(contentHandle);
+    return index && RemoveTab(*index);
+}
+
+bool UITabGroupComponent::SelectContent(UIHandle contentHandle) noexcept {
+    const auto index = IndexOf(contentHandle);
+    return index && SelectTab(*index);
 }
 
 bool UITabGroupComponent::RemoveTab(std::size_t index) {
@@ -45,13 +62,18 @@ bool UIDockNode::Split(DockSlot slot, float ratio, UIHandle newContent) {
     if (!std::isfinite(ratio)) return false;
 
     if (slot == DockSlot::Center) {
-        // Nunca descarta o conteudo existente: agrupa em abas.
+        // Nunca descarta o conteudo existente: agrupa em abas. Cada janela fica em um so lugar (abas, nao
+        // content).
         if (!content.IsValid() && tabs.TabCount() == 0) {
             content = newContent;
             return true;
         }
-        if (tabs.TabCount() == 0) (void)tabs.AddTab("", content);
-        (void)tabs.AddTab("", newContent);
+        if (newContent == content || tabs.IndexOf(newContent)) return false;
+        if (tabs.TabCount() == 0) {
+            (void)tabs.AddTab("", content);
+            content = InvalidUIHandle;
+        }
+        if (!tabs.AddTab("", newContent)) return false;
         return tabs.SelectTab(tabs.TabCount() - 1);
     }
 
@@ -69,7 +91,6 @@ bool UIDockNode::Split(DockSlot slot, float ratio, UIHandle newContent) {
 
     if (slot == DockSlot::Left) {
         splitDirection = LayoutDirection::Row;
-        splitRatio = clampedRatio;
         std::swap(firstChild, secondChild);
     } else if (slot == DockSlot::Right) {
         splitDirection = LayoutDirection::Row;
@@ -99,7 +120,8 @@ void UIDockNode::Layout(Rect availableBounds) {
         const float secondW = availableBounds.size.x - firstW;
 
         Rect firstRect{availableBounds.position, {firstW, availableBounds.size.y}};
-        Rect secondRect{{availableBounds.position.x + firstW, availableBounds.position.y}, {secondW, availableBounds.size.y}};
+        Rect secondRect{{availableBounds.position.x + firstW, availableBounds.position.y},
+                        {secondW, availableBounds.size.y}};
 
         firstChild->Layout(firstRect);
         secondChild->Layout(secondRect);
@@ -108,7 +130,8 @@ void UIDockNode::Layout(Rect availableBounds) {
         const float secondH = availableBounds.size.y - firstH;
 
         Rect firstRect{availableBounds.position, {availableBounds.size.x, firstH}};
-        Rect secondRect{{availableBounds.position.x, availableBounds.position.y + firstH}, {availableBounds.size.x, secondH}};
+        Rect secondRect{{availableBounds.position.x, availableBounds.position.y + firstH},
+                        {availableBounds.size.x, secondH}};
 
         firstChild->Layout(firstRect);
         secondChild->Layout(secondRect);

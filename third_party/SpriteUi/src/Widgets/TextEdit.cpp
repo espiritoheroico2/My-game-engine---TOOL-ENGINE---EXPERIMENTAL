@@ -6,6 +6,8 @@ namespace ToolEngine::SpriteUi::Widgets {
 
 namespace {
 
+using Utf8Text = std::string_view;
+
 bool IsContinuation(char c) noexcept {
     return (static_cast<unsigned char>(c) & 0xC0) == 0x80;
 }
@@ -15,9 +17,90 @@ bool IsControl(char c) noexcept {
     return u < 0x20 || u == 0x7F;
 }
 
+// Bytes do codepoint que comeca com `lead`; 0 se `lead` nao pode começar um codepoint valido.
+std::size_t SequenceLength(unsigned char lead) noexcept {
+    if (lead < 0x80) return 1;
+    if (lead >= 0xC2 && lead <= 0xDF) return 2;
+    if (lead >= 0xE0 && lead <= 0xEF) return 3;
+    if (lead >= 0xF0 && lead <= 0xF4) return 4;
+    return 0;
+}
+
+// Confere continuacoes e os intervalos proibidos (overlong, surrogates, acima de U+10FFFF).
+bool IsValidSequenceAt(Utf8Text text, std::size_t pos, std::size_t length) noexcept {
+    if (length == 0 || pos + length > text.size()) return false;
+    for (std::size_t i = 1; i < length; ++i) {
+        if (!IsContinuation(text[pos + i])) return false;
+    }
+    if (length == 1) return true;
+    const auto lead = static_cast<unsigned char>(text[pos]);
+    const auto second = static_cast<unsigned char>(text[pos + 1]);
+    if (lead == 0xE0 && second < 0xA0) return false;
+    if (lead == 0xED && second >= 0xA0) return false;
+    if (lead == 0xF0 && second < 0x90) return false;
+    if (lead == 0xF4 && second >= 0x90) return false;
+    return true;
+}
+
+bool IsValidUtf8(Utf8Text text) noexcept {
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+        const std::size_t length = SequenceLength(static_cast<unsigned char>(text[pos]));
+        if (!IsValidSequenceAt(text, pos, length)) return false;
+        pos += length;
+    }
+    return true;
+}
+
+// Codepoint do texto ja validado que comeca em pos (com `length` bytes).
+std::uint32_t DecodeAt(const std::string& text, std::size_t pos) noexcept {
+    const auto lead = static_cast<unsigned char>(text[pos]);
+    const std::size_t length = SequenceLength(lead);
+    if (length == 1) return lead;
+    std::uint32_t codepoint = lead & (0xFFu >> (length + 1));
+    for (std::size_t i = 1; i < length; ++i) {
+        codepoint = (codepoint << 6) | (static_cast<unsigned char>(text[pos + i]) & 0x3Fu);
+    }
+    return codepoint;
+}
+
+// Marcas combinantes entram no caractere anterior: "e" + acento e um unico caractere para edicao.
+bool IsCombiningMark(std::uint32_t codepoint) noexcept {
+    return (codepoint >= 0x0300 && codepoint <= 0x036F) ||
+           (codepoint >= 0x1AB0 && codepoint <= 0x1AFF) ||
+           (codepoint >= 0x1DC0 && codepoint <= 0x1DFF) ||
+           (codepoint >= 0x20D0 && codepoint <= 0x20FF) ||
+           (codepoint >= 0xFE20 && codepoint <= 0xFE2F);
+}
+
+bool StartsCombiningMark(const std::string& text, std::size_t pos) noexcept {
+    return pos < text.size() && IsCombiningMark(DecodeAt(text, pos));
+}
+
+// Maior prefixo de `utf8` que cabe em `room` bytes sem cortar um codepoint.
+Utf8Text FitWholeCodepoints(Utf8Text utf8, std::size_t room) noexcept {
+    if (utf8.size() <= room) return utf8;
+    std::size_t cut = room;
+    while (cut > 0 && IsContinuation(utf8[cut])) --cut;
+    return utf8.substr(0, cut);
+}
+
+std::string WithoutControls(Utf8Text utf8, bool acceptNewlines) {
+    std::string clean;
+    clean.reserve(utf8.size());
+    for (char c : utf8) {
+        if (!IsControl(c) || (acceptNewlines && c == '\n')) clean.push_back(c);
+    }
+    return clean;
+}
+
 } // namespace
 
-TextEditState::TextEditState(std::string text) : text_{std::move(text)} {
+TextEditState::TextEditState(std::string text) : TextEditState(std::move(text), false) {}
+
+TextEditState::TextEditState(std::string text, bool acceptNewlines)
+    : text_{IsValidUtf8(text) ? std::string(FitWholeCodepoints(text, kMaxTextBytes)) : std::string()},
+      acceptNewlines_{acceptNewlines} {
     caret_ = anchor_ = text_.size();
 }
 
@@ -41,37 +124,54 @@ void TextEditState::DeleteSelection() {
     caret_ = anchor_ = begin;
 }
 
-std::size_t TextEditState::PrevBoundary(std::size_t pos) const noexcept {
+std::size_t TextEditState::PrevCodepointStart(std::size_t pos) const noexcept {
     if (pos == 0) return 0;
     --pos;
     while (pos > 0 && IsContinuation(text_[pos])) --pos;
     return pos;
 }
 
+std::size_t TextEditState::PrevBoundary(std::size_t pos) const noexcept {
+    if (pos == 0) return 0;
+    std::size_t start = PrevCodepointStart(pos);
+    while (start > 0 && StartsCombiningMark(text_, start)) start = PrevCodepointStart(start);
+    return start;
+}
+
 std::size_t TextEditState::NextBoundary(std::size_t pos) const noexcept {
     if (pos >= text_.size()) return text_.size();
-    ++pos;
-    while (pos < text_.size() && IsContinuation(text_[pos])) ++pos;
+    // O texto e UTF-8 valido e pos esta em fronteira: o codepoint em pos tem ao menos um byte.
+    std::size_t next = pos + SequenceLength(static_cast<unsigned char>(text_[pos]));
+    while (next < text_.size() && StartsCombiningMark(text_, next)) {
+        next += SequenceLength(static_cast<unsigned char>(text_[next]));
+    }
+    return next;
+}
+
+std::size_t TextEditState::ClusterStart(std::size_t pos) const noexcept {
+    if (pos >= text_.size()) return text_.size();
+    while (pos > 0 && IsContinuation(text_[pos])) --pos;
+    while (pos > 0 && StartsCombiningMark(text_, pos)) pos = PrevCodepointStart(pos);
     return pos;
 }
 
 void TextEditState::SetCaret(std::size_t pos, bool extend) noexcept {
-    caret_ = pos;
-    if (!extend) anchor_ = pos;
+    caret_ = ClusterStart(pos);
+    if (!extend) anchor_ = caret_;
 }
 
 void TextEditState::InsertText(std::string_view utf8) {
-    std::string clean;
-    clean.reserve(utf8.size());
-    for (char c : utf8) {
-        if (!IsControl(c)) clean.push_back(c);
-    }
-    if (clean.empty() && !HasSelection()) return;
+    if (!IsValidUtf8(utf8)) return;
+    const std::string clean = WithoutControls(utf8, acceptNewlines_);
+    const auto [begin, end] = SelectionRange();
+    const std::size_t roomAfterSelection = kMaxTextBytes - (text_.size() - (end - begin));
+    const std::string_view fitting = FitWholeCodepoints(clean, roomAfterSelection);
+    if (fitting.empty() && !HasSelection()) return;
 
     Record();
     if (HasSelection()) DeleteSelection();
-    text_.insert(caret_, clean);
-    caret_ = anchor_ = caret_ + clean.size();
+    text_.insert(caret_, fitting);
+    caret_ = anchor_ = caret_ + fitting.size();
 }
 
 bool TextEditState::Backspace() {
@@ -142,9 +242,7 @@ void TextEditState::MoveEnd(bool extend) noexcept {
 }
 
 void TextEditState::MoveCaretTo(std::size_t byteOffset, bool extend) noexcept {
-    byteOffset = std::min(byteOffset, text_.size());
-    while (byteOffset > 0 && byteOffset < text_.size() && IsContinuation(text_[byteOffset])) --byteOffset;
-    SetCaret(byteOffset, extend);
+    SetCaret(std::min(byteOffset, text_.size()), extend);
 }
 
 void TextEditState::SelectAll() noexcept {

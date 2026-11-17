@@ -35,13 +35,10 @@ Notable changes to SpriteUI are documented here. This project has not published 
 - Added SDL3 finger down/motion/up/cancel translation into logical pointer snapshots, including synthesized touch-mouse filtering and simultaneous-contact tests.
 - Added the `fotos/LOGO.png` image to the visualizer's featured-ad card through an optional Windows Imaging Component PNG loader; headless tests assert the image pixels render.
 - Added a public API reference entry page and an optional Doxygen generation target (`SPRITEUI_BUILD_DOCS`).
-- Added a bitmap raster-size policy with DPI buckets for hosts using coverage atlases.
-- Added pointer-drag text selection to the native `TextField` widget.
 
 ### Fixed
 
 - Corrected MSDF screen-space coverage by converting the atlas `pxRange` from texels using the texture dimensions before applying UV derivatives.
-- Made bitmap coverage the default render mode for `GenerateTextRenderItems`; MSDF sampling is now an explicit choice.
 - Centralized focus-candidate validation for spatial and semantic navigation without changing routing behavior.
 
 ### Still out of scope
