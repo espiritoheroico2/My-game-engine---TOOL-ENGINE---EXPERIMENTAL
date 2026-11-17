@@ -163,9 +163,9 @@ O comando de navegação é consumido uma vez por chamada; se vários comandos c
 
 ## Atlas de glifos stb_truetype (opcional)
 
-`SpriteUI::TextStb`, ligado com `-DSPRITEUI_WITH_TEXT_STB=ON` (padrão OFF), monta um atlas de cobertura alfa de 8 bits a partir de um TTF/OTF com `BuildTruetypeAtlas`, e converte UTF-8 em `GlyphInstance` com `ShapeTruetype`. Usa a convenção do `DebugShaper` (`unitsPerEm = 1000`, `planeBounds` com y para cima, `uvRect` normalizado). `GenerateTextRenderItems` usa `FlagBitmapText` por padrão, coerente com esse atlas; informe `FlagMsdfText` apenas para uma textura MSDF real.
+`SpriteUi::TextStb`, ligado com `-DSPRITEUI_WITH_TEXT_STB=ON` (padrão OFF), monta um atlas de cobertura alfa de 8 bits a partir de um TTF/OTF com `BuildTruetypeAtlas`, e converte UTF-8 em `GlyphInstance` com `ShapeTruetype`. Usa a convenção do `DebugShaper` (`unitsPerEm = 1000`, `planeBounds` com y para cima, `uvRect` normalizado).
 
-Limites deste passo: um glifo por codepoint, sem kerning, ligaduras ou marcas combinantes; atlas de rasterização, não SDF/MSDF, então o texto fica serrilhado longe do tamanho rasterizado; uma página só; o pixel (0,0) do atlas fica reservado (padding ≥ 1). A política de buckets DPI `BitmapRasterPolicy.hpp` escolhe uma resolução de cobertura maior para o host, mas não transforma o atlas em SDF/MSDF. O núcleo `SpriteUI` continua sem essa dependência. `stb_truetype` (public domain ou MIT) está em `third_party/stb/`, com nota de procedência. A biblioteca não valida o conteúdo da fonte: carregue apenas fontes confiáveis. Os testes estão em `tests/test_truetype_atlas.cpp` (`SpriteUI.TruetypeAtlas`).
+Limites deste passo: um glifo por codepoint, sem kerning, ligaduras ou marcas combinantes; atlas de rasterização, não SDF/MSDF, então o texto fica serrilhado longe do tamanho rasterizado; uma página só; o pixel (0,0) do atlas fica reservado (padding ≥ 1). O núcleo `SpriteUI` continua sem essa dependência. `stb_truetype` (public domain ou MIT) está em `third_party/stb/`, com nota de procedência. A biblioteca não valida o conteúdo da fonte: carregue apenas fontes confiáveis. Os testes estão em `tests/test_truetype_atlas.cpp` (`SpriteUI.TruetypeAtlas`).
 
 ## Backend RHI da ToolEngine (opcional)
 
@@ -336,7 +336,15 @@ tree.Create(root, child);
 tree.Layout({{0,0},{640,480}});
 ```
 
-Este é um subconjunto de Flex: há freeze/re-distribuição para limites, wrap, `justifyContent`, `alignContent` e baseline; não há implementação de todas as regras CSS nem bases intrínsecas complexas. `BuildClipHierarchy` recebe clips em ordem pai-antes-do-filho e retorna interseções efetivas; o índice resultante pode ser atribuído a `UIRenderItem::clipIndex`. Para input, `HitTarget::clipRectLogical` deve receber o clip efetivo em coordenadas lógicas. Veja `docs/IMPLEMENTATION_STATUS.md` para limites e próximos passos.
+Este é um subconjunto de Flex: há freeze/re-distribuição para limites, wrap, `justifyContent`, `alignContent` e baseline; não há implementação de todas as regras CSS nem bases intrínsecas complexas.
+
+### Padrões de layout (`SpriteUi/Layout/LayoutPatterns.hpp`)
+
+Construtores pequenos para os padrões que antes eram literais de `FlexItem`: `Sized`, `WidthFraction`, `FillWidth`,
+`Row`, `Column`, `Centered` com `CenteredItem`, `Spacer`, `Grow`, e `LayoutTokens` (escala de espaçamento e alturas).
+`CreateLabeledField` cria uma linha de rótulo e campo num `LayoutTree` e devolve os handles. `AlignItems` é do filho:
+para centralizar nos dois eixos, use `Centered` no contêiner e `CenteredItem` no filho. A convenção de composição
+dos widgets está em `docs/COMPOSITION.md`. `BuildClipHierarchy` recebe clips em ordem pai-antes-do-filho e retorna interseções efetivas; o índice resultante pode ser atribuído a `UIRenderItem::clipIndex`. Para input, `HitTarget::clipRectLogical` deve receber o clip efetivo em coordenadas lógicas. Veja `docs/IMPLEMENTATION_STATUS.md` para limites e próximos passos.
 
 ## Estrutura do pacote
 

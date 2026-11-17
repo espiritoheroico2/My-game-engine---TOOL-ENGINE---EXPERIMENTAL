@@ -1,5 +1,8 @@
 #pragma once
 
+// Barra de menus da API anterior do SpriteUI, mantida para o editor (apps/editor/mainmenu_panel.hpp). Fica no
+// namespace Legacy porque os nomes MenuItem, MenuKey e MenuBarEntry tambem existem em Widgets/Menu.hpp (nova API).
+
 #include "SpriteUi/Core/Math.hpp"
 
 #include <algorithm>
@@ -10,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace ToolEngine::SpriteUi::Widgets {
+namespace ToolEngine::SpriteUi::Widgets::Legacy {
 
 enum class MenuItemKind : std::uint8_t {
     Action,
@@ -303,4 +306,4 @@ private:
     std::optional<std::size_t> pressedItem_;
 };
 
-} // namespace ToolEngine::SpriteUi::Widgets
+} // namespace ToolEngine::SpriteUi::Widgets::Legacy

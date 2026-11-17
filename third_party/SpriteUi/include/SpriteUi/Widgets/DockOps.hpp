@@ -28,4 +28,10 @@ bool RemoveFromDock(UIDockNode& root, UIHandle window) noexcept;
 // Retorna false sem alterar a arvore quando o alvo nao existe, e quando a janela cairia no proprio lugar.
 bool ApplyDropResult(UIDockNode& root, UIHandle window, const DockDropResult& drop, float ratio = 0.5f) noexcept;
 
+// Arrasta o divisor de um no dividido. offsetPx e a posicao do divisor, medida a partir do inicio da area do
+// no (bounds, preenchido por Layout). Cada lado fica com pelo menos minSidePx. Exemplo: um no de 300 px de
+// largura com minimo de 80 px: arrastar para 10 px deixa o lado esquerdo com 80 px. Falso se o no nao e
+// dividido, se a area nao cabe dois minimos ou se o valor nao e finito.
+bool DragSplitDivider(UIDockNode& node, float offsetPx, float minSidePx) noexcept;
+
 } // namespace ToolEngine::SpriteUi::Widgets

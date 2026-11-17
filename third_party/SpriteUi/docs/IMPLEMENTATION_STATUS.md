@@ -9,6 +9,65 @@ O CMake declara a versão 0.6.0; isso não significa que uma release esteja publ
 - **Limpeza de Diretórios Vazios:** O diretório órfão `src/Core` foi removido.
 - **Expansão de Flexbox:** `JustifyContent`, wrap, `AlignContent`, baseline e redistribuição com limites min/max estão implementados.
 
+## Escopo do texto
+
+Esta seção separa o que é código do core, o que é adaptador, o que depende do checkout da ToolEngine e o que ainda
+é planejado. Assim, nenhum item de texto é tratado como integração entregue sem ela existir.
+
+| Escopo | O que é | Limite declarado |
+|---|---|---|
+| **Core standalone** | `LayoutText`, `GenerateTextRenderItems`, `BitmapRasterPolicy`, `FontRenderMetadata`, `FontAtlasCache`, `ITextShaper`/`CodepointShaper`, `BuildTruetypeAtlas` com `FontLoadPolicy` (target `SpriteUi::TextStb`, opcional, com stb_truetype) | Sem HarfBuzz, FreeType, bidi, MSDF real, atlas multipágina e GPU. O cache não toca na GPU. |
+| **Adaptador presente no pacote** | `adapters/toolengine` (RHI e `FramePacket`) e o adaptador SDL3 de entrada e janela | Coordenadas do `FramePacket` já são pixels físicos (DPI 1). O shader e os adaptadores não sabem de fonte: recebem UV e flag. |
+| **Integração ToolEngine** | Host do editor (`apps/editor/spriteui_host.hpp`), rasterização de fonte do host, página de textura e fences | Existe só no checkout da ToolEngine. Este repositório não contém essa integração. |
+| **Planejado** | HarfBuzz (shaping), FreeType (parser validado), MSDF real com `msdfgen`, fallback por família/script, bidi/RTL, atlas multipágina, liberação de textura atrás de fence | Ver o roteiro abaixo. |
+
+Decisões de fronteira:
+
+- **Decodificação de imagem (PNG, SVG, WebP) fica no host.** O core não decodifica imagem nem cria recurso de GPU.
+  `UIIcon` e `UIRenderItem` referenciam slices e UVs já carregados. SVG deve ser rasterizado no importador de
+  assets ou em ferramenta de build, nunca no caminho crítico do quadro. Exemplo de jogo: o ícone de habilidade
+  é um SVG convertido em PNG com gutter de 2 px no atlas, durante o build dos assets.
+- **Fonte não confiável.** A validação estrutural não substitui um parser completo. Para fonte escolhida pelo
+  usuário ou por mod, use `FontLoadPolicy` com `allowUntrustedFonts = false` e carregue só fontes de caminho
+  confiável; FreeType, em processo isolado quando o modelo de ameaça exigir, é a fase 2.
+- **Liberação de textura.** `FontAtlasCache` avisa a saída de uma entrada por `onEvict`. O host libera a textura
+  GPU depois da fence do último quadro que a usou.
+
+## Roteiro de texto (relatório de auditoria, seção 7)
+
+Fase 1, caminho bitmap:
+
+- [x] `FlagBitmapText` como padrão para atlas de cobertura (`c60e510`).
+- [x] Limites de configuração do atlas (`d9f5871`).
+- [x] Política de buckets para rasterização bitmap (`2d69fbb`).
+- [x] Cache de atlas por fonte, DPI e bucket, no core (`369472a`). Integração com o host e a fence pendentes.
+- [ ] Validar fontes Latin-1 e UTF-8 com acentos em capturas de referência.
+
+Fase 2, tipografia de produção:
+
+- [ ] Integrar FreeType para parsing e rasterização validados. A validação estrutural atual (`5233737`) é uma etapa anterior.
+- [ ] Integrar HarfBuzz. A interface `ITextShaper` já está pronta (`087c726`); falta a implementação.
+- [ ] Definir fallback por família e script.
+- [ ] Definir comportamento bidi e RTL.
+- [ ] Atlas multipágina e cache dinâmico de glyph IDs.
+
+Fase 3, MSDF:
+
+- [ ] Integrar msdfgen ou gerador equivalente.
+- [ ] Produzir MSDF a partir de outlines reais.
+- [ ] Armazenar `pxRange`, dimensões e formato por material. O metadado (`FontRenderMetadata`, `8637c09`) existe; o material ainda não o usa.
+- [ ] Padding compatível com `pxRange`.
+- [ ] Testar em 1x, 1,25x, 1,5x, 2x e 3x de DPI, zoom e rotação.
+- [ ] Validar em GPU real (GL, Vulkan, D3D12, conforme os backends).
+
+Fase 4, renderização e integração:
+
+- [ ] Integrar o pipeline de fontes ao cache de textura do host.
+- [ ] Proteger substituição e liberação de atlas com fences.
+- [ ] Verificar blending premultiplicado e amostragem linear.
+- [x] Contrato lógico para físico: layout, caret e hit-test independentes do DPI; glifos no grid físico com erro de até meio pixel (`e342cdb`). Clipping e caret em GPU real continuam pendentes.
+- [ ] Snapshots de regressão com texto pequeno, normal, negrito, itálico e acentuado.
+
 ## Módulos Implementados
 
 - **ABI e GPU:**
@@ -42,10 +101,17 @@ O CMake declara a versão 0.6.0; isso não significa que uma release esteja publ
 
 - **Tipografia e Texto:**
   - `GlyphInstance`, `FontMetrics`, `LayoutText` (quads, quebra por palavra no subconjunto implementado, alinhamento), `GetCaretRect`, `FindInsertionOffset`, `FindClusterAtPosition` e `GenerateTextRenderItems`.
-  - `GenerateTextRenderItems` aceita flags de cobertura MSDF (padrão compatível) ou bitmap em tons de cinza; o shader e o rasterizador de referência CPU distinguem os dois modos.
+  - `GenerateTextRenderItems` usa `FlagBitmapText` por padrão (cobertura do atlas gerado por `BuildTruetypeAtlas`). `FlagMsdfText` só vale com um atlas MSDF real, que ainda não existe (fase 3). O atlas carrega o próprio metadado (`FontRenderMetadata`, `TextRenderMode`), e `TextShaderFlagFor` deriva a flag dele; atlas de cobertura nunca viram MSDF.
+  - Política de resolução do bitmap (`BitmapRasterPolicy.hpp`): P = ceil(tamanho lógico × DPI × O), O padrão 1,25 configurável, buckets 16 a 256.
+  - Limites do atlas (`TruetypeAtlasConfig::maxGlyphCount`, padrão 4096, teto 65536; em até 512 px; padding até 64), checados antes de qualquer alocação.
+  - Validação estrutural de fonte (cabeçalho sfnt/TTC e tabela de tabelas dentro do arquivo, aritmética de 64 bits) com `FontLoadPolicy` (tamanho máximo 32 MiB; `allowUntrustedFonts` padrão `true`).
+  - Cache de atlas por `FontAtlasKey` (`FontAtlasCache`): reuso, limites de entradas e bytes, e eviction que nunca remove entrada em uso.
+  - Interface `ITextShaper` com `CodepointShaper` (um glifo por codepoint) como padrão; o layout não muda quando o shaper muda.
   - O visualizador opcional carrega Xmind Regular como fonte primária, gera um atlas Latin-1 de cobertura com métricas da fonte e aceita outro arquivo TTF/OTF por `--font`. Essa rasterização do visualizador usa GDI no Windows; não substitui HarfBuzz/FreeType, shaping complexo, bidi/RTL ou atlas MSDF de produção.
   - HarfBuzz/FreeType e bidi/RTL não estão integrados ao core.
 - **Renderização auxiliar:** Nine-Slice e painéis SDF arredondados; compilação DXIL do shader verificada localmente, sem validação em GPU real.
+- **Cantos arredondados por estilo:** janela, painel, menu (popup da barra e dropdown), campo de texto, dropdown e abas têm campo `cornerRadius` (padrão zero, retos). `AppendFill` e `AppendBox` (`Elements/Paint.hpp`) usam `MakeRoundedRect`, que prende o raio à metade do menor lado. O botão mantém o `cornerRadius` do próprio elemento (padrão 4, como antes). Capturas com fonte real: `raio-01` (janelas e botões com raio 0, 6 e 12) e `raio-02` (menu com raio 8); sem captura de campo, dropdown e abas com raio.
+- **UIBuilder (projeto):** ferramenta separada, sem codigo ainda. Formato JSON, caminho ate a arvore, regra de ajuste sem perda de campos, otimizacao de draw calls e cinco fases estao em `docs/UIBUILDER.md`.
 
 - **Persistência Segura (JSON):**
   - `UIConfigManager` com validação de `schemaVersion`, sanitização numérica por `ReadFiniteFloat`, staging atômico e commit transacional.
@@ -78,6 +144,7 @@ O CMake declara a versão 0.6.0; isso não significa que uma release esteja publ
 | Integração do editor ToolEngine sem dependência final de ImGui | Não iniciada; migração gradual planejada, com remoção do ImGui após paridade e regressão |
 | Adaptador SDL3 standalone: janela, mouse/foco, navegação teclado/gamepad, texto/IME e clipboard | Implementado e validado localmente com SDL 3.2.30; execução CI remota pendente; para ToolEngine, reutilizar `tool::IWindow` e encaminhar eventos/snapshot sem um segundo event loop |
 | Visualizador de qualidade de interface em janela | Abas selecionáveis, gradiente demonstrativo, botões flutuantes e fade via ToonMotion; build MSVC, CTest 5/5 e captura headless aprovados; desktop real/GPU fora do escopo |
+| UIBuilder (ferramenta de layout em JSON, executavel separado) | Em projeto: formato, fabrica, ajuste sem perda de campos, draw calls e fases com criterios de aceite em `docs/UIBUILDER.md`; sem codigo ainda | 
 | Multi-pointer routing no core | Implementado e coberto por teste com dois ponteiros simultâneos, click, cancelamento e entrada inválida |
 | SDL3 touch/finger e snapshots multi-pointer | Implementado e testado com SDL 3.2.30 (down/motion/up/cancel e dois contatos simultâneos) |
 | Adaptador GLFW | Pendente |

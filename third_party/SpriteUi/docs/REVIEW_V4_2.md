@@ -1,5 +1,7 @@
 # Revisão de conformidade — SpriteUi × Documento V4.2 (0.5.1)
 
+> **Histórico.** Este documento registra a conformidade com a revisão V4.2 (0.5.1). Não é o estado atual. A fonte operacional é `docs/IMPLEMENTATION_STATUS.md`. Conteúdo mantido sem alterações para rastreabilidade.
+
 Base normativa: seções 1–7 do documento V4.2 (as demais são histórico legado). Build verificado com GCC 13 (Debug + ASan/UBSan) e Clang 18 (Release): 0 avisos, 298 verificações passando.
 
 ## Conformidade por seção

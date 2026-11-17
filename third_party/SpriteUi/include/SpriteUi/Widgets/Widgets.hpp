@@ -4,10 +4,13 @@
 #include "SpriteUi/Core/Math.hpp"
 #include "SpriteUi/Core/Transform2D.hpp"
 #include "SpriteUi/Input/InputRouter.hpp"
+#include "SpriteUi/Widgets/Style.hpp"
+#include "SpriteUi/Widgets/StylePresets.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace ToolEngine::SpriteUi::Widgets {
 
@@ -15,12 +18,12 @@ struct UISliderComponent {
     float value = 0.5f; // Value in domain [minValue, maxValue].
     float minValue = 0.0f;
     float maxValue = 1.0f;
-    float step = 0.0f;  // Zero means continuous.
+    float step = 0.0f; // Zero means continuous.
     bool isDragging = false;
 
     [[nodiscard]] bool SetValue(float candidate) noexcept {
-        if (!IsFinite(candidate) || !IsFinite(minValue) || !IsFinite(maxValue) ||
-            maxValue < minValue || !IsFinite(step) || step < 0.0f) {
+        if (!IsFinite(candidate) || !IsFinite(minValue) || !IsFinite(maxValue) || maxValue < minValue ||
+            !IsFinite(step) || step < 0.0f) {
             return false;
         }
         float next = std::clamp(candidate, minValue, maxValue);
@@ -89,8 +92,8 @@ struct UIButtonState {
 struct UIToggleComponent {
     bool isOn = false;
     bool disabled = false;
-    Vec4 onColor{0.2f, 0.8f, 0.2f, 1.0f};
-    Vec4 offColor{0.5f, 0.5f, 0.5f, 1.0f};
+    Vec4 onColor = ToggleStyle{}.onColor; // Padrao em Widgets/Style.hpp.
+    Vec4 offColor = ToggleStyle{}.offColor;
 
     [[nodiscard]] bool Toggle() noexcept {
         if (disabled) return false;
@@ -111,14 +114,10 @@ enum class ResizeEdge : std::uint8_t {
     BottomRight
 };
 
-[[nodiscard]] inline ResizeEdge GetResizeEdge(
-    Vec2 pos,
-    Vec2 size,
-    Vec2 pointerPos,
-    float edgeThickness = 6.0f) noexcept
-{
-    if (!IsFinite(pos) || !IsFinite(size) || !IsFinite(pointerPos) ||
-        size.x <= 0.0f || size.y <= 0.0f || edgeThickness <= 0.0f) {
+[[nodiscard]] inline ResizeEdge GetResizeEdge(Vec2 pos, Vec2 size, Vec2 pointerPos,
+                                              float edgeThickness = 6.0f) noexcept {
+    if (!IsFinite(pos) || !IsFinite(size) || !IsFinite(pointerPos) || size.x <= 0.0f || size.y <= 0.0f ||
+        edgeThickness <= 0.0f) {
         return ResizeEdge::None;
     }
 
@@ -150,17 +149,23 @@ struct UIWindowComponent {
     float titleBarHeight = 30.0f;
     ResizeEdge activeResizeEdge = ResizeEdge::None;
     bool isDragging = false;
+    // Estilo visual (StylePresets.hpp). O padrao Classic mantem a aparencia atual: cantos retos, sem sombra e
+    // sem animacao. A paleta e opcional: sem valor, a janela usa as cores do preset.
+    StyleKind style = StyleKind::Classic;
+    std::optional<StylePalette> palette{};
+
+    // Preset do estilo com a paleta da janela aplicada, se houver.
+    [[nodiscard]] StylePreset ResolvedStyle() const noexcept {
+        const StylePreset preset = GetPreset(style);
+        return palette ? ApplyPalette(preset, *palette) : preset;
+    }
 };
 
 // Pure logic for window title dragging and 8-edge resizing.
 // Modifies layout/transform offsets in-place and manages capture/focus.
-bool ProcessWindowInteraction(
-    UIWindowComponent& window,
-    UILayoutRect& layout,
-    UIRectTransform& transform,
-    const Input::UIInputSnapshot& input,
-    Input::UIPointerRoutingState& routing,
-    UIHandle windowHandle) noexcept;
+bool ProcessWindowInteraction(UIWindowComponent& window, UILayoutRect& layout, UIRectTransform& transform,
+                              const Input::UIInputSnapshot& input, Input::UIPointerRoutingState& routing,
+                              UIHandle windowHandle) noexcept;
 
 struct UITextInputComponent {
     bool hasFocus = false;
@@ -178,9 +183,7 @@ struct UITextInputComponent {
         blinkTimer += dt;
     }
 
-    void ClearSelection() noexcept {
-        selectionStartCluster = -1;
-    }
+    void ClearSelection() noexcept { selectionStartCluster = -1; }
 
     [[nodiscard]] bool HasSelection() const noexcept {
         return selectionStartCluster >= 0 &&

@@ -22,17 +22,57 @@ add_library(SpriteUI
     src/Layout/LayoutTree.cpp
     src/Layout/LayoutBridge.cpp
     src/Text/DebugShaper.cpp
+    src/Text/FontAtlasCache.cpp
+    src/Text/FontRegistry.cpp
     src/Text/LineBreak.cpp
     src/Text/TextLayout.cpp
+    src/Text/TextLines.cpp
     src/Widgets/Widgets.cpp
     src/Widgets/VirtualList.cpp
     src/Widgets/Docking.cpp
     src/Widgets/DockInteraction.cpp
     src/Widgets/DockOps.cpp
     src/Widgets/TextEdit.cpp
+    src/Widgets/TextField.cpp
+    src/Elements/Element.cpp
+    src/Elements/ElementTree.cpp
+    src/Elements/Label.cpp
+    src/Elements/PressGesture.cpp
+    src/Elements/Paint.cpp
+    src/Elements/Checkbox.cpp
+    src/Elements/Slider.cpp
+    src/Elements/Button.cpp
+    src/Elements/TextField.cpp
+    src/Widgets/Controls.cpp
+    src/Widgets/StylePresets.cpp
     src/Widgets/Graphs.cpp
+    src/Widgets/WindowFrame.cpp
+    src/Widgets/WindowFramePaint.cpp
+    src/Widgets/WindowFrameTheme.cpp
     src/Widgets/Popup.cpp
+    src/Widgets/FloatingWindows.cpp
+    src/Core/RefreshPolicy.cpp
+    src/Widgets/TreeView.cpp
+    src/Widgets/Table.cpp
+    src/Widgets/ScrollBar.cpp
+    src/Widgets/Menu.cpp
+    src/Widgets/Tooltip.cpp
+    src/Widgets/Modal.cpp
+    src/Widgets/ColorPicker.cpp
+    src/Widgets/ProgressBar.cpp
+    src/Widgets/TextArea.cpp
+    src/Widgets/DragDrop.cpp
     src/Config/UIConfig.cpp
+    src/Elements/RadioButton.cpp
+    src/Elements/Toggle.cpp
+    src/Elements/ListBox.cpp
+    src/Elements/Dropdown.cpp
+    src/Elements/TabBar.cpp
+    src/Elements/Window.cpp
+    src/Elements/Panel.cpp
+    src/Elements/MenuBar.cpp
+    src/Elements/Image.cpp
+    src/Elements/Graph.cpp
 )
 add_library(SpriteUi::SpriteUI ALIAS SpriteUI)
 
@@ -98,13 +138,17 @@ endif()
 if(SPRITEUI_WITH_TEXT_STB)
     add_library(SpriteUI_TextStb
         src/Text/TruetypeAtlas.cpp
+        src/Text/TextShaper.cpp
     )
     add_library(SpriteUi::TextStb ALIAS SpriteUI_TextStb)
     target_compile_features(SpriteUI_TextStb PUBLIC cxx_std_20)
     target_include_directories(SpriteUI_TextStb
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        PRIVATE
+    )
+    # stb_truetype.h e codigo de terceiros: SYSTEM suprime os avisos dele (ex.: -Wconversion), sem tocar no projeto.
+    target_include_directories(SpriteUI_TextStb
+        SYSTEM PRIVATE
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb>
     )
     target_link_libraries(SpriteUI_TextStb PUBLIC SpriteUi::SpriteUI)
@@ -236,9 +280,37 @@ if(SPRITEUI_BUILD_TESTS)
     target_link_libraries(spriteui_text_edit_tests PRIVATE SpriteUi::SpriteUI)
     add_test(NAME SpriteUI.TextEdit COMMAND spriteui_text_edit_tests)
 
-    add_executable(spriteui_menubar_tests tests/test_menubar.cpp)
-    target_link_libraries(spriteui_menubar_tests PRIVATE SpriteUi::SpriteUI)
-    add_test(NAME SpriteUI.MenuBar COMMAND spriteui_menubar_tests)
+    # Campo de texto generico (TextField): rolagem que segue o caret, recorte a caixa e clique com rolagem.
+    add_executable(spriteui_text_field_tests tests/test_text_field.cpp)
+    target_link_libraries(spriteui_text_field_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.TextField COMMAND spriteui_text_field_tests)
+
+    # Base de elementos (Element, ElementTree): geometria da caixa, ancoras, min/max e handles da arvore.
+    add_executable(spriteui_element_tests tests/test_elements.cpp)
+    target_include_directories(spriteui_element_tests PRIVATE tests)
+    target_link_libraries(spriteui_element_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Elements COMMAND spriteui_element_tests)
+    # Registro de fontes (FontRegistry): ids estaveis, fonte padrao e slice por fonte. Sem atlas real.
+    add_executable(spriteui_font_registry_tests tests/test_font_registry.cpp)
+    target_link_libraries(spriteui_font_registry_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.FontRegistry COMMAND spriteui_font_registry_tests)
+    # Politica de resolucao do atlas bitmap (BitmapRasterPolicy.hpp): buckets, DPI e O configuravel.
+    add_executable(spriteui_bitmap_raster_policy_tests tests/test_bitmap_raster_policy.cpp)
+    target_link_libraries(spriteui_bitmap_raster_policy_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.BitmapRasterPolicy COMMAND spriteui_bitmap_raster_policy_tests)
+    # Derivacao da flag do shader a partir do formato do atlas (FontRenderMetadata.hpp).
+    add_executable(spriteui_font_render_metadata_tests tests/test_font_render_metadata.cpp)
+    target_link_libraries(spriteui_font_render_metadata_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.FontRenderMetadata COMMAND spriteui_font_render_metadata_tests)
+    # Cache de atlas por FontAtlasKey: reuso, limite de entradas e bytes, e eviction que respeita uso.
+    add_executable(spriteui_font_atlas_cache_tests tests/test_font_atlas_cache.cpp)
+    target_link_libraries(spriteui_font_atlas_cache_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.FontAtlasCache COMMAND spriteui_font_atlas_cache_tests)
+    # Camada L0 (layout): padroes de construcao (LayoutPatterns.hpp) medidos pelo LayoutTree.
+    add_executable(spriteui_layout_pattern_tests tests/test_layout_patterns.cpp)
+    target_include_directories(spriteui_layout_pattern_tests PRIVATE tests)
+    target_link_libraries(spriteui_layout_pattern_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.LayoutPatterns COMMAND spriteui_layout_pattern_tests)
 
     if(SPRITEUI_WITH_TEXT_STB)
         add_executable(spriteui_truetype_tests tests/test_truetype_atlas.cpp)
@@ -269,6 +341,163 @@ if(SPRITEUI_BUILD_TESTS)
             "-DCONFIG=$<CONFIG>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/PackageSmokeTest.cmake"
     )
+
+    # Controles como modelos puros (Controls.hpp): checkbox, slider, dropdown, abas e lista. Sem janela.
+    add_executable(spriteui_controls_tests tests/test_controls.cpp)
+    target_link_libraries(spriteui_controls_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Controls COMMAND spriteui_controls_tests)
+
+    # Presets de estilo (StylePresets.hpp): Classic, Modern e Effects. Forma e paleta separadas.
+    add_executable(spriteui_style_preset_tests tests/test_style_presets.cpp)
+    target_link_libraries(spriteui_style_preset_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.StylePresets COMMAND spriteui_style_preset_tests)
+
+    # Janelas flutuantes (FloatingWindows.hpp): clamp no canvas, tamanho minimo, ordem Z, Float/Dock e encaixe.
+    add_executable(spriteui_floating_window_tests tests/test_floating_windows.cpp)
+    target_link_libraries(spriteui_floating_window_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.FloatingWindows COMMAND spriteui_floating_window_tests)
+
+    # Politica de atualizacao por janela (RefreshPolicy.hpp): taxa em Hz, sujo e relogio injetado.
+    add_executable(spriteui_refresh_policy_tests tests/test_refresh_policy.cpp)
+    target_link_libraries(spriteui_refresh_policy_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.RefreshPolicy COMMAND spriteui_refresh_policy_tests)
+
+    # Arvore de nos (TreeView.hpp): expansao, linhas visiveis com profundidade, teclado e selecao escondida.
+    add_executable(spriteui_tree_view_tests tests/test_tree_view.cpp)
+    target_link_libraries(spriteui_tree_view_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.TreeView COMMAND spriteui_tree_view_tests)
+
+    # Tabela (Table.hpp): colunas fixas e proporcionais, cabecalho, linha sob o ponto e lista virtual.
+    add_executable(spriteui_table_tests tests/test_table.cpp)
+    target_link_libraries(spriteui_table_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Table COMMAND spriteui_table_tests)
+
+    # Barra de rolagem (ScrollBar.hpp): polegar, pagina no trilho, arrasto, roda e eixo bloqueado.
+    add_executable(spriteui_scroll_bar_tests tests/test_scroll_bar.cpp)
+    target_link_libraries(spriteui_scroll_bar_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.ScrollBar COMMAND spriteui_scroll_bar_tests)
+
+    # Menus (Menu.hpp): destaque, submenus em cascata, separadores, atalhos exibidos e barra de menus.
+    add_executable(spriteui_menu_tests tests/test_menu.cpp)
+    target_link_libraries(spriteui_menu_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Menu COMMAND spriteui_menu_tests)
+
+    # Dica de ferramenta (Tooltip.hpp): atraso, troca de alvo, transicoes e posicao dentro do canvas.
+    add_executable(spriteui_tooltip_tests tests/test_tooltip.cpp)
+    target_link_libraries(spriteui_tooltip_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Tooltip COMMAND spriteui_tooltip_tests)
+
+    # Grupo de radio (RadioButton.hpp) e chave Toggle (Toggle.hpp): exclusao mutua, teclado, geometria e itens.
+    add_executable(spriteui_radio_toggle_tests tests/test_radio_toggle.cpp)
+    target_link_libraries(spriteui_radio_toggle_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.RadioToggle COMMAND spriteui_radio_toggle_tests)
+
+    # Lista (ListBox.hpp): selecao por identificador, Ctrl e Shift, teclas, rolagem e altura que cresce.
+    add_executable(spriteui_list_box_tests tests/test_list_box.cpp)
+    target_link_libraries(spriteui_list_box_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.ListBox COMMAND spriteui_list_box_tests)
+
+    # Caixa de combinacao (Dropdown.hpp): abertura, escolha, Escape, posicao acima ou abaixo e rolagem da lista.
+    add_executable(spriteui_dropdown_tests tests/test_dropdown.cpp)
+    target_link_libraries(spriteui_dropdown_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Dropdown COMMAND spriteui_dropdown_tests)
+
+    # Barra de abas (TabBar.hpp): abas que crescem com rolagem, setas, Enter e paineis ocultos com estado preservado.
+    add_executable(spriteui_tab_bar_tests tests/test_tab_bar.cpp)
+    target_link_libraries(spriteui_tab_bar_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.TabBar COMMAND spriteui_tab_bar_tests)
+
+    # Janela e painel (Window.hpp, Panel.hpp): arrasto pela barra, botoes, minimo no redimensionamento e rolagem.
+    add_executable(spriteui_window_panel_tests tests/test_window_panel.cpp)
+    target_link_libraries(spriteui_window_panel_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.WindowPanel COMMAND spriteui_window_panel_tests)
+
+    # Moldura de janela (WindowFrame.hpp, WindowFramePaint.hpp): geometria, botoes, aba, raio, rolagem e itens.
+    add_executable(spriteui_window_frame_tests tests/test_window_frame.cpp)
+    target_link_libraries(spriteui_window_frame_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.WindowFrame COMMAND spriteui_window_frame_tests)
+
+    # Barra de menus (MenuBar.hpp): cascata, Escape por nivel, Alt, atraso de submenu, atalhos e rolagem.
+    add_executable(spriteui_menu_bar_tests tests/test_menu_bar.cpp)
+    target_link_libraries(spriteui_menu_bar_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.MenuBar COMMAND spriteui_menu_bar_tests)
+
+    # Imagem e botao de imagem (Image.hpp): modos de ajuste, UV limitado, marcador de erro, nine-slice e estados.
+    add_executable(spriteui_image_tests tests/test_image.cpp)
+    target_link_libraries(spriteui_image_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Image COMMAND spriteui_image_tests)
+
+    # Graficos (Graph.hpp): anel de historico, escala com NaN ignorado, area de plotagem e itens por coluna.
+    add_executable(spriteui_graph_tests tests/test_graph.cpp)
+    target_link_libraries(spriteui_graph_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Graph COMMAND spriteui_graph_tests)
+
+    # Dialogo modal (Modal.hpp): bloqueio do fundo, foco preso, Esc cancela, Enter confirma e retorno do foco.
+    add_executable(spriteui_modal_tests tests/test_modal.cpp)
+    target_link_libraries(spriteui_modal_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Modal COMMAND spriteui_modal_tests)
+
+    # Seletor de cor RGBA (ColorPicker.hpp): campos numericos 0 a 255, texto invalido, passos e reverter.
+    add_executable(spriteui_color_picker_tests tests/test_color_picker.cpp)
+    target_link_libraries(spriteui_color_picker_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.ColorPicker COMMAND spriteui_color_picker_tests)
+
+    # Barra de progresso e separador (ProgressBar.hpp, Separator.hpp): faixa, valor, preenchimento e linha centrada.
+    add_executable(spriteui_progress_tests tests/test_progress_separator.cpp)
+    target_link_libraries(spriteui_progress_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.ProgressSeparator COMMAND spriteui_progress_tests)
+
+    # Area de texto de varias linhas (TextArea.hpp): quebra, subir e descer, rolagem que segue o caret e recorte.
+    add_executable(spriteui_text_area_tests tests/test_text_area.cpp)
+    target_include_directories(spriteui_text_area_tests PRIVATE tests)
+    target_link_libraries(spriteui_text_area_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.TextArea COMMAND spriteui_text_area_tests)
+
+    # Arrastar e soltar com carga (DragDrop.hpp): limiar, filtro por tipo, alvo de cima e cancelamento.
+    add_executable(spriteui_drag_drop_tests tests/test_drag_drop.cpp)
+    target_link_libraries(spriteui_drag_drop_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.DragDrop COMMAND spriteui_drag_drop_tests)
+
+    # Primitivas de desenho (Rendering/Primitives.hpp): retangulo, linha girada e retangulo arredondado.
+    add_executable(spriteui_primitive_tests tests/test_primitives.cpp)
+    target_link_libraries(spriteui_primitive_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Primitives COMMAND spriteui_primitive_tests)
+
+    add_executable(spriteui_sprite_tests tests/test_sprite.cpp)
+    target_link_libraries(spriteui_sprite_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.Sprite COMMAND spriteui_sprite_tests)
+
+    add_executable(spriteui_render_list_tests tests/test_render_list.cpp)
+    target_link_libraries(spriteui_render_list_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.RenderList COMMAND spriteui_render_list_tests)
+
+    # Demonstracao visual dos componentes novos (tests/Visual/ComponentsShowcase.cpp): cinco cenas em PNG com
+    # checagem de pixels, pelo renderizador de software do harness.
+    add_executable(spriteui_components_showcase tests/Visual/ComponentsShowcase.cpp)
+    target_include_directories(spriteui_components_showcase PRIVATE tests)
+    target_link_libraries(spriteui_components_showcase PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.ComponentsShowcase
+        COMMAND spriteui_components_showcase "${CMAKE_CURRENT_BINARY_DIR}/components-snapshots")
+
+    # Capturas dos elementos novos com a fonte real do projeto (exige o atlas stb_truetype).
+    if(SPRITEUI_WITH_TEXT_STB)
+        add_executable(spriteui_element_captures tests/Visual/ElementCaptures.cpp)
+        target_include_directories(spriteui_element_captures PRIVATE tests)
+        target_compile_definitions(spriteui_element_captures PRIVATE
+            "SPRITEUI_FONT_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/Fonts/Xmind/static/Xmind-Regular.ttf\"")
+        target_link_libraries(spriteui_element_captures PRIVATE SpriteUi::SpriteUI SpriteUi::TextStb)
+        add_test(NAME SpriteUI.ElementCaptures
+            COMMAND spriteui_element_captures "${CMAKE_CURRENT_BINARY_DIR}/element-captures")
+
+        # Captura do layout de docking com tres janelas (progress/docking-01.png).
+        add_executable(spriteui_docking_capture tests/Visual/DockingCapture.cpp)
+        target_include_directories(spriteui_docking_capture PRIVATE tests)
+        target_compile_definitions(spriteui_docking_capture PRIVATE
+            "SPRITEUI_FONT_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/Fonts/Xmind/static/Xmind-Regular.ttf\"")
+        target_link_libraries(spriteui_docking_capture PRIVATE SpriteUi::SpriteUI SpriteUi::TextStb)
+        add_test(NAME SpriteUI.DockingCapture
+            COMMAND spriteui_docking_capture "${CMAKE_CURRENT_BINARY_DIR}/docking-01.png")
+    endif()
 endif()
 
 if(SPRITEUI_BUILD_BENCHMARKS)

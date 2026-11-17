@@ -186,7 +186,7 @@ bool TestTouchPointerEvents(SDL_Window* window) {
     event.tfinger.x = 0.25f;
     event.tfinger.y = 0.5f;
     if (!Check(adapter.ProcessEvent(event), "first finger down should be accepted")) return false;
-    auto snapshots = adapter.BuildPointerSnapshots(1);
+    auto snapshots = adapter.BuildPointerSnapshots(1, 0.0);
     if (!Check(snapshots.size() == 2, "mouse and one finger should produce two snapshots")) return false;
     const auto first = std::find_if(snapshots.begin(), snapshots.end(),
         [](const UIInputSnapshot& snapshot) { return snapshot.pointerId >= 0x80000000u; });
@@ -204,7 +204,7 @@ bool TestTouchPointerEvents(SDL_Window* window) {
     event.tfinger.x = 0.75f;
     event.tfinger.y = 0.25f;
     if (!Check(adapter.ProcessEvent(event), "second concurrent finger should be accepted")) return false;
-    snapshots = adapter.BuildPointerSnapshots(2);
+    snapshots = adapter.BuildPointerSnapshots(2, 0.0);
     if (!Check(snapshots.size() == 3, "two fingers and mouse should produce three snapshots")) return false;
     const auto second = std::find_if(snapshots.begin(), snapshots.end(),
         [firstPointerId](const UIInputSnapshot& snapshot) {
@@ -232,7 +232,7 @@ bool TestTouchPointerEvents(SDL_Window* window) {
     event.tfinger.x = 0.75f;
     event.tfinger.y = 0.25f;
     if (!Check(adapter.ProcessEvent(event), "finger up should be accepted")) return false;
-    snapshots = adapter.BuildPointerSnapshots(3);
+    snapshots = adapter.BuildPointerSnapshots(3, 0.0);
     const auto moved = std::find_if(snapshots.begin(), snapshots.end(),
         [firstPointerId](const UIInputSnapshot& snapshot) {
             return snapshot.pointerId == firstPointerId;
@@ -257,7 +257,7 @@ bool TestTouchPointerEvents(SDL_Window* window) {
     event.tfinger.x = 0.5f;
     event.tfinger.y = 0.5f;
     if (!Check(adapter.ProcessEvent(event), "finger cancellation should be accepted")) return false;
-    snapshots = adapter.BuildPointerSnapshots(4);
+    snapshots = adapter.BuildPointerSnapshots(4, 0.0);
     const auto cancelled = std::find_if(snapshots.begin(), snapshots.end(),
         [firstPointerId](const UIInputSnapshot& snapshot) {
             return snapshot.pointerId == firstPointerId;
@@ -265,7 +265,7 @@ bool TestTouchPointerEvents(SDL_Window* window) {
     if (!Check(cancelled != snapshots.end() && cancelled->pointerCancelled &&
                    !cancelled->primaryDown && !cancelled->primaryReleased,
                "finger cancellation must cancel rather than synthesize a click")) return false;
-    if (!Check(adapter.BuildPointerSnapshots(5).size() == 1,
+    if (!Check(adapter.BuildPointerSnapshots(5, 0.0).size() == 1,
                "ended finger contacts should be removed after their final snapshot")) return false;
 
     event = {};

@@ -1,211 +1,144 @@
 #pragma once
 
+// Seletor de cor RGBA. A parte de modelo (ColorPickerControl) guarda a cor e aplica as regras de edicao; ela nao
+// desenha e nao conhece texto de plataforma. A parte de desenho (LayoutColorPicker e BuildColorPickerItems) monta
+// as areas do seletor e os itens de render. O texto dos campos HEX e RGB nao sai daqui: o chamador desenha o
+// rotulo de cada campo (BuildLabelItems) dentro do retangulo que o layout devolve.
+//
+// Itens do seletor, de cima para baixo: area 2D de saturacao e valor (com marcador), faixa de matiz (com marcador),
+// faixa de alfa sobre fundo quadriculado (com marcador), linha de amostra (original e atual, lado a lado), campo
+// HEX e os quatro campos R, G, B e A. Os gradientes sao grades de celulas de cor solida: a biblioteca nao tem
+// shader de gradiente.
+//
+// Regras do modelo:
+//  - Espaco de edicao e HSV: matiz, saturacao e valor sao floats, e o alfa e float em [0, 1]. Arrastar a area
+//    2D ou a faixa de matiz muda a cor sem arredondar. O arredondamento para 8 bits so acontece na exibicao
+//    (Channel, ChannelText, HexText).
+//  - Campos guardam inteiros 0 a 255, como o usuario digita. Valor fora da faixa e prendido na faixa.
+//  - Texto invalido (letras, vazio, so sinal) nao muda o campo. Espacos nas pontas sao ignorados.
+//  - HEX aceita #RRGGBB (alfa opaco) e #RRGGBBAA, em maiusculas ou minusculas. HEX invalido e rejeitado e a
+//    cor atual fica.
+//  - Sample() devolve a cor em 0 a 1, sem premultiplicar. Original() e a cor ao abrir o seletor: a amostra
+//    mostra as duas, e Revert() volta a ela (cancelar).
+//  - Controle desabilitado ignora a entrada do usuario (campos, passos, HEX e arrastes). SetColor(), SetAlpha()
+//    e SetChannel() sao de programa e sempre valem.
+
+#include "SpriteUi/Core/Handle.hpp"
 #include "SpriteUi/Core/Math.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
 
-#include <algorithm>
 #include <array>
-#include <cmath>
-#include <cstdio>
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ToolEngine::SpriteUi::Widgets {
 
 enum class ColorChannel : std::uint8_t { Red, Green, Blue, Alpha };
 
-struct ColorPickerLayout {
-    Rect saturationValue{};
-    Rect hue{};
-    Rect hexField{};
-    std::array<Rect, 4> channelFields{};
-};
-
-struct ColorPickerStyle {
-    float saturationValueHeight = 120.0f;
-    float hueHeight = 14.0f;
-    float fieldHeight = 24.0f;
-    float channelHeight = 20.0f;
-    float gap = 8.0f;
+// Cor no espaco de edicao: matiz em [0, 1), saturacao e valor em [0, 1].
+struct HsvColor {
+    float hue = 0.0f;
+    float saturation = 0.0f;
+    float value = 1.0f;
+    [[nodiscard]] bool operator==(const HsvColor& other) const noexcept = default;
 };
 
 class ColorPickerControl {
 public:
-    [[nodiscard]] bool SetColor(Vec4 color) noexcept {
-        if (!IsFinite(color)) return false;
-        color.x = Clamp01(color.x);
-        color.y = Clamp01(color.y);
-        color.z = Clamp01(color.z);
-        color.w = Clamp01(color.w);
-        const float maximum = std::max({color.x, color.y, color.z});
-        const float minimum = std::min({color.x, color.y, color.z});
-        const float delta = maximum - minimum;
-        value_ = maximum;
-        saturation_ = maximum <= 0.0f ? 0.0f : delta / maximum;
-        if (delta <= 0.0f) hue_ = 0.0f;
-        else if (maximum == color.x) hue_ = std::fmod((color.y - color.z) / delta, 6.0f) / 6.0f;
-        else if (maximum == color.y) hue_ = ((color.z - color.x) / delta + 2.0f) / 6.0f;
-        else hue_ = ((color.x - color.y) / delta + 4.0f) / 6.0f;
-        hue_ = hue_ < 0.0f ? hue_ + 1.0f : hue_;
-        alpha_ = color.w;
-        return true;
-    }
+    ColorPickerControl() = default;
+    explicit ColorPickerControl(Vec4 initial) noexcept;
 
-    [[nodiscard]] Vec4 Sample() const noexcept {
-        return SampleAt(saturation_, value_);
-    }
+    bool disabled = false;
 
-    [[nodiscard]] Vec4 SampleAt(float saturation, float value) const noexcept {
-        const float h = hue_ * 6.0f;
-        const float c = Clamp01(value) * Clamp01(saturation);
-        const float x = c * (1.0f - std::abs(std::fmod(h, 2.0f) - 1.0f));
-        const float m = Clamp01(value) - c;
-        Vec4 rgb;
-        if (h < 1.0f) rgb = {c, x, 0.0f, alpha_};
-        else if (h < 2.0f) rgb = {x, c, 0.0f, alpha_};
-        else if (h < 3.0f) rgb = {0.0f, c, x, alpha_};
-        else if (h < 4.0f) rgb = {0.0f, x, c, alpha_};
-        else if (h < 5.0f) rgb = {x, 0.0f, c, alpha_};
-        else rgb = {c, 0.0f, x, alpha_};
-        rgb.x += m;
-        rgb.y += m;
-        rgb.z += m;
-        return rgb;
-    }
+    [[nodiscard]] std::uint8_t Channel(ColorChannel channel) const noexcept;
+    [[nodiscard]] std::string ChannelText(ColorChannel channel) const;
+    // "#RRGGBBAA" em maiusculas.
+    [[nodiscard]] std::string HexText() const;
+    [[nodiscard]] Vec4 Sample() const noexcept;
+    [[nodiscard]] Vec4 Original() const noexcept;
+    // Matiz em [0, 1) e saturacao/valor em [0, 1], para desenhar a area 2D e a faixa de matiz.
+    [[nodiscard]] float Hue() const noexcept { return hsv_.hue; }
+    [[nodiscard]] float Saturation() const noexcept { return hsv_.saturation; }
+    [[nodiscard]] float Value() const noexcept { return hsv_.value; }
+    [[nodiscard]] bool Changed() const noexcept { return current() != original_; }
 
-    [[nodiscard]] float Hue() const noexcept { return hue_; }
-    [[nodiscard]] float Saturation() const noexcept { return saturation_; }
-    [[nodiscard]] float Value() const noexcept { return value_; }
-
-    [[nodiscard]] bool DragSaturationValue(float saturation, float value) noexcept {
-        if (!IsFinite(saturation) || !IsFinite(value)) return false;
-        saturation = Clamp01(saturation);
-        value = Clamp01(value);
-        const bool changed = saturation_ != saturation || value_ != value;
-        saturation_ = saturation;
-        value_ = value;
-        return changed;
-    }
-
-    [[nodiscard]] bool DragHue(float hue) noexcept {
-        if (!IsFinite(hue)) return false;
-        hue = Clamp01(hue);
-        const bool changed = hue_ != hue;
-        hue_ = hue;
-        return changed;
-    }
-
-    [[nodiscard]] std::string ChannelText(ColorChannel channel) const {
-        const Vec4 c = Sample();
-        float value = 0.0f;
-        switch (channel) {
-            case ColorChannel::Red: value = c.x; break;
-            case ColorChannel::Green: value = c.y; break;
-            case ColorChannel::Blue: value = c.z; break;
-            case ColorChannel::Alpha: value = c.w; break;
-        }
-        char text[16];
-        std::snprintf(text, sizeof(text), "%3d", static_cast<int>(std::round(Clamp01(value) * 255.0f)));
-        return text;
-    }
+    // Escreve um canal, prendendo na faixa. Retorna true se o valor mudou.
+    [[nodiscard]] bool SetChannel(ColorChannel channel, int value) noexcept;
+    // Digitacao no campo. Ver as regras no topo do arquivo.
+    [[nodiscard]] bool SetChannelText(ColorChannel channel, std::string_view text) noexcept;
+    // Seta do campo: soma delta ao valor atual. Retorna true se mudou.
+    [[nodiscard]] bool Step(ColorChannel channel, int delta) noexcept;
+    // Digitacao no campo HEX. Ver as regras no topo do arquivo.
+    [[nodiscard]] bool SetHex(std::string_view text) noexcept;
+    // Arrasto da faixa de matiz (matiz em voltas, qualquer valor finito).
+    [[nodiscard]] bool DragHue(float hue) noexcept;
+    // Arrasto da area 2D: saturacao e valor em [0, 1].
+    [[nodiscard]] bool DragSaturationValue(float saturation, float value) noexcept;
+    // Alfa em [0, 1]; fora da faixa e prendido. NaN e recusado.
+    [[nodiscard]] bool SetAlpha(float alpha) noexcept;
+    // Cor inteira de 0 a 1 (programa). Valores fora da faixa sao prendidos. Retorna true se mudou.
+    [[nodiscard]] bool SetColor(Vec4 color) noexcept;
+    // Volta a cor original (cancelar). Retorna true se mudou.
+    [[nodiscard]] bool Revert() noexcept;
 
 private:
-    float hue_ = 0.0f;
-    float saturation_ = 0.0f;
-    float value_ = 1.0f;
+    struct State {
+        HsvColor hsv{};
+        float alpha = 1.0f;
+        [[nodiscard]] bool operator==(const State& other) const noexcept = default;
+    };
+
+    [[nodiscard]] State current() const noexcept { return {hsv_, alpha_}; }
+    [[nodiscard]] bool SetHsv(HsvColor next) noexcept;
+
+    HsvColor hsv_{};
     float alpha_ = 1.0f;
+    State original_{};
 };
 
-[[nodiscard]] inline ColorPickerLayout LayoutColorPicker(Rect bounds, const ColorPickerStyle& style) noexcept {
-    const float gap = std::max(0.0f, style.gap);
-    const float hueHeight = std::max(0.0f, style.hueHeight);
-    const float fieldHeight = std::max(0.0f, style.fieldHeight);
-    const float channelHeight = std::max(0.0f, style.channelHeight);
-    const float svHeight = std::min(std::max(0.0f, style.saturationValueHeight),
-                                    std::max(0.0f, bounds.size.y - hueHeight - fieldHeight - channelHeight - 3.0f * gap));
-    ColorPickerLayout result{
-        {bounds.position, {bounds.size.x, svHeight}},
-        {{bounds.position.x, bounds.position.y + svHeight + gap}, {bounds.size.x, hueHeight}},
-        {{bounds.position.x, bounds.position.y + svHeight + gap + hueHeight + gap}, {bounds.size.x, fieldHeight}},
-        {}
-    };
-    const float channelY = result.hexField.position.y + result.hexField.size.y + gap;
-    const float channelGap = 4.0f;
-    const float channelWidth = std::max(0.0f, (bounds.size.x - 3.0f * channelGap) * 0.25f);
-    for (std::size_t i = 0; i < result.channelFields.size(); ++i) {
-        result.channelFields[i] = {{bounds.position.x + static_cast<float>(i) * (channelWidth + channelGap), channelY},
-                                   {channelWidth, channelHeight}};
-    }
-    return result;
-}
+// Retangulos do seletor, em coordenadas absolutas. Os campos R, G, B e A ficam numa linha; o HEX e a amostra
+// (original a esquerda, atual a direita) ficam na linha de cima dos campos.
+struct ColorPickerLayout {
+    Rect saturationValue;
+    Rect hue;
+    Rect alpha;
+    Rect sampleOriginal;
+    Rect sampleCurrent;
+    Rect hexField;
+    std::array<Rect, 4> channelFields{}; // Ordem: Red, Green, Blue, Alpha.
+};
 
-[[nodiscard]] inline std::vector<Rendering::UIRenderItem> BuildColorPickerItems(
-    const ColorPickerControl& control,
-    const ColorPickerLayout& layout,
-    UIHandle owner,
-    const ColorPickerStyle&,
-    float zOrder,
-    std::uint64_t paintOrder)
-{
-    std::vector<Rendering::UIRenderItem> items;
-    const auto solid = [&](Rect bounds, Vec4 tint, std::uint64_t paint) {
-        Rendering::UIRenderItem item;
-        item.handle = owner;
-        item.layout.resolvedPosition = bounds.position;
-        item.layout.resolvedSize = bounds.size;
-        item.tintPremultipliedLinear = tint;
-        item.textureSlice = Rendering::WhiteTextureSlice;
-        item.zOrder = zOrder;
-        item.paintOrder = paint;
-        return item;
-    };
-    if (layout.saturationValue.size.x > 0.0f && layout.saturationValue.size.y > 0.0f) {
-        constexpr std::size_t columns = 32;
-        constexpr std::size_t rows = 16;
-        for (std::size_t row = 0; row < rows; ++row) {
-            const float top = layout.saturationValue.position.y +
-                              layout.saturationValue.size.y * static_cast<float>(row) / static_cast<float>(rows);
-            const float bottom = layout.saturationValue.position.y +
-                                 layout.saturationValue.size.y * static_cast<float>(row + 1) / static_cast<float>(rows);
-            const float value = 1.0f - (static_cast<float>(row) + 0.5f) / static_cast<float>(rows);
-            for (std::size_t column = 0; column < columns; ++column) {
-                const float left = layout.saturationValue.position.x +
-                                   layout.saturationValue.size.x * static_cast<float>(column) / static_cast<float>(columns);
-                const float right = layout.saturationValue.position.x +
-                                    layout.saturationValue.size.x * static_cast<float>(column + 1) / static_cast<float>(columns);
-                const float saturation = (static_cast<float>(column) + 0.5f) / static_cast<float>(columns);
-                items.push_back(solid({{left, top}, {right - left, bottom - top}},
-                                      control.SampleAt(saturation, value), paintOrder++));
-            }
-        }
-        const float markerX = layout.saturationValue.position.x + layout.saturationValue.size.x * control.Saturation();
-        const float markerY = layout.saturationValue.position.y + layout.saturationValue.size.y * (1.0f - control.Value());
-        const float markerSize = 5.0f;
-        items.push_back(solid({{markerX - markerSize, markerY}, {markerSize * 2.0f, 1.0f}}, {0, 0, 0, 1}, paintOrder++));
-        items.push_back(solid({{markerX - markerSize + 1.0f, markerY + 1.0f}, {markerSize * 2.0f - 2.0f, 1.0f}},
-                              {1, 1, 1, 1}, paintOrder++));
-    }
-    if (layout.hue.size.x > 0.0f && layout.hue.size.y > 0.0f) {
-        constexpr std::size_t segments = 24;
-        for (std::size_t i = 0; i < segments; ++i) {
-            const float x = layout.hue.position.x + layout.hue.size.x * static_cast<float>(i) / static_cast<float>(segments);
-            const float next = layout.hue.position.x + layout.hue.size.x * static_cast<float>(i + 1) / static_cast<float>(segments);
-            const float h = static_cast<float>(i) / static_cast<float>(segments);
-            ColorPickerControl hueOnly;
-            (void)hueOnly.SetColor({1, 0, 0, 1});
-            (void)hueOnly.DragHue(h);
-            items.push_back(solid({{x, layout.hue.position.y}, {next - x, layout.hue.size.y}}, hueOnly.Sample(), paintOrder++));
-        }
-        const float hueX = layout.hue.position.x + layout.hue.size.x * control.Hue();
-        items.push_back(solid({{hueX - 1.0f, layout.hue.position.y - 1.0f}, {2.0f, layout.hue.size.y + 2.0f}},
-                              {1, 1, 1, 1}, paintOrder++));
-    }
-    for (const Rect& field : layout.channelFields) {
-        if (field.size.x > 0.0f && field.size.y > 0.0f) {
-            items.push_back(solid(field, {0.09f, 0.11f, 0.15f, 1.0f}, paintOrder++));
-        }
-    }
-    return items;
-}
+// Cores do estilo sao sRGB sem premultiplicar, como as da amostra. Medidas em pixels logicos.
+struct ColorPickerStyle {
+    float gap = 8.0f;
+    float stripHeight = 14.0f;
+    float fieldHeight = 24.0f;
+    float sampleWidth = 24.0f;
+    float checkerSize = 6.0f;
+    float markerSize = 12.0f;
+    float markerBorder = 2.0f;
+    Vec4 fieldFill{0.14f, 0.14f, 0.16f, 1.0f};
+    Vec4 fieldBorder{0.32f, 0.32f, 0.36f, 1.0f};
+    Vec4 markerFill{1.0f, 1.0f, 1.0f, 1.0f};
+    Vec4 markerEdge{0.0f, 0.0f, 0.0f, 1.0f};
+    Vec4 checkerLight{0.85f, 0.85f, 0.85f, 1.0f};
+    Vec4 checkerDark{0.55f, 0.55f, 0.55f, 1.0f};
+};
+
+// Divide bounds nas areas do seletor. A area 2D ocupa o espaco que sobra acima das faixas e das linhas fixas.
+[[nodiscard]] ColorPickerLayout LayoutColorPicker(Rect bounds, const ColorPickerStyle& style = {}) noexcept;
+
+// Centro do marcador na area 2D (saturacao no eixo x, valor de baixo para cima), na faixa de matiz e na faixa de alfa.
+[[nodiscard]] Vec2 SaturationValueMarkerCenter(const ColorPickerControl& picker, const ColorPickerLayout& layout) noexcept;
+[[nodiscard]] Vec2 HueMarkerCenter(const ColorPickerControl& picker, const ColorPickerLayout& layout) noexcept;
+[[nodiscard]] Vec2 AlphaMarkerCenter(const ColorPickerControl& picker, const ColorPickerLayout& layout) noexcept;
+
+// Itens de render do seletor, sem texto. Cada campo HEX e RGB tem so o fundo e a borda; o rotulo vem do chamador.
+[[nodiscard]] std::vector<Rendering::UIRenderItem> BuildColorPickerItems(const ColorPickerControl& picker,
+                                                                         const ColorPickerLayout& layout,
+                                                                         UIHandle owner, const ColorPickerStyle& style,
+                                                                         float zOrder, std::uint64_t paintOrder);
 
 } // namespace ToolEngine::SpriteUi::Widgets

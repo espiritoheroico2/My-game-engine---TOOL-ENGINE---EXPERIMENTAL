@@ -100,14 +100,15 @@ void TestCorruptedStateNeverIndexesOutOfBounds() {
     CHECK(true); // o objetivo e nao disparar ASan/UBSan
 }
 
-void TestNonFiniteSamplesAreSanitized() {
+void TestNonFiniteSamplesAreSkipped() {
+    // NaN e infinito nao entram no historico: nem como pico nem como zero na escala.
     UIOscilloscopeGraph osc;
     osc.AddSample(std::numeric_limits<float>::quiet_NaN());
     osc.AddSample(std::numeric_limits<float>::infinity());
     osc.AddSample(2.0f);
     float out[3];
-    CHECK(osc.GetLatestSamples(out) == 3);
-    CHECK(Near(out[0], 0.0f) && Near(out[1], 0.0f) && Near(out[2], 2.0f));
+    CHECK(osc.GetLatestSamples(out) == 1);
+    CHECK(Near(out[0], 2.0f));
 }
 
 } // namespace
@@ -117,7 +118,7 @@ void RunGraphSamplingTests() {
     TestLatestSamplesBeforeRingIsFull();
     TestNormalizedSamplesWindow();
     TestCorruptedStateNeverIndexesOutOfBounds();
-    TestNonFiniteSamplesAreSanitized();
+    TestNonFiniteSamplesAreSkipped();
 }
 
 } // namespace SpriteUiTests

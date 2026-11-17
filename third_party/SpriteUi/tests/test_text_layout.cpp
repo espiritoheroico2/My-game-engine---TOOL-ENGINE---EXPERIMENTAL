@@ -1,7 +1,6 @@
 #include "SpriteUi/SpriteUi.hpp"
 #include "SpriteUi/Text/DebugShaper.hpp"
 #include "SpriteUi/Text/LineBreak.hpp"
-
 #include "TestHarness.hpp"
 #include "TestSuites.hpp"
 
@@ -52,7 +51,8 @@ std::vector<std::string> Lines(std::string_view text, const TextLayoutResult& la
     std::vector<std::string> out;
     for (const TextLine& line : layout.lines) {
         std::string s(text.substr(line.byteBegin, line.byteEnd - line.byteBegin));
-        while (!s.empty() && (s.back() == ' ' || s.back() == '\n' || s.back() == '\r')) s.pop_back();
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\n' || s.back() == '\r'))
+            s.pop_back();
         out.push_back(s);
     }
     return out;
@@ -75,7 +75,7 @@ void TestWordWrapBreaksAtSpacesNotInsideWords() {
     CHECK((Lines(text, layout) == V{"hello world", "foo bar"}));
     CHECK(layout.lineCount == 2);
     CHECK(LinesTileText(text, layout));
-    CHECK(Near(layout.lines[0].width, 55.0f));   // "hello world" = 11 chars * 5
+    CHECK(Near(layout.lines[0].width, 55.0f)); // "hello world" = 11 chars * 5
     CHECK(Near(layout.lines[1].y, 12.0f));
     CHECK(Near(layout.size.y, 24.0f));
     CHECK(Near(layout.lineHeight, 12.0f));
@@ -92,15 +92,16 @@ void TestTrailingSpacesHangAndNeverOverflow() {
     const std::string text = "ab   cd";
     const auto layout = Layout(text, 10.0f);
     CHECK((Lines(text, layout) == V{"ab", "cd"}));
-    CHECK(Near(layout.lines[0].width, 10.0f));      // spaces are not part of the content width
-    CHECK(layout.lines[0].byteEnd == 5);            // ...but they still belong to the line (caret mapping)
+    CHECK(Near(layout.lines[0].width, 10.0f)); // spaces are not part of the content width
+    CHECK(layout.lines[0].byteEnd == 5);       // ...but they still belong to the line (caret mapping)
     CHECK(LinesTileText(text, layout));
 }
 
 void TestEmergencyBreakForLongWords() {
     const std::string text = "abcdefghij";
     CHECK((Lines(text, Layout(text, 20.0f)) == V{"abcd", "efgh", "ij"}));
-    CHECK((Lines("abc", Layout("abc", 2.0f)) == V{"a", "b", "c"})); // narrower than one glyph: still progresses
+    CHECK(
+        (Lines("abc", Layout("abc", 2.0f)) == V{"a", "b", "c"})); // narrower than one glyph: still progresses
 }
 
 void TestMandatoryNewlines() {
@@ -110,7 +111,7 @@ void TestMandatoryNewlines() {
     CHECK(LinesTileText(text, layout));
     CHECK(layout.lines[0].endsWithNewline);
     CHECK(!layout.lines[3].endsWithNewline);
-    CHECK(Near(layout.lines[2].y, 24.0f));          // the blank line still occupies a line box
+    CHECK(Near(layout.lines[2].y, 24.0f)); // the blank line still occupies a line box
     CHECK(Lines("a\r\nb", Layout("a\r\nb", 100.0f)).size() == 2);
     CHECK(Lines("a\n", Layout("a\n", 100.0f)).size() == 1); // a trailing newline adds no layout line
     CHECK(Lines("\n\n", Layout("\n\n", 100.0f)).size() == 2);
@@ -123,9 +124,10 @@ void TestWrapNoneStillHonoursNewlines() {
 }
 
 void TestCjkAndPunctuationRules() {
-    const std::string cjk = "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E\xE3\x81\xAE\xE3\x83\x86\xE3\x82\xAD\xE3\x82\xB9\xE3\x83\x88"; // 日本語のテキスト
+    const std::string cjk = "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E\xE3\x81\xAE\xE3\x83\x86\xE3\x82\xAD\xE3\x82"
+                            "\xB9\xE3\x83\x88"; // 日本語のテキスト
     const auto layout = Layout(cjk, 30.0f);
-    CHECK(layout.lineCount == 3);                   // 3 wide glyphs (10px each) per line
+    CHECK(layout.lineCount == 3); // 3 wide glyphs (10px each) per line
     CHECK(Near(layout.lines[0].width, 30.0f));
     CHECK(Near(layout.lines[2].width, 20.0f));
     CHECK(LinesTileText(cjk, layout));
@@ -138,7 +140,7 @@ void TestCjkAndPunctuationRules() {
 void TestAlignmentUsesContentWidthNotHangingSpaces() {
     const std::string text = "ab  ";
     const auto center = Layout(text, 100.0f, TextWrap::Word, TextAlignment::Center);
-    CHECK(Near(center.lines[0].x, 45.0f));          // (100 - 10) / 2: the two trailing spaces are ignored
+    CHECK(Near(center.lines[0].x, 45.0f)); // (100 - 10) / 2: the two trailing spaces are ignored
     CHECK(Near(center.quads[0].penOrigin.x, 45.0f));
     const auto right = Layout(text, 100.0f, TextWrap::Word, TextAlignment::Right);
     CHECK(Near(right.lines[0].x, 90.0f));
@@ -147,11 +149,12 @@ void TestAlignmentUsesContentWidthNotHangingSpaces() {
 }
 
 void TestClustersWithSeveralGlyphsStayTogether() {
-    const std::string text = "e\xCC\x81" "e\xCC\x81"; // two clusters, each base + combining mark = 2 glyphs
+    const std::string text = "e\xCC\x81"
+                             "e\xCC\x81"; // two clusters, each base + combining mark = 2 glyphs
     const FontMetrics m = Metrics();
     const auto glyphs = ShapeDebug(text, m, Shaper());
     CHECK(glyphs.size() == 4);
-    const auto layout = Layout(text, 5.0f);         // fits exactly one cluster per line
+    const auto layout = Layout(text, 5.0f); // fits exactly one cluster per line
     CHECK(layout.lineCount == 2);
     CHECK(layout.quads.size() == 4);
     CHECK(layout.lines[0].quadCount == 2 && layout.lines[1].quadCount == 2);
@@ -228,7 +231,8 @@ void TestSourceOverloadMatchesLegacyGeometry() {
     for (int it = 0; it < 600; ++it) {
         std::string text;
         const int len = 1 + std::rand() % 30;
-        for (int k = 0; k < len; ++k) text += alphabet[std::rand() % 8];
+        for (int k = 0; k < len; ++k)
+            text += alphabet[std::rand() % 8];
         const auto glyphs = ShapeDebug(text, m, Shaper());
         TextLayoutConfig config;
         config.fontSize = 10.0f;
@@ -237,8 +241,9 @@ void TestSourceOverloadMatchesLegacyGeometry() {
         config.alignment = static_cast<TextAlignment>(std::rand() % 3);
         const auto legacy = LayoutText(glyphs, m, config);
         const auto modern = LayoutText(text, glyphs, m, config);
-        identical = identical && legacy.quads.size() == modern.quads.size() && legacy.lineCount == modern.lineCount &&
-                    Near(legacy.size.x, modern.size.x) && Near(legacy.size.y, modern.size.y);
+        identical = identical && legacy.quads.size() == modern.quads.size() &&
+                    legacy.lineCount == modern.lineCount && Near(legacy.size.x, modern.size.x) &&
+                    Near(legacy.size.y, modern.size.y);
         for (std::size_t i = 0; identical && i < legacy.quads.size(); ++i) {
             identical = Near(legacy.quads[i].bounds.position.x, modern.quads[i].bounds.position.x) &&
                         Near(legacy.quads[i].bounds.position.y, modern.quads[i].bounds.position.y) &&
@@ -252,14 +257,27 @@ void TestSourceOverloadMatchesLegacyGeometry() {
 // Property: for any text/width/mode, lines tile the text, quads are never lost and finite.
 void TestLayoutInvariantsOnRandomText() {
     std::srand(909);
-    const char* alphabet[] = {"a", "b", "c", " ", " ", "\n", "-", "\xE6\x97\xA5", "\xE3\x80\x82", "e\xCC\x81",
-                              "\xF0\x9F\x98\x80", "\xC2\xA0", "\xE2\x80\x8B", "\t"};
+    const char* alphabet[] = {"a",
+                              "b",
+                              "c",
+                              " ",
+                              " ",
+                              "\n",
+                              "-",
+                              "\xE6\x97\xA5",
+                              "\xE3\x80\x82",
+                              "e\xCC\x81",
+                              "\xF0\x9F\x98\x80",
+                              "\xC2\xA0",
+                              "\xE2\x80\x8B",
+                              "\t"};
     const FontMetrics m = Metrics();
     bool tiles = true, quadsComplete = true, finite = true, fits = true, progresses = true;
     for (int it = 0; it < 2500; ++it) {
         std::string text;
         const int len = 1 + std::rand() % 40;
-        for (int k = 0; k < len; ++k) text += alphabet[std::rand() % 14];
+        for (int k = 0; k < len; ++k)
+            text += alphabet[std::rand() % 14];
         const auto glyphs = ShapeDebug(text, m, Shaper());
         TextLayoutConfig config;
         config.fontSize = 10.0f;
@@ -279,7 +297,8 @@ void TestLayoutInvariantsOnRandomText() {
                 std::uint32_t distinct = 0, last = 0xFFFFFFFFu;
                 for (std::size_t q = 0; q < line.quadCount; ++q) {
                     const std::uint32_t off = layout.quads[line.firstQuad + q].clusterByteOffset;
-                    if (off != last && layout.quads[line.firstQuad + q].bounds.size.x > 0.0f) ++distinct; // visible glyphs only: hanging spaces do not count
+                    if (off != last && layout.quads[line.firstQuad + q].bounds.size.x > 0.0f)
+                        ++distinct; // visible glyphs only: hanging spaces do not count
                     last = off;
                 }
                 fits = fits && distinct <= 1;
@@ -317,11 +336,11 @@ void TestCaretRectUsesPenOrigin() {
 
 void TestCaretAtWrapBoundariesAndNewlines() {
     const std::string text = "hello world";
-    const auto wrapped = Layout(text, 30.0f);       // "hello " / "world"
+    const auto wrapped = Layout(text, 30.0f); // "hello " / "world"
     CHECK(wrapped.lineCount == 2);
-    const Rect atSpace = GetCaretRect(wrapped, 5);  // right after "hello"
+    const Rect atSpace = GetCaretRect(wrapped, 5); // right after "hello"
     CHECK(Near(atSpace.position.x, 25.0f) && Near(atSpace.position.y, 0.0f));
-    const Rect atWrap = GetCaretRect(wrapped, 6);   // soft-wrap boundary -> start of the next line
+    const Rect atWrap = GetCaretRect(wrapped, 6); // soft-wrap boundary -> start of the next line
     CHECK(Near(atWrap.position.x, 0.0f) && Near(atWrap.position.y, 12.0f));
     const Rect atEnd = GetCaretRect(wrapped, 11);
     CHECK(Near(atEnd.position.x, 25.0f) && Near(atEnd.position.y, 12.0f));
@@ -329,13 +348,14 @@ void TestCaretAtWrapBoundariesAndNewlines() {
     const std::string nl = "ab\n";
     const auto afterNewline = Layout(nl, 100.0f);
     const Rect virtualLine = GetCaretRect(afterNewline, 3);
-    CHECK(Near(virtualLine.position.x, 0.0f) && Near(virtualLine.position.y, 12.0f)); // a new empty line below
+    CHECK(Near(virtualLine.position.x, 0.0f) &&
+          Near(virtualLine.position.y, 12.0f)); // a new empty line below
     const auto centered = Layout(nl, 100.0f, TextWrap::Word, TextAlignment::Center);
     CHECK(Near(GetCaretRect(centered, 3).position.x, 50.0f));
 
     const std::string blank = "a\n\nb";
     const auto b = Layout(blank, 100.0f);
-    const Rect onBlank = GetCaretRect(b, 2);        // the empty middle line
+    const Rect onBlank = GetCaretRect(b, 2); // the empty middle line
     CHECK(Near(onBlank.position.x, 0.0f) && Near(onBlank.position.y, 12.0f));
 
     const std::string accent = "e\xCC\x81x";
@@ -358,9 +378,9 @@ void TestFindInsertionOffsetPicksNearestCaretStop() {
 
     const std::string two = "ab\ncd";
     const auto l2 = Layout(two, 100.0f);
-    CHECK(FindInsertionOffset(l2, {100.0f, 5.0f}) == 2);     // end of line 0 is BEFORE the newline
-    CHECK(FindInsertionOffset(l2, {100.0f, 15.0f}) == 5);    // last line has no newline: true end
-    CHECK(FindInsertionOffset(l2, {100.0f, 999.0f}) == 5);   // y below clamps to the last line
+    CHECK(FindInsertionOffset(l2, {100.0f, 5.0f}) == 2);   // end of line 0 is BEFORE the newline
+    CHECK(FindInsertionOffset(l2, {100.0f, 15.0f}) == 5);  // last line has no newline: true end
+    CHECK(FindInsertionOffset(l2, {100.0f, 999.0f}) == 5); // y below clamps to the last line
     CHECK(FindInsertionOffset(l2, {std::nanf(""), std::nanf("")}) <= two.size());
     CHECK(FindInsertionOffset(TextLayoutResult{}, {1.0f, 1.0f}) == 0);
 }
@@ -380,6 +400,86 @@ void TestInsertionOffsetRoundTrip() {
     CHECK(roundTrips);
 }
 
+// An empty text still has one line box: an empty field needs a caret that is one line tall.
+void TestEmptyTextKeepsOneLineBox() {
+    const auto empty = Layout("", 100.0f);
+    CHECK(Near(empty.lineHeight, 12.0f)); // Metrics(): (8 + 2) + 2 px
+    CHECK(empty.lines.size() == 1);
+    CHECK(Near(GetCaretRect(empty, 0).size.y, 12.0f));
+    CHECK(Near(GetCaretRect(empty, 0).position.x, 0.0f));
+    CHECK(FindInsertionOffset(empty, {40.0f, 5.0f}) == 0);
+
+    const auto centered = Layout("", 100.0f, TextWrap::Word, TextAlignment::Center);
+    CHECK(Near(GetCaretRect(centered, 0).position.x, 50.0f));
+    CHECK(Near(GetCaretRect(centered, 0).size.y, 12.0f));
+}
+
+// A click to the right of a soft-wrapped line lands before the trailing space of that line, not on the
+// start of the next line (the same offset would draw its caret at the next line).
+void TestClickPastEndOfSoftWrappedLineStaysOnThatLine() {
+    const std::string text = "hello world";
+    const auto wrapped = Layout(text, 30.0f); // "hello " / "world"
+    CHECK(wrapped.lineCount == 2);
+    CHECK(FindInsertionOffset(wrapped, {100.0f, 5.0f}) == 5);   // after "hello", before the space
+    CHECK(FindInsertionOffset(wrapped, {100.0f, 17.0f}) == 11); // end of the last line
+    CHECK(FindInsertionOffset(wrapped, {0.0f, 17.0f}) == 6);    // start of the second line
+    CHECK(Near(GetCaretRect(wrapped, FindInsertionOffset(wrapped, {100.0f, 5.0f})).position.y, 0.0f));
+}
+
+// Right alignment moves the caret and the glyphs by the same amount, and the whole text follows the rect
+// origin.
+void TestRenderItemsFollowTheCaretOrigin() {
+    const std::string text = "abc";
+    const FontMetrics m = Metrics();
+    const auto glyphs = ShapeDebug(text, m, Shaper());
+    TextLayoutConfig config;
+    config.fontSize = 10.0f;
+    config.maxWidth = 40.0f;
+    config.wrap = TextWrap::Word;
+    const auto left = LayoutText(text, glyphs, m, config);
+    config.alignment = TextAlignment::Right;
+    const auto right = LayoutText(text, glyphs, m, config);
+
+    UILayoutRect rectAtOrigin;
+    UILayoutRect rectMoved;
+    rectMoved.resolvedPosition = {100.0f, 200.0f};
+    const auto leftItems = GenerateTextRenderItems(left, rectAtOrigin, Vec4{1.0f, 1.0f, 1.0f, 1.0f}, 1u);
+    const auto rightItems = GenerateTextRenderItems(right, rectAtOrigin, Vec4{1.0f, 1.0f, 1.0f, 1.0f}, 1u);
+    const auto movedItems = GenerateTextRenderItems(left, rectMoved, Vec4{1.0f, 1.0f, 1.0f, 1.0f}, 1u);
+    CHECK(leftItems.size() == 3 && rightItems.size() == 3 && movedItems.size() == 3);
+    if (leftItems.size() != 3 || rightItems.size() != 3 || movedItems.size() != 3) return;
+
+    const float caretShift = GetCaretRect(right, 0).position.x - GetCaretRect(left, 0).position.x;
+    const float glyphShift = rightItems[0].layout.resolvedPosition.x - leftItems[0].layout.resolvedPosition.x;
+    CHECK(Near(caretShift, 25.0f)); // 40 px container - 15 px of text
+    CHECK(Near(caretShift, glyphShift));
+
+    CHECK(Near(movedItems[0].layout.resolvedPosition.x - leftItems[0].layout.resolvedPosition.x, 100.0f));
+    CHECK(Near(movedItems[0].layout.resolvedPosition.y - leftItems[0].layout.resolvedPosition.y, 200.0f));
+}
+
+// Baseline sits ascent below the top of the line box; the line pitch is lineHeight; extra leading goes below.
+void TestLineBoxMetricsAndLineHeightMultiplier() {
+    const auto plain = Layout("a\nb", 100.0f);
+    CHECK(plain.lines.size() == 2);
+    if (plain.lines.size() != 2) return;
+    CHECK(Near(plain.lines[0].baseline, 8.0f));
+    CHECK(Near(plain.lines[1].y, 12.0f));
+    CHECK(Near(plain.lines[1].baseline, 20.0f));
+    CHECK(Near(plain.lines[0].height, 12.0f));
+
+    const std::string text = "a\nb";
+    const FontMetrics m = Metrics();
+    TextLayoutConfig config;
+    config.fontSize = 10.0f;
+    config.maxWidth = 100.0f;
+    config.lineHeightMultiplier = 1.5f;
+    const auto spaced = LayoutText(text, ShapeDebug(text, m, Shaper()), m, config);
+    CHECK(Near(spaced.lineHeight, 18.0f));
+    CHECK(Near(spaced.lines[1].y, 18.0f));
+    CHECK(Near(spaced.lines[0].baseline, 8.0f));
+}
+
 } // namespace
 
 void RunTextWrapLayoutTests() {
@@ -397,6 +497,58 @@ void RunTextWrapLayoutTests() {
     TestNonFiniteMetricsStayFinite();
     TestSourceOverloadMatchesLegacyGeometry();
     TestLayoutInvariantsOnRandomText();
+    TestEmptyTextKeepsOneLineBox();
+    TestLineBoxMetricsAndLineHeightMultiplier();
+    TestRenderItemsFollowTheCaretOrigin();
+}
+
+// Contrato logico -> fisico (DPI). Layout, caret e hit-test trabalham so em coordenadas logicas: o DPI
+// nao muda nenhum deles. A unica conversao para pixels de tela no core e o alinhamento de glifo em
+// GenerateTextRenderItems (arredonda no grid de devicePixelScale e volta para logico). O backend multiplica
+// por DPI uma vez, no FramePacket. Exemplo de jogo: um HUD em 150% escreve "Vida 80" na mesma posicao
+// logica que em 100%; so os glifos mudam de meio pixel fisico, nunca de posicao logica.
+void TestLogicalToPhysicalContract() {
+    const std::string text = "abcdef";
+    const FontMetrics m = Metrics();
+    const auto glyphs = ShapeDebug(text, m, Shaper());
+    TextLayoutConfig config;
+    config.fontSize = 10.0f;
+    config.wrap = TextWrap::None;
+
+    // 1. O layout nao depende da escala: mesmos quads, mesmo caret e mesmo hit-test.
+    TextLayoutConfig atOne = config;
+    atOne.devicePixelScale = 1.0f;
+    TextLayoutConfig atTwo = config;
+    atTwo.devicePixelScale = 2.0f;
+    const auto one = LayoutText(text, glyphs, m, atOne);
+    const auto two = LayoutText(text, glyphs, m, atTwo);
+    CHECK(one.quads.size() == two.quads.size());
+    if (one.quads.size() != two.quads.size()) return;
+    for (std::size_t i = 0; i < one.quads.size(); ++i) {
+        CHECK(Near(one.quads[i].bounds.position.x, two.quads[i].bounds.position.x));
+        CHECK(Near(one.quads[i].bounds.size.x, two.quads[i].bounds.size.x));
+    }
+    CHECK(Near(GetCaretRect(one, 3).position.x, GetCaretRect(two, 3).position.x));
+    CHECK(FindInsertionOffset(one, Vec2{7.2f, 3.0f}) == FindInsertionOffset(two, Vec2{7.2f, 3.0f}));
+
+    // 2. Os itens ficam no grid fisico (x * 2 inteiro) e a no maximo meio pixel fisico (1/4 logico) do ponto logico.
+    UILayoutRect rect;
+    rect.resolvedPosition = {10.3f, 4.7f};
+    const auto items = GenerateTextRenderItems(two, rect, Vec4{1.0f, 1.0f, 1.0f, 1.0f}, 1u, Rendering::NoClipIndex, 0.0f,
+                                               0, UIHandle{1, 1});
+    CHECK(items.size() == two.quads.size());
+    if (items.size() != two.quads.size()) return;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        const Vec2 snapped = items[i].layout.resolvedPosition;
+        const Vec2 logical = rect.resolvedPosition + two.quads[i].bounds.position;
+        CHECK(Near(snapped.x * 2.0f, std::round(snapped.x * 2.0f), 1.0e-3f));
+        CHECK(Near(snapped.y * 2.0f, std::round(snapped.y * 2.0f), 1.0e-3f));
+        CHECK(std::fabs(snapped.x - logical.x) <= 0.25f + 1.0e-4f);
+        CHECK(std::fabs(snapped.y - logical.y) <= 0.25f + 1.0e-4f);
+        // 3. O alinhamento nao escala o tamanho: continua o tamanho logico do quad.
+        CHECK(Near(items[i].layout.resolvedSize.x, two.quads[i].bounds.size.x));
+        CHECK(Near(items[i].layout.resolvedSize.y, two.quads[i].bounds.size.y));
+    }
 }
 
 void RunCaretAndHitTests() {
@@ -404,6 +556,8 @@ void RunCaretAndHitTests() {
     TestCaretAtWrapBoundariesAndNewlines();
     TestFindInsertionOffsetPicksNearestCaretStop();
     TestInsertionOffsetRoundTrip();
+    TestClickPastEndOfSoftWrappedLineStaysOnThatLine();
+    TestLogicalToPhysicalContract();
 }
 
 } // namespace SpriteUiTests
