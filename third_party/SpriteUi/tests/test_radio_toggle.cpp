@@ -41,7 +41,7 @@ PointerEvent PointerAt(PointerPhase phase, Vec2 position, bool inside) {
     return event;
 }
 
-// Grupo com tres opcoes (ids 10, 20, 30) em uma caixa de 200 x 100. Linhas de 26 px: 0..26, 26..52, 52..78.
+// Grupo com tres opcoes (ids 10, 20, 30) em uma caixa de 200 x 100. Linhas de 28 px: 0..28, 28..56, 56..84.
 void FillGroup(RadioGroup& group) {
     group.border = {{0, 0}, {200, 100}};
     CHECK(group.AddOption(10, "Pequeno"));
@@ -79,7 +79,7 @@ void TestRadioClickRules() {
     RadioGroup group;
     FillGroup(group);
     (void)group.OnPointer(PointerAt(PointerPhase::Down, {10, 30}, true));
-    RadioEvents e = group.OnPointer(PointerAt(PointerPhase::Up, {10, 30}, true));  // Linha 1 (26..52).
+    RadioEvents e = group.OnPointer(PointerAt(PointerPhase::Up, {10, 30}, true));  // Linha 1 (28..56).
     CHECK(e.clicked && e.valueChanged && group.selectedId == 20);
 
     (void)group.OnPointer(PointerAt(PointerPhase::Down, {10, 5}, true));
@@ -99,10 +99,10 @@ void TestRadioRowAt() {
     RadioGroup group;
     FillGroup(group);
     CHECK(group.RowAt({10, 0}) == 0);
-    CHECK(group.RowAt({10, 25.9f}) == 0);
-    CHECK(group.RowAt({10, 26}) == 1);
-    CHECK(group.RowAt({10, 77.9f}) == 2);
-    CHECK(group.RowAt({10, 78}) == NoRadioIndex);   // Abaixo da ultima linha.
+    CHECK(group.RowAt({10, 27.9f}) == 0);
+    CHECK(group.RowAt({10, 28}) == 1);
+    CHECK(group.RowAt({10, 83.9f}) == 2);
+    CHECK(group.RowAt({10, 84}) == NoRadioIndex);   // Abaixo da ultima linha.
     CHECK(group.RowAt({250, 10}) == NoRadioIndex);  // Fora da largura.
     CHECK(group.RowAt({10, -1}) == NoRadioIndex);
 }
@@ -128,17 +128,17 @@ void TestRadioKeyboard() {
     CHECK(group.selectedId == 10);
 }
 
-// Geometria: linha i comeca em i * 26; circulo centrado na linha; rotulo recuado pelo circulo e a folga.
+// Geometria: linha i comeca em i * 28; circulo centrado na linha; rotulo recuado pelo circulo e a folga.
 void TestRadioGeometry() {
     RadioGroup group;
     FillGroup(group);
     const RadioStyle style;
-    CHECK(SameRect(RadioRowRect(group, 1), {{0, 26}, {200, 26}}));
+    CHECK(SameRect(RadioRowRect(group, 1), {{0, 28}, {200, 28}}));
     CHECK(SameRect(RadioRowRect(group, 3), {{0, 0}, {0, 0}}));
-    // Circulo de 18 px centrado na linha de 26: deslocamento (26 - 18) / 2 = 4.
-    CHECK(SameRect(RadioCircleRect(group, style, 1), {{0, 30}, {18, 18}}));
+    // Circulo de 18 px centrado na linha de 28: deslocamento (28 - 18) / 2 = 5.
+    CHECK(SameRect(RadioCircleRect(group, style, 1), {{0, 33}, {18, 18}}));
     // Rotulo: 18 + 8 = 26 a partir da esquerda.
-    CHECK(SameRect(RadioLabelRect(group, style, 1), {{26, 26}, {174, 26}}));
+    CHECK(SameRect(RadioLabelRect(group, style, 1), {{26, 28}, {174, 28}}));
 }
 
 // Itens: um circulo por opcao; a escolhida ganha o ponto; a focada ganha um anel (um item). Desabilitado: sem anel.
@@ -177,16 +177,35 @@ void TestToggleRules() {
     CHECK(!toggle.ToggleByKey().valueChanged && !toggle.on);
 }
 
-// Trilha de 40 x 22 centrada numa area de 200 x 30: x 0, y (30 - 22) / 2 = 4.
-// Bolinha de 22 - 2 * 3 = 16 px: a esquerda em x = 3 quando desligada, em x = 40 - 3 - 16 = 21 quando ligada.
+// Trilha de 40 x 28 centrada numa area de 200 x 30: x 0, y (30 - 28) / 2 = 1.
+// Bolinha de 28 - 2 * 3 = 22 px: a esquerda em x = 3 quando desligada, em x = 40 - 3 - 22 = 15 quando ligada.
 void TestToggleGeometry() {
     Toggle toggle;
     toggle.border = {{0, 0}, {200, 30}};
     const ToggleStyle style;
-    CHECK(SameRect(ToggleTrackRect(toggle, style), {{0, 4}, {40, 22}}));
-    CHECK(SameRect(ToggleKnobRect(toggle, style), {{3, 7}, {16, 16}}));
+    CHECK(SameRect(ToggleTrackRect(toggle, style), {{0, 1}, {40, 28}}));
+    CHECK(SameRect(ToggleKnobRect(toggle, style), {{3, 4}, {22, 22}}));
     toggle.on = true;
-    CHECK(SameRect(ToggleKnobRect(toggle, style), {{21, 7}, {16, 16}}));
+    CHECK(SameRect(ToggleKnobRect(toggle, style), {{15, 4}, {22, 22}}));
+}
+
+// Area de clique da chave: a pilula da trilha (40 x 28), nao a caixa do elemento (200 x 30). Canto da caixa e
+// area ao lado da trilha nao acionam; o meio da trilha aciona; o hover segue a mesma area.
+void TestToggleClickAreaFollowsTrack() {
+    Toggle toggle;
+    toggle.border = {{0, 0}, {200, 30}};
+    const ToggleStyle style;
+    (void)toggle.OnPointer(PointerAt(PointerPhase::Down, {100, 15}, true), style);
+    CHECK(!toggle.OnPointer(PointerAt(PointerPhase::Up, {100, 15}, true), style).clicked && !toggle.on);
+    (void)toggle.OnPointer(PointerAt(PointerPhase::Down, {1, 2}, true), style);   // Canto, fora do arco.
+    CHECK(!toggle.OnPointer(PointerAt(PointerPhase::Up, {1, 2}, true), style).clicked && !toggle.on);
+    (void)toggle.OnPointer(PointerAt(PointerPhase::Down, {20, 15}, true), style); // Meio da trilha.
+    CHECK(toggle.OnPointer(PointerAt(PointerPhase::Up, {20, 15}, true), style).clicked && toggle.on);
+
+    (void)toggle.OnPointer(PointerAt(PointerPhase::Enter, {100, 15}, true), style);
+    CHECK(!toggle.states.hovered);
+    (void)toggle.OnPointer(PointerAt(PointerPhase::Enter, {20, 15}, true), style);
+    CHECK(toggle.states.hovered);
 }
 
 // Area menor que a trilha: a trilha encolhe para caber, sem passar da borda.
@@ -222,6 +241,7 @@ int main() {
     TestRadioItems();
     TestToggleRules();
     TestToggleGeometry();
+    TestToggleClickAreaFollowsTrack();
     TestToggleSmallArea();
     TestToggleItems();
 

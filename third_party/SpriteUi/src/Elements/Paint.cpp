@@ -52,6 +52,29 @@ Rect RowInsideBorder(Rect row, Rect popup, float borderWidth) noexcept {
     return {{left, top}, {std::max(0.0f, right - left), std::max(0.0f, bottom - top)}};
 }
 
+bool ContainsDrawn(Rect drawn, float radius, Vec2 point) noexcept {
+    if (!drawn.Contains(point)) return false;
+    // Raio limitado a metade do menor lado; NaN ou zero deixam o retangulo reto.
+    const float limit = 0.5f * std::min(drawn.size.x, drawn.size.y);
+    const float r = radius > 0.0f ? std::min(radius, limit) : 0.0f;
+    if (r <= 0.0f) return true;
+    // Dentro do miolo (ou de uma faixa reta) o ponto fica igual; so nos cantos ele e puxado para o centro do arco.
+    const float cx = std::clamp(point.x, drawn.position.x + r, drawn.position.x + drawn.size.x - r);
+    const float cy = std::clamp(point.y, drawn.position.y + r, drawn.position.y + drawn.size.y - r);
+    const float dx = point.x - cx;
+    const float dy = point.y - cy;
+    return dx * dx + dy * dy <= r * r;
+}
+
+PointerEvent WithinDrawn(const PointerEvent& event, Rect drawn, float radius) noexcept {
+    PointerEvent out = event;
+    out.inside = event.inside && IsFinite(event.position) && ContainsDrawn(drawn, radius, event.position);
+    if (!out.inside && (event.phase == PointerPhase::Enter || event.phase == PointerPhase::Move)) {
+        out.phase = PointerPhase::Leave;  // Saiu da area desenhada: o hover some mesmo com o ponteiro na caixa.
+    }
+    return out;
+}
+
 void AppendFill(UIHandle owner, Rect rect, float radius, Vec4 color, std::uint32_t clipIndex, float zOrder,
                 std::uint64_t& paint, std::vector<Rendering::UIRenderItem>& out) {
     if (radius > 0.0f) {

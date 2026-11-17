@@ -10,18 +10,15 @@ namespace ToolEngine::SpriteUi::Elements {
 
 namespace {
 
-// Distancia a partir da qual um Down na barra vira arraste (ver spec 4.3).
-constexpr float kDragThreshold = 4.0f;
-
 bool ContainsPoint(Rect rect, Vec2 point) noexcept {
     return point.x >= rect.position.x && point.x <= rect.position.x + rect.size.x &&
            point.y >= rect.position.y && point.y <= rect.position.y + rect.size.y;
 }
 
-bool PastThreshold(Vec2 from, Vec2 to) noexcept {
+bool PastThreshold(Vec2 from, Vec2 to, float threshold) noexcept {
     const float dx = to.x - from.x;
     const float dy = to.y - from.y;
-    return dx * dx + dy * dy >= kDragThreshold * kDragThreshold;
+    return dx * dx + dy * dy >= threshold * threshold;
 }
 
 Rect Shifted(Rect rect, Vec2 delta) noexcept {
@@ -75,7 +72,7 @@ WindowEvents Window::OnPointer(const PointerEvent& event) noexcept {
         break;
     case PointerPhase::Move:
         if (drag_ == Drag::Pending) {
-            if (!PastThreshold(grab_, event.position)) break;
+            if (!PastThreshold(grab_, event.position, dragThreshold)) break;
             drag_ = Drag::Move;
         }
         if (drag_ == Drag::Move) {

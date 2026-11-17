@@ -179,3 +179,98 @@ visualizador, API reference de entrada, keyframe sampling e playback com loop/se
 multi-pointer do core, tradução SDL3 de eventos touch e fuzzing libFuzzer do parser JSON configurado
 na CI Clang. A execução do fuzz depende da CI; cobertura total, demais plataformas e itens restantes
 permanecem explícitos para não declarar integração sem backend, dependências ou código da engine.
+
+## Sessão de correções da interface (camadas, entrada, divisores, texto, desempenho e menus)
+
+Cada item abaixo corresponde a um commit desta sessão.
+
+### 1. Camadas (z-order)
+
+A ordem de desenho e a ordem de acerto de ponteiro usam a mesma regra (`DrawsAbove`, em `Core/DrawOrder.hpp`):
+camada, zOrder efetivo, `paintOrder` e handle. Antes, o desenho ordenava por camada e zOrder, mas o acerto só por
+`paintOrder`, então um elemento com zOrder alto aparecia por cima de outra janela e não recebia o ponteiro. `UILayer`
+define a pilha padrão, de baixo para cima: Background, Docked, Floating, Popup, Tooltip e DragPreview. O zOrder de
+um elemento é um deslocamento relativo ao pai, então subir uma janela sobe os filhos junto. `LayoutTree::BringToFront`
+muda só a ordem de empilhamento e não o fluxo do layout. `LayoutSceneBridge::SetDragRoot` coloca a subárvore
+arrastada na camada DragPreview. `SceneExtractionResult::OrderOf` devolve a chave de um dono, para que textos gerados
+pelo host sigam a ordem do elemento. Teste: `spriteui_layers_input_tests` (sobreposição, subir janela, popup e arrasto).
+
+### 2. Docking: limiar de arrasto, ícones de encaixe e histerese
+
+Clicar na barra de título sem arrastar não move nem desencaixa a janela. `Window` e
+`UIWindowComponent` só iniciam o arraste depois de `dragThreshold` (padrão 6 px, antes 4 px e sem limiar no
+caminho de componente). O deslocamento acumulado desde o pressionamento é aplicado de uma vez, sem salto.
+`DockDragController::Release` com um clique sem arrasto devolve ação `None`. `BuildDockGuideItems`
+(`Widgets/DockGuides.hpp`) gera os cinco ícones de encaixe (esquerda, direita, topo, base e centro) na camada
+`DragPreview`, com opacidade média (0,45 comum, 0,60 no slot destacado), só para a folha sob o ponteiro. O
+slot tem histerese (`DockInteractionConfig::slotHysteresis`, 15 por cento da zona): `Track` e `Release` usam a
+mesma regra, então a prévia e a ação final coincidem e o alvo não pula na divisa. Testes:
+`spriteui_dock_tests` (clique de 2 px, limiar de 6 px, histerese, prévia e ícones) e `SpriteUi.CoreTests`.
+
+### 3. Clique que pedia várias tentativas
+
+Causas encontradas e corrigidas. (a) `UIEventRouter::Process` descartava qualquer entrada com o mesmo `frameId`
+da anterior. Um `move`, `down` e `up` no mesmo quadro perdiam o press e o release, e o botão só respondia na
+tentativa seguinte. Agora o roteador aceita várias entradas por quadro e descarta apenas uma repetição exata da
+anterior. (b) O adaptador SDL3 descartava o press quando o evento de foco chegava depois do clique; um clique
+dentro da janela agora prova o foco. (c) O bridge ignorava o estado desativado: `ElementVisual::enabled` agora
+gera alvos desativados, que cobrem o ponteiro sem deixar o evento passar, e os filhos de um elemento desativado
+também ficam desativados. Testes: `spriteui_layers_input_tests` (press e release no mesmo quadro sobre botão
+recém-criado, press e release em um único snapshot, primeiro clique sem foco prévio e desativado sem vazamento).
+O adaptador SDL3 não foi compilado nesta máquina, porque o SDL3 não está instalado; a alteração é uma linha.
+
+### 4. Divisores (Splitter)
+
+`Elements::Splitter` é a alça entre dois painéis. A área de pegada tem 8 px (`hitThickness`), centrada na linha
+visível de 2 px, então cada lado da linha tem 4 px de pegada a partir do centro. `HitRect()` garante pelo menos
+8 px mesmo quando o layout dá uma caixa mais fina. Arrastar muda o tamanho do painel da frente (esquerda ou
+topo) nos dois sentidos, porque o deslocamento é com sinal. Os limites são por painel: `minLeading`/`maxLeading`
+para a frente e `minTrailing`/`maxTrailing` para o painel de trás, que só valem com `totalSize` informado. Se os
+limites são incompatíveis, o divisor não muda. Cancelar volta ao tamanho de antes do arraste. `Cursor()` sugere
+o cursor de redimensionamento do eixo, e `BuildSplitterItems` desenha a linha, destacada com o ponteiro em cima.
+O divisor não move os painéis: devolve `leadingSize` e quem chama aplica no layout. Testes:
+`spriteui_splitter_tests` (área de pegada, arraste nos dois sentidos, limites, cancelamento e cursor).
+
+### 5. Texto nítido: escala de interface como fator de primeiro nível
+
+`Text::UIScale` (`Text/UIScale.hpp`) trata a escala de interface como um valor único. O padrão é 1.25 (125 por
+cento) e `SanitizeUIScale` aceita de 0,5 a 4,0; valor inválido volta ao padrão. A partir dela saem três coisas: o
+bucket de rasterização (`BitmapRasterSizeFor`, que é `ceil(logico x escala x oversampling)` no bucket de
+`BitmapRasterPolicy`), a configuração de layout com o grid de pixel físico (`MakeScaledTextConfig`, que define
+`devicePixelScale`) e a chave do cache de atlas com o bucket (`MakeBitmapAtlasKey`). `MakeBitmapAtlasConfig` escolhe
+o raster do bucket e cresce a textura de 512 até 4096 quando o bucket é grande demais para o padrão. O snap a pixel
+físico já existia e está confirmado: o desenho de cada glifo cai em pixel de tela inteiro, enquanto o layout, o
+caret e o acerto continuam em coordenadas lógicas, sem depender do DPI. Filtro linear e gama são do backend e do
+host: `coverageGamma` continua no padrão 1,0. Teste: `spriteui_ui_scale_tests` ("Hello" em 1.0x, 1.25x e 2.0x, com
+a altura do H proporcional ao raster; snap de desenho). Limitação: o host do editor (fora deste repositório) ainda
+precisa adotar estas funções para que o texto do editor use o bucket da escala.
+
+## Sessão de menus e controles padrão (altura de 28 px e área de clique)
+
+Cada parte abaixo corresponde a um commit desta sessão.
+
+### 1. Barra de menus
+
+A barra (`Elements/MenuBar.hpp`, `Widgets/Menu.hpp`) tem destaque de hover no cabeçalho, além do destaque de
+menu aberto (`HoveredHeader`, só com a barra fechada ou com outro menu aberto). Cada item tem uma coluna de ícone
+(`IconRect`; o modelo guarda só a chave em `MenuItem::icon` e o host desenha) e uma coluna de atalho alinhada à
+direita (`ShortcutRect`; o host desenha o texto). Um item `checkable` alterna `checked` com Enter ou clique, e o menu
+continua aberto; `MenuBarControl::Menus()` devolve o valor novo porque a cópia do popup é sincronizada depois de cada
+tecla ou clique. Os popups ficam na camada `UILayer::Popup`. A altura da faixa vem de `MenuBarHeightFor(escala)`:
+28 px a 100 por cento. Ponto em aberto: a 125 por cento a função devolve 35 px (28 x 1,25, arredondado ao pixel
+físico); a meta de 34 px não foi aplicada, e a diferença precisa de decisão. Testes: `spriteui_menu_bar_tests`
+(abrir, navegar com setas, marcar com Enter, Esc, clique na caixa, colunas, camada, hover e altura). Precisa de teste
+visual: alinhamento do ícone e do atalho, contraste da marca e do destaque de hover.
+
+### 2. Controles padrão: altura de 28 px e área de clique igual ao desenho
+
+Button, Checkbox, Toggle e RadioGroup têm altura mínima de 28 px a 100 por cento (`kStandardControlHeight`, aplicada
+no construtor). A área de clique segue o desenho: o Button aceita só dentro do fundo, com os cantos arredondados
+(`WithinDrawn`, `ContainsDrawn`); o Toggle aceita só dentro da pílula da trilha de 40 x 28, por isso `OnPointer`
+recebe o mesmo `ToggleStyle` do desenho; a caixa de seleção usa a linha do controle, que inclui o rótulo filho; o
+RadioGroup usa a linha de cada opção, que inclui o rótulo desenhado pelo chamador. Ponto fora da área não pressiona,
+não gera Click e não acende o hover. O token `buttonHeight` passa a 28; `controlHeight` (campos de texto) continua
+30, fora desta parte. Testes: `spriteui_element_tests` (área do botão nos cantos, altura padrão, helpers de área) e
+`spriteui_radio_toggle_tests` (pílula da chave, geometria de 28 px, clique fora da trilha). Precisa de teste visual:
+as capturas de `tests/Visual` mudam com a altura nova (não rodam no ctest desta máquina) e as referências de pixel
+dos botões, chaves e linhas de radio devem ser refeitas.

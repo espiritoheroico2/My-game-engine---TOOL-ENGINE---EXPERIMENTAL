@@ -18,8 +18,10 @@ Vec4 TrackColor(const Toggle& toggle, const ToggleStyle& style) noexcept {
 
 } // namespace
 
-ToggleEvents Toggle::OnPointer(const PointerEvent& event) noexcept {
-    const GestureResult gesture = gesture_.Apply(states, event);
+ToggleEvents Toggle::OnPointer(const PointerEvent& event, const ToggleStyle& style) noexcept {
+    // A trilha e uma pilula: o raio e metade da altura (limitado pelo helper). Fora dela, nada aciona.
+    const Rect track = ToggleTrackRect(*this, style);
+    const GestureResult gesture = gesture_.Apply(states, WithinDrawn(event, track, 0.5f * track.size.y));
     ToggleEvents events;
     events.pressStarted = gesture.pressStarted;
     events.pressEnded = gesture.pressEnded;

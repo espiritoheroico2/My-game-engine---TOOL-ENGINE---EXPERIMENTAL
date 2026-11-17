@@ -23,7 +23,8 @@ float Finite(float value) noexcept {
 } // namespace
 
 ButtonEvents Button::OnPointer(const PointerEvent& event) noexcept {
-    const GestureResult gesture = gesture_.Apply(states, event);
+    // A area de clique e o fundo desenhado (com os cantos), nao a caixa inteira do elemento.
+    const GestureResult gesture = gesture_.Apply(states, WithinDrawn(event, border, cornerRadius));
     ButtonEvents events;
     events.pressStarted = gesture.pressStarted;
     events.pressEnded = gesture.pressEnded;

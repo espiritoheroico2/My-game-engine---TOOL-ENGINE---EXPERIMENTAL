@@ -1,5 +1,7 @@
 #include "SpriteUi/Input/InputRouter.hpp"
 
+#include "SpriteUi/Core/DrawOrder.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -17,6 +19,20 @@ const HitTarget* UIEventRouter::FindTarget(
         }
     }
     return nullptr;
+}
+
+bool UIEventRouter::SameSnapshot(const UIInputSnapshot& a, const UIInputSnapshot& b) noexcept {
+    const auto sameVec = [](Vec2 x, Vec2 y) noexcept { return x.x == y.x && x.y == y.y; };
+    return sameVec(a.pointerPositionLogical, b.pointerPositionLogical) &&
+           sameVec(a.pointerDeltaLogical, b.pointerDeltaLogical) && sameVec(a.wheelDelta, b.wheelDelta) &&
+           a.pointerId == b.pointerId && a.primaryDown == b.primaryDown &&
+           a.primaryPressed == b.primaryPressed && a.primaryReleased == b.primaryReleased &&
+           a.pointerCancelled == b.pointerCancelled && a.windowFocused == b.windowFocused &&
+           a.frameId == b.frameId && a.frameTimeSeconds == b.frameTimeSeconds;
+}
+
+DrawOrderKey UIEventRouter::KeyOf(const HitTarget& target) noexcept {
+    return DrawOrderKey{target.layer, target.zOrder, target.paintOrder, target.handle.Pack()};
 }
 
 const HitTarget* UIEventRouter::HitTest(
@@ -43,10 +59,8 @@ const HitTarget* UIEventRouter::HitTest(
             continue;
         }
 
-        const bool laterPaint = !best || target.paintOrder > best->paintOrder;
-        const bool deterministicTie = best && target.paintOrder == best->paintOrder &&
-                                       target.handle.Pack() > best->handle.Pack();
-        if (laterPaint || deterministicTie) {
+        // Mesma regra de desenho: o alvo que seria pintado por ultimo recebe o ponteiro.
+        if (!best || DrawsAbove(KeyOf(target), KeyOf(*best))) {
             best = &target;
             bestLocal = local;
         }
@@ -132,7 +146,8 @@ std::vector<UIEvent> UIEventRouter::Process(
         return Process(cancelled, targets);
     }
 
-    if (hasProcessedFrame_ && input.frameId == lastFrameId_) return events;
+    if (hasProcessedFrame_ && SameSnapshot(input, lastInput_)) return events;
+    lastInput_ = input;
     lastFrameId_ = input.frameId;
     hasProcessedFrame_ = true;
     state_.consumedThisFrame = false;

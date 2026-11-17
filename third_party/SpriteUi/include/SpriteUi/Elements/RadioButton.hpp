@@ -70,7 +70,7 @@ class RadioGroup final : public Element {
     std::vector<RadioOption> options;
     RadioOptionId selectedId = NoRadioOption;
     std::size_t focusedIndex = NoRadioIndex;
-    float rowHeight = 26.0f;
+    float rowHeight = 28.0f;      // Altura padrao de controle (28 px a 100 por cento); a area de clique e a linha.
 
     // Adiciona uma opcao no fim. Identificador repetido ou NoRadioOption: false.
     bool AddOption(RadioOptionId id, std::string label);

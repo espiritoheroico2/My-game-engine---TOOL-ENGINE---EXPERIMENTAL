@@ -9,6 +9,9 @@
 // Click inverte o valor exatamente uma vez (Down e Up dentro, com o mesmo ponteiro). Arrastar para fora e
 // soltar nao muda nada. Espaco inverte quando o elemento esta focado. Desabilitado nao muda nada.
 //
+// Area de clique: a pilula da trilha desenhada, nao a caixa do elemento. Por isso OnPointer recebe o mesmo
+// ToggleStyle usado em BuildToggleItems. Altura padrao: 28 px a 100 por cento (kStandardControlHeight).
+//
 // Exemplo:
 //   auto id = tree.Create<Toggle>(parent);
 //   tree.GetAs<Toggle>(id)->on = true;   // Estado inicial de programa.
@@ -31,7 +34,7 @@ struct ToggleStyle {
     Vec4 knob{1.0f, 1.0f, 1.0f, 1.0f};
     Vec4 focusRing{0.95f, 0.8f, 0.3f, 1.0f};
     float trackWidth = 40.0f;
-    float trackHeight = 22.0f;
+    float trackHeight = 28.0f;     // Altura padrao de controle (28 px a 100 por cento).
     float knobInset = 3.0f;        // Folga entre a bolinha e a borda da trilha.
     float focusRingWidth = 2.0f;
     float hoverAmount = 0.10f;
@@ -48,8 +51,11 @@ class Toggle final : public Element {
   public:
     bool on = false;
 
-    // Ponteiro: Click inverte o valor. Devolve o que aconteceu neste evento.
-    [[nodiscard]] ToggleEvents OnPointer(const PointerEvent& event) noexcept;
+    Toggle() noexcept { minSize.y = kStandardControlHeight; }
+
+    // Ponteiro: Click inverte o valor, so se cair na trilha desenhada. Devolve o que aconteceu neste evento.
+    // Passe o estilo do desenho: a area de clique segue trackWidth, trackHeight e a forma da pilula.
+    [[nodiscard]] ToggleEvents OnPointer(const PointerEvent& event, const ToggleStyle& style = ToggleStyle{}) noexcept;
 
     // Espaco com foco inverte o valor. Sem foco ou desabilitado, nao faz nada.
     [[nodiscard]] ToggleEvents ToggleByKey() noexcept;

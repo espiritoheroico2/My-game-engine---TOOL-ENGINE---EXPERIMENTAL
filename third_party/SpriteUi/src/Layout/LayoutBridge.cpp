@@ -1,5 +1,7 @@
 #include "SpriteUi/Layout/LayoutBridge.hpp"
 
+#include <algorithm>
+
 namespace ToolEngine::SpriteUi {
 
 void LayoutSceneBridge::SetVisual(UIHandle handle, const ElementVisual& visual) {
@@ -21,6 +23,15 @@ const ElementVisual* LayoutSceneBridge::GetVisual(UIHandle handle) const {
 }
 
 namespace {
+
+// Verdadeiro quando o retangulo nao tem nenhuma area dentro do recorte (todo de fora).
+bool FullyClipped(Rect rect, const Rendering::ClipRectGPU& clip) noexcept {
+    const float x0 = std::max(rect.position.x, clip.minX);
+    const float y0 = std::max(rect.position.y, clip.minY);
+    const float x1 = std::min(rect.position.x + rect.size.x, clip.maxX);
+    const float y1 = std::min(rect.position.y + rect.size.y, clip.maxY);
+    return x1 <= x0 || y1 <= y0;
+}
 
 struct TraversalState {
     std::uint64_t paintCounter = 0;
@@ -59,7 +70,7 @@ void CollectClipsAndPaint(
 
     state.elementInheritedClip.push_back({id, currentClipNodeIdx});
 
-    for (UIHandle child : elem->children) {
+    for (UIHandle child : tree.PaintChildren(id)) {
         CollectClipsAndPaint(child, tree, bridge, currentClipNodeIdx, state);
     }
 }
@@ -70,7 +81,7 @@ SceneExtractionResult LayoutSceneBridge::Extract(const LayoutTree& tree) const {
     SceneExtractionResult result;
 
     TraversalState state;
-    for (UIHandle root : tree.Roots()) {
+    for (UIHandle root : tree.PaintRoots()) {
         CollectClipsAndPaint(root, tree, *this, Rendering::NoClipIndex, state);
     }
 
@@ -83,15 +94,24 @@ SceneExtractionResult LayoutSceneBridge::Extract(const LayoutTree& tree) const {
         }
     }
 
-    // Traverse again to emit HitTargets and RenderItems in paint order
+    // Segunda passada: caixas de acerto e itens de desenho, na ordem de pintura. A camada e o zOrder efetivos
+    // passam do pai para o filho (camada: a maior; zOrder: a soma), assim a janela inteira sobe junta.
     std::uint64_t paintCounter = 0;
 
-    auto emitElement = [&](auto self, UIHandle id, UIHandle hitAncestor) -> void {
+    auto emitElement = [&](auto self, UIHandle id, UIHandle hitAncestor, std::int32_t parentLayer,
+                           float parentZ, bool inDrag, bool disabledAncestor) -> void {
         const auto* elem = tree.Get(id);
         if (!elem || !elem->visible) return;
 
         const auto* visual = GetVisual(id);
         const std::uint64_t currentPaint = ++paintCounter;
+
+        const bool dragging = inDrag || (dragRoot_.IsValid() && id == dragRoot_);
+        std::int32_t layer = std::max(visual ? visual->layer : parentLayer, parentLayer);
+        if (dragging) layer = std::max(layer, static_cast<std::int32_t>(UILayer::DragPreview));
+        const float zOrder = parentZ + (visual ? visual->zOrder : 0.0f);
+
+        result.orders[id.Pack()] = DrawOrderKey{layer, zOrder, currentPaint, id.Pack()};
 
         std::uint32_t effectiveClip = Rendering::NoClipIndex;
         auto clipIt = elementEffectiveClipIndex.find(id.Pack());
@@ -111,8 +131,11 @@ SceneExtractionResult LayoutSceneBridge::Extract(const LayoutTree& tree) const {
             target.localToScreen.tx = elem->node.rect.position.x;
             target.localToScreen.ty = elem->node.rect.position.y;
             target.paintOrder = currentPaint;
+            target.layer = layer;
+            target.zOrder = zOrder;
             target.visible = elem->visible;
-            target.enabled = true;
+            // Filho de um elemento desativado tambem fica desativado.
+            target.enabled = !disabledAncestor && (visual ? visual->enabled : true);
             target.blocksInput = visual ? visual->blocksInput : true;
             target.focusable = visual ? visual->focusable : false;
 
@@ -125,8 +148,12 @@ SceneExtractionResult LayoutSceneBridge::Extract(const LayoutTree& tree) const {
             result.hitTargets.push_back(target);
         }
 
-        // RenderItem
-        if (visual && elem->node.rect.size.x > 0.0f && elem->node.rect.size.y > 0.0f) {
+        // RenderItem. Elemento todo fora do recorte nao gera item de desenho (culling); o acerto nao muda.
+        const bool culled = effectiveClip != Rendering::NoClipIndex &&
+                            effectiveClip < result.clipHierarchy.effectiveRects.size() &&
+                            FullyClipped(elem->node.rect, result.clipHierarchy.effectiveRects[effectiveClip]);
+        if (culled && visual) ++result.culledRenderItems;
+        if (visual && !culled && elem->node.rect.size.x > 0.0f && elem->node.rect.size.y > 0.0f) {
             Rendering::UIRenderItem item;
             item.handle = id;
             item.layout.resolvedPosition = elem->node.rect.position;
@@ -146,23 +173,32 @@ SceneExtractionResult LayoutSceneBridge::Extract(const LayoutTree& tree) const {
             item.materialIndex = visual->materialIndex;
             item.clipIndex = effectiveClip;
             item.flags = visual->flags;
-            item.zOrder = visual->zOrder;
+            item.layer = layer;
+            item.zOrder = zOrder;
             item.paintOrder = currentPaint;
             item.visible = elem->visible;
 
             result.renderItems.push_back(item);
         }
 
-        for (UIHandle child : elem->children) {
-            self(self, child, emitsTarget ? id : hitAncestor);
+        const bool disabledHere = disabledAncestor || (visual && !visual->enabled);
+        for (UIHandle child : tree.PaintChildren(id)) {
+            self(self, child, emitsTarget ? id : hitAncestor, layer, zOrder, dragging, disabledHere);
         }
     };
 
-    for (UIHandle root : tree.Roots()) {
-        emitElement(emitElement, root, InvalidUIHandle);
+    for (UIHandle root : tree.PaintRoots()) {
+        emitElement(emitElement, root, InvalidUIHandle, static_cast<std::int32_t>(UILayer::Background), 0.0f,
+                    false, false);
     }
 
     return result;
+}
+
+std::optional<DrawOrderKey> SceneExtractionResult::OrderOf(UIHandle handle) const {
+    const auto it = orders.find(handle.Pack());
+    if (it == orders.end()) return std::nullopt;
+    return it->second;
 }
 
 } // namespace ToolEngine::SpriteUi

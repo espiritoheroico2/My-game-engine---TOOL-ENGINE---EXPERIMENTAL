@@ -39,6 +39,11 @@ struct ElementStates {
 // Valor de maximo "sem limite".
 inline constexpr float NoMaxSize = std::numeric_limits<float>::max();
 
+// Altura padrao de um controle de uma linha (botao, caixa de selecao, chave) a 100 por cento de escala. Os
+// construtores dos controles usam este valor como altura minima; em outra escala, multiplique pela escala de
+// interface (Text/UIScale.hpp).
+inline constexpr float kStandardControlHeight = 28.0f;
+
 // Reduz o retangulo pelos quatro lados. Insets negativos ou nao finitos contam como zero; a largura e a
 // altura nunca ficam negativas.
 [[nodiscard]] Rect ShrinkRect(Rect rect, Insets insets) noexcept;

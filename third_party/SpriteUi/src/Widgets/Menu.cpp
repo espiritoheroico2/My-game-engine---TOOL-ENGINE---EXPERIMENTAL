@@ -175,7 +175,21 @@ MenuEvent MenuControl::PopSubmenu() noexcept {
     return MenuEvent::Moved;
 }
 
+std::vector<MenuItem>& MenuControl::MutableItems(std::size_t depth) noexcept {
+    std::vector<MenuItem>* items = &root_;
+    for (std::size_t level = 0; level < depth && level < path_.size(); ++level) {
+        items = &(*items)[path_[level]].children;
+    }
+    return *items;
+}
+
 MenuEvent MenuControl::Activate(std::size_t depth, std::size_t index) noexcept {
+    MenuItem& item = MutableItems(depth)[index];
+    if (item.checkable) {
+        // Caixa de selecao: alterna e o menu continua aberto para o usuario ver o novo valor.
+        item.checked = !item.checked;
+        return MenuEvent::Moved;
+    }
     activation_.assign(path_.begin(), path_.begin() + static_cast<std::ptrdiff_t>(depth));
     activation_.push_back(index);
     Close();
@@ -229,9 +243,16 @@ MenuEvent MenuBarControl::Click(std::size_t depth, std::size_t index) noexcept {
 }
 
 MenuEvent MenuBarControl::Finish(MenuEvent event) noexcept {
+    SyncActiveMenu();
     if (event == MenuEvent::Activated) activatedMenu_ = active_;
     if (event == MenuEvent::Activated || event == MenuEvent::Dismissed) active_ = NoControlIndex;
     return event;
+}
+
+void MenuBarControl::SyncActiveMenu() noexcept {
+    if (active_ == NoControlIndex || active_ >= menus_.size() || !dropdown_.IsOpen()) return;
+    // A raiz do popup e a copia da arvore do menu; so 'checked' muda durante a interacao.
+    menus_[active_].items = dropdown_.Items(0);
 }
 
 MenuEvent MenuBarControl::SwitchMenu(int step) noexcept {

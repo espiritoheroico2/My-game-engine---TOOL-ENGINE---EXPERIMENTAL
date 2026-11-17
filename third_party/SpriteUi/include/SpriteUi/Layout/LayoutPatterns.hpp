@@ -25,7 +25,8 @@ struct LayoutTokens {
     float spaceLg = 24.0f;
     float labelHeight = 18.0f;
     float controlHeight = 30.0f; // Text fields and single-line controls.
-    float buttonHeight = 34.0f;
+    // Botao: 28 px a 100 por cento de escala, a mesma altura padrao de Button (kStandardControlHeight).
+    float buttonHeight = 28.0f;
 };
 
 // Fixed width and height. Does not shrink.

@@ -4,7 +4,9 @@
 #include "SpriteUi/Elements/ElementTree.hpp"
 #include "SpriteUi/Elements/Button.hpp"
 #include "SpriteUi/Elements/Checkbox.hpp"
+#include "SpriteUi/Elements/Paint.hpp"
 #include "SpriteUi/Elements/Slider.hpp"
+#include "SpriteUi/Elements/Toggle.hpp"
 #include "SpriteUi/Elements/Label.hpp"
 #include "SpriteUi/Elements/TextField.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
@@ -120,9 +122,11 @@ void TestArrangeMarginAndMinMax() {
     CHECK(Near(withMargin.ArrangeIn({{0, 0}, {200, 100}}).size.x, 120.0f));
 }
 
+// Ponto no centro do botao de teste (border 100 x 28): dentro do desenho quando inside e verdadeiro.
 PointerEvent Pointer(PointerPhase phase, bool inside, std::uint32_t pointerId = 1) {
     PointerEvent event;
     event.phase = phase;
+    event.position = {50.0f, 14.0f};
     event.inside = inside;
     event.pointerId = pointerId;
     return event;
@@ -131,6 +135,7 @@ PointerEvent Pointer(PointerPhase phase, bool inside, std::uint32_t pointerId = 
 // Botao: clique so com Down e Up dentro, ponteiro capturado, cancelamento e desabilitado.
 void TestButtonClickRules() {
     Button button;
+    button.border = {{0, 0}, {100, 28}};
     ButtonEvents e = button.OnPointer(Pointer(PointerPhase::Down, true));
     CHECK(e.pressStarted && button.states.pressed);
     e = button.OnPointer(Pointer(PointerPhase::Up, true));
@@ -170,6 +175,7 @@ void TestButtonClickRules() {
 
 void TestButtonHoldAndKeyboard() {
     Button button;
+    button.border = {{0, 0}, {100, 28}};
     (void)button.OnPointer(Pointer(PointerPhase::Down, true));
     button.Advance(0.2f);
     CHECK(!button.IsHeld());
@@ -194,6 +200,7 @@ void TestButtonGeometryAndPressOffset() {
     CHECK(Near(size.y, layout.lineHeight + 8.0f));
 
     Button button;
+    button.border = {{0, 0}, {100, 28}};
     ButtonStyle style;
     CHECK(Near(ButtonPressOffset(button, style).y, 0.0f));
     (void)button.OnPointer(Pointer(PointerPhase::Down, true));
@@ -514,6 +521,61 @@ PointerEvent PointerAt(PointerPhase phase, Vec2 position, bool inside) {
     return event;
 }
 
+// Area de clique igual ao desenho: o botao so aciona dentro do fundo, cantos arredondados incluidos.
+void TestButtonClickAreaFollowsDrawing() {
+    Button button;
+    button.border = {{0, 0}, {100, 28}};
+    button.cornerRadius = 8.0f;
+    (void)button.OnPointer(PointerAt(PointerPhase::Down, {50, 14}, true));
+    CHECK(button.OnPointer(PointerAt(PointerPhase::Up, {50, 14}, true)).clicked);
+
+    // Canto da caixa fora do arco (raio 8): nao inicia pressao nem gera Click.
+    CHECK(!button.OnPointer(PointerAt(PointerPhase::Down, {1, 1}, true)).pressStarted);
+    CHECK(!button.states.pressed);
+    CHECK(!button.OnPointer(PointerAt(PointerPhase::Up, {1, 1}, true)).clicked);
+
+    // Ponto fora da caixa (o chamador informa inside falso): nada.
+    CHECK(!button.OnPointer(PointerAt(PointerPhase::Down, {150, 14}, false)).pressStarted);
+
+    // Hover: entrar so no canto de fora nao acende o destaque; entrar no meio acende.
+    (void)button.OnPointer(PointerAt(PointerPhase::Enter, {1, 1}, true));
+    CHECK(!button.states.hovered);
+    (void)button.OnPointer(PointerAt(PointerPhase::Enter, {50, 14}, true));
+    CHECK(button.states.hovered);
+}
+
+// Area desenhada: pilula (raio = metade do menor lado), cantos de fora do arco e borda direita meio-aberta.
+void TestDrawnAreaHelpers() {
+    const Rect pill{{0, 0}, {40, 28}};
+    CHECK(ContainsDrawn(pill, 14, {20, 14}));
+    CHECK(ContainsDrawn(pill, 14, {1, 14}));     // Ponta da pilula, dentro do arco.
+    CHECK(!ContainsDrawn(pill, 14, {1, 1}));     // Canto: fora do arco.
+    CHECK(ContainsDrawn(pill, 0, {1, 1}));       // Sem raio, o canto conta.
+    CHECK(!ContainsDrawn(pill, 14, {40, 14}));   // Borda direita e meio-aberta.
+    CHECK(!ContainsDrawn(pill, 14, {-1, 14}));
+    CHECK(!ContainsDrawn(pill, 14, {std::numeric_limits<float>::quiet_NaN(), 14}));
+    CHECK(ContainsDrawn(pill, 100, {20, 14}));   // Raio grande demais vira pilula, nao passa do meio.
+    CHECK(!ContainsDrawn(pill, 100, {1, 1}));
+
+    PointerEvent enter;
+    enter.phase = PointerPhase::Enter;
+    enter.inside = true;
+    enter.position = {1, 1};
+    const PointerEvent outside = WithinDrawn(enter, pill, 14);
+    CHECK(outside.phase == PointerPhase::Leave && !outside.inside);
+    enter.position = {20, 14};
+    const PointerEvent within = WithinDrawn(enter, pill, 14);
+    CHECK(within.phase == PointerPhase::Enter && within.inside);
+}
+
+// Altura padrao 28 px a 100 por cento: minimo do elemento para botao, caixa de selecao e chave.
+void TestControlDefaultHeight() {
+    CHECK(Near(Button{}.minSize.y, kStandardControlHeight));
+    CHECK(Near(Checkbox{}.minSize.y, 28.0f));
+    CHECK(Near(Toggle{}.minSize.y, 28.0f));
+    CHECK(Near(kStandardControlHeight, 28.0f));
+}
+
 // Caixa de selecao: Click inverte uma vez, arrastar para fora nao muda, desabilitado nao muda, Espaco com foco.
 void TestCheckboxToggleRules() {
     Checkbox box;
@@ -759,6 +821,9 @@ int main() {
     TestButtonClickRules();
     TestButtonHoldAndKeyboard();
     TestButtonGeometryAndPressOffset();
+    TestButtonClickAreaFollowsDrawing();
+    TestDrawnAreaHelpers();
+    TestControlDefaultHeight();
     TestTextFieldLayoutAndItems();
     TestTextFieldScrollAndClick();
     TestTextFieldScrollTransitions();

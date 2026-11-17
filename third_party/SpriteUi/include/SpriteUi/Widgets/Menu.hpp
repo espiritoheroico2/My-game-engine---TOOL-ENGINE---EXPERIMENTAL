@@ -12,6 +12,8 @@
 //    caminho escolhido (ActivationPath).
 //  - Clique em um nivel mais raso fecha os niveis mais fundos que ficaram abaixo dele.
 //  - Shortcut e so texto exibido ao lado do rotulo; o modelo nao o interpreta.
+//  - Item checkable alterna 'checked' e o menu continua aberto. Na barra, o estado e devolvido a
+//    MenuBarControl::Menus() depois de cada tecla ou clique, para que o host leia o valor novo.
 //  - Menu fechado ignora teclas e movimentos (retornam None / false).
 
 #include "SpriteUi/Widgets/Controls.hpp"
@@ -31,6 +33,13 @@ struct MenuItem {
     MenuItemKind kind = MenuItemKind::Action;
     bool disabled = false;
     std::vector<MenuItem> children; // Usado apenas por MenuItemKind::Submenu.
+
+    // Icone: chave escolhida pelo host (ex.: "save"). O modelo so guarda o nome; quem desenha e o chamador.
+    std::string icon;
+    // Item com caixa de selecao. Enter ou clique alterna 'checked' e o menu continua aberto (MenuEvent::Moved).
+    // Exemplo de jogo: "Mostrar grade" no menu Exibir liga e desliga sem fechar o menu.
+    bool checkable = false;
+    bool checked = false;
 };
 
 enum class MenuKey : std::uint8_t { Up, Down, Left, Right, Home, End, Enter, Escape };
@@ -53,7 +62,8 @@ public:
     [[nodiscard]] bool IsOpen() const noexcept { return open_; }
     // Quantidade de niveis abertos (0 se fechado).
     [[nodiscard]] std::size_t Depth() const noexcept { return open_ ? path_.size() + 1 : 0; }
-    // Itens do nivel (0 = raiz). Valido para depth < Depth().
+    // Itens do nivel (0 = raiz). Valido para depth < Depth(). A raiz guarda a arvore inteira (submenus incluidos),
+    // por isso Items(0) serve de copia atualizada para quem precisa ler 'checked' depois de um clique.
     [[nodiscard]] const std::vector<MenuItem>& Items(std::size_t depth) const noexcept;
     // Indice destacado no nivel, ou NoControlIndex.
     [[nodiscard]] std::size_t Highlighted(std::size_t depth) const noexcept;
@@ -81,6 +91,7 @@ private:
     void PushSubmenu(std::size_t index) noexcept;
     [[nodiscard]] MenuEvent PopSubmenu() noexcept;
     [[nodiscard]] MenuEvent Activate(std::size_t depth, std::size_t index) noexcept;
+    [[nodiscard]] std::vector<MenuItem>& MutableItems(std::size_t depth) noexcept;
 
     std::vector<MenuItem> root_;
     std::vector<std::size_t> path_;       // Submenu aberto em cada nivel (indice no nivel anterior).
@@ -124,6 +135,8 @@ public:
 
 private:
     [[nodiscard]] MenuEvent Finish(MenuEvent event) noexcept;
+    void SyncActiveMenu() noexcept; // Copia o estado do popup (checked) de volta para menus_[active_].
+
     [[nodiscard]] MenuEvent SwitchMenu(int step) noexcept;
 
     std::vector<MenuBarEntry> menus_;
