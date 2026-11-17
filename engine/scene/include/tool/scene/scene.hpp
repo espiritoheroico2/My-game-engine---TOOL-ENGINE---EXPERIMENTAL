@@ -64,6 +64,9 @@ struct PoolStats {
 
 class Scene;
 
+// Wrapper NAO e proprietario da entidade: e um handle leve (cena + Entity). Copias do wrapper nao
+// controlam a vida do objeto; destroy() apaga a entidade via Scene e as copias ficam obsoletas
+// (valid() = false). Quem quer a limpeza completa (assinatura e pool) deve usar Scene::destroy.
 class ToolObject {
 public:
   ToolObject() = default;
@@ -137,7 +140,7 @@ public:
     const Entity e = o.entity();
     const auto sigIt = signatureByEntity_.find(e.index);
     if (sigIt == signatureByEntity_.end()) { // nao veio de um Blueprint: apaga normalmente
-      world_.destroy(e);
+      destroy(o);
       return;
     }
 
@@ -149,6 +152,17 @@ public:
   }
 
   void deleteAndReuse(ToolObject o, double now) { recycle(o, now); }
+
+  // F-13: ponto UNICO de destruicao real de um objeto vivo. Apaga a entidade (nao vai ao pool) e
+  // remove a assinatura, para que um indice reaproveitado depois nao herde a assinatura antiga.
+  // Dormentes nao sao handles validos (ToolObject::valid), entao nunca chegam aqui: quem limpa o
+  // pool e collectPool/flushPool.
+  void destroy(ToolObject o) {
+    if (!o.valid()) return;
+    const Entity e = o.entity();
+    signatureByEntity_.erase(e.index);
+    world_.destroy(e);
+  }
 
   // Etapa de limpeza (chamar no fim do quadro): expira dormentes.
   // Etapa 1: expira dormentes ociosos por tempo.
@@ -258,7 +272,7 @@ inline void ToolObject::addTag(TagId t) const {
 }
 inline bool ToolObject::hasTag(TagId t) const { return valid() && scene_->world().hasTag(e_, t); }
 inline void ToolObject::destroy() {
-  if (valid()) scene_->world().destroy(e_);
+  if (scene_) scene_->destroy(*this);
 }
 inline void ToolObject::recycle() {
   if (scene_) scene_->recycle(*this, scene_->clock());

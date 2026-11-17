@@ -106,6 +106,23 @@ TEST(scene_pool_over_signature_frees_only_excess) {
   CHECK(s.dormantCount() == 0);
 }
 
+// F-13: destruir pelo wrapper limpa a assinatura; um indice reaproveitado depois nao entra no pool.
+TEST(scene_destroy_clears_signature_for_reused_index) {
+  Quiet q; Scene s; s.setPoolPolicy({1000.0, 100, 100});
+  auto bp = enemyBp(s);
+  auto a = s.spawn(bp);
+  const u32 idx = a.entity().index;
+  a.destroy();
+  CHECK(!a.valid());
+  CHECK(s.world().liveCount() == 0);
+  const Entity raw = s.world().create();          // reaproveita o indice, sem Blueprint
+  CHECK(raw.index == idx);
+  ToolObject o(&s, raw);
+  o.recycle();                                    // sem assinatura obsoleta: apaga, nao pool
+  CHECK(s.dormantCount() == 0);
+  CHECK(s.world().liveCount() == 0);
+}
+
 TEST(scene_delete_reuse_stale_handle_warns) {
   Quiet q; Scene s; auto bp = enemyBp(s);
   auto a = s.spawn(bp);
