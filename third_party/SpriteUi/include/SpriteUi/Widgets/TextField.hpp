@@ -68,6 +68,12 @@ class TextField {
     void PointerDown(Vec2 localPos, Vec2 boxSize, const Text::TextLayoutResult& layout,
                      const TextFieldStyle& style, bool extend = false);
 
+    // Arrasto para selecionar: PointerDown (com foco) inicia; PointerMove estende a selecao; PointerUp encerra.
+    // Perder o foco tambem encerra. Mantem a API que o editor usa desde a versao anterior da biblioteca.
+    void PointerMove(Vec2 localPos, Vec2 boxSize, const Text::TextLayoutResult& layout, const TextFieldStyle& style);
+    void PointerUp() noexcept { selectionDragging_ = false; }
+    [[nodiscard]] bool DraggingSelection() const noexcept { return selectionDragging_; }
+
     // Gera os itens do campo (fundo, selecao, texto, caret) e empilha um recorte da caixa em clips. Os itens
     // de texto, selecao e caret usam esse recorte. Chama FollowCaret antes de gerar, entao o caret aparece.
     // Retorna os itens na ordem de desenho; o recorte e o ultimo elemento de clips.
@@ -79,6 +85,7 @@ class TextField {
   private:
     TextEditState edit_;
     bool focused_ = false;
+    bool selectionDragging_ = false;   // true entre PointerDown com foco e PointerUp
     float scrollX_ = 0.0f;
 };
 

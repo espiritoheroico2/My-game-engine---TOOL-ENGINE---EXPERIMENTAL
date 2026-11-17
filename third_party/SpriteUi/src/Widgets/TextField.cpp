@@ -12,7 +12,10 @@ TextField::TextField(std::string text) : edit_{std::move(text)} {}
 void TextField::SetFocus(bool focused) noexcept {
     focused_ = focused;
     // Sem foco o campo mostra o inicio do texto.
-    if (!focused_) scrollX_ = 0.0f;
+    if (!focused_) {
+        scrollX_ = 0.0f;
+        selectionDragging_ = false;   // sem foco nao ha arrasto em andamento
+    }
 }
 
 float TextField::ViewportWidth(Vec2 boxSize, const TextFieldStyle& style) noexcept {
@@ -49,13 +52,22 @@ void TextField::FollowCaret(const Text::TextLayoutResult& layout, float viewport
 
 void TextField::PointerDown(Vec2 localPos, Vec2 boxSize, const Text::TextLayoutResult& layout,
                             const TextFieldStyle& style, bool extend) {
+    const bool wasFocused = focused_;
     SetFocus(true);
+    selectionDragging_ = wasFocused;   // so arrasta a selecao se o campo ja tinha foco
     if (!IsFinite(localPos)) return;
     const Vec2 origin = TextOrigin(boxSize, layout, style);
     const std::uint32_t offset =
         Text::FindInsertionOffset(layout, {localPos.x - origin.x, localPos.y - origin.y});
     edit_.MoveCaretTo(offset, extend);
     FollowCaret(layout, ViewportWidth(boxSize, style), style.caretWidth);
+}
+
+void TextField::PointerMove(Vec2 localPos, Vec2 boxSize, const Text::TextLayoutResult& layout,
+                            const TextFieldStyle& style) {
+    if (!selectionDragging_ || !focused_) return;
+    // Arrastar so estende a selecao a partir da ancora ja definida pelo PointerDown.
+    PointerDown(localPos, boxSize, layout, style, true);
 }
 
 std::vector<Rendering::UIRenderItem> TextField::Build(Rect box, const Text::TextLayoutResult& layout,

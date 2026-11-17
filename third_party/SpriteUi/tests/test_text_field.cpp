@@ -271,6 +271,32 @@ void TestStyleDefaultsAndSwap() {
 
 } // namespace
 
+// Arrasto com o mouse: PointerDown com foco inicia a selecao; PointerMove estende; PointerUp encerra.
+// Sem foco, o arrasto nao comeca. Perder o foco cancela o arrasto em andamento.
+void TestDragSelectionFollowsPointer() {
+    TextFieldStyle style;
+    TextField field;
+    field.Edit().InsertText("abcdefghij");
+    const auto layout = Layout(field.Edit().Text());
+
+    field.SetFocus(false);
+    field.PointerDown({0.0f, 5.0f}, kBox.size, layout, style);
+    CHECK(!field.DraggingSelection());   // sem foco nao arrasta
+
+    field.SetFocus(true);
+    field.PointerDown({0.0f, 5.0f}, kBox.size, layout, style);   // ancora no inicio, com foco
+    CHECK(field.DraggingSelection());
+    field.PointerMove({60.0f, 5.0f}, kBox.size, layout, style);  // estende ate o meio
+    CHECK(field.Edit().HasSelection());
+    field.PointerUp();
+    CHECK(!field.DraggingSelection());
+
+    field.PointerDown({0.0f, 5.0f}, kBox.size, layout, style);
+    CHECK(field.DraggingSelection());
+    field.SetFocus(false);                                        // perder foco cancela o arrasto
+    CHECK(!field.DraggingSelection());
+}
+
 int main() {
     TestCaretStaysVisibleWhileTyping();
     TestHomeReturnsScrollToZero();
@@ -282,6 +308,7 @@ int main() {
     TestTextSelectionAndCaretUseBoxClip();
     TestWideFieldKeepsTextUnscrolled();
     TestStyleDefaultsAndSwap();
+    TestDragSelectionFollowsPointer();
     std::printf("text field: %d/%d checks passed\n", run - failed, run);
     return failed == 0 ? 0 : 1;
 }
