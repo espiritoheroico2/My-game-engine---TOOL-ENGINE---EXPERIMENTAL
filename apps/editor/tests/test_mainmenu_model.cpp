@@ -73,12 +73,34 @@ void TestWindowItemsShowCheckState() {
   MenuState state;
   state.hierarchy = true;
   auto menus = editor::mainmenu::buildMenus(state, Identity);
-  CHECK(menus[2].items[0].label == "[x] Hierarchy");
-  CHECK(menus[2].items[1].label == "[ ] Inspector");
+  // Janela: o nome vem sem colchetes; a marca e a caixa de selecao (checkable/checked).
+  CHECK(menus[2].items[0].label == "Hierarchy");
+  CHECK(menus[2].items[0].checkable && menus[2].items[0].checked);
+  CHECK(menus[2].items[1].label == "Inspector");
+  CHECK(menus[2].items[1].checkable && !menus[2].items[1].checked);
   CHECK(editor::mainmenu::requestAt(2, 0).command == Command::ToggleHierarchy);
   state.lockInterface = true;
   menus = editor::mainmenu::buildMenus(state, Identity);
-  CHECK(menus[3].items[0].label == "[x] Lock interface");
+  CHECK(menus[3].items[0].label == "Lock interface");
+  CHECK(menus[3].items[0].checkable && menus[3].items[0].checked);
+  CHECK(!menus[1].items[0].checkable);   // Desfazer nao e marcavel
+}
+
+void TestWindowMenuOrderAndIcons() {
+  current = "TestWindowMenuOrderAndIcons";
+  MenuState state;
+  auto menus = editor::mainmenu::buildMenus(state, Identity);
+  const auto& win = menus[2].items;
+  // Ordem pedida: as janelas, um separador e Reset layout no fim.
+  const char* expected[] = {"Hierarchy", "Inspector", "Console", "Profiler", "Edit Mesh", "Paint Mesh", "Scene", "Game",
+                            "Assets", "Scenes", "Settings", "Narrative Controller", "Input Map", "SpriteUI diagnostics", "Help"};
+  for (std::size_t i = 0; i < 15; ++i) CHECK(win[i].label == expected[i]);
+  CHECK(win[15].separator);
+  CHECK(win[16].label == "Reset layout" && !win[16].checkable);
+  // Cada janela tem icone; o separador nao tem.
+  for (std::size_t i = 0; i < 15; ++i) CHECK(win[i].icon != editor::ui_icons::Icon::None);
+  CHECK(win[15].icon == editor::ui_icons::Icon::None);
+  CHECK(win[16].icon == editor::ui_icons::Icon::Reset);
 }
 
 void TestUndoRedoDisabledWhilePlaying() {
@@ -130,6 +152,7 @@ int main() {
   TestRequestsFollowTheRows();
   TestSettingsTabsFromOptionsMenu();
   TestWindowItemsShowCheckState();
+  TestWindowMenuOrderAndIcons();
   TestUndoRedoDisabledWhilePlaying();
   TestBarButtonsFollowPlayState();
   TestTranslatorIsUsedForLabels();

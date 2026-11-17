@@ -86,6 +86,11 @@ target_include_directories(editor_mainmenu_model_tests PRIVATE ${CMAKE_CURRENT_S
 target_link_libraries(editor_mainmenu_model_tests PRIVATE tool::core)
 add_test(NAME Editor.MainMenuModel COMMAND editor_mainmenu_model_tests)
 
+# Icones da interface (ui_icons.hpp): desenhos de 12 x 12 usados nas abas e na barra de menus.
+add_executable(editor_ui_icons_tests tests/test_ui_icons.cpp)
+target_include_directories(editor_ui_icons_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.UiIcons COMMAND editor_ui_icons_tests)
+
 # Modelo da janela Configuracoes (settings_model.hpp): abas, limites de escolha, tamanho do jogo, sombra e divisao.
 add_executable(editor_settings_model_tests tests/test_settings_model.cpp)
 target_include_directories(editor_settings_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
