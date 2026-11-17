@@ -133,6 +133,7 @@ class InspectorPanel {
     // Monta os controles do quadro e devolve a altura do bloco (em pixels, sem a janela). Chamar antes de reservar
     // a altura no ImGui; depois, draw. Ler o objeto aqui nao muda nada.
     float prepare(const Context& ctx, const Hooks& hooks, float width) {
+        theme_ = sui::Theme::fromTokens();   // cores e forma atuais (Aparencia)
         ctx_ = ctx;             // copia: os ponteiros dentro dele valem neste quadro, e o painel os usa em draw e eventos
         hooks_ = hooks;
         width_ = std::max(140.f, width);
@@ -175,6 +176,7 @@ class InspectorPanel {
     // Desenha o bloco. origin = canto superior esquerdo do bloco na tela; visible = parte que cabe na janela ImGui
     // (a janela rola e corta o bloco por esse retangulo).
     bool draw(SDL_Renderer* renderer, sui::Box origin, sui::Box visible, bool shown) {
+        theme_ = sui::Theme::fromTokens();   // cores e forma atuais (Aparencia)
         origin_ = origin;
         visible_ = visible;
         shown_ = shown && visible.w > 0.f && visible.h > 0.f;   // sem objeto, o proprio bloco mostra o aviso

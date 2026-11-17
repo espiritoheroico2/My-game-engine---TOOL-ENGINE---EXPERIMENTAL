@@ -130,6 +130,7 @@ class HelpPanel {
 
   // Desenha a janela quando `open`. Retorna false so em falha do SDL.
   bool draw(SDL_Renderer* renderer, SDL_Window* window, bool& open, bool portuguese) {
+    theme_ = sui::Theme::fromTokens();   // cores e forma atuais (Aparencia)
     if (model_.Portuguese() != portuguese) {
       model_.SetPortuguese(portuguese);
       dirty_ = true;

@@ -77,6 +77,7 @@ public:
     }
 
     bool draw(SDL_Renderer* renderer, SDL_Window* window, float barHeight, std::vector<Request>& requests) {
+        theme_ = sui::Theme::fromTokens();   // cores e forma atuais (Aparencia)
         requests.insert(requests.end(), queue_.begin(), queue_.end());
         queue_.clear();
         if (!renderer || !window) return false;

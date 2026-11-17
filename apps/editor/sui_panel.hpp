@@ -8,6 +8,7 @@
 // Medida e corte de texto acontecem so ao montar o conteudo. Por quadro, o canvas so desloca e recorta o que guardou.
 
 #include "spriteui_host.hpp"
+#include "ui_tokens.hpp"
 
 #include "SpriteUi/Rendering/DrawList.hpp"
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
@@ -43,6 +44,24 @@ struct Theme {
   SU::Vec4 textDim = Srgb(0.56f, 0.565f, 0.60f);
   SU::Vec4 divider = Srgb(0.20f, 0.24f, 0.30f);
   SU::Vec4 error = Srgb(1.f, 0.45f, 0.4f);
+
+  // Cores atuais dos tokens de aparencia (sRGB reto convertido como as cores fixas acima). Os paineis chamam isto
+  // no comeco de cada quadro, assim uma troca na aba Aparencia aparece na hora.
+  static Theme fromTokens() {
+    using C = ui_tokens::Color;
+    const ui_tokens::Tokens& t = ui_tokens::tokens();
+    auto conv = [&t](C c) {
+      const ui_tokens::Rgba& v = t.color(c);
+      return Srgb(v.r, v.g, v.b, v.a);
+    };
+    Theme th;
+    th.panel = conv(C::Panel);
+    th.text = conv(C::Text);
+    th.textDim = conv(C::TextDim);
+    th.divider = conv(C::Divider);
+    th.error = conv(C::Error);
+    return th;
+  }
 };
 
 // Retangulo local da janela (origem no canto superior esquerdo da janela).

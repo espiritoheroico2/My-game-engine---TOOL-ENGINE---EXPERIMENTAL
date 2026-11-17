@@ -91,6 +91,11 @@ add_executable(editor_ui_icons_tests tests/test_ui_icons.cpp)
 target_include_directories(editor_ui_icons_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME Editor.UiIcons COMMAND editor_ui_icons_tests)
 
+# Tokens de aparencia (ui_tokens.hpp): cores por elemento e forma (raio, espaco, recuo, escala).
+add_executable(editor_ui_tokens_tests tests/test_ui_tokens.cpp)
+target_include_directories(editor_ui_tokens_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.UiTokens COMMAND editor_ui_tokens_tests)
+
 # Modelo da janela Configuracoes (settings_model.hpp): abas, limites de escolha, tamanho do jogo, sombra e divisao.
 add_executable(editor_settings_model_tests tests/test_settings_model.cpp)
 target_include_directories(editor_settings_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

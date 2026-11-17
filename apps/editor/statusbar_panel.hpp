@@ -22,6 +22,7 @@ class StatusBarPanel {
 
   // Desenha a faixa de `barHeight` px no pe de uma janela `windowW` x `windowH`. Retorna false so em falha do SDL.
   bool draw(SDL_Renderer* renderer, const Info& info, Translate tr, double nowSec, float windowW, float windowH, float barHeight) {
+    theme_ = sui::Theme::fromTokens();   // cores e forma atuais (Aparencia)
     if (model_.refresh(nowSec, info, tr) || windowW != builtWidth_ || barHeight != builtHeight_) rebuild(windowW, barHeight);
     const sui::Box bar{0.f, windowH - barHeight, windowW, barHeight};
 
