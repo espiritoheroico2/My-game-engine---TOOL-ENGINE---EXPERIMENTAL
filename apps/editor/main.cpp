@@ -2184,7 +2184,7 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
   if (f) {
     std::stringstream ss; ss << f.rdbuf();
     if (auto j = tool::Json::parse(ss.str())) {
-      editor::I18n::get().select((*j)["language"].asString());
+      editor::I18n::get().selectOrDefault((*j)["language"].asString());   // sem idioma salvo: ingles
       ed.showGridScene = editor::ser::flag(*j, "showGridScene", true); ed.showGridGame = editor::ser::flag(*j, "showGridGame", false); ed.showGizmos = editor::ser::flag(*j, "showGizmos", true);
       ed.resMode = std::clamp(static_cast<int>(editor::ser::num(*j, "resMode", 0.f)), 0, 5);
       ed.customW = static_cast<int>(editor::ser::num(*j, "customW", 1280.f)); ed.customH = static_cast<int>(editor::ser::num(*j, "customH", 720.f));
@@ -2316,7 +2316,7 @@ int main(int argc, char** argv) {
 
   Editor ed;
   editor::I18n::get().scan("assets/lang");
-  editor::I18n::get().select("en");
+  editor::I18n::get().select(editor::kDefaultLanguage);   // ingles sem configuracao salva
   ed.theme.scan("assets/themes");
   ed.theme.apply();
   std::string lastScene, lastProject; int savedApi = 0;
