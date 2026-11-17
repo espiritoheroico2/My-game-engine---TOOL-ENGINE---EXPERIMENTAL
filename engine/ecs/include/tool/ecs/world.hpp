@@ -143,11 +143,21 @@ public:
     });
   }
 
-  // Quantos componentes T existem (sem contar dormentes).
-  template <class T> size_t count() const {
+  // F-07: total de componentes T armazenados, INCLUINDO entidades dormentes.
+  template <class T> size_t storageCount() const {
     auto* st = findStorage<T>();
     return st ? st->size() : 0;
   }
+  // Componentes T em entidades vivas e nao dormentes (o que as consultas enxergam).
+  template <class T> size_t activeCount() const {
+    auto* st = findStorage<T>();
+    if (!st) return 0;
+    size_t n = 0;
+    for (u32 i : st->indices()) if (ids_.aliveIndex(i) && !dormant_[i]) ++n;
+    return n;
+  }
+  // Alias de activeCount<T>() (mantido por compatibilidade; antes contava dormentes).
+  template <class T> size_t count() const { return activeCount<T>(); }
 
   // Simulacao ligada/desligada por entidade (fisica e scripts podem pular as que estao longe da camera).
   // Diferente de dormant: a entidade continua visivel e nas consultas; so o sistema de simulacao a ignora.

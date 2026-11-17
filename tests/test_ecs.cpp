@@ -150,6 +150,19 @@ TEST(ecs_parallel_each_matches_each) {
   CHECK(w.count<Vel>() == static_cast<size_t>(N - (N + 2) / 3));
 }
 
+// F-07: storageCount inclui dormentes; activeCount e count (alias) nao.
+TEST(ecs_counts_distinguish_dormant_and_active) {
+  World w;
+  Entity a = w.create(), b = w.create(), c = w.create(), gone = w.create();
+  w.add<Pos>(a); w.add<Pos>(b); w.add<Pos>(c); w.add<Pos>(gone);
+  w.setDormant(b, true);
+  w.destroy(gone);                                 // destruido: componente removido
+  CHECK(w.storageCount<Pos>() == 3);               // a, b (dormente) e c
+  CHECK(w.activeCount<Pos>() == 2);                // a e c
+  CHECK(w.count<Pos>() == w.activeCount<Pos>());   // alias
+  CHECK(w.activeCount<Vel>() == 0 && w.storageCount<Vel>() == 0);  // tipo sem storage
+}
+
 TEST(ecs_simulating_flag_default_and_toggle) {
   World w;
   Entity e = w.create();
