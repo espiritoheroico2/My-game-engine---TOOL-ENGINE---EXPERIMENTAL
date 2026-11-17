@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <optional>
@@ -63,11 +64,17 @@ public:
 
   struct Limits { size_t maxDepth = 64; size_t maxBytes = 16u << 20; };
 
+  // Contramedidas configuraveis (F-06). Padrao = comportamento anterior.
+  //   rejectDuplicateKeys: true recusa objeto com a mesma chave duas vezes (o padrao mantem o ultimo valor).
+  // Nota: o tipo e Json::Options (publico), nao Parser::Options, porque Parser e interno.
+  struct Options { bool rejectDuplicateKeys = false; };
+
   // Retorna nullopt para qualquer erro (fail-closed).
-  static std::optional<Json> parse(std::string_view text) { return parse(text, Limits{}); }
-  static std::optional<Json> parse(std::string_view text, Limits lim) {
+  static std::optional<Json> parse(std::string_view text) { return parse(text, Limits{}, Options{}); }
+  static std::optional<Json> parse(std::string_view text, Limits lim) { return parse(text, lim, Options{}); }
+  static std::optional<Json> parse(std::string_view text, Limits lim, Options opt) {
     if (text.size() > lim.maxBytes) return std::nullopt;
-    Parser p{text, 0, lim.maxDepth};
+    Parser p{text, 0, lim.maxDepth, opt};
     p.ws();
     auto v = p.value(0);
     if (!v) return std::nullopt;
@@ -78,7 +85,7 @@ public:
 
 private:
   struct Parser {
-    std::string_view t; size_t i; size_t maxDepth;
+    std::string_view t; size_t i; size_t maxDepth; Options opt;
     void ws() { while (i < t.size() && (t[i] == ' ' || t[i] == '\n' || t[i] == '\t' || t[i] == '\r')) ++i; }
     bool lit(std::string_view w) { if (t.substr(i, w.size()) == w) { i += w.size(); return true; } return false; }
     std::optional<Json> value(size_t depth) {
@@ -92,17 +99,49 @@ private:
       if (lit("null")) return Json();
       return num();
     }
+    bool dig(size_t k) const { return k < t.size() && t[k] >= '0' && t[k] <= '9'; }
+    // Gramatica JSON estrita (F-06): -? (0 | [1-9][0-9]*) (\.[0-9]+)? ([eE][+-]?[0-9]+)?
+    // Rejeita zero a esquerda, '+' inicial, '.' ou expoente sem digito.
     std::optional<Json> num() {
       const size_t s = i;
       if (i < t.size() && t[i] == '-') ++i;
-      size_t digits = 0;
-      while (i < t.size() && ((t[i] >= '0' && t[i] <= '9') || t[i] == '.' || t[i] == 'e' || t[i] == 'E' || t[i] == '+' || t[i] == '-')) { ++i; ++digits; }
-      if (digits == 0) return std::nullopt;
+      if (!dig(i)) return std::nullopt;
+      if (t[i] == '0') { ++i; if (dig(i)) return std::nullopt; }
+      else while (dig(i)) ++i;
+      if (i < t.size() && t[i] == '.') { ++i; if (!dig(i)) return std::nullopt; while (dig(i)) ++i; }
+      if (i < t.size() && (t[i] == 'e' || t[i] == 'E')) {
+        ++i;
+        if (i < t.size() && (t[i] == '+' || t[i] == '-')) ++i;
+        if (!dig(i)) return std::nullopt;
+        while (dig(i)) ++i;
+      }
       const std::string tmp(t.substr(s, i - s));
       char* end = nullptr;
       const double d = std::strtod(tmp.c_str(), &end);
       if (end != tmp.c_str() + tmp.size() || !std::isfinite(d)) return std::nullopt;
       return Json(d);
+    }
+    bool hex4(unsigned& cp) {
+      if (i + 4 > t.size()) return false;
+      cp = 0;
+      for (int k = 0; k < 4; ++k) {
+        const char h = t[i++]; cp <<= 4;
+        if (h >= '0' && h <= '9') cp |= static_cast<unsigned>(h - '0');
+        else if (h >= 'a' && h <= 'f') cp |= static_cast<unsigned>(h - 'a' + 10);
+        else if (h >= 'A' && h <= 'F') cp |= static_cast<unsigned>(h - 'A' + 10);
+        else return false;
+      }
+      return true;
+    }
+    static void appendUtf8(std::string& out, unsigned cp) {
+      if (cp < 0x80) { out += static_cast<char>(cp); return; }
+      if (cp < 0x800) { out += static_cast<char>(0xC0 | (cp >> 6)); out += static_cast<char>(0x80 | (cp & 0x3F)); return; }
+      if (cp < 0x10000) {
+        out += static_cast<char>(0xE0 | (cp >> 12)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); out += static_cast<char>(0x80 | (cp & 0x3F));
+        return;
+      }
+      out += static_cast<char>(0xF0 | (cp >> 18)); out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+      out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); out += static_cast<char>(0x80 | (cp & 0x3F));
     }
     std::optional<std::string> str() {
       ++i; // "
@@ -119,18 +158,19 @@ private:
         case 'n': out += '\n'; break; case 't': out += '\t'; break; case 'r': out += '\r'; break;
         case 'b': out += '\b'; break; case 'f': out += '\f'; break;
         case 'u': {
-          if (i + 4 > t.size()) return std::nullopt;
+          // UTF-16 (F-06): alto D800-DBFF exige baixo DC00-DFFF logo depois; baixo isolado ou alto sem baixo e erro.
           unsigned cp = 0;
-          for (int k = 0; k < 4; ++k) {
-            const char h = t[i++]; cp <<= 4;
-            if (h >= '0' && h <= '9') cp |= static_cast<unsigned>(h - '0');
-            else if (h >= 'a' && h <= 'f') cp |= static_cast<unsigned>(h - 'a' + 10);
-            else if (h >= 'A' && h <= 'F') cp |= static_cast<unsigned>(h - 'A' + 10);
-            else return std::nullopt;
+          if (!hex4(cp)) return std::nullopt;
+          if (cp >= 0xD800 && cp <= 0xDBFF) {
+            unsigned lo = 0;
+            if (i + 2 > t.size() || t[i] != '\\' || t[i + 1] != 'u') return std::nullopt;
+            i += 2;
+            if (!hex4(lo) || lo < 0xDC00 || lo > 0xDFFF) return std::nullopt;
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+          } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+            return std::nullopt;
           }
-          if (cp < 0x80) out += static_cast<char>(cp);
-          else if (cp < 0x800) { out += static_cast<char>(0xC0 | (cp >> 6)); out += static_cast<char>(0x80 | (cp & 0x3F)); }
-          else { out += static_cast<char>(0xE0 | (cp >> 12)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); out += static_cast<char>(0x80 | (cp & 0x3F)); }
+          appendUtf8(out, cp);
           break;
         }
         default: return std::nullopt;
@@ -157,6 +197,7 @@ private:
         ws();
         if (i >= t.size() || t[i] != '"') return std::nullopt;
         auto k = str(); if (!k) return std::nullopt;
+        if (opt.rejectDuplicateKeys && j.o_.count(*k)) return std::nullopt;
         ws();
         if (i >= t.size() || t[i] != ':') return std::nullopt;
         ++i; ws();
