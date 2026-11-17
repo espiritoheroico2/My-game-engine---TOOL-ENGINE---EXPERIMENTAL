@@ -570,11 +570,11 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   h.setActive = [&ed](bool on) {
     tool::World& w = ed.scene.world();
     if (on) { if (w.has<ed_::Inactive>(ed.selected)) w.remove<ed_::Inactive>(ed.selected); }
-    else if (!w.has<ed_::Inactive>(ed.selected)) w.add<ed_::Inactive>(ed.selected, ed_::Inactive{});
+    else if (!w.has<ed_::Inactive>(ed.selected)) w.tryAdd<ed_::Inactive>(ed.selected, ed_::Inactive{});
   };
   h.setLocked = [&ed](bool on) {
     tool::World& w = ed.scene.world();
-    if (on) w.add<ed_::Locked>(ed.selected, ed_::Locked{});
+    if (on) w.tryAdd<ed_::Locked>(ed.selected, ed_::Locked{});
     else w.remove<ed_::Locked>(ed.selected);
   };
   h.setPrincipal = [&ed](bool on) { ed.setPrincipal(ed.selected, on); };
@@ -588,7 +588,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     const auto& part = lm->data.parts[static_cast<size_t>(pi)];
     auto* po = w.get<ed_::PartOverrides>(ed.selected);
     if (on) {
-      if (!po) { w.add<ed_::PartOverrides>(ed.selected, ed_::PartOverrides{}); po = w.get<ed_::PartOverrides>(ed.selected); }
+      if (!po) { po = w.tryAdd<ed_::PartOverrides>(ed.selected, ed_::PartOverrides{}); if (!po) return; }
       for (const auto& it : po->items) if (it.part == pi) return;
       ed_::PartOverride ov;
       ov.part = pi;

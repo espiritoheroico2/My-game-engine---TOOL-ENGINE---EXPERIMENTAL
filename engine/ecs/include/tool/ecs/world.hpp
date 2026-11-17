@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <deque>
 #include <memory>
+#include <stdexcept>
 #include <typeinfo>
 #include <utility>
 #include <vector>
@@ -60,9 +61,15 @@ public:
   }
 
   // --- componentes ------------------------------------------------------------
+  // F-02: handle nulo, destruido ou obsoleto (indice reaproveitado) nao pode receber componente;
+  // gravar no indice contaminaria a entidade atual que ocupa o slot. add lanca; tryAdd devolve nullptr.
   template <class T, class... Args> T& add(Entity e, Args&&... args) {
-    auto& st = storage<T>();
-    return st.set(e.index, T{std::forward<Args>(args)...});
+    if (!alive(e)) throw std::invalid_argument("World::add: entidade invalida ou obsoleta");
+    return storage<T>().set(e.index, T{std::forward<Args>(args)...});
+  }
+  template <class T, class... Args> T* tryAdd(Entity e, Args&&... args) {
+    if (!alive(e)) return nullptr;
+    return &storage<T>().set(e.index, T{std::forward<Args>(args)...});
   }
   template <class T> bool has(Entity e) const {
     const auto* st = findStorage<T>();
