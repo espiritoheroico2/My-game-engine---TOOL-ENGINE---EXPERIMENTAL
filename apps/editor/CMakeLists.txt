@@ -42,6 +42,11 @@ target_include_directories(editor_ui_presets_tests PRIVATE ${CMAKE_CURRENT_SOURC
 target_link_libraries(editor_ui_presets_tests PRIVATE tool::core)
 add_test(NAME Editor.UiPresets COMMAND editor_ui_presets_tests)
 
+# Politica de remocao do cache de malhas de chunks (chunk_cache.hpp, F-08): teto, lote menos recente e simulacao.
+add_executable(editor_chunk_cache_tests tests/test_chunk_cache.cpp)
+target_include_directories(editor_chunk_cache_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.ChunkCache COMMAND editor_chunk_cache_tests)
+
 # Modelo do painel do Profiler (profiler_model.hpp): quais numeros aparecem, formatacao fixa e taxa de atualizacao.
 add_executable(editor_profiler_model_tests tests/test_profiler_model.cpp)
 target_include_directories(editor_profiler_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
