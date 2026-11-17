@@ -8,8 +8,10 @@
 #include "tool/ecs/world.hpp"
 #include "tool/events/events.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -149,18 +151,38 @@ public:
   void deleteAndReuse(ToolObject o, double now) { recycle(o, now); }
 
   // Etapa de limpeza (chamar no fim do quadro): expira dormentes.
+  // Etapa 1: expira dormentes ociosos por tempo.
+  // Etapa 2: se ainda houver mais que maxPerSignature, libera SOMENTE o excedente,
+  // começando pelos mais antigos (menor `since`). Os demais continuam reutilizaveis.
   void collectPool(double now) {
     for (auto& [signature, entries] : pool_) {
       size_t write = 0;
       for (size_t read = 0; read < entries.size(); ++read) {
-        const bool idle = now - entries[read].since >= policy_.maxIdleSeconds;
-        const bool overSignature = entries.size() > policy_.maxPerSignature;
-        if (idle || overSignature) {
+        if (now - entries[read].since >= policy_.maxIdleSeconds) {
           freeDormant(entries[read]);
         } else {
           if (write != read) entries[write] = entries[read];
           ++write;
         }
+      }
+      entries.resize(write);
+
+      if (entries.size() <= policy_.maxPerSignature) continue;
+      const size_t excess = entries.size() - policy_.maxPerSignature;
+      std::vector<size_t> order(entries.size());
+      std::iota(order.begin(), order.end(), size_t{0});
+      std::stable_sort(order.begin(), order.end(),
+                       [&](size_t a, size_t b) { return entries[a].since < entries[b].since; });
+      std::vector<char> drop(entries.size(), 0);
+      for (size_t k = 0; k < excess; ++k) {
+        drop[order[k]] = 1;
+        freeDormant(entries[order[k]]);
+      }
+      write = 0;
+      for (size_t read = 0; read < entries.size(); ++read) {
+        if (drop[read]) continue;
+        if (write != read) entries[write] = entries[read];
+        ++write;
       }
       entries.resize(write);
     }

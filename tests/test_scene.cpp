@@ -89,6 +89,23 @@ TEST(scene_pool_limits_and_flush) {
   CHECK(s.world().liveCount() == 0);
 }
 
+// F-01: excedente por assinatura libera so o que passa do limite (o resto continua reutilizavel).
+TEST(scene_pool_over_signature_frees_only_excess) {
+  Quiet q; Scene s; s.setPoolPolicy({1000.0, 4, 100});
+  auto bp = enemyBp(s);
+  std::vector<ToolObject> v;
+  for (int i = 0; i < 5; ++i) v.push_back(s.spawn(bp));   // maxPerSignature + 1
+  for (int i = 0; i < 5; ++i) s.recycle(v[i], static_cast<double>(i));
+  CHECK(s.dormantCount() == 5);
+  s.collectPool(10.0);                                    // nenhum expirou por tempo
+  CHECK(s.stats().freed == 1);                            // exatamente 1 liberado
+  CHECK(s.dormantCount() == 4);
+  CHECK(s.world().liveCount() == 4);
+  for (int i = 0; i < 4; ++i) s.spawn(bp);                // os 4 restantes sao reaproveitados
+  CHECK(s.stats().reused == 4);
+  CHECK(s.dormantCount() == 0);
+}
+
 TEST(scene_delete_reuse_stale_handle_warns) {
   Quiet q; Scene s; auto bp = enemyBp(s);
   auto a = s.spawn(bp);
