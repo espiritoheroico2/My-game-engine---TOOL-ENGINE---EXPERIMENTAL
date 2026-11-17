@@ -86,6 +86,10 @@ class SpriteUiSdlRenderer {
         const auto& inst = packet.instances[batch.firstInstance + i];
         const SDL_FColor color = sdlColor(inst);
         const bool textured = batch.textureSlice != SR::WhiteTextureSlice;
+        if (isRounded(inst)) {
+          appendRoundedFan(inst, color, textured);
+          continue;
+        }
         const SDL_FPoint p[4] = {transform(inst, 0.f, 0.f), transform(inst, 1.f, 0.f),
                                  transform(inst, 1.f, 1.f), transform(inst, 0.f, 1.f)};
         const SDL_FPoint uv[4] = {uvAt(inst, 0.f, 0.f, textured), uvAt(inst, 1.f, 0.f, textured),
@@ -131,6 +135,47 @@ class SpriteUiSdlRenderer {
     return SDL_SetRenderClipRect(renderer, &rect);
   }
 
+  // Retangulo com cantos arredondados (FlagRoundedPanel e raio positivo). O SDL nao tem o SDF do shader, entao o
+  // contorno vira um leque: o centro e os pontos dos quatro arcos, kCornerSegments por canto.
+  // O raio vem de transformRow1[3], em pixels logicos; o item e so uma caixa com a matriz do retangulo.
+  static bool isRounded(const SR::SpriteInstanceGPU& inst) {
+    return (inst.resourceIds[3] & SR::FlagRoundedPanel) != 0u && inst.transformRow1[3] > 0.f;
+  }
+
+  void appendRoundedFan(const SR::SpriteInstanceGPU& inst, SDL_FColor color, bool textured) {
+    const float width = std::hypot(inst.transformRow0[0], inst.transformRow1[0]);
+    const float height = std::hypot(inst.transformRow0[1], inst.transformRow1[1]);
+    if (!(width > 0.f) || !(height > 0.f)) return;
+    // Raio em fracao do retangulo local (no maximo 0,5 em cada eixo).
+    const float rx = std::min(0.5f, inst.transformRow1[3] / width);
+    const float ry = std::min(0.5f, inst.transformRow1[3] / height);
+    // Arcos no sentido horario da tela: centro do arco e angulo inicial; cada arco gira um quarto de volta.
+    struct Corner {
+      float cx, cy, start;
+    };
+    const Corner corners[4] = {
+        {rx, ry, kPi},
+        {1.f - rx, ry, kPi + kHalfPi},
+        {1.f - rx, 1.f - ry, 0.f},
+        {rx, 1.f - ry, kHalfPi},
+    };
+    const int base = static_cast<int>(vertices_.size());
+    const auto addVertex = [&](float u, float v) {
+      vertices_.push_back({transform(inst, u, v), color, uvAt(inst, u, v, textured)});
+    };
+    addVertex(0.5f, 0.5f);
+    for (const Corner& c : corners) {
+      for (int k = 0; k <= kCornerSegments; ++k) {
+        const float a = c.start + kHalfPi * static_cast<float>(k) / static_cast<float>(kCornerSegments);
+        addVertex(c.cx + rx * std::cos(a), c.cy + ry * std::sin(a));
+      }
+    }
+    const int ring = 4 * (kCornerSegments + 1);
+    for (int k = 0; k < ring; ++k) {
+      indices_.insert(indices_.end(), {base, base + 1 + k, base + 1 + (k + 1) % ring});
+    }
+  }
+
   static SDL_FPoint transform(const SR::SpriteInstanceGPU& inst, float u, float v) {
     // Retangulo local [0,1]^2 -> tela: linha 0 = (m00, m01, tx), linha 1 = (m10, m11, ty).
     const float lx = u, ly = v;
@@ -154,6 +199,10 @@ class SpriteUiSdlRenderer {
     return linear <= 0.0031308f ? linear * 12.92f : 1.055f * std::pow(linear, 1.f / 2.4f) - 0.055f;
   }
 
+  static constexpr int kCornerSegments = 6;   // segmentos de cada arco de canto (fan do retangulo arredondado)
+  static constexpr float kPi = 3.14159265f;
+  static constexpr float kHalfPi = 0.5f * kPi;
+
   SDL_Texture* atlas_ = nullptr;
   SDL_Texture* icons_ = nullptr;
   SDL_Texture* views_[kViewSlots] = {};
@@ -171,6 +220,8 @@ inline bool LoadTextAtlas(const std::string& fontPath, ST::TruetypeAtlas& out, f
   cfg.rasterPixelSize = static_cast<float>(ST::ChooseBitmapRasterPixelSize(16.f, displayScale));
   cfg.atlasWidth = cfg.rasterPixelSize >= 64.f ? 2048u : 1024u;
   cfg.atlasHeight = cfg.atlasWidth;
+  // Gama de cobertura 0,5: o SDL mistura em sRGB; sem isso o texto claro sobre fundo escuro sai fino (medido).
+  cfg.coverageGamma = 0.5f;
   cfg.firstCodepoint = 0x20;
   cfg.lastCodepoint = 0x17F;
   return ST::BuildTruetypeAtlas(bytes, cfg, out);
