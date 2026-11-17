@@ -160,8 +160,8 @@ public:
     gp.DepthStencilDesc.DepthEnable = d.depthTest;
     gp.DepthStencilDesc.DepthWriteEnable = d.depthWrite;
     gp.DepthStencilDesc.DepthFunc = dl::COMPARISON_FUNC_LESS_EQUAL;
-    // Scissor sempre ligado: sem setScissor o recorte e o alvo inteiro (definido em begin), entao nada muda para
-    // pipelines antigas; o recorte por lote so funciona com esta flag.
+    // Scissor sempre ligado, para o recorte por lote do SpriteUI funcionar. Quem chama precisa de um scissor definido
+    // em begin()/beginKeep() (ver defineScissorDoAlvo): o Diligent nao o define em SetViewports.
     gp.RasterizerDesc.ScissorEnable = true;
     if (d.blendPremultiplied) {
       auto& rt = gp.BlendDesc.RenderTargets[0];
@@ -384,12 +384,13 @@ public:
       d_.ctx->SetViewports(1, &vp, td.Width, td.Height);
     }
     targetW_ = static_cast<u32>(rtv->GetTexture()->GetDesc().Width); targetH_ = static_cast<u32>(rtv->GetTexture()->GetDesc().Height);
+    defineScissorDoAlvo();
     const float clear[4] = {r, g, b, a};
     d_.ctx->ClearRenderTarget(rtv, clear, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     if (dsv) d_.ctx->ClearDepthStencil(dsv, dl::CLEAR_DEPTH_FLAG, 1.f, 0, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
   }
   // Abre a lista sem limpar o alvo. Resolve o alvo como begin() (inclusive o backbuffer) e define viewport,
-  // scissor padrao e o tamanho do alvo, que o recorte e setScissor usam.
+  // scissor do alvo inteiro e o tamanho do alvo, que o recorte e setScissor usam.
   void beginKeep(TextureId target, TextureId depth) override {
     if (open_) d_.err("beginKeep() dentro de begin()");
     open_ = true;
@@ -404,6 +405,7 @@ public:
     dl::Viewport vp; vp.Width = static_cast<float>(td.Width); vp.Height = static_cast<float>(td.Height);
     d_.ctx->SetViewports(1, &vp, td.Width, td.Height);
     targetW_ = static_cast<u32>(td.Width); targetH_ = static_cast<u32>(td.Height);
+    defineScissorDoAlvo();
   }
   void setTargets(TextureId target, TextureId depth) override {
     if (!check()) return;
@@ -464,7 +466,7 @@ public:
     if (w == 0 || h == 0 || x + w > targetW_ || y + h > targetH_) { d_.err("setViewport fora do alvo"); return; }
     dl::Viewport vp; vp.TopLeftX = static_cast<float>(x); vp.TopLeftY = static_cast<float>(y);
     vp.Width = static_cast<float>(w); vp.Height = static_cast<float>(h); vp.MinDepth = 0.f; vp.MaxDepth = 1.f;
-    d_.ctx->SetViewports(1, &vp, targetW_, targetH_); // scissor padrao = alvo inteiro
+    d_.ctx->SetViewports(1, &vp, targetW_, targetH_); // o viewport nao mexe no scissor: ele continua no alvo inteiro
   }
   void drawIndexed(u32 n, u32 inst) override {
     if (!check()) return;
@@ -506,6 +508,16 @@ public:
 
 private:
   bool check() { if (!open_) d_.err("comando fora de begin()/end()"); return open_; }
+  // Define o scissor como o alvo inteiro. Necessario porque ScissorEnable esta ligado em todas as pipelines e o
+  // Diligent nao define o scissor em SetViewports: sem isto, no Vulkan e no D3D12 o retangulo fica vazio e nada e
+  // desenhado (Scene e Jogo ficam pretos ao trocar a API). No GL o padrao seria o tamanho da janela, que corta alvos
+  // offscreen maiores que ela. O retangulo inteiro e simetrico em Y, entao vale para as duas convencoes de origem.
+  void defineScissorDoAlvo() {
+    dl::Rect r;
+    r.left = 0; r.top = 0;
+    r.right = static_cast<int>(targetW_); r.bottom = static_cast<int>(targetH_);
+    d_.ctx->SetScissorRects(1, &r, targetW_, targetH_);
+  }
   DiligentDevice& d_;
   bool open_ = false, vb_ = false, ib_ = false;
   u32 targetW_ = 0, targetH_ = 0; // tamanho do alvo do begin() atual
