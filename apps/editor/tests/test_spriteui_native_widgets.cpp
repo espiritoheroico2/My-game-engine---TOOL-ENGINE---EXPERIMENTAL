@@ -72,7 +72,9 @@ void testScrollBar() {
     assert(bar.HasOverflow(view));
     assert(bar.Wheel(120.0f, view));
     assert(near(view.scrollOffset.y, 120.0f));
-    assert(bar.PointerDown({95.0f, 95.0f}, view));
+    // Polegar fica perto do topo com a rolagem em 120 (y entre ~11 e ~27). Clique no polegar inicia o arrasto;
+    // no trilho (y=95) o clique avancaria uma pagina, como a SpriteUI atual faz.
+    assert(!bar.PointerDown({95.0f, 20.0f}, view));
     assert(bar.Dragging());
     assert(bar.PointerMove({95.0f, 50.0f}, view));
     assert(view.scrollOffset.y > 0.0f && view.scrollOffset.y < 900.0f);
