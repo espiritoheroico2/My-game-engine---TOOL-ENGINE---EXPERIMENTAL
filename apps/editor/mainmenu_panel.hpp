@@ -3,7 +3,7 @@
 #include "mainmenu_model.hpp"
 #include "sui_panel.hpp"
 
-#include "SpriteUi/Widgets/MenuBar.hpp"
+#include "SpriteUi/Widgets/Legacy/MenuBar.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -17,7 +17,8 @@
 namespace editor::mainmenu {
 
 namespace SU = ToolEngine::SpriteUi;
-namespace SW = ToolEngine::SpriteUi::Widgets;
+// Menu da barra principal: a API antiga do MenuBar fica em Widgets::Legacy na SpriteUI atual.
+namespace SW = ToolEngine::SpriteUi::Widgets::Legacy;
 namespace SR = ToolEngine::SpriteUi::Rendering;
 namespace ST = ToolEngine::SpriteUi::Text;
 
