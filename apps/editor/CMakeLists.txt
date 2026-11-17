@@ -1,6 +1,13 @@
 add_executable(tool_editor main.cpp image_io.cpp)
 target_include_directories(tool_editor PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
-target_link_libraries(tool_editor PRIVATE tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::audio_miniaudio tool::assets tool::pack tool::mod imgui_lib)
+target_link_libraries(tool_editor PRIVATE tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod imgui_lib)
+if(TOOL_WITH_MINIAUDIO)
+  target_link_libraries(tool_editor PRIVATE tool::audio_miniaudio)
+endif()
+# TOOL_HAS_MINIAUDIO=1 liga o dispositivo real; sem ele o editor roda sem saida de audio (ensureAudio).
+if(TOOL_WITH_MINIAUDIO)
+  target_compile_definitions(tool_editor PRIVATE TOOL_HAS_MINIAUDIO=1)
+endif()
 if(MSVC)
   target_compile_options(tool_editor PRIVATE /bigobj)
 endif()
@@ -21,7 +28,10 @@ if(TOOL_WITH_SPRITEUI)
   # Camada L4b (tela de inicio sem janela): estado dos campos, foco, selecao e acoes do modelo.
   add_executable(editor_start_screen_model_tests tests/test_start_screen_model.cpp)
   target_include_directories(editor_start_screen_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(editor_start_screen_model_tests PRIVATE SpriteUi::SpriteUI tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::audio_miniaudio tool::assets tool::pack tool::mod)
+  target_link_libraries(editor_start_screen_model_tests PRIVATE SpriteUi::SpriteUI tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_start_screen_model_tests PRIVATE tool::audio_miniaudio)
+  endif()
   add_test(NAME Editor.StartScreenModel COMMAND editor_start_screen_model_tests)
 
   # Modelo da janela Help (help_model.hpp): blocos do texto, busca por idioma e edicao da busca.

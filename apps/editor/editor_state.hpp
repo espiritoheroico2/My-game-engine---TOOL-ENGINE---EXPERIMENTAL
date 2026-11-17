@@ -24,7 +24,9 @@
 #include "theme.hpp"
 #include "undo.hpp"
 #include "tool/audio/decode.hpp"
+#if defined(TOOL_HAS_MINIAUDIO)
 #include "tool/audio/miniaudio_device.hpp"
+#endif
 #include "tool/render/gpu_renderer.hpp"
 #include "tool/render/occlusion.hpp"
 #include "tool/render/postfx.hpp"
@@ -238,7 +240,9 @@ struct Editor {
   void applyInputMap() { inputMap.apply(input); }
   float sunRuntime = 0.f;
   tool::Mixer mixer;
+#if defined(TOOL_HAS_MINIAUDIO)
   std::unique_ptr<tool::MiniaudioDevice> audioDev;
+#endif
   bool audioTried = false, audioOk = false;
   tool::VoiceId previewVoice{};
 
@@ -1021,8 +1025,12 @@ public:
   void ensureAudio() {
     if (audioTried) return;
     audioTried = true;
+#if defined(TOOL_HAS_MINIAUDIO)
     audioDev = std::make_unique<tool::MiniaudioDevice>();
     audioOk = audioDev->start(mixer);
+#else
+    audioOk = false;   // build sem miniaudio: sem dispositivo, sem som, editor segue normalmente
+#endif
     if (!audioOk) tool::logWarn("No audio output device available: sound is disabled.");
   }
   // O "ouvido": camera Principal marcada como Sound Ear, senao qualquer camera com Sound Ear, senao a camera da janela Scene.
