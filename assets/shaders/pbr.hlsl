@@ -16,6 +16,7 @@ cbuffer FrameBuffer : register(b4) {
   float4x4 view;        // mundo -> camera (profundidade de view para escolher a cascata)
   float3   cameraPos; float _pad0;
 };
+#ifdef PBR_LEGACY_OBJECT
 cbuffer ObjectBuffer : register(b6) {
   float4x4 world;
   float4   baseColor;
@@ -28,10 +29,29 @@ cbuffer ObjectBuffer : register(b6) {
   float4   fogColor;      // rgb = cor da neblina (linear)
   float4   fogParams;     // x = inicio (m), y = fim (m), z = quantidade maxima (0 = sem neblina)
 };
+#else
+struct InstanceData {
+  float4x4 world;
+  float4 baseColor;
+  float metallic, roughness, receiveShadow, _pad1;
+  float4 texInfo;
+  float4 emissive;
+  float4 fogColor;
+  float4 fogParams;
+};
+StructuredBuffer<InstanceData> Instances : register(t15);
+cbuffer BatchBuffer : register(b6) {
+  uint4 batchInfo;
+};
+#endif
 Texture2D AlbedoMap : register(t0);
 Texture2D<float> AoMap : register(t14); // SSAO (ssao.hlsl): 1 = sem oclusao; so afeta a luz ambiente, como na Light Prism  // Load, sem sampler: amostragem "mais proximo" com repeticao
 
-struct VSIn  { float3 pos : ATTRIB0; float3 normal : ATTRIB1; float2 uv : ATTRIB2; };
+struct VSIn  { float3 pos : ATTRIB0; float3 normal : ATTRIB1; float2 uv : ATTRIB2;
+#ifndef PBR_LEGACY_OBJECT
+  uint iid : SV_InstanceID;
+#endif
+};
 struct VSOut {
   float4 clip : SV_Position;
   float3 worldPos : TEXCOORD0;
@@ -49,19 +69,41 @@ struct VSOut {
 
 VSOut VSMain(VSIn i) {
   VSOut o;
-  float4 wp = mul(world, float4(i.pos, 1.0));
+#ifdef PBR_LEGACY_OBJECT
+  float4x4 instanceWorld = world;
+  float4 instanceBaseColor = baseColor;
+  float instanceMetallic = metallic;
+  float instanceRoughness = roughness;
+  float instanceReceiveShadow = receiveShadow;
+  float4 instanceTexInfo = texInfo;
+  float4 instanceEmissive = emissive;
+  float4 instanceFogColor = fogColor;
+  float4 instanceFogParams = fogParams;
+#else
+  InstanceData d = Instances[batchInfo.x + i.iid];
+  float4x4 instanceWorld = d.world;
+  float4 instanceBaseColor = d.baseColor;
+  float instanceMetallic = d.metallic;
+  float instanceRoughness = d.roughness;
+  float instanceReceiveShadow = d.receiveShadow;
+  float4 instanceTexInfo = d.texInfo;
+  float4 instanceEmissive = d.emissive;
+  float4 instanceFogColor = d.fogColor;
+  float4 instanceFogParams = d.fogParams;
+#endif
+  float4 wp = mul(instanceWorld, float4(i.pos, 1.0));
   o.worldPos = wp.xyz;
-  o.normal = normalize(mul((float3x3)world, i.normal));
+  o.normal = normalize(mul((float3x3)instanceWorld, i.normal));
   o.uv = i.uv;
   o.clip = mul(viewProj, wp);
   o.toCam = cameraPos - wp.xyz;
   o.viewDepth = -mul(view, wp).z;
-  o.baseColor = baseColor;
-  o.material = float4(metallic, roughness, receiveShadow, 0.0f);
-  o.texInfo = texInfo;
-  o.emissive = emissive.rgb;
-  o.fogColor = fogColor;
-  o.fogParams = fogParams;
+  o.baseColor = instanceBaseColor;
+  o.material = float4(instanceMetallic, instanceRoughness, instanceReceiveShadow, 0.0f);
+  o.texInfo = instanceTexInfo;
+  o.emissive = instanceEmissive.rgb;
+  o.fogColor = instanceFogColor;
+  o.fogParams = instanceFogParams;
   return o;
 }
 

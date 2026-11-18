@@ -1,5 +1,14 @@
 # CODAR.MD — tarefas de código pendentes (para resolver no código)
 
+## Estado P1 - Instanciamento no renderizador (2026-11-18)
+
+- Fase 1a: implementado o binding de `StorageBuffer` em VS e PS no backend Diligent; falta validação visual em cena real.
+- Fase 1b: PBR principal passou a ler `Instances` por `SV_InstanceID` com `BatchBuffer` de 16 bytes.
+- Fase 1c: passe opaco principal passou a montar lotes por malha/textura e desenhar por instância; transparências e bloom permanecem por objeto.
+- Fase 1d: prepass SSAO e sombras diretas/pontuais passaram a preparar instâncias por lote. Implementado em código, aguardando captura de tela.
+- Verificação automatizada: build CPU+GPU concluído; `tool_tests` passou com 197 testes e 0 falhas; teste Vulkan passou.
+- Teste visual obrigatório pendente: executar `--ecs 1000 --play`, comparar imagem antes/depois e enviar `DrawStats`, CSV do benchmark e log Vulkan.
+
 Este documento lista o que falta na engine para a interface ficar completa.
 Cada tarefa tem: contexto, arquivos, passos e critério de aceite. Idioma padrão da engine: inglês.
 

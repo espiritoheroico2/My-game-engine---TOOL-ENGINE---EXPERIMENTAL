@@ -53,7 +53,7 @@
 -- Platform: Windows-10.0.26300
 -- 64-bit:   TRUE
 -- Compiler: C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
--- Revision: SDL3-3.2.8-c2cc5dc
+-- Revision: SDL3-3.2.8-2d2e658
 -- Vendor:   
 -- 
 -- Subsystems:
@@ -533,8 +533,8 @@ suppress it.
 -- Looking for pthread_create in pthread
 -- Looking for pthread_create in pthread - not found
 -- Found Threads: TRUE
--- Configuring done (142.0s)
--- Generating done (11.0s)
+-- Configuring done (226.0s)
+-- Generating done (15.4s)
 -- Build files have been written to: C:/Users/espir/Downloads/ACTToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/out
 Versão do MSBuild 18.11.1-1.26513.3+940033be3 para .NET Framework
 
@@ -853,7 +853,6 @@ Versão do MSBuild 18.11.1-1.26513.3+940033be3 para .NET Framework
   scalar_replacement_pass.cpp
   set_spec_constant_default_value_pass.cpp
   simplification_pass.cpp
-  spread_volatile_semantics.cpp
 C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\DiligentCore\ThirdParty\SPIRV-Tools\source\util\small_vector.h(188,16): warning C5232: no C++20, essa comparação chama 'bool spvtools::utils::operator ==(const std::vector<uint32_t,std::allocator<uint32_t>> &,const spvtools::utils::SmallVector<uint32_t,2> &)' recursivamente [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\_deps\diligentcore-build\ThirdParty\SPIRV-Tools\source\opt\SPIRV-Tools-opt.vcxproj]
   (compilando o arquivo fonte '../../../../../../../third_party/DiligentCore/ThirdParty/SPIRV-Tools/source/opt/set_spec_constant_default_value_pass.cpp')
       C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\DiligentCore\ThirdParty\SPIRV-Tools\source\util\small_vector.h(188,16):
@@ -867,6 +866,7 @@ C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXP
               C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\third_party\DiligentCore\ThirdParty\SPIRV-Tools\source\opt\set_spec_constant_default_value_pass.cpp(304,9):
               veja a primeira referência a 'spvtools::utils::operator !=' em 'spvtools::opt::SetSpecConstantDefaultValuePass::Process'
   
+  spread_volatile_semantics.cpp
   ssa_rewrite_pass.cpp
   strength_reduction_pass.cpp
   strip_debug_info_pass.cpp

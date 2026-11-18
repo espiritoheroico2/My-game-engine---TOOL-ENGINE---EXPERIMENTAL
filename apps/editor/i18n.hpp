@@ -21,6 +21,8 @@
 
 namespace editor {
 
+inline constexpr const char* kDefaultLanguage = "en";
+
 struct LangPack {
   std::string code, name, path;
 };
@@ -67,6 +69,12 @@ public:
         if (v.isString() && !v.asString().empty()) table_[k] = v.asString();
       return true;
     }
+    return false;
+  }
+
+  bool selectOrDefault(const std::string& code) {
+    if (select(code)) return true;
+    select(kDefaultLanguage);
     return false;
   }
 

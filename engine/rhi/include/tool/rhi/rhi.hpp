@@ -49,7 +49,7 @@ enum class CullMode : u8 { None, Back, Front };
 enum class BufferUsage : u8 { Vertex, Index, Uniform, Storage };
 enum class ShaderStage : u8 { Vertex, Pixel, Compute };
 
-struct BufferDesc { size_t size = 0; BufferUsage usage = BufferUsage::Vertex; bool dynamic = false; };
+struct BufferDesc { size_t size = 0; BufferUsage usage = BufferUsage::Vertex; bool dynamic = false; u32 elementStride = 0; };
 struct TextureDesc { u32 width = 1, height = 1, mips = 1; Format format = Format::RGBA8; bool renderTarget = false; };
 // `source` = HLSL (backends reais compilam para SPIR-V/GLSL/DXIL); `bytecode` = binario ja compilado (opcional).
 enum class ShaderLang : u8 { HLSL, GLSL };
@@ -66,7 +66,7 @@ struct PipelineDesc {
   std::vector<VertexAttrib> layout; u32 vertexStride = 0;
   std::vector<std::string> uniformNames; // slot i -> nome do cbuffer no HLSL
   std::vector<std::string> textureNames; // slot i -> nome da textura (Texture2D) no shader de pixel; lida com Load/texelFetch (sem sampler)
-  std::vector<std::string> storageNames; // slot i -> nome de um StructuredBuffer somente leitura (SRV) no shader de pixel (setStorage)
+  std::vector<std::string> storageNames; // slot i -> nome de um StructuredBuffer somente leitura (SRV) em VS e PS (setStorage)
   std::string name;
 };
 
@@ -94,7 +94,7 @@ public:
   // Viewport (e scissor) dentro do alvo atual, em pixels. begin() ja define o alvo inteiro; use isto para desenhar
   // varias faces num alvo empilhado (mapa de sombra de cubo em uma textura R x 6R). Chamar depois de begin().
   virtual void setViewport(u32 x, u32 y, u32 w, u32 h) = 0;
-  // Buffer estruturado somente leitura (StructuredBuffer) no slot de PipelineDesc::storageNames. Padrao: nada (backends sem suporte ignoram).
+  // Buffer estruturado somente leitura (StructuredBuffer) no slot de PipelineDesc::storageNames, ligado em VS e PS.
   virtual void setStorage(u32 /*slot*/, BufferId /*b*/) {}
   virtual void drawIndexed(u32 indexCount, u32 instances) = 0;
   // Recorte (scissor) em pixels do alvo atual. Padrao depois de begin()/setViewport: alvo inteiro.

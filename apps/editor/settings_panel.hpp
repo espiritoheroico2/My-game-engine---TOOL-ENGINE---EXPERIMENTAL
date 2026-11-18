@@ -49,7 +49,7 @@ namespace W = SU::Widgets;
 namespace SR = SU::Rendering;
 namespace ST = SU::Text;
 
-inline constexpr int kGraphicsTab = 2;   // indice da aba Graficos em kTabNames
+inline constexpr int kGraphicsTab = 1;   // indice da aba Settings em kTabNames
 
 // Valores que a janela mostra. O main.cpp copia do Editor a cada quadro.
 struct Values {

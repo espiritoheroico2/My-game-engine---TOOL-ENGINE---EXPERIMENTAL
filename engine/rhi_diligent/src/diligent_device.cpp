@@ -79,7 +79,11 @@ public:
     case BufferUsage::Vertex: bd.BindFlags = dl::BIND_VERTEX_BUFFER; break;
     case BufferUsage::Index: bd.BindFlags = dl::BIND_INDEX_BUFFER; break;
     case BufferUsage::Uniform: bd.BindFlags = dl::BIND_UNIFORM_BUFFER; break;
-    case BufferUsage::Storage: bd.BindFlags = dl::BIND_SHADER_RESOURCE; bd.Mode = dl::BUFFER_MODE_RAW; break;
+    case BufferUsage::Storage:
+      bd.BindFlags = dl::BIND_SHADER_RESOURCE;
+      bd.Mode = d.elementStride ? dl::BUFFER_MODE_STRUCTURED : dl::BUFFER_MODE_RAW;
+      bd.ElementByteStride = d.elementStride;
+      break;
     }
     if (d.dynamic || d.usage == BufferUsage::Uniform) { bd.Usage = dl::USAGE_DYNAMIC; bd.CPUAccessFlags = dl::CPU_ACCESS_WRITE; }
     else if (data) bd.Usage = dl::USAGE_IMMUTABLE;
@@ -459,7 +463,10 @@ public:
     auto* buf = d_.obj<dl::IBuffer>(b, DiligentDevice::Kind::Buffer);
     if (!buf) { d_.err("storage buffer invalido"); return; }
     if (!pipe_ || slot >= pipe_->storageNames.size()) { d_.err("setStorage: slot sem nome (defina PipelineDesc::storageNames e chame setPipeline antes)"); return; }
-    if (auto* var = pipe_->srb->GetVariableByName(dl::SHADER_TYPE_PIXEL, pipe_->storageNames[slot].c_str())) var->Set(buf->GetDefaultView(dl::BUFFER_VIEW_SHADER_RESOURCE));
+    for (dl::SHADER_TYPE st : {dl::SHADER_TYPE_VERTEX, dl::SHADER_TYPE_PIXEL}) {
+      if (auto* var = pipe_->srb->GetVariableByName(st, pipe_->storageNames[slot].c_str()))
+        var->Set(buf->GetDefaultView(dl::BUFFER_VIEW_SHADER_RESOURCE));
+    }
   }
   void setViewport(u32 x, u32 y, u32 w, u32 h) override {
     if (!check()) return;

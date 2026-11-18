@@ -1941,6 +1941,19 @@ struct SettingsEditorTarget {
     L.custom = true;
     ed.settingsDirty = true;
   }
+  void setChunkCacheMax(int value) {
+    ed.chunkCacheMax = ::editor::settings_model::ClampChunkCacheSize(value);
+    ed.settingsDirty = true;
+  }
+  void setInterfaceScale(float value) {
+    ed.theme.scale = ::editor::settings_model::ClampInterfaceScale(value);
+    ed.theme.applyMetrics();
+    ed.settingsDirty = true;
+  }
+  void setIdleRendering(bool on) {
+    ed.idleRendering = on;
+    ed.settingsDirty = true;
+  }
 };
 
 #endif
@@ -1948,13 +1961,34 @@ struct SettingsEditorTarget {
 // Conteudo de uma aba do ImGui (as abas em SpriteUI passam por aqui so se o ImGui precisar desenhar).
 void drawSettingsTabBody(Editor& ed, int i) {
   if (i == 0) drawAppearanceTab(ed);
-  else if (i == 1) drawLanguageTab(ed);
-  else if (i == 2) drawGraphicsTab(ed);
-  else if (i == 3) drawGameTab(ed);
-  else if (i == 4) drawLightingTab(ed);
-  else if (i == 5) drawTagsTab(ed);
-  else if (i == 6) drawProjectTab(ed);
-  else editor::drawPhysicsTab(ed);
+  else if (i == 1) {
+    drawGraphicsTab(ed);
+    ImGui::SeparatorText(T("Tags"));
+    drawTagsTab(ed);
+    ImGui::SeparatorText(T("Project"));
+    drawProjectTab(ed);
+    ImGui::SeparatorText(T("Physics"));
+    editor::drawPhysicsTab(ed);
+  } else if (i == 2) drawGameTab(ed);
+  else if (i == 3) drawLightingTab(ed);
+  else if (i == 4) {
+    bool c = false;
+    ImGui::SeparatorText(T("Frame and cache"));
+    c |= ImGui::Combo(T("Frame rate limit"), &ed.fpsMode, "VSync\0" "30 FPS\0" "60 FPS\0" "120 FPS\0" "Unlimited\0");
+    if (c) { ed.fpsDirty = true; ed.settingsDirty = true; }
+    int cacheMax = static_cast<int>(ed.chunkCacheMax);
+    if (ImGui::SliderInt(T("Mesh chunk cache"), &cacheMax, ::editor::settings_model::kChunkCacheMin, ::editor::settings_model::kChunkCacheMax)) {
+      ed.chunkCacheMax = ::editor::settings_model::ClampChunkCacheSize(cacheMax);
+      ed.settingsDirty = true;
+    }
+    ImGui::SeparatorText(T("Interface"));
+    if (ImGui::SliderFloat(T("UI scale"), &ed.theme.scale, ::editor::settings_model::kInterfaceScaleMin, ::editor::settings_model::kInterfaceScaleMax, "%.2f")) {
+      ed.theme.scale = ::editor::settings_model::ClampInterfaceScale(ed.theme.scale);
+      ed.theme.applyMetrics();
+      ed.settingsDirty = true;
+    }
+    if (ImGui::Checkbox(T("Idle rendering"), &ed.idleRendering)) ed.settingsDirty = true;
+  } else if (i == 5) drawLanguageTab(ed);
 }
 
 void drawSettings(Editor& ed) {
@@ -2169,6 +2203,9 @@ void saveSettings(Editor& ed) {
   j.set("graphicsApi", ed.apiRequested);
   j.set("resMode", ed.resMode); j.set("customW", ed.customW); j.set("customH", ed.customH); j.set("pixelFilter", ed.pixelFilter); j.set("fpsMode", ed.fpsMode);
   j.set("upscaleMode", ed.upscaleMode); j.set("aaMode", ed.aaMode);
+  j.set("chunkCacheMax", static_cast<double>(ed.chunkCacheMax));
+  j.set("idleRendering", ed.idleRendering);
+  j.set("interfaceScale", static_cast<double>(ed.theme.scale));
   j.set("lockInterface", ed.lockInterface); j.set("dockWithShift", ed.dockWithShift);
   j.set("dockLockV2", true); j.set("dockLockV3", true);
   j.set("renderScaleSet", ed.renderScaleSet); if (ed.renderScaleSet) j.set("renderScale", static_cast<double>(ed.renderScale));
@@ -2181,6 +2218,8 @@ void saveSettings(Editor& ed) {
 int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
   std::ifstream f("editor_settings.json", std::ios::binary);
   int api = 0;
+  bool interfaceScaleSet = false;
+  float interfaceScale = ed.theme.scale;
   if (f) {
     std::stringstream ss; ss << f.rdbuf();
     if (auto j = tool::Json::parse(ss.str())) {
@@ -2190,6 +2229,12 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
       ed.customW = static_cast<int>(editor::ser::num(*j, "customW", 1280.f)); ed.customH = static_cast<int>(editor::ser::num(*j, "customH", 720.f));
       ed.pixelFilter = editor::ser::flag(*j, "pixelFilter", false); ed.fpsMode = std::clamp(static_cast<int>(editor::ser::num(*j, "fpsMode", 4.f)), 0, 4);
       ed.upscaleMode = std::clamp(static_cast<int>(editor::ser::num(*j, "upscaleMode", 2.f)), 0, 3); ed.aaMode = std::clamp(static_cast<int>(editor::ser::num(*j, "aaMode", 0.f)), 0, 1);
+      ed.chunkCacheMax = ::editor::settings_model::ClampChunkCacheSize(static_cast<int>(editor::ser::num(*j, "chunkCacheMax", 8192.f)));
+      ed.idleRendering = editor::ser::flag(*j, "idleRendering", true);
+      if ((*j)["interfaceScale"].isNumber()) {
+        interfaceScaleSet = true;
+        interfaceScale = static_cast<float>((*j)["interfaceScale"].asNumber(ed.theme.scale));
+      }
       // Arquivos anteriores podiam gravar a trava automaticamente; abre destravado uma vez para permitir resize/docking.
       ed.lockInterface = editor::ser::flag(*j, "dockLockV3", false)
           ? editor::ser::flag(*j, "lockInterface", false)
@@ -2200,6 +2245,10 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
     }
   }
   ed.theme.load("editor_theme.json");
+  if (interfaceScaleSet) {
+    ed.theme.scale = ::editor::settings_model::ClampInterfaceScale(interfaceScale);
+    ed.theme.applyMetrics();
+  }
   return api;
 }
 
