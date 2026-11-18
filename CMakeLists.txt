@@ -6,6 +6,9 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 # Windows/MSVC: runtime C++ ESTATICO => o .exe roda em qualquer PC sem instalar o "VC++ Redistributable".
 if(MSVC)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  # C4324 (relleno por alignas) e intencional: structs de fisica e iluminacao sao alinhadas para SIMD/GPU.
+  # O aviso so informa o relleno, nao e erro. Mantido desligado para o build nao poluir o log.
+  add_compile_options(/wd4324)
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
