@@ -87,8 +87,37 @@ TEST(newtoon_raycast_hits_nearest_shape_and_reports_normal) {
   auto h = s.w.Raycast({0, 0, 0}, {0, 0, -1}, 100.f);
   CHECK(h.hit && h.entity == a && std::fabs(h.distance - 4.f) < 1e-3f && h.normal.z > 0.99f);
   CHECK(!s.w.Raycast({0, 0, 0}, {0, 0, -1}, 3.f).hit);                                   // alcance curto
-  CHECK(s.w.Raycast({0, 0, 0}, {0, 0, -1}, 100.f, a).entity == b);                      // ignora o primeiro
+  CHECK(s.w.Raycast({0, 0, 0}, {0, 0, -1}, 100.f, static_cast<Entity>(a)).entity == b); // ignora o primeiro
   CHECK(!s.w.Raycast({5, 5, 0}, {0, 0, -1}, 100.f).hit);
+}
+
+TEST(newtoon_sphere_collider_offset_rotates_with_body) {
+  Sim s;
+  const size_t body = s.add({0, 0, 0}, ShapeType::Sphere, {}, 0.f, 0.5f);
+  s.t[body].rotation = Quat::FromAxisAngle({0, 0, 1}, 1.57079632679f);
+  s.c[body].offset = {1, 0, 0};
+  s.w.Rebuild(s.t, s.r, s.c);
+
+  const RaycastHit hit = s.w.Raycast({0, 1, 3}, {0, 0, -1}, 10.f);
+  CHECK(hit.hit && hit.entity == body && std::fabs(hit.distance - 2.5f) < 1e-3f);
+  CHECK(!s.w.Raycast({1, 0, 3}, {0, 0, -1}, 10.f).hit);
+}
+
+TEST(newtoon_idle_world_refreshes_externally_moved_shapes) {
+  Sim s;
+  const size_t body = s.add({0, 0, 0}, ShapeType::Sphere, {}, 0.f);
+  s.w.Rebuild(s.t, s.r, s.c);
+  s.t[body].position = {3, 0, 0};
+  s.w.Simulate(s.t, s.r, s.c, s.w.fixedDt);
+
+  CHECK(s.w.stats.idleSteps == 1 && s.w.stats.broadphaseBuilds == 1);
+  CHECK(s.w.Raycast({3, 0, 3}, {0, 0, -1}, 10.f).hit);
+  CHECK(!s.w.Raycast({0, 0, 3}, {0, 0, -1}, 10.f).hit);
+
+  s.add({6, 0, 0}, ShapeType::Sphere, {}, 0.f);
+  s.w.Simulate(s.t, s.r, s.c, s.w.fixedDt * 0.5f);
+  CHECK(s.w.stats.steps == 0 && s.w.stats.broadphaseBuilds == 1);
+  CHECK(s.w.Raycast({6, 0, 3}, {0, 0, -1}, 10.f).hit);
 }
 
 TEST(newtoon_ccd_prevents_tunneling) {
@@ -108,6 +137,26 @@ TEST(newtoon_many_bodies_is_deterministic_and_fast) {
   bool same = true; for (size_t i = 0; i < a.t.size(); ++i) if (a.t[i].position.x != b.t[i].position.x || a.t[i].position.y != b.t[i].position.y) same = false;
   CHECK(same);
   bool sane = true; for (auto& t : a.t) if (!(t.position.y > -1.f && t.position.y < 40.f)) sane = false; CHECK(sane);
+}
+
+TEST(newtoon_500_sleeping_bodies_skip_broadphase_rebuilds) {
+  Sim s;
+  s.add({0, -0.5f, 0}, ShapeType::Box, {50, 0.5f, 50}, 0.f);
+  for (int i = 0; i < 500; ++i) {
+    const float x = static_cast<float>(i % 25) * 1.3f - 15.6f;
+    const float z = static_cast<float>(i / 25) * 1.3f - 12.35f;
+    const float y = 1.f + static_cast<float>((i * 37) % 120) * 0.1f;
+    s.add({x, y, z}, ShapeType::Sphere, {}, 1.f, 0.5f);
+  }
+  s.run(5.f);
+
+  bool allSleeping = true;
+  for (size_t i = 1; i < s.r.size(); ++i) allSleeping = allSleeping && s.r[i].isSleeping;
+  CHECK(allSleeping);
+  CHECK(s.w.stats.steps == 1);
+  CHECK(s.w.stats.idleSteps == 1);
+  CHECK(s.w.stats.broadphaseBuilds == 0);
+  CHECK(s.w.stats.awake == 0);
 }
 
 TEST(newtoon_verlet_chain_hangs_from_fixed_bone) {

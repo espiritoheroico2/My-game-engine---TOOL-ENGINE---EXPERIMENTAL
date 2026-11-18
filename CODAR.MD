@@ -29,12 +29,37 @@ cores base, forma e tamanho) e os presets salvos em `ui_presets.hpp`. O que mudo
 (`ui-settings-wip`) ainda nao esta ligada ao editor, e so portou essas opcoes como dados.
 
 **O que nao esta pronto e por que:**
-- Settings em SpriteUI: a reescrita esta em `ui-settings-wip` (commit `eac213e`) e nao compila. Falta a ponte
-  com o Editor (`settings_editor.hpp`) e a adaptacao de `main.cpp`. Enquanto isso, o `ui-integrado` usa o Settings antigo.
-- Janelas do ImGui: 1445 chamadas. Nao da para trocar tudo de uma vez sem ver a tela.
+- Settings em SpriteUI: o Editor continua usando a janela ImGui em `main.cpp`; `settings_tabs.hpp` e
+  `settings_editor.hpp` nao existem no checkout atual. `settings_bridge.hpp` e seu teste existem e seguem usados.
+- Janelas do ImGui: 1176 chamadas na busca desta revisao. Nao da para trocar tudo de uma vez sem ver a tela.
 - Plugin de interface na GPU para o jogo: falta validacao com placa de video.
 - Melhoria de desempenho do SpriteUI (instancias em vez de vertices): falta teste de pixel na GPU.
 - Bloco `engine` do `project.json`: gravado e lido, mas a janela ainda nao o aplica.
+
+**Implementacao iniciada nesta revisao:**
+- `Splitter.cpp`, `DockGuides.cpp` e `UIScale.cpp` agora fazem parte da biblioteca SpriteUI, com alvos de teste no CMake.
+- Guias de docking desenham cinco pictogramas com destaque de cor/opacidade; dimensoes pequenas e estilos invalidos
+  nao geram geometrias fora da folha.
+- Modelos de icones e tokens ganharam testes; indices de cor fora do enum nao acessam arrays fora dos limites.
+  A escala minima dos tokens foi alinhada ao Settings atual (70%).
+- Na validacao inicial desta revisao, builds `tool_editor` CPU e GPU concluiram e cinco testes focados (`UiIcons`, `UiTokens`, `SpriteUiSplitter`,
+  `SpriteUiDockGuides`, `SpriteUiUiScale`) passaram nas duas configuracoes.
+- Tokens, icones, Splitter, guias, escala e cache de texto ainda nao estao ligados visualmente aos paineis ativos.
+  Persistencia/ColorPicker de tokens, integracao do cache aos paineis ativos e teste visual continuam pendentes.
+  O benchmark SpriteUI foi executado em Release; a referencia atual e o resultado, sem comparacao historica, estao em
+  `docs/IMPLEMENTATION_STATUS.md`.
+- Grid, eixos e marcadores X/Y/Z do Game convertidos para geometria 3D transparente nos renderizadores CPU e GPU;
+  a profundidade oculta esses elementos atras dos objetos. As duas rotas do Game informam o slot correto para cameras divididas.
+- Faixa de abas do Settings elevada para a camada Docked, preservando a ordem interna de pintura.
+- Builds do Editor CPU e GPU aprovados; 10 testes focados passaram em ambas as configuracoes
+  (GameGrid, SettingsBridge, SpriteUI nativo, camadas/entrada, cache de texto, Splitter, DockGuides, UIScale,
+  UiIcons e UiTokens).
+- Suite completa sequencial: CPU 30/30 aprovados; GPU 32 aprovados e dois testes OpenGL nao executados porque
+  `xvfb-run` nao esta disponivel. O teste GameGrid, incluindo a comparacao de pixels sob um objeto opaco, passou
+  novamente nas duas configuracoes.
+- Teste visual manual ainda pendente: conferir grid/eixos atras de objetos no Game nas duas APIs, inclusive com
+  cameras divididas; e confirmar que a faixa de abas do Settings fica visivel sobre os demais elementos.
+- Nenhum arquivo foi apagado nesta revisao.
 
 **Commits relevantes:** `ui-integrado`: 73bb6c6 (driver de render), aae4527 (Help SpriteUI), e537377 (analise),
 517ec74 (bloco engine no project.json), aaa68d1 (lista do ImGui). `ui-settings-wip`: eac213e.
@@ -57,7 +82,8 @@ Rodar no seu computador com placa de video. Para cada item, diga "ok" ou descrev
 
 1. **Build e testes automatizados**
    - `cmake --build <pasta-de-build> --target tool_editor -j2` deve terminar sem erro.
-   - `ctest` deve passar em todos os testes (hoje sao 23).
+   - Atualmente, o CTest registra 30 testes CPU e 34 GPU. A suite CPU passou completa; na GPU, 32 passaram e dois
+     testes OpenGL nao executaram por falta do wrapper `xvfb-run`.
 2. **Escala e texto**
    - Abrir o editor: a escala deve estar em 125% e o texto nitido (sem serrilhado).
    - Idioma padrao: ingles.
@@ -89,16 +115,14 @@ Rodar no seu computador com placa de video. Para cada item, diga "ok" ou descrev
 
 ## T1. Terminar a janela Settings (estado parado)
 
-**Contexto.** O painel de Settings está sendo trocado por uma barra de ícones com tooltip
+**Contexto.** O painel de Settings precisa migrar para uma barra de ícones com tooltip
 (pincel = Appearance, engrenagem = Settings, controle = Game, lanterna = Lighting,
-blocos = Optimizing, G = Language). Há um arquivo novo `apps/editor/settings_tabs.hpp` e
-mudanças em `settings_model.hpp`, `settings_panel.hpp` e `settings_changes.hpp` ainda sem commit.
+blocos = Optimizing, G = Language). `settings_model.hpp`, `settings_panel.hpp` e `settings_changes.hpp`
+existem; `settings_tabs.hpp` e `settings_editor.hpp` nao existem no checkout atual.
 
-**Pendência.** `apps/editor/settings_bridge.hpp` e `apps/editor/tests/test_settings_bridge.cpp`
-aparecem como removidos no índice, mas `apps/editor/main.cpp` (função `settingsApiBuilt`) e
-`apps/editor/CMakeLists.txt` (alvo `editor_settings_bridge_tests`) ainda os usam.
-Ação: ou restaurar os dois arquivos do HEAD (`git restore --staged --worktree ...`), ou
-migrar `settingsApiBuilt` para o painel novo e então remover o bridge, o alvo CMake e o teste.
+**Estado.** `settings_bridge.hpp` e `tests/test_settings_bridge.cpp` existem e estao ligados ao Editor/CMake.
+O Settings ativo ainda e o ImGui em `main.cpp`; a nova interface SpriteUI e a persistencia dela nao foram integradas.
+Nao remover a ponte enquanto houver consumidores.
 
 **Passos.**
 1. Resolver a pendência acima e compilar `tool_editor`.
@@ -125,11 +149,11 @@ Já existem tokens de cor e de forma (commit `860f0c8`).
 
 ## T3. Janelas ainda em ImGui
 
-Contagem atual de chamadas `ImGui::` em `apps/editor`: 1445.
+Contagem atual de chamadas `ImGui::` em `apps/editor`: 1176 (busca nesta revisao).
 Por arquivo: `extra_ui.hpp` 235, `assets_panel.hpp` 139, `project_dialog.hpp` 40,
 `export_ui.hpp` 40, `script_window.hpp` 37, `narrative_panel.hpp` 54 (por último), `fx.hpp` 15,
 `editor_scripts.hpp` 4, `theme.hpp` 5, `ui_contract.hpp` 4, `viewport_tools.hpp` 3,
-`view_shapes.hpp` 1, `ui_test.cpp` 8, `main.cpp` 578.
+`view_shapes.hpp` 1, `ui_test.cpp` 8, `main.cpp` 591.
 
 Ordem sugerida:
 1. **Assets e Scenes** (`assets_panel.hpp`): árvore de pastas, importação, arrastar e soltar,
@@ -170,7 +194,11 @@ Ordem sugerida:
 - Cache de layout de texto (`TextLayoutCache.hpp`) já existe; aplicar também aos painéis do editor.
 - Evitar `std::string` temporário no laço de desenho.
 
-**Aceite.** Número de quadro registrado antes e depois, no `docs/IMPLEMENTATION_STATUS.md`.
+**Estado.** Referencia atual registrada em `docs/IMPLEMENTATION_STATUS.md` (Release, 1000 quadros). O benchmark ja usa
+cache de layout de texto, mas ainda nao mede uma versao anterior nem o Editor com o cache integrado.
+
+**Aceite.** Aplicar o cache aos paineis ativos e registrar uma comparacao antes/depois, mantendo a mesma configuracao
+do benchmark em `docs/IMPLEMENTATION_STATUS.md`.
 
 ## T6. Segurança e críticas pendentes (auditoria)
 

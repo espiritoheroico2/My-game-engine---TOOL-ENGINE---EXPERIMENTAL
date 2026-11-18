@@ -28,7 +28,7 @@ class PhysicsWorld {
   std::vector<PhysicsMaterial> materials{PhysicsMaterial{}}; // materialId indexa aqui
 
   // estatisticas do ultimo Simulate (para o Profiler)
-  struct Stats { int bodies = 0, awake = 0, pairs = 0, contacts = 0, steps = 0; } stats;
+  struct Stats { int bodies = 0, awake = 0, pairs = 0, contacts = 0, steps = 0, idleSteps = 0, broadphaseBuilds = 0; } stats;
 
   const std::vector<CollisionEvent>& GetCollisionEvents() const { return events_; }
   void ClearEvents() { events_.clear(); }
@@ -41,7 +41,7 @@ class PhysicsWorld {
     while (acc_ >= fixedDt && steps < maxStepsPerFrame) { Step(tf, rb, col, n, fixedDt); acc_ -= fixedDt; ++steps; }
     if (steps == maxStepsPerFrame) acc_ = 0.f;
     stats.steps = steps;
-    if (steps == 0 && cache_.size() != n) Prepare(tf, rb, col, n); // primeira chamada: deixa o raycast pronto
+    if (steps == 0 && cache_.size() != n) { Prepare(tf, rb, col, n); ++stats.broadphaseBuilds; } // primeira chamada: deixa o raycast pronto
   }
 
   // Recalcula formas no mundo + BVH (ja chamado por Simulate). Chame antes de Raycast se ainda nao simulou.
@@ -64,12 +64,23 @@ class PhysicsWorld {
  private:
   // ------------------------------------------------------------------ formas no mundo
   struct Shape { Vec3 c; Mat3 R; Vec3 e; float r = 0; bool sphere = false; AABB box; bool valid = false; };
+  struct ShapeInput { Transform transform; ShapeType type; Vec3 extents, offset, inverseInertia; float radius; bool dynamic; };
   struct Contact { Entity a, b; Vec3 p, n; float depth; float e, mu; Vec3 ra, rb; float normalMass = 0, tangentMass = 0, tangentMass2 = 0, bias = 0, jn = 0, jt1 = 0, jt2 = 0; Vec3 t1, t2; };
+  std::vector<ShapeInput> shapeInputs_;
 
-  static Shape MakeShape(const Transform& t, const Collider& c, bool active) {
-    Shape s; s.R = t.rotation.ToMat3(); s.c = t.position + s.R * c.offset; s.valid = active;
-    if (c.type == ShapeType::Sphere) { s.sphere = true; s.r = c.radius; s.e = {c.radius, c.radius, c.radius}; s.box = {s.c - s.e, s.c + s.e}; }
+  static Shape MakeShape(const Transform& t, const Collider& c, const Rigidbody& r, bool active) {
+    Shape s; s.valid = active;
+    if (c.type == ShapeType::Sphere) {
+      s.sphere = true; s.r = c.radius; s.e = {c.radius, c.radius, c.radius}; s.c = t.position;
+      const bool rotateOffset = c.offset.SqrMagnitude() != 0.f;
+      const bool anisotropicInertia = r.IsDynamic() &&
+          (r.inverseInertiaLocal.x != r.inverseInertiaLocal.y || r.inverseInertiaLocal.y != r.inverseInertiaLocal.z);
+      if (rotateOffset || anisotropicInertia) s.R = t.rotation.ToMat3();
+      if (rotateOffset) s.c += s.R * c.offset;
+      s.box = {s.c - s.e, s.c + s.e};
+    }
     else {
+      s.R = t.rotation.ToMat3(); s.c = t.position + s.R * c.offset;
       s.e = c.extents; const Vec3 ex{std::fabs(s.R.r[0].x) * s.e.x + std::fabs(s.R.r[0].y) * s.e.y + std::fabs(s.R.r[0].z) * s.e.z,
                                       std::fabs(s.R.r[1].x) * s.e.x + std::fabs(s.R.r[1].y) * s.e.y + std::fabs(s.R.r[1].z) * s.e.z,
                                       std::fabs(s.R.r[2].x) * s.e.x + std::fabs(s.R.r[2].y) * s.e.y + std::fabs(s.R.r[2].z) * s.e.z};
@@ -78,15 +89,54 @@ class PhysicsWorld {
     return s;
   }
 
+  static bool SameVec(const Vec3& a, const Vec3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+  static bool SameShapeInput(const ShapeInput& a, const Transform& t, const Rigidbody& r, const Collider& c) {
+    return SameVec(a.transform.position, t.position) &&
+        a.transform.rotation.x == t.rotation.x && a.transform.rotation.y == t.rotation.y &&
+        a.transform.rotation.z == t.rotation.z && a.transform.rotation.w == t.rotation.w &&
+        a.type == c.type && SameVec(a.extents, c.extents) && SameVec(a.offset, c.offset) &&
+        a.radius == c.radius && SameVec(a.inverseInertia, r.inverseInertiaLocal) && a.dynamic == r.IsDynamic();
+  }
+  bool ShapeInputsUnchanged(const std::vector<Transform>& tf, const std::vector<Rigidbody>& rb,
+                            const std::vector<Collider>& col, size_t n) const {
+    if (shapeInputs_.size() != n) return false;
+    for (size_t i = 0; i < n; ++i) if (!SameShapeInput(shapeInputs_[i], tf[i], rb[i], col[i])) return false;
+    return true;
+  }
+
   void Prepare(const std::vector<Transform>& tf, const std::vector<Rigidbody>& rb, const std::vector<Collider>& col, size_t n) {
-    (void)rb;
-    cache_.resize(n); boxes_.resize(n); valid_.assign(n, 1);
-    JobSystem::Get().ParallelFor(n, 512, [&](size_t b, size_t e) { for (size_t i = b; i < e; ++i) { cache_[i] = MakeShape(tf[i], col[i], true); boxes_[i] = cache_[i].box; } });
+    cache_.resize(n); boxes_.resize(n); valid_.assign(n, 1); shapeInputs_.resize(n);
+    JobSystem::Get().ParallelFor(n, 512, [&](size_t b, size_t e) { for (size_t i = b; i < e; ++i) {
+      cache_[i] = MakeShape(tf[i], col[i], rb[i], true); boxes_[i] = cache_[i].box;
+      shapeInputs_[i] = {tf[i], col[i].type, col[i].extents, col[i].offset, rb[i].inverseInertiaLocal, col[i].radius, rb[i].IsDynamic()};
+    } });
     bvh_.Build(boxes_, valid_);
   }
 
   // ------------------------------------------------------------------ passo fixo
   void Step(std::vector<Transform>& tf, std::vector<Rigidbody>& rb, const std::vector<Collider>& col, size_t n, float dt) {
+    auto active = [&](size_t i) { return (rb[i].IsDynamic() && !rb[i].isSleeping) || (rb[i].isKinematic && rb[i].velocity.SqrMagnitude() > 1e-8f); };
+    bool hasActiveBody = false;
+    for (size_t i = 0; i < n && !hasActiveBody; ++i) hasActiveBody = active(i);
+    if (!hasActiveBody && !ShapeInputsUnchanged(tf, rb, col, n)) {
+      Prepare(tf, rb, col, n);
+      ++stats.broadphaseBuilds;
+    }
+    if (!hasActiveBody) {
+      for (size_t i = 0; i < n; ++i) {
+        Rigidbody& r = rb[i];
+        if (!r.isSleeping) r.grounded = false;
+        r.forceAccumulator = r.torqueAccumulator = {};
+      }
+      curPairs_.clear();
+      for (auto& kv : prevPairs_)
+        events_.push_back({kv.second.a, kv.second.b, {}, {}, 0.f, CollisionType::Exit, kv.second.trigger});
+      prevPairs_.clear();
+      ++stats.idleSteps;
+      TrimEvents();
+      return;
+    }
+
     // 1) velocidades (paralelo): gravidade/vector physics, forcas, arrasto
     JobSystem::Get().ParallelFor(n, 1024, [&](size_t b, size_t e) {
       for (size_t i = b; i < e; ++i) {
@@ -95,8 +145,8 @@ class PhysicsWorld {
         const Vec3 g = r.overrideGravity ? r.gravity : gravity;
         if (r.useGravity) r.velocity += g * (r.gravityScale * dt);
         r.velocity += r.forceAccumulator * (r.inverseMass * dt);
-        const Mat3 R = tf[i].rotation.ToMat3();
-        r.angularVelocity += InvInertiaWorld(r, R) * r.torqueAccumulator * dt;
+        if (!r.freezeRotation && r.torqueAccumulator.SqrMagnitude() != 0.f)
+          r.angularVelocity += InvInertiaWorld(r, tf[i].rotation.ToMat3()) * r.torqueAccumulator * dt;
         r.forceAccumulator = r.torqueAccumulator = {};
         r.velocity *= 1.f / (1.f + r.linearDamping * dt); r.angularVelocity *= 1.f / (1.f + r.angularDamping * dt);
         if (r.freezeRotation) r.angularVelocity = {};
@@ -104,9 +154,9 @@ class PhysicsWorld {
     });
     // 2) formas + BVH
     Prepare(tf, rb, col, n);
+    ++stats.broadphaseBuilds;
     // 3) pares (broad-phase)
     pairs_.clear();
-    auto active = [&](size_t i) { return (rb[i].IsDynamic() && !rb[i].isSleeping) || (rb[i].isKinematic && rb[i].velocity.SqrMagnitude() > 1e-8f); };
     for (size_t i = 0; i < n; ++i) {
       if (!active(i)) continue;
       bvh_.Query(boxes_[i], [&](Entity j) {
@@ -117,8 +167,6 @@ class PhysicsWorld {
       });
     }
     stats.pairs += static_cast<int>(pairs_.size());
-    invIw_.resize(n);
-    JobSystem::Get().ParallelFor(n, 1024, [&](size_t b, size_t e) { for (size_t i = b; i < e; ++i) invIw_[i] = InvInertiaWorld(rb[i], cache_[i].R); });
     // 4) narrow-phase
     contacts_.clear(); curPairs_.clear();
     for (auto& pr : pairs_) {
@@ -141,9 +189,18 @@ class PhysicsWorld {
     }
     stats.contacts += static_cast<int>(contacts_.size());
     // 5) solver
-    PreSolve(tf, rb, dt);
-    for (int it = 0; it < solverIterations; ++it) SolveContacts(rb);
-    for (auto& c : contacts_) { auto f = curPairs_.find(Key(c.a, c.b)); if (f != curPairs_.end()) f->second.impulse += c.jn; }
+    if (!contacts_.empty()) {
+      invIw_.resize(n); invIwReady_.assign(n, 0);
+      auto prepareInertia = [&](Entity e) {
+        if (invIwReady_[e]) return;
+        invIw_[e] = InvInertiaWorld(rb[e], cache_[e].R);
+        invIwReady_[e] = 1;
+      };
+      for (const Contact& c : contacts_) { prepareInertia(c.a); prepareInertia(c.b); }
+      PreSolve(tf, rb, dt);
+      for (int it = 0; it < solverIterations; ++it) SolveContacts(rb);
+      for (auto& c : contacts_) { auto f = curPairs_.find(Key(c.a, c.b)); if (f != curPairs_.end()) f->second.impulse += c.jn; }
+    }
     // 6) CCD (so quem pediu e anda rapido): limita o deslocamento ao primeiro acerto
     for (size_t i = 0; i < n; ++i) {
       Rigidbody& r = rb[i]; if (!r.useCCD || !r.IsDynamic() || r.isSleeping) continue;
@@ -175,12 +232,15 @@ class PhysicsWorld {
     }
     for (auto& kv : prevPairs_) if (!curPairs_.count(kv.first)) events_.push_back({kv.second.a, kv.second.b, {}, {}, 0.f, CollisionType::Exit, kv.second.trigger});
     prevPairs_ = curPairs_;
-    if (events_.size() > 20000) events_.erase(events_.begin(), events_.begin() + 10000); // ninguem limpando: nao crescer sem limite
+    TrimEvents();
   }
 
   static float c0Up(const Vec3& n) { return n.y; }
   static uint64_t Key(Entity a, Entity b) { if (a > b) std::swap(a, b); return (static_cast<uint64_t>(a) << 32) | b; }
   const PhysicsMaterial& Mat(uint16_t id) const { return materials[id < materials.size() ? id : 0]; }
+  void TrimEvents() {
+    if (events_.size() > 20000) events_.erase(events_.begin(), events_.begin() + 10000);
+  }
   // Tensor de inercia inverso no MUNDO: R * diag(I^-1) * R^T (zero para corpos estaticos/cinematicos: nao giram por impacto).
   static Mat3 InvInertiaWorld(const Rigidbody& r, const Mat3& R) {
     Mat3 out; if (!r.IsDynamic()) { out.r[0] = out.r[1] = out.r[2] = {}; return out; }
@@ -195,8 +255,13 @@ class PhysicsWorld {
   struct Pt { Vec3 p, n; float depth; };
   bool Collide(const Shape& A, const Shape& B, std::vector<Pt>& out) const {
     if (A.sphere && B.sphere) return SphereSphere(A, B, out);
-    if (A.sphere) { std::vector<Pt> t; if (!SphereBox(A, B, t)) return false; for (auto& p : t) out.push_back(p); return true; }
-    if (B.sphere) { std::vector<Pt> t; if (!SphereBox(B, A, t)) return false; for (auto& p : t) out.push_back({p.p, -p.n, p.depth}); return true; }
+    if (A.sphere) return SphereBox(A, B, out);
+    if (B.sphere) {
+      const size_t first = out.size();
+      if (!SphereBox(B, A, out)) return false;
+      for (size_t i = first; i < out.size(); ++i) out[i].n = -out[i].n;
+      return true;
+    }
     return BoxBox(A, B, out);
   }
   static bool SphereSphere(const Shape& A, const Shape& B, std::vector<Pt>& out) {
@@ -318,6 +383,7 @@ class PhysicsWorld {
   }
   struct PairInfo { Entity a = kNoEntity, b = kNoEntity; Vec3 p, n; float depth = 0, impulse = 0; bool trigger = false; };
   std::vector<Mat3> invIw_;
+  std::vector<char> invIwReady_;
   std::vector<Shape> cache_; std::vector<AABB> boxes_; std::vector<char> valid_;
   BVH bvh_;
   std::vector<std::pair<Entity, Entity>> pairs_; std::vector<Pt> tmp_; std::vector<Contact> contacts_;

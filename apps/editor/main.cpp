@@ -1087,7 +1087,7 @@ void drawGameView(Editor& ed, SDL_Renderer* sdl, bool player = false) {
     const bool reuseGame = ed.viewsIdle() && ed.gameTex[i].tex && ed.gameTex[i].w == tw && ed.gameTex[i].h == th;
     const tool::u8* pixels = nullptr;
     if (!reuseGame) {
-      const tool::u8* raw = ed.renderView(cam, rw, rh, false, editor::Zone::GameRender, &fx);
+      const tool::u8* raw = ed.renderView(cam, rw, rh, false, editor::Zone::GameRender, &fx, static_cast<std::size_t>(i));
       pixels = soft ? ed.finishView(ed.gameUp[i], raw, rw, rh, w, h) : raw;
       ed.gameTex[i].ensure(sdl, tw, th);
     }
@@ -1105,15 +1105,8 @@ void drawGameView(Editor& ed, SDL_Renderer* sdl, bool player = false) {
       origin = {cell.x + (size.x - fit.x) * 0.5f, cell.y + (size.y - fit.y) * 0.5f}; size = fit;
     }
     ImGui::GetWindowDrawList()->AddImage(reinterpret_cast<ImTextureID>(ed.gameTex[i].tex), origin, {origin.x + size.x, origin.y + size.y});
-    if (ed.showGridGame) { // o grid so aparece no jogo se ligado em Settings > Game
-      const ViewXf xf = ViewXf::make(cam, origin, size);
-      ImDrawList* dl = ImGui::GetWindowDrawList();
-      dl->PushClipRect(origin, {origin.x + size.x, origin.y + size.y}, true);
-      drawGrid(dl, xf);
-      dl->PopClipRect();
-    }
-        editor::drawParticleOverlay(ed, cam, origin, size, tool::Entity{});
-        editor::drawUiOverlay(ed, e, origin, size, ed.playing);
+    editor::drawParticleOverlay(ed, cam, origin, size, tool::Entity{});
+    editor::drawUiOverlay(ed, e, origin, size, ed.playing);
   }
   ImGui::End();
 }
@@ -1398,7 +1391,7 @@ SDL_Texture* updateGameTexture(Editor& ed, SDL_Renderer* sdl, std::size_t i, con
   th = soft ? h : rh;
   const bool reuse = ed.viewsIdle() && ed.gameTex[i].tex && ed.gameTex[i].w == tw && ed.gameTex[i].h == th;
   if (!reuse) {
-    const tool::u8* raw = ed.renderView(cam, rw, rh, false, editor::Zone::GameRender, &fx);
+    const tool::u8* raw = ed.renderView(cam, rw, rh, false, editor::Zone::GameRender, &fx, i);
     const tool::u8* pixels = soft ? ed.finishView(ed.gameUp[i], raw, rw, rh, w, h) : raw;
     ed.gameTex[i].ensure(sdl, tw, th);
     if (ed.gameTex[i].tex) SDL_UpdateTexture(ed.gameTex[i].tex, nullptr, pixels, tw * 4);
@@ -1427,7 +1420,6 @@ void buildGameCell(Editor& ed, SDL_Renderer* sdl, std::size_t i, tool::Entity e,
   out.fit = fixedRes ? ImageFit::Contain : ImageFit::Stretch;
   const gm::Rect img = fixedRes ? gm::letterbox(cell, static_cast<float>(rw), static_cast<float>(rh)) : cell;
   const editor::sui::Box imgBox{img.x, img.y, img.w, img.h};
-  if (ed.showGridGame) vo::buildGrid(cam, vm::Projection::make(cam, {img.x, img.y, img.w, img.h}), out.overlay);
   vo::buildParticles(ed, cam, imgBox, tool::Entity{}, out.overlay);
   vo::buildUi(ed, e, imgBox, ed.playing, gGamePanel->hoverHit(i), gGamePanel->pressedHit(i), out);
 }

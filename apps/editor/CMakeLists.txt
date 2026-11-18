@@ -132,6 +132,11 @@ target_include_directories(editor_scene_view_model_tests PRIVATE ${CMAKE_CURRENT
 target_link_libraries(editor_scene_view_model_tests PRIVATE tool::math tool::render)
 add_test(NAME Editor.SceneViewModel COMMAND editor_scene_view_model_tests)
 
+add_executable(editor_game_grid_tests tests/test_game_grid.cpp)
+target_include_directories(editor_game_grid_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_game_grid_tests PRIVATE tool::render)
+add_test(NAME Editor.GameGrid COMMAND editor_game_grid_tests)
+
 # Menu flutuante da Scene (scene_transform_menu.hpp): teclas W, E, R, Q, passo do ima e arrasto com e sem encaixe.
 add_executable(editor_scene_transform_menu_tests tests/test_scene_transform_menu.cpp)
 target_include_directories(editor_scene_transform_menu_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -143,6 +148,40 @@ add_executable(editor_game_view_model_tests tests/test_game_view_model.cpp)
 target_include_directories(editor_game_view_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(editor_game_view_model_tests PRIVATE SpriteUi::SpriteUI)
 add_test(NAME Editor.GameViewModel COMMAND editor_game_view_model_tests)
+
+add_executable(editor_ui_icons_tests tests/test_ui_icons.cpp)
+target_include_directories(editor_ui_icons_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.UiIcons COMMAND editor_ui_icons_tests)
+add_executable(editor_ui_tokens_tests tests/test_ui_tokens.cpp)
+target_include_directories(editor_ui_tokens_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.UiTokens COMMAND editor_ui_tokens_tests)
+
+if(TOOL_WITH_SPRITEUI)
+  add_executable(editor_spriteui_layers_input_tests ${CMAKE_SOURCE_DIR}/third_party/SpriteUi/tests/test_layers_and_input.cpp)
+  target_link_libraries(editor_spriteui_layers_input_tests PRIVATE SpriteUi::SpriteUI)
+  add_test(NAME Editor.SpriteUiLayersInput COMMAND editor_spriteui_layers_input_tests)
+  add_executable(editor_spriteui_frame_cost_tests ${CMAKE_SOURCE_DIR}/third_party/SpriteUi/tests/test_frame_cost.cpp)
+  target_link_libraries(editor_spriteui_frame_cost_tests PRIVATE SpriteUi::SpriteUI)
+  add_test(NAME Editor.SpriteUiFrameCost COMMAND editor_spriteui_frame_cost_tests)
+  add_executable(editor_spriteui_splitter_tests ${CMAKE_SOURCE_DIR}/third_party/SpriteUi/tests/test_splitter.cpp)
+  target_link_libraries(editor_spriteui_splitter_tests PRIVATE SpriteUi::SpriteUI)
+  add_test(NAME Editor.SpriteUiSplitter COMMAND editor_spriteui_splitter_tests)
+  add_executable(editor_spriteui_dock_guides_tests ${CMAKE_SOURCE_DIR}/third_party/SpriteUi/tests/test_dock_guides.cpp)
+  target_link_libraries(editor_spriteui_dock_guides_tests PRIVATE SpriteUi::SpriteUI)
+  add_test(NAME Editor.SpriteUiDockGuides COMMAND editor_spriteui_dock_guides_tests)
+  add_executable(editor_spriteui_ui_scale_tests ${CMAKE_SOURCE_DIR}/third_party/SpriteUi/tests/test_ui_scale.cpp)
+  target_link_libraries(editor_spriteui_ui_scale_tests PRIVATE SpriteUi::TextStb)
+  target_compile_definitions(editor_spriteui_ui_scale_tests PRIVATE
+    "SPRITEUI_UI_SCALE_TEST_FONT=\"${CMAKE_SOURCE_DIR}/third_party/SpriteUi/Fonts/Xmind/static/Xmind-Regular.ttf\"")
+  add_test(NAME Editor.SpriteUiUiScale COMMAND editor_spriteui_ui_scale_tests)
+
+  if(TOOL_BUILD_TESTS)
+    add_executable(spriteui_frame_benchmark ${CMAKE_SOURCE_DIR}/third_party/SpriteUi/benchmarks/spriteui_frame_benchmark.cpp)
+    target_link_libraries(spriteui_frame_benchmark PRIVATE SpriteUi::TextStb)
+    target_compile_definitions(spriteui_frame_benchmark PRIVATE
+      "SPRITEUI_BENCH_FONT_PATH=\"${CMAKE_SOURCE_DIR}/third_party/SpriteUi/Fonts/Xmind/static/Xmind-Regular.ttf\"")
+  endif()
+endif()
 
 add_test(NAME editor_selftest COMMAND tool_editor --selftest WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 set_tests_properties(editor_selftest PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy" TIMEOUT 120)

@@ -17,7 +17,12 @@ Referencia: `docs/PESQUISA_MILHARES_OBJETOS.md` (fontes e motivo de cada tecnica
 
 - Builds CPU e GPU e testes automatizados anteriores passaram; `tool_tests` registrou 197 testes sem falhas e o teste Vulkan passou.
 - Os builds atualizados do Editor (CPU e GPU), após a adicao da exportacao do Profiler, tambem passaram; `Editor.ProfilerModel` e `Editor.ProfilerExport` passaram nos dois.
+- Nesta revisao de UI, `tool_editor` foi recompilado nas configuracoes CPU e GPU. Cinco testes focados de icones,
+  tokens, divisor, guias de docking e escala passaram em ambas; isso nao substitui os testes completos nem a validacao visual do P1.
 - Os testes OpenGL configurados pelo CTest nao executaram: `xvfb-run` nao estava disponivel no ambiente.
+- A correcao do grid do Game e independente do batching do P1. Nesta continuacao, a suite completa CPU passou
+  (30/30); na GPU, 32 testes passaram e dois testes OpenGL nao executaram por falta de `xvfb-run`. O teste do grid,
+  incluindo o teste de pixels contra objeto opaco, passou nas duas configuracoes.
 - A verificacao visual obrigatoria ainda falta: comparar a cena `--ecs 1000 --play`, confirmar equivalencia visual e medir `DrawStats`/CSV do benchmark.
 - O bloom e os objetos transparentes continuam sendo desenhados por objeto intencionalmente; isso nao bloqueia o P1 implementado.
 

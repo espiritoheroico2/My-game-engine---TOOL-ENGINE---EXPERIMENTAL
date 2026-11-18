@@ -24,6 +24,7 @@ Escopo desta etapa: núcleo (ECS, GPU, paralelismo), editor (cena e jogo), siste
 | A11 | `eachTagged` percorre até o maior índice usado | Baixo/médio | **Pendente**: índice por tag |
 | A12 | Upscaling por software: custo por quadro na CPU | Médio (só quando ativo) | **Implementado** com paralelismo por linha; "Off (SDL linear)" é o padrão do caminho rápido |
 | A13 | Contexto QuickJS por objeto com script | Alto com muitos objetos com script | **Pendente**: um contexto por arquivo + tabela de estado (ver `docs/ECS.md` §6) |
+| A14 | Física reconstroi formas/BVH e prepara matrizes de inercia sem trabalho util | Alto em cenas grandes/ociosas | **Otimizado parcialmente**: passo ocioso pula formas/BVH quando os dados nao mudam; alteracoes externas invalidam o cache. Buffers e calculos de inercia/rotacao evitam trabalho desnecessario. O ganho nao foi confirmado por comparacao controlada; crash interativo do `test ecs:500` continua sem reproducao |
 
 ## 3. Memória: sanitizadores
 
@@ -47,6 +48,8 @@ Medição de 30 quadros ativos com `--ecs 5 --bench-frames 30 --project .\Projec
 
 Nova varredura dos caminhos críticos: `SoftRenderer::rasterize` executa interpolação perspectiva, normalização e avaliação PBR por fragmento coberto; esse caminho corresponde à zona CPU rasterization dominante. O `resolve` percorre a imagem inteira e o FXAA/sharpen também processa pixels em CPU quando habilitado, compatível com o custo medido em Post-processing. Esses caminhos devem ser priorizados para otimização; mudanças de algoritmo devem manter paridade visual e ser comparadas com uma cena e configuração fixas. Também há ordenações por quadro de draws transparentes (`gpu_renderer.hpp`) e candidatos de luz (`lighting.hpp`), mas não foram isolados como gargalo por esta medição.
 
+Medicao adicional limitada da fisica: `--ecs 500 --bench-frames 60 --play --project .\Project` criou 502 corpos. CPU: media 1,29 ms/quadro, p50 1,06 ms, p95 2,09 ms, max 3,04 ms; zona Physics 0,04 ms. Vulkan: media 1,40 ms/quadro, p50 1,32 ms, p95 2,75 ms, max 3,19 ms; zona Physics 0,03 ms. As vistas estavam ociosas (0 draws e 0 triangulos), logo estes valores nao medem o custo de renderizar a cena nem permitem concluir ganho comparativo. O Profiler agora separa `Physics simulation`; para avaliar o crash, ainda e necessaria uma reproducao interativa e uma captura das zonas quando o problema ocorre.
+
 Para repetir no seu sistema, use `test ECS: N` (Console) com N = 10 000, 50 000 e 100 000, e leia as zonas **Physics**, **Update** e **Scene render** no Profiler.
 
 Medição de upscaling (`/home/claude/scratch/bench_up.cpp`, `-O2`, 2 threads): ver `docs/RENDER_SCALING.md`.
@@ -65,6 +68,7 @@ Medição de upscaling (`/home/claude/scratch/bench_up.cpp`, `-O2`, 2 threads): 
 - Os cronômetros de zona do loop principal reutilizam armazenamento na pilha, evitando alocações de heap por quadro.
 - O limite inicial de FPS passou a ser ilimitado. VSync e limites de 30/60/120 FPS continuam disponíveis quando selecionados em Settings > Graphics.
 - Ainda não há uma comparação numérica antes/depois feita no mesmo hardware nesta revisão; use `--ecs N` ou `--voxel N` com `--project <pasta>` para coletar média, p50, p95 e tempos das zonas no próprio sistema. `--bench-frames N` ajusta a amostra medida (padrão 300; intervalo 1–10000), após o aquecimento. Exemplo de render ativo: `tool_editor --ecs 5 --bench-frames 30 --project .\Project`. As médias das zonas usam os mesmos quadros medidos; zonas aninhadas podem se sobrepor.
+- A zona **Physics simulation** agora mede `PhysicsWorld::Simulate`. O selftest valida 500 corpos pelo spawner e `tool_tests` inclui 500 corpos que dormem e confirmam que o passo ocioso nao reconstruiu a broadphase; outro teste confirma a atualizacao de geometrias alteradas externamente. Isso verifica corretude e a condicao ociosa, nao a causa do crash interativo nem um ganho de desempenho em cena renderizada.
 
 ## 8. Direct3D 11
 
