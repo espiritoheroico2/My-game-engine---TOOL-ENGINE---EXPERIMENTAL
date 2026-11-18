@@ -226,6 +226,25 @@ void TestPopupBackdropBlocksWindowBelow() {
     CHECK(router.GetState().hoveredEntity == backdrop.handle);
 }
 
+// TopmostAt segue a mesma regra de camada que o clique: menu (Popup) cobre a janela de tras.
+void TestTopmostAtMatchesClickRule() {
+    current = "TestTopmostAtMatchesClickRule";
+    HitTarget below;
+    below.handle = UIHandle{1, 1};
+    below.localSize = {300.0f, 300.0f};
+    below.layer = static_cast<std::int32_t>(UILayer::Docked);
+    below.paintOrder = 1;
+    HitTarget menu = below;
+    menu.handle = UIHandle{2, 1};
+    menu.layer = static_cast<std::int32_t>(UILayer::Popup);
+    menu.localSize = {80.0f, 80.0f};
+    menu.paintOrder = 2;
+    const std::vector<HitTarget> targets{below, menu};
+    CHECK(UIEventRouter::TopmostAt(targets, {20.0f, 20.0f}) == menu.handle);
+    CHECK(UIEventRouter::TopmostAt(targets, {200.0f, 200.0f}) == below.handle);
+    CHECK(!UIEventRouter::TopmostAt(targets, {400.0f, 400.0f}).IsValid());
+}
+
 // Itens de janela levam a camada da janela (flutuante acima de encaixada no desenho).
 void TestWindowItemsCarryLayer() {
     current = "TestWindowItemsCarryLayer";
@@ -273,6 +292,7 @@ int main() {
     TestFloatingWindowWinsOverDockedRegardlessOfPaint();
     TestPopupBackdropBlocksWindowBelow();
     TestWindowItemsCarryLayer();
+    TestTopmostAtMatchesClickRule();
     TestDockedWindowNeedsUndockThreshold();
     TestWindowGripIsOnlyLeftIcon();
     std::printf("layers and input: %d/%d checks passed\n", run - failed, run);

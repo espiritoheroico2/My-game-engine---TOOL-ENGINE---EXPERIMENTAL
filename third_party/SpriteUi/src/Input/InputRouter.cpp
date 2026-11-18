@@ -258,6 +258,11 @@ std::vector<UIEvent> UIEventRouter::Process(
     return events;
 }
 
+UIHandle UIEventRouter::TopmostAt(std::span<const HitTarget> targets, Vec2 screenPosition) noexcept {
+    const HitTarget* top = HitTest(targets, screenPosition, nullptr);
+    return top ? top->handle : InvalidUIHandle;
+}
+
 void UIEventRouter::Reset() noexcept {
     pressTimeSeconds_ = 0.0;
     state_.holdActive = false;

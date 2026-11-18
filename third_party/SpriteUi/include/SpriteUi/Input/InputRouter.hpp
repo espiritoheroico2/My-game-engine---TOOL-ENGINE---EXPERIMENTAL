@@ -88,6 +88,11 @@ public:
     [[nodiscard]] const UIPointerRoutingState& GetState() const noexcept { return state_; }
     void Reset() noexcept;
 
+    // Alvo que um clique em `screenPosition` acertaria agora (mesma regra de Process). Sem estado: pode ser
+    // usado para decidir a quem entregar um evento antes de o roteador processar o quadro. Retorna handle invalido
+    // se nenhum alvo cobre o ponto. Um alvo desabilitado tambem conta como coberto: quem chama decide o que fazer.
+    [[nodiscard]] static UIHandle TopmostAt(std::span<const HitTarget> targets, Vec2 screenPosition) noexcept;
+
 private:
     [[nodiscard]] static const HitTarget* FindTarget(
         std::span<const HitTarget> targets, UIHandle handle) noexcept;
