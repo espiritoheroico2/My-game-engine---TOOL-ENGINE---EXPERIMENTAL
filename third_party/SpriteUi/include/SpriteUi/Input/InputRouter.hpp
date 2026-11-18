@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SpriteUi/Core/DrawOrder.hpp"
 #include "SpriteUi/Core/Handle.hpp"
 #include "SpriteUi/Core/Math.hpp"
 
@@ -34,6 +35,10 @@ struct HitTarget {
     Vec2 localSize{};         // Logical pixel dimensions in local space.
     Rect clipRectLogical{};   // Effective ancestor clip; used when clipEnabled.
     bool clipEnabled = false;
+    // Mesma chave de desenho (DrawOrder.hpp): camada, zOrder e ordem de pintura. Quem e desenhado por cima
+    // recebe o ponteiro primeiro. Padroes iguais a 0 mantem o comportamento antigo.
+    std::int32_t layer = 0;
+    float zOrder = 0.0f;
     std::uint64_t paintOrder = 0;
     bool visible = true;
     bool enabled = true;

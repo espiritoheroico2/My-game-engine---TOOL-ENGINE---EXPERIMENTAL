@@ -188,7 +188,7 @@ Rect TitleBarInside(const Window& window, float borderWidth) noexcept {
 }
 
 std::vector<Rendering::UIRenderItem> BuildWindowItems(const Window& window, const WindowStyle& style, float zOrder,
-                                                      std::uint64_t paintOrder) {
+                                                      std::uint64_t paintOrder, std::int32_t layer) {
     std::vector<Rendering::UIRenderItem> out;
     const Rect box = window.border;
     if (!IsFinite(box.position) || !IsFinite(box.size)) return out;
@@ -206,6 +206,7 @@ std::vector<Rendering::UIRenderItem> BuildWindowItems(const Window& window, cons
                                                zOrder, paint++));
         AppendGlyph(window, button, style, zOrder, paint, out);
     }
+    for (Rendering::UIRenderItem& item : out) item.layer = layer;
     return out;
 }
 

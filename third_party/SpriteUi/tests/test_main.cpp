@@ -1234,10 +1234,20 @@ static void TestWidgetsAndWindowInteraction() {
     UIPointerRoutingState routing;
     UIHandle winHandle{42, 1};
 
-    // Click on titlebar
+    // Clique no meio do titulo nao arrasta: so o grip (icone a esquerda) inicia o arraste.
+    UIInputSnapshot clickMiddleTitle;
+    clickMiddleTitle.frameId = 1;
+    clickMiddleTitle.pointerPositionLogical = {100.0f, 60.0f};
+    clickMiddleTitle.primaryPressed = true;
+    clickMiddleTitle.primaryDown = true;
+    CHECK(!ProcessWindowInteraction(window, layout, transform, clickMiddleTitle, routing, winHandle));
+    CHECK(!window.isDragging);
+    routing.capturedEntity = InvalidUIHandle;
+
+    // Clique no grip (dentro dos 14 px a esquerda do titulo)
     UIInputSnapshot clickTitle;
     clickTitle.frameId = 1;
-    clickTitle.pointerPositionLogical = {100.0f, 60.0f}; // Inside titlebar
+    clickTitle.pointerPositionLogical = {56.0f, 60.0f};
     clickTitle.primaryPressed = true;
     clickTitle.primaryDown = true;
     CHECK(ProcessWindowInteraction(window, layout, transform, clickTitle, routing, winHandle));

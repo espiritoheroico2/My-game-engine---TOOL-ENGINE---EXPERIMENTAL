@@ -110,6 +110,8 @@ SceneExtractionResult LayoutSceneBridge::Extract(const LayoutTree& tree) const {
             target.localSize = elem->node.rect.size;
             target.localToScreen.tx = elem->node.rect.position.x;
             target.localToScreen.ty = elem->node.rect.position.y;
+            target.layer = visual ? visual->layer : 0;
+            target.zOrder = visual ? visual->zOrder : 0.0f;
             target.paintOrder = currentPaint;
             target.visible = elem->visible;
             target.enabled = true;
@@ -146,6 +148,7 @@ SceneExtractionResult LayoutSceneBridge::Extract(const LayoutTree& tree) const {
             item.materialIndex = visual->materialIndex;
             item.clipIndex = effectiveClip;
             item.flags = visual->flags;
+            item.layer = visual->layer;
             item.zOrder = visual->zOrder;
             item.paintOrder = currentPaint;
             item.visible = elem->visible;

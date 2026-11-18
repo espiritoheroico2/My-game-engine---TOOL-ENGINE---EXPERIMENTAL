@@ -2,6 +2,9 @@
 // Executavel proprio, sem o harness principal. Usa o pipeline real: LayoutTree -> LayoutSceneBridge -> roteador.
 
 #include "SpriteUi/Elements/Button.hpp"
+#include "SpriteUi/Elements/Window.hpp"
+#include "SpriteUi/Widgets/DockInteraction.hpp"
+#include "SpriteUi/Widgets/Widgets.hpp"
 #include "SpriteUi/Core/DrawOrder.hpp"
 #include "SpriteUi/Input/InputRouter.hpp"
 #include "SpriteUi/Layout/LayoutBridge.hpp"
@@ -182,6 +185,83 @@ void TestDisabledTargetDoesNotLeakEvents() {
     CHECK(router.GetState().consumedThisFrame);
 }
 
+// Janela flutuante sobre uma encaixada: a flutuante recebe o clique mesmo com paintOrder menor.
+void TestFloatingWindowWinsOverDockedRegardlessOfPaint() {
+    current = "TestFloatingWindowWinsOverDockedRegardlessOfPaint";
+    HitTarget docked;
+    docked.handle = UIHandle{1, 1};
+    docked.localSize = {300.0f, 300.0f};
+    docked.layer = static_cast<std::int32_t>(UILayer::Docked);
+    docked.zOrder = 50.0f;
+    docked.paintOrder = 9;
+    HitTarget floating = docked;
+    floating.handle = UIHandle{2, 1};
+    floating.layer = static_cast<std::int32_t>(UILayer::Floating);
+    floating.zOrder = 0.0f;
+    floating.paintOrder = 1;
+    const std::vector<HitTarget> targets{docked, floating};
+    UIEventRouter router;
+    (void)router.Process(Snap({10.0f, 10.0f}, 1, false, false, false), targets);
+    CHECK(router.GetState().hoveredEntity == floating.handle);
+}
+
+// Menu aberto: um fundo de captura na camada Popup recebe o clique; a janela de tras nao recebe.
+void TestPopupBackdropBlocksWindowBelow() {
+    current = "TestPopupBackdropBlocksWindowBelow";
+    HitTarget below;
+    below.handle = UIHandle{1, 1};
+    below.localSize = {300.0f, 300.0f};
+    below.layer = static_cast<std::int32_t>(UILayer::Docked);
+    below.paintOrder = 1;
+    HitTarget backdrop = below;
+    backdrop.handle = UIHandle{2, 1};
+    backdrop.layer = static_cast<std::int32_t>(UILayer::Popup);
+    backdrop.paintOrder = 2;
+    const std::vector<HitTarget> targets{below, backdrop};
+    UIEventRouter router;
+    const auto events = router.Process(Snap({20.0f, 20.0f}, 1, true, true, false), targets);
+    bool reachedBelow = false;
+    for (const UIEvent& e : events) reachedBelow = reachedBelow || e.target == below.handle;
+    CHECK(!reachedBelow);
+    CHECK(router.GetState().hoveredEntity == backdrop.handle);
+}
+
+// Itens de janela levam a camada da janela (flutuante acima de encaixada no desenho).
+void TestWindowItemsCarryLayer() {
+    current = "TestWindowItemsCarryLayer";
+    Elements::Window win;
+    win.border = {{0.0f, 0.0f}, {200.0f, 150.0f}};
+    const auto items = Elements::BuildWindowItems(win, Elements::WindowStyle{}, 3.0f, 0,
+                                                  static_cast<std::int32_t>(UILayer::Floating));
+    CHECK(!items.empty());
+    bool allFloating = true;
+    for (const auto& item : items) allFloating = allFloating && item.layer == static_cast<std::int32_t>(UILayer::Floating);
+    CHECK(allFloating);
+}
+
+// Arraste de janela encaixada: 10 px nao tiram do dock; 20 px tiram. Janela solta usa o limiar menor.
+void TestDockedWindowNeedsUndockThreshold() {
+    current = "TestDockedWindowNeedsUndockThreshold";
+    const UIHandle w{7, 1};
+    Widgets::DockDragController docked;
+    docked.BeginPress(w, {100.0f, 100.0f}, true);
+    CHECK(!docked.Move({110.0f, 100.0f}));
+    CHECK(docked.Move({120.0f, 100.0f}));
+
+    Widgets::DockDragController floating;
+    floating.BeginPress(w, {100.0f, 100.0f}, false);
+    CHECK(floating.Move({107.0f, 100.0f}));
+}
+
+// Grip: so os 14 px a esquerda do titulo.
+void TestWindowGripIsOnlyLeftIcon() {
+    current = "TestWindowGripIsOnlyLeftIcon";
+    const Rect title{{0.0f, 0.0f}, {300.0f, 24.0f}};
+    const Rect grip = Widgets::WindowGripRect(title, 14.0f);
+    CHECK(grip.Contains({5.0f, 10.0f}));
+    CHECK(!grip.Contains({100.0f, 10.0f}));
+}
+
 } // namespace
 
 int main() {
@@ -190,6 +270,11 @@ int main() {
     TestPressAndReleaseInOneSnapshotClicks();
     TestFirstClickOnUnfocusedButtonClicks();
     TestDisabledTargetDoesNotLeakEvents();
+    TestFloatingWindowWinsOverDockedRegardlessOfPaint();
+    TestPopupBackdropBlocksWindowBelow();
+    TestWindowItemsCarryLayer();
+    TestDockedWindowNeedsUndockThreshold();
+    TestWindowGripIsOnlyLeftIcon();
     std::printf("layers and input: %d/%d checks passed\n", run - failed, run);
     return failed == 0 ? 0 : 1;
 }

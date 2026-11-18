@@ -24,6 +24,7 @@ const HitTarget* UIEventRouter::HitTest(
 {
     const HitTarget* best = nullptr;
     Vec2 bestLocal{};
+    DrawOrderKey bestKey{};
 
     if (!IsFinite(screenPosition)) return nullptr;
 
@@ -43,11 +44,10 @@ const HitTarget* UIEventRouter::HitTest(
             continue;
         }
 
-        const bool laterPaint = !best || target.paintOrder > best->paintOrder;
-        const bool deterministicTie = best && target.paintOrder == best->paintOrder &&
-                                       target.handle.Pack() > best->handle.Pack();
-        if (laterPaint || deterministicTie) {
+        const DrawOrderKey key{target.layer, target.zOrder, target.paintOrder, target.handle.Pack()};
+        if (!best || DrawsAbove(key, bestKey)) {
             best = &target;
+            bestKey = key;
             bestLocal = local;
         }
     }

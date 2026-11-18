@@ -1,5 +1,7 @@
 #include "SpriteUi/Widgets/Widgets.hpp"
 
+#include <algorithm>
+
 namespace ToolEngine::SpriteUi::Widgets {
 
 bool ProcessWindowInteraction(
@@ -29,8 +31,10 @@ bool ProcessWindowInteraction(
 
     // 2. Start drag or resize on pointer down
     if (input.primaryPressed) {
-        // Check resize edges first (edges surround the window)
-        const ResizeEdge edge = GetResizeEdge(pos, size, mouse);
+        // O grip (faixa do titulo, a esquerda) tem prioridade sobre a borda esquerda: sem isso a alça ficaria
+        // dentro da margem de redimensionar e nunca arrastaria. Fora da faixa do titulo, a borda redimensiona.
+        const Rect gripRect{pos, {std::min(window.gripWidth, size.x), std::min(window.titleBarHeight, size.y)}};
+        const ResizeEdge edge = gripRect.Contains(mouse) ? ResizeEdge::None : GetResizeEdge(pos, size, mouse);
         if (edge != ResizeEdge::None) {
             window.activeResizeEdge = edge;
             window.isDragging = false;
@@ -40,9 +44,8 @@ bool ProcessWindowInteraction(
             return true;
         }
 
-        // Check title bar for dragging
-        const Rect titleBarRect{pos, {size.x, window.titleBarHeight}};
-        if (titleBarRect.Contains(mouse)) {
+        // Arraste so pelo grip, a esquerda do titulo. Clique no resto da barra nao move a janela.
+        if (gripRect.Contains(mouse)) {
             window.isDragging = true;
             window.activeResizeEdge = ResizeEdge::None;
             routing.capturedEntity = windowHandle;

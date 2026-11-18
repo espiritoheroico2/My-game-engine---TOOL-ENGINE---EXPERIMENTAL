@@ -20,9 +20,13 @@
 namespace ToolEngine::SpriteUi::Widgets {
 
 struct DockInteractionConfig {
-    float dragThreshold = 6.0f;   // pixels logicos de deslocamento ate o arrasto comecar
-    float edgeFraction = 0.25f;   // fracao de cada borda da folha que vira zona de encaixe
+    float dragThreshold = 6.0f;    // pixels logicos de deslocamento ate o arrasto comecar (janela solta)
+    float undockThreshold = 16.0f; // pixels logicos para tirar uma janela encaixada do dock (evita saida acidental)
+    float edgeFraction = 0.25f;    // fracao de cada borda da folha que vira zona de encaixe
 };
+
+// Grip de uma janela: icone a esquerda do titulo. So ele deve iniciar o arraste (quem chama confere com BeginPress).
+[[nodiscard]] Rect WindowGripRect(Rect titleBar, float gripWidth) noexcept;
 
 enum class DockAction : std::uint8_t {
     None,
@@ -52,8 +56,9 @@ class DockDragController {
 public:
     explicit DockDragController(DockInteractionConfig config = {}) noexcept : config_{config} {}
 
-    // Pressionar o titulo ou a aba de uma janela.
-    void BeginPress(UIHandle window, Vec2 pointer) noexcept;
+    // Pressionar o grip de uma janela. `docked` indica que a janela estava encaixada: usa undockThreshold.
+    // Quem chama deve so chamar isto quando o ponteiro esta sobre o grip (WindowGripRect).
+    void BeginPress(UIHandle window, Vec2 pointer, bool docked = false) noexcept;
 
     // Atualiza com a posicao atual. Retorna true quando o arrasto esta ativo.
     bool Move(Vec2 pointer) noexcept;
@@ -75,6 +80,7 @@ private:
     Vec2 lastPosition_{};
     bool pressed_ = false;
     bool dragging_ = false;
+    bool fromDock_ = false;
 };
 
 } // namespace ToolEngine::SpriteUi::Widgets

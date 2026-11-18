@@ -112,7 +112,9 @@ class Window final : public Element {
 [[nodiscard]] Rect ResizedWindowRect(Rect start, std::uint8_t edges, Vec2 delta, Vec2 minSize) noexcept;
 
 // Itens da janela: fundo, contorno, barra de titulo e botoes com seus tracos. Nao desenha o rotulo do titulo.
+// `layer` (UILayer) vai para todos os itens: janela flutuante usa Floating, para ficar acima das encaixadas.
 [[nodiscard]] std::vector<Rendering::UIRenderItem> BuildWindowItems(const Window& window, const WindowStyle& style,
-                                                                    float zOrder, std::uint64_t paintOrder);
+                                                                    float zOrder, std::uint64_t paintOrder,
+                                                                    std::int32_t layer = 0);
 
 } // namespace ToolEngine::SpriteUi::Elements

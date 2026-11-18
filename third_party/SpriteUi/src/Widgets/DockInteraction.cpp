@@ -41,12 +41,17 @@ Rect ClampWindowToScreen(Rect window, Rect screen) noexcept {
     return window;
 }
 
-void DockDragController::BeginPress(UIHandle window, Vec2 pointer) noexcept {
+Rect WindowGripRect(Rect titleBar, float gripWidth) noexcept {
+    return {titleBar.position, {std::min(std::max(0.0f, gripWidth), titleBar.size.x), titleBar.size.y}};
+}
+
+void DockDragController::BeginPress(UIHandle window, Vec2 pointer, bool docked) noexcept {
     window_ = window;
     pressPosition_ = pointer;
     lastPosition_ = pointer;
     pressed_ = true;
     dragging_ = false;
+    fromDock_ = docked;
 }
 
 bool DockDragController::Move(Vec2 pointer) noexcept {
@@ -54,7 +59,8 @@ bool DockDragController::Move(Vec2 pointer) noexcept {
     lastPosition_ = pointer;
     if (!dragging_) {
         const Vec2 d = pointer - pressPosition_;
-        if (std::sqrt(d.x * d.x + d.y * d.y) >= config_.dragThreshold) dragging_ = true;
+        const float limit = fromDock_ ? config_.undockThreshold : config_.dragThreshold;
+        if (std::sqrt(d.x * d.x + d.y * d.y) >= limit) dragging_ = true;
     }
     return dragging_;
 }

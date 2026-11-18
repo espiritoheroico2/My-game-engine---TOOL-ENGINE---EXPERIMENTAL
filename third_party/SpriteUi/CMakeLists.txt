@@ -278,6 +278,10 @@ if(SPRITEUI_BUILD_TESTS)
     target_link_libraries(spriteui_dock_tests PRIVATE SpriteUi::SpriteUI)
     add_test(NAME SpriteUI.DockInteraction COMMAND spriteui_dock_tests)
 
+    add_executable(spriteui_layers_input_tests tests/test_layers_and_input.cpp)
+    target_link_libraries(spriteui_layers_input_tests PRIVATE SpriteUi::SpriteUI)
+    add_test(NAME SpriteUI.LayersAndInput COMMAND spriteui_layers_input_tests)
+
     # Camada L4 (campo de texto): edicao, selecao, UTF-8, desfazer e persistencia do texto.
     add_executable(spriteui_text_edit_tests tests/test_text_edit.cpp)
     target_link_libraries(spriteui_text_edit_tests PRIVATE SpriteUi::SpriteUI)

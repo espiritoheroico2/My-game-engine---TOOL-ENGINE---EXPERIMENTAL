@@ -147,6 +147,8 @@ struct UIWindowComponent {
     bool isMinimized = false;
     Vec2 minSize{150.0f, 100.0f};
     float titleBarHeight = 30.0f;
+    // Largura do grip (icone a esquerda do titulo). So o grip inicia o arraste; o resto da barra nao.
+    float gripWidth = 14.0f;
     ResizeEdge activeResizeEdge = ResizeEdge::None;
     bool isDragging = false;
     // Estilo visual (StylePresets.hpp). O padrao Classic mantem a aparencia atual: cantos retos, sem sombra e
