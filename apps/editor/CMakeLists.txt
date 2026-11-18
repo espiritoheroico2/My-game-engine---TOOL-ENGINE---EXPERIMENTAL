@@ -58,6 +58,13 @@ add_executable(editor_window_manager_tests tests/test_window_manager.cpp window_
 target_include_directories(editor_window_manager_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME Editor.WindowManager COMMAND editor_window_manager_tests)
 
+if(TOOL_WITH_SPRITEUI)
+  add_executable(editor_panel_router_tests tests/test_panel_router.cpp)
+  target_include_directories(editor_panel_router_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_panel_router_tests PRIVATE SpriteUi::SpriteUI)
+  add_test(NAME Editor.PanelRouter COMMAND editor_panel_router_tests)
+endif()
+
 add_executable(editor_ui_presets_tests tests/test_ui_presets.cpp)
 target_include_directories(editor_ui_presets_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(editor_ui_presets_tests PRIVATE tool::core)
