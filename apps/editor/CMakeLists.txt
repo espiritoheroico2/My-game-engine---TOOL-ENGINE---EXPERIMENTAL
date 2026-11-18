@@ -70,6 +70,12 @@ target_include_directories(editor_profiler_model_tests PRIVATE ${CMAKE_CURRENT_S
 target_link_libraries(editor_profiler_model_tests PRIVATE tool::core)
 add_test(NAME Editor.ProfilerModel COMMAND editor_profiler_model_tests)
 
+# Exportacao do Profiler: snapshots completos e serializacao Markdown, sem janela nem SDL.
+add_executable(editor_profiler_export_tests tests/test_profiler_export.cpp)
+target_include_directories(editor_profiler_export_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_profiler_export_tests PRIVATE tool::core)
+add_test(NAME Editor.ProfilerExport COMMAND editor_profiler_export_tests)
+
 # Modelo da barra de status (statusbar_model.hpp): textos, tons e refresh de 4 vezes por segundo.
 add_executable(editor_statusbar_model_tests tests/test_statusbar_model.cpp)
 target_include_directories(editor_statusbar_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

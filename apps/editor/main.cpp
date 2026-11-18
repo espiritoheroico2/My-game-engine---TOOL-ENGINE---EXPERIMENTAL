@@ -521,6 +521,9 @@ editor::sui::Box gInspectorOrigin;   // canto do bloco SpriteUI na tela (preench
 editor::sui::Box gInspectorVisible;  // parte do bloco que cabe na janela ImGui (a janela rola e corta)
 bool gProfilerFrame = false;         // a janela ImGui do Profiler esta visivel neste quadro
 editor::sui::Box gProfilerRect;       // area de conteudo da janela dockavel Profiler
+bool gProfilerExportRequested = false;
+bool gProfilerExportActive = false;
+std::string gProfilerExportStatus;
 bool gConsoleFrame = false;          // a janela ImGui do Console esta visivel neste quadro
 editor::sui::Box gConsoleRect;        // area de conteudo da janela dockavel Console
 
@@ -625,6 +628,10 @@ void drawProfilerFrame(Editor& ed) {
     ImGui::End();
     return;
   }
+  if (gProfilerExportActive) ImGui::BeginDisabled();
+  if (ImGui::Button(T("Export data"))) gProfilerExportRequested = true;
+  if (gProfilerExportActive) ImGui::EndDisabled();
+  if (!gProfilerExportStatus.empty()) ImGui::TextWrapped("%s", gProfilerExportStatus.c_str());
   const ImVec2 origin = ImGui::GetCursorScreenPos();
   const ImVec2 avail = ImGui::GetContentRegionAvail();
   gProfilerRect = {origin.x, origin.y, avail.x, avail.y};
@@ -2693,9 +2700,19 @@ int main(int argc, char** argv) {
     drawViewPanels(ed, renderer);   // Scene e Jogo em SpriteUI: por cima do ImGui
 #ifdef TOOL_WITH_SPRITEUI
     const double nowSec = static_cast<double>(SDL_GetTicksNS()) * 1e-9;
-    if (profPanel && ed.showProfiler && gProfilerFrame) {
-      if (profPanel->due(nowSec)) profPanel->refresh(nowSec, ed.prof, fillProfilerExtras(ed));   // so 4 vezes por segundo
-      if (!profPanel->draw(renderer, gProfilerRect)) {
+    if (profPanel) {
+      if (gProfilerExportRequested) {
+        profPanel->beginExport(nowSec);
+        gProfilerExportRequested = false;
+      }
+      const bool profilerVisible = ed.showProfiler && gProfilerFrame;
+      if (profilerVisible || profPanel->exporting()) {
+        if (profPanel->due(nowSec)) profPanel->refresh(nowSec, ed.prof, fillProfilerExtras(ed));   // so 4 vezes por segundo
+        profPanel->tickExport(nowSec);
+      }
+      gProfilerExportActive = profPanel->exporting();
+      gProfilerExportStatus = profPanel->exportStatus();
+      if (profilerVisible && !profPanel->draw(renderer, gProfilerRect)) {
         tool::logError(std::string("Profiler SpriteUI render failed: ") + SDL_GetError());
         ed.showProfiler = false;
       }

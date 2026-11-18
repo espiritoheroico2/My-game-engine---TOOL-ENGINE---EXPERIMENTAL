@@ -7,14 +7,21 @@ Referencia: `docs/PESQUISA_MILHARES_OBJETOS.md` (fontes e motivo de cada tecnica
 
 | Item | Estado |
 |---|---|
-| Agrupamento por malha e textura (`engine/render/include/tool/render/instance_batch.hpp`) | Pronto, testado (7 testes, 197 no total, 0 falhas) |
-| Layout `InstanceGPU` (160 bytes, igual ao `ObjectCB`) | Pronto, com `static_assert` |
-| Buffer de instancias no RHI Diligent (VS) | NAO feito |
-| Shaders lendo instancias (`pbr`, `prepass`, `shadow`, `shadow_point`) | NAO feito |
-| Renderizador usando lotes | NAO feito |
+| Agrupamento por malha e textura (`engine/render/include/tool/render/instance_batch.hpp`) | Implementado e coberto por testes |
+| Layout `InstanceGPU` (160 bytes, igual ao `ObjectCB`) | Implementado, com `static_assert` |
+| Buffer de instancias no RHI Diligent (VS e PS) | Implementado |
+| Shaders lendo instancias (`pbr`, `prepass`, `shadow`, `shadow_point`) | Implementado |
+| Renderizador usando lotes | Implementado no passe opaco, prepass e sombras |
 
-Regra de ouro: cada fase abaixo termina com uma verificacao visual. Nao avance se a anterior falhou.
-Se a tela ficar preta, volte a fase inteira (`git checkout -- <arquivos>`) e me envie o log.
+### Estado validado e pendencias
+
+- Builds CPU e GPU e testes automatizados anteriores passaram; `tool_tests` registrou 197 testes sem falhas e o teste Vulkan passou.
+- Os builds atualizados do Editor (CPU e GPU), após a adicao da exportacao do Profiler, tambem passaram; `Editor.ProfilerModel` e `Editor.ProfilerExport` passaram nos dois.
+- Os testes OpenGL configurados pelo CTest nao executaram: `xvfb-run` nao estava disponivel no ambiente.
+- A verificacao visual obrigatoria ainda falta: comparar a cena `--ecs 1000 --play`, confirmar equivalencia visual e medir `DrawStats`/CSV do benchmark.
+- O bloom e os objetos transparentes continuam sendo desenhados por objeto intencionalmente; isso nao bloqueia o P1 implementado.
+
+Regra de validacao: nao considerar o P1 visualmente concluido antes da comparacao de imagem e do benchmark listados na secao 7.
 
 ## 1. Restricoes que ja conhecemos (leia antes de mexer)
 

@@ -18,6 +18,7 @@
 // A roda sobre o conteudo rola a lista. Eventos de ponteiro seguem para o ImGui para foco e docking funcionarem.
 #include "i18n.hpp"
 #include "profiler.hpp"
+#include "profiler_export.hpp"
 #include "profiler_model.hpp"
 #include "spriteui_host.hpp"
 
@@ -32,10 +33,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -109,6 +115,28 @@ class ProfilerPanel {
   void refresh(double nowSec, const editor::FrameProfiler& prof, const pm::Extras& extras) {
     model_.refresh(nowSec, prof, prof.sys.get(), extras, [](const char* s) { return T(s); });
     rebuild();
+  }
+
+  bool exporting() const { return exporting_; }
+  const std::string& exportStatus() const { return exportStatus_; }
+
+  void beginExport(double nowSec) {
+    if (exporting_) return;
+    exportSamples_.clear();
+    exportStart_ = nowSec;
+    exportSchedule_.start(nowSec);
+    exporting_ = true;
+    exportStatus_ = "Collecting Profiler data (0/5)";
+  }
+
+  void tickExport(double nowSec) {
+    if (!exporting_ || !exportSchedule_.due(nowSec)) return;
+    exportSamples_.push_back(profiler_export::Capture(model_, nowSec - exportStart_));
+    if (!exportSchedule_.record(nowSec)) {
+      exportStatus_ = "Collecting Profiler data (" + std::to_string(exportSchedule_.sampleCount()) + "/5)";
+      return;
+    }
+    saveExport();
   }
 
   // So consome a roda dentro do conteudo. Cliques e movimentos precisam chegar a janela hospedeira.
@@ -447,6 +475,55 @@ class ProfilerPanel {
   Bounds panelBounds_{};
   std::uint64_t frameId_ = 0;
   bool hasPacket_ = false;
+  bool exporting_ = false;
+  double exportStart_ = 0.0;
+  profiler_export::CaptureSchedule exportSchedule_;
+  std::vector<profiler_export::Snapshot> exportSamples_;
+  std::string exportStatus_;
+
+  void saveExport() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path directory = fs::current_path(ec);
+    if (ec) {
+      exporting_ = false;
+      exportStatus_ = "Profiler export failed: " + ec.message();
+      return;
+    }
+
+    const auto now = std::chrono::system_clock::now();
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm local{};
+#if defined(_WIN32)
+    if (localtime_s(&local, &time) != 0) {
+#else
+    if (!localtime_r(&time, &local)) {
+#endif
+      exporting_ = false;
+      exportStatus_ = "Profiler export failed: could not format the current time";
+      return;
+    }
+    char filename[64];
+    std::snprintf(filename, sizeof filename, "ProfilerExport_%04d%02d%02d_%02d%02d%02d_%03lld.md",
+                  local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec,
+                  static_cast<long long>(millis % 1000));
+    const fs::path outputPath = directory / filename;
+    std::ofstream file(outputPath, std::ios::binary | std::ios::trunc);
+    if (!file) {
+      exporting_ = false;
+      exportStatus_ = "Profiler export failed: could not open " + outputPath.string();
+      return;
+    }
+    file << profiler_export::ToMarkdown(exportSamples_);
+    file.close();
+    exporting_ = false;
+    if (!file) {
+      exportStatus_ = "Profiler export failed while writing " + outputPath.string();
+      return;
+    }
+    exportStatus_ = "Saved: " + outputPath.string();
+  }
 };
 
 }  // namespace editor::profiler_panel
