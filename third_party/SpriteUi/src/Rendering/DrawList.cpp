@@ -1,7 +1,5 @@
 #include "SpriteUi/Rendering/DrawList.hpp"
 
-#include "SpriteUi/Core/DrawOrder.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -148,11 +146,10 @@ FramePacket RenderExtractor::Build(
 
     // Paint order is authoritative. Material sorting is intentionally forbidden
     // across non-adjacent items because alpha blending is order dependent.
-    // Mesma regra de DrawsAbove (Core/DrawOrder.hpp) usada pelo roteador de entrada: desenho e acerto concordam.
     std::stable_sort(ordered.begin(), ordered.end(),
         [](const UIRenderItem* a, const UIRenderItem* b) {
-            return DrawsAbove(DrawOrderKey{b->layer, b->zOrder, b->paintOrder, b->handle.Pack()},
-                              DrawOrderKey{a->layer, a->zOrder, a->paintOrder, a->handle.Pack()});
+            return std::tuple{a->layer, a->zOrder, a->paintOrder, a->handle.Pack()} <
+                   std::tuple{b->layer, b->zOrder, b->paintOrder, b->handle.Pack()};
         });
 
     packet.instances.reserve(ordered.size());

@@ -22,7 +22,6 @@ bool ProcessWindowInteraction(
     // 1. Release capture on pointer up
     if (input.primaryReleased && routing.capturedEntity == windowHandle) {
         window.isDragging = false;
-        window.dragPending = false;
         window.activeResizeEdge = ResizeEdge::None;
         routing.capturedEntity = InvalidUIHandle;
         return true;
@@ -41,12 +40,10 @@ bool ProcessWindowInteraction(
             return true;
         }
 
-        // Check title bar for dragging. O arraste so comeca depois do limiar: um clique na barra nao move a janela.
+        // Check title bar for dragging
         const Rect titleBarRect{pos, {size.x, window.titleBarHeight}};
         if (titleBarRect.Contains(mouse)) {
-            window.isDragging = false;
-            window.dragPending = true;
-            window.pressPosition = mouse;
+            window.isDragging = true;
             window.activeResizeEdge = ResizeEdge::None;
             routing.capturedEntity = windowHandle;
             routing.focusedEntity = windowHandle;
@@ -57,22 +54,6 @@ bool ProcessWindowInteraction(
 
     // 3. Process active dragging or resizing
     if (input.primaryDown && routing.capturedEntity == windowHandle) {
-        if (window.dragPending) {
-            const Vec2 travel = mouse - window.pressPosition;
-            if (travel.x * travel.x + travel.y * travel.y < window.dragThreshold * window.dragThreshold) {
-                routing.consumedThisFrame = true;   // tremor do ponteiro: segura a janela no lugar
-                return true;
-            }
-            // Passou do limiar: a janela anda o deslocamento total desde o pressionamento, sem salto.
-            window.dragPending = false;
-            window.isDragging = true;
-            transform.offsetMin += travel;
-            transform.offsetMax += travel;
-            layout.resolvedPosition += travel;
-            layout.dirty = true;
-            routing.consumedThisFrame = true;
-            return true;
-        }
         if (window.isDragging) {
             transform.offsetMin += input.pointerDeltaLogical;
             transform.offsetMax += input.pointerDeltaLogical;

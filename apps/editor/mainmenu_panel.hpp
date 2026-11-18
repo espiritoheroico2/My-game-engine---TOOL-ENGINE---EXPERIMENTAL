@@ -2,7 +2,6 @@
 
 #include "mainmenu_model.hpp"
 #include "sui_panel.hpp"
-#include "ui_icons.hpp"
 
 #include "SpriteUi/Widgets/Legacy/MenuBar.hpp"
 
@@ -44,8 +43,7 @@ public:
         state_ = state;
         translate_ = translate;
         std::vector<SW::MenuBarEntry> menus;
-        specs_ = buildMenus(state_, translate_);   // a caixa e o icone nao cabem em MenuItem: ficam aqui, por indice
-        for (const MenuSpec& menu : specs_) {
+        for (const MenuSpec& menu : buildMenus(state_, translate_)) {
             SW::MenuBarEntry entry;
             entry.label = menu.title;
             for (const ItemSpec& item : menu.items) {
@@ -77,7 +75,6 @@ public:
     }
 
     bool draw(SDL_Renderer* renderer, SDL_Window* window, float barHeight, std::vector<Request>& requests) {
-        theme_ = sui::Theme::fromTokens();   // cores e forma atuais (Aparencia)
         requests.insert(requests.end(), queue_.begin(), queue_.end());
         queue_.clear();
         if (!renderer || !window) return false;
@@ -114,8 +111,6 @@ private:
         SU::Vec4 headerOpen = sui::Srgb(0.16f, 0.2f, 0.28f);
         SU::Vec4 popup = sui::Srgb(0.07f, 0.09f, 0.12f);
         SU::Vec4 highlight = sui::Srgb(0.12f, 0.3f, 0.6f);
-        SU::Vec4 checkEdge = sui::Srgb(0.45f, 0.5f, 0.6f);
-        SU::Vec4 checkFill = sui::Srgb(0.12f, 0.15f, 0.2f);
     };
 
     struct Button {
@@ -130,13 +125,6 @@ private:
     static constexpr float kButtonGap = 8.0f;
     static constexpr float kButtonInset = 2.0f;
     static constexpr float kButtonsShift = 30.0f;
-    // Item marcavel: caixa a esquerda, icone depois, nome por ultimo. Medidas em pixels logicos.
-    static constexpr float kCheckX = 8.0f;
-    static constexpr float kCheckSize = 12.0f;
-    static constexpr float kIconX = 28.0f;
-    static constexpr float kIconSize = 14.0f;
-    static constexpr float kNameWithIcon = 50.0f;   // recuo do nome quando ha icone
-    static constexpr float kNameWithCheck = 26.0f;  // recuo do nome quando so ha caixa
 
     static sui::Box toBox(SU::Rect rect) {
         return {rect.position.x, rect.position.y, rect.size.x, rect.size.y};
@@ -245,46 +233,19 @@ private:
                 canvas_.addSolid(row.position.x + 1.0f, row.position.y, std::max(0.0f, row.size.x - 2.0f),
                                  row.size.y, style_.highlight, 0.5f);
             }
-            const ItemSpec& spec = specs_[menuIndex].items[i];
             const float shortcutWidth = items[i].shortcut.empty()
                                             ? 0.0f
                                             : canvas_.layout(items[i].shortcut, kFontSize).size.x + kRowPadding;
             const SU::Vec4 textColor = items[i].disabled ? theme_.textDim : theme_.text;
-            const float nameX = addMarks(spec, row, items[i].disabled);
-            canvas_.addText(row.position.x + nameX,
+            canvas_.addText(row.position.x + kRowPadding,
                             row.position.y + (row.size.y - lineHeight) * 0.5f,
-                            items[i].label, kFontSize, textColor, row.size.x - nameX - kRowPadding - shortcutWidth);
+                            items[i].label, kFontSize, textColor, row.size.x - 2.0f * kRowPadding - shortcutWidth);
             if (shortcutWidth > 0.0f) {
                 canvas_.addText(row.position.x + row.size.x - kRowPadding,
                                 row.position.y + (row.size.y - lineHeight) * 0.5f,
                                 items[i].shortcut, kFontSize, theme_.textDim, shortcutWidth, true);
             }
         }
-    }
-
-    // Caixa de selecao e icone de um item (quando existem). Devolve o recuo do nome, em relacao a linha.
-    float addMarks(const ItemSpec& spec, const SU::Rect& row, bool disabled) {
-        const float mid = row.position.y + row.size.y * 0.5f;
-        const SU::Vec4 ink = disabled ? theme_.textDim : theme_.text;
-        float nameX = kRowPadding;
-        if (spec.checkable) {
-            const float x = row.position.x + kCheckX;
-            const float y = mid - kCheckSize * 0.5f;
-            canvas_.addSolid(x, y, kCheckSize, kCheckSize, style_.checkEdge, 0.45f);
-            canvas_.addSolid(x + 1.0f, y + 1.0f, kCheckSize - 2.0f, kCheckSize - 2.0f, style_.checkFill, 0.46f);
-            if (spec.checked) canvas_.addSolid(x + 3.0f, y + 3.0f, kCheckSize - 6.0f, kCheckSize - 6.0f, ink, 0.47f);
-            nameX = kNameWithCheck;
-        }
-        if (spec.icon != ui_icons::Icon::None) {
-            const float px = kIconSize / static_cast<float>(ui_icons::kIconSize);
-            const float x0 = row.position.x + kIconX;
-            const float y0 = mid - kIconSize * 0.5f;
-            ui_icons::forEachPixel(spec.icon, [&](int col, int r) {
-                canvas_.addSolid(x0 + static_cast<float>(col) * px, y0 + static_cast<float>(r) * px, px, px, ink, 0.45f);
-            });
-            nameX = kNameWithIcon;
-        }
-        return nameX;
     }
 
     void addButtons(float windowWidth, float lineHeight) {
@@ -315,7 +276,6 @@ private:
     Style style_;
     SW::MenuBar bar_;
     MenuState state_;
-    std::vector<MenuSpec> specs_;   // espelho dos itens: caixa, icone e destaque, por menu e item
     Translate translate_ = [](const char* text) { return text; };
     float barHeight_ = 0.0f;
     bool pointerCaptured_ = false;

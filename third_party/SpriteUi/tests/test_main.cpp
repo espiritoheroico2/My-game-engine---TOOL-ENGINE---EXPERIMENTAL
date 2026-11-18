@@ -1241,7 +1241,7 @@ static void TestWidgetsAndWindowInteraction() {
     clickTitle.primaryPressed = true;
     clickTitle.primaryDown = true;
     CHECK(ProcessWindowInteraction(window, layout, transform, clickTitle, routing, winHandle));
-    CHECK(!window.isDragging && window.dragPending);   // so vira arraste depois do limiar
+    CHECK(window.isDragging);
     CHECK(routing.capturedEntity == winHandle);
 
     // Drag move
@@ -1251,8 +1251,7 @@ static void TestWidgetsAndWindowInteraction() {
     dragMove.pointerDeltaLogical = {10.0f, 10.0f};
     dragMove.primaryDown = true;
     CHECK(ProcessWindowInteraction(window, layout, transform, dragMove, routing, winHandle));
-    CHECK(window.isDragging);
-    CHECK(Near(layout.resolvedPosition.x, 60.0f));   // desloca o total desde o pressionamento (10, 10)
+    CHECK(Near(layout.resolvedPosition.x, 60.0f));
     CHECK(Near(layout.resolvedPosition.y, 60.0f));
 
     // Release drag
@@ -1262,38 +1261,6 @@ static void TestWidgetsAndWindowInteraction() {
     CHECK(ProcessWindowInteraction(window, layout, transform, release, routing, winHandle));
     CHECK(!window.isDragging);
     CHECK(!routing.capturedEntity.IsValid());
-
-    // Clique com 2 px de tremor na barra: a janela nao sai do lugar (limiar padrao de 6 px).
-    {
-        UIWindowComponent tap;
-        tap.titleBarHeight = 25.0f;
-        UILayoutRect tapLayout{pos, size, true, false};
-        UIRectTransform tapTransform;
-        tapTransform.offsetMin = pos;
-        tapTransform.offsetMax = pos + size;
-        UIPointerRoutingState tapRouting;
-        const UIHandle tapHandle{44, 1};
-        UIInputSnapshot tapDown;
-        tapDown.frameId = 10;
-        tapDown.pointerPositionLogical = {100.0f, 60.0f};
-        tapDown.primaryPressed = true;
-        tapDown.primaryDown = true;
-        CHECK(ProcessWindowInteraction(tap, tapLayout, tapTransform, tapDown, tapRouting, tapHandle));
-        UIInputSnapshot tapMove;
-        tapMove.frameId = 11;
-        tapMove.pointerPositionLogical = {102.0f, 61.0f};
-        tapMove.pointerDeltaLogical = {2.0f, 1.0f};
-        tapMove.primaryDown = true;
-        CHECK(ProcessWindowInteraction(tap, tapLayout, tapTransform, tapMove, tapRouting, tapHandle));
-        CHECK(!tap.isDragging);
-        CHECK(Near(tapLayout.resolvedPosition.x, pos.x) && Near(tapLayout.resolvedPosition.y, pos.y));
-        UIInputSnapshot tapUp;
-        tapUp.frameId = 12;
-        tapUp.pointerPositionLogical = {102.0f, 61.0f};
-        tapUp.primaryReleased = true;
-        CHECK(ProcessWindowInteraction(tap, tapLayout, tapTransform, tapUp, tapRouting, tapHandle));
-        CHECK(Near(tapTransform.offsetMin.x, pos.x) && Near(tapTransform.offsetMin.y, pos.y));
-    }
 
     // Resize bottom-right
     UIInputSnapshot clickBR;

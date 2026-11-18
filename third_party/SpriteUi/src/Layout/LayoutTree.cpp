@@ -14,7 +14,6 @@ UIHandle LayoutTree::Create(UIHandle parent, FlexItem style) {
         ++next_.generation;
     }
 
-    layoutDirty_ = true;
     LayoutElement element;
     element.id = id;
     element.parent = parent;
@@ -47,7 +46,6 @@ void LayoutTree::RemoveSubtree(UIHandle id) {
 bool LayoutTree::Remove(UIHandle id) {
     auto* element = Get(id);
     if (!element) return false;
-    layoutDirty_ = true;
 
     const UIHandle parent = element->parent;
     RemoveSubtree(id);
@@ -74,7 +72,6 @@ const LayoutElement* LayoutTree::Get(UIHandle id) const {
 bool LayoutTree::SetStyle(UIHandle id, FlexItem style) {
     auto* element = Get(id);
     if (!element) return false;
-    layoutDirty_ = true;
     element->node.style = style;
     return true;
 }
@@ -82,7 +79,6 @@ bool LayoutTree::SetStyle(UIHandle id, FlexItem style) {
 bool LayoutTree::SetVisible(UIHandle id, bool visible) {
     auto* element = Get(id);
     if (!element) return false;
-    layoutDirty_ = true;
     element->visible = visible;
     return true;
 }
@@ -124,13 +120,6 @@ void LayoutTree::Commit(UIHandle id, const LayoutNode& node) {
 }
 
 void LayoutTree::Layout(Rect viewport, LayoutStats* stats) {
-    const bool sameViewport = viewport.position.x == laidOutViewport_.position.x &&
-                              viewport.position.y == laidOutViewport_.position.y &&
-                              viewport.size.x == laidOutViewport_.size.x && viewport.size.y == laidOutViewport_.size.y;
-    if (!layoutDirty_ && sameViewport) return;   // nada mudou: o resultado anterior ainda vale
-    layoutDirty_ = false;
-    laidOutViewport_ = viewport;
-
     LayoutEngine engine;
     for (UIHandle root : roots_) {
         auto* element = Get(root);
@@ -141,38 +130,6 @@ void LayoutTree::Layout(Rect viewport, LayoutStats* stats) {
         engine.Arrange(node, viewport, stats);
         Commit(root, node);
     }
-}
-
-bool LayoutTree::BringToFront(UIHandle id) {
-    LayoutElement* element = Get(id);
-    if (!element) return false;
-    element->stackOrder = ++stackCounter_;
-    return true;
-}
-
-namespace {
-
-// Ordena uma lista de irmaos pela ordem de empilhamento (estavel: empates ficam na ordem de layout).
-std::vector<UIHandle> ByStackOrder(const std::vector<UIHandle>& handles, const auto& lookup) {
-    std::vector<UIHandle> out = handles;
-    std::stable_sort(out.begin(), out.end(), [&](UIHandle a, UIHandle b) {
-        const LayoutElement* ea = lookup(a);
-        const LayoutElement* eb = lookup(b);
-        return (ea ? ea->stackOrder : 0) < (eb ? eb->stackOrder : 0);
-    });
-    return out;
-}
-
-} // namespace
-
-std::vector<UIHandle> LayoutTree::PaintChildren(UIHandle id) const {
-    const LayoutElement* element = Get(id);
-    if (!element) return {};
-    return ByStackOrder(element->children, [this](UIHandle h) { return Get(h); });
-}
-
-std::vector<UIHandle> LayoutTree::PaintRoots() const {
-    return ByStackOrder(roots_, [this](UIHandle h) { return Get(h); });
 }
 
 } // namespace ToolEngine::SpriteUi

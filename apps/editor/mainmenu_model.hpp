@@ -5,8 +5,6 @@
 // SDL, ImGui nem SpriteUI: mainmenu_panel.hpp desenha e main.cpp executa os pedidos.
 // Roda no ctest como Editor.MainMenuModel.
 
-#include "ui_icons.hpp"
-
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -90,13 +88,10 @@ struct MenuState {
 };
 
 struct ItemSpec {
-  std::string label;      // ja traduzido, sem marca: a marca e a caixa de selecao (checkable/checked)
+  std::string label;      // ja traduzido; itens de janela trazem "[x] " ou "[ ] " antes do nome
   std::string shortcut;   // ex.: "Ctrl+S"; vazio = sem atalho
   bool separator = false;
   bool disabled = false;
-  bool checkable = false; // janela ou opcao que liga e desliga: mostra uma caixa de selecao
-  bool checked = false;   // estado da caixa (so vale com checkable)
-  ui_icons::Icon icon = ui_icons::Icon::None;   // icone a esquerda do nome (None = sem icone)
 };
 
 struct MenuSpec {
@@ -117,7 +112,6 @@ struct Def {
   const char* shortcut;
   Command command;
   int tab;
-  ui_icons::Icon icon = ui_icons::Icon::None;
 };
 
 struct MenuDef {
@@ -141,23 +135,23 @@ inline const std::vector<MenuDef>& definitions() {
         {"Quit", "", Command::Quit, 0}}},
       {"Edit", {{"Undo", "Ctrl+Z", Command::Undo, 0}, {"Redo", "Ctrl+Y", Command::Redo, 0}}},
       {"Window",
-       {{"Hierarchy", "", Command::ToggleHierarchy, 0, ui_icons::Icon::Hierarchy},
-        {"Inspector", "", Command::ToggleInspector, 0, ui_icons::Icon::Inspector},
-        {"Console", "", Command::ToggleConsole, 0, ui_icons::Icon::Console},
-        {"Profiler", "", Command::ToggleProfiler, 0, ui_icons::Icon::Profiler},
-        {"Edit Mesh", "", Command::ToggleEditMesh, 0, ui_icons::Icon::Mesh},
-        {"Paint Mesh", "", Command::TogglePaintMesh, 0, ui_icons::Icon::Brush},
-        {"Scene", "", Command::ToggleScene, 0, ui_icons::Icon::Scene},
-        {"Game", "", Command::ToggleGame, 0, ui_icons::Icon::Gamepad},
-        {"Assets", "", Command::ToggleAssets, 0, ui_icons::Icon::Assets},
-        {"Scenes", "", Command::ToggleScenes, 0, ui_icons::Icon::Scenes},
-        {"Settings", "", Command::ToggleSettings, 0, ui_icons::Icon::Gear},
-        {"Narrative Controller", "", Command::ToggleNarrative, 0, ui_icons::Icon::Nodes},
-        {"Input Map", "", Command::ToggleInputMap, 0, ui_icons::Icon::Keyboard},
-        {"SpriteUI diagnostics", "", Command::ToggleSpriteUiDiagnostics, 0, ui_icons::Icon::Diagnostic},
-        {"Help", "F1", Command::ToggleHelp, 0, ui_icons::Icon::Help},
+       {{"Hierarchy", "", Command::ToggleHierarchy, 0},
+        {"Inspector", "", Command::ToggleInspector, 0},
+        {"Console", "", Command::ToggleConsole, 0},
+        {"Profiler", "", Command::ToggleProfiler, 0},
+        {"Edit Mesh", "", Command::ToggleEditMesh, 0},
+        {"Paint Mesh", "", Command::TogglePaintMesh, 0},
+        {"Scene", "", Command::ToggleScene, 0},
+        {"Game", "", Command::ToggleGame, 0},
+        {"Assets", "", Command::ToggleAssets, 0},
+        {"Scenes", "", Command::ToggleScenes, 0},
+        {"Settings", "", Command::ToggleSettings, 0},
+        {"Narrative Controller", "", Command::ToggleNarrative, 0},
+        {"Input Map", "", Command::ToggleInputMap, 0},
+        {"SpriteUI diagnostics", "", Command::ToggleSpriteUiDiagnostics, 0},
+        {"Help", "F1", Command::ToggleHelp, 0},
         {nullptr, nullptr, Command::None, 0},
-        {"Reset layout", "", Command::ResetLayout, 0, ui_icons::Icon::Reset}}},
+        {"Reset layout", "", Command::ResetLayout, 0}}},
       {"Interface",
        {{"Lock interface", "", Command::ToggleLockInterface, 0},
         {"Dock only while holding Shift", "", Command::ToggleDockWithShift, 0},
@@ -216,10 +210,7 @@ inline ItemSpec itemFor(const MenuState& s, const Def& def, Translate tr) {
     return item;
   }
   const std::optional<bool> on = toggleValue(s, def.command);
-  item.label = tr(def.label);
-  item.checkable = on.has_value();
-  item.checked = on.value_or(false);
-  item.icon = def.icon;
+  item.label = on ? std::string(*on ? "[x] " : "[ ] ") + tr(def.label) : std::string(tr(def.label));
   item.shortcut = def.shortcut;
   item.disabled = isDisabled(s, def.command);
   return item;

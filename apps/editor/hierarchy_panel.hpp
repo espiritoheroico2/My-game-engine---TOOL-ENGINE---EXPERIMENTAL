@@ -158,7 +158,6 @@ class HierarchyPanel {
 
     // Desenha a janela na area `rect` (coordenadas da janela, ja medidas pelo ImGui). Os pedidos saem em `out`.
     bool draw(SDL_Renderer* renderer, SDL_Window* window, sui::Box rect, bool visible, Source src, Requests& out) {
-        theme_ = sui::Theme::fromTokens();   // cores e forma atuais (Aparencia)
         rect_ = rect;
         visible_ = visible;
         window_ = window;

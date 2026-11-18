@@ -67,9 +67,6 @@ bool SDL3InputAdapter::ProcessEvent(const SDL_Event& event) {
         }
         pointerId_ = event.button.which;
         pointerPosition_ = {event.button.x, event.button.y};
-        // Um clique dentro da janela prova o foco. Sem isso, o press do primeiro clique era descartado quando o
-        // evento de foco chegava depois do botao, e o usuario precisava clicar de novo.
-        if (event.button.down) windowFocused_ = true;
         if (event.button.down && !primaryDown_) primaryPressed_ = true;
         if (!event.button.down && primaryDown_) primaryReleased_ = true;
         primaryDown_ = event.button.down;

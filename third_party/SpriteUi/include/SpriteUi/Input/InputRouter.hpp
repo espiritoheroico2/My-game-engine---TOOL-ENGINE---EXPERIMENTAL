@@ -1,6 +1,5 @@
 #pragma once
 
-#include "SpriteUi/Core/DrawOrder.hpp"
 #include "SpriteUi/Core/Handle.hpp"
 #include "SpriteUi/Core/Math.hpp"
 
@@ -36,9 +35,6 @@ struct HitTarget {
     Rect clipRectLogical{};   // Effective ancestor clip; used when clipEnabled.
     bool clipEnabled = false;
     std::uint64_t paintOrder = 0;
-    // Mesma chave de ordem do desenho (Core/DrawOrder.hpp). O acerto escolhe o alvo que seria desenhado por cima.
-    std::int32_t layer = 0;
-    float zOrder = 0.0f;
     bool visible = true;
     bool enabled = true;
     bool focusable = false;
@@ -78,8 +74,6 @@ struct UIPointerRoutingState {
     bool holdActive = false;
 };
 
-// Um roteador aceita varias entradas no mesmo quadro (move, press e release chegam como snapshots separados). So
-// descarta uma repeticao exata da entrada anterior, para nao contar duas vezes o mesmo press ou release.
 class UIEventRouter {
 public:
     [[nodiscard]] std::vector<UIEvent> Process(
@@ -92,9 +86,6 @@ public:
 private:
     [[nodiscard]] static const HitTarget* FindTarget(
         std::span<const HitTarget> targets, UIHandle handle) noexcept;
-
-    [[nodiscard]] static DrawOrderKey KeyOf(const HitTarget& target) noexcept;
-    [[nodiscard]] static bool SameSnapshot(const UIInputSnapshot& a, const UIInputSnapshot& b) noexcept;
 
     [[nodiscard]] static const HitTarget* HitTest(
         std::span<const HitTarget> targets, Vec2 screenPosition, Vec2* outLocal) noexcept;
@@ -123,7 +114,6 @@ private:
     double pressTimeSeconds_ = 0.0;
     std::uint64_t lastFrameId_ = 0;
     bool hasProcessedFrame_ = false;
-    UIInputSnapshot lastInput_{};
 };
 
 } // namespace ToolEngine::SpriteUi::Input

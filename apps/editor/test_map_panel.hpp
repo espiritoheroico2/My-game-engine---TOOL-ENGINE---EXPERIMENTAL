@@ -78,7 +78,6 @@ class TestMapPanel {
   // Desenha a janela quando `open`. Retorna false so em falha do SDL.
   // `language` = I18n::get().code(): o texto muda quando o idioma muda.
   bool draw(SDL_Renderer* renderer, SDL_Window* window, bool open, int side, const std::string& language) {
-    theme_ = sui::Theme::fromTokens();   // cores e forma atuais (Aparencia)
     if (!open) return true;
     if (!renderer || !window) return false;
     int ww = 0, wh = 0;
