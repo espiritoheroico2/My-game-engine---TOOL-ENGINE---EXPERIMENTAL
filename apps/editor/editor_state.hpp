@@ -4,12 +4,13 @@
 // COMO O EDITOR DESENHA UM QUADRO
 //   1. As janelas "Scene" e "Game" pedem uma imagem: renderView(camera, largura, altura).
 //   2. renderView escolhe o caminho: GPU (Diligent -> readback) ou CPU (SoftRenderer, multithread).
-//   3. A imagem vira uma textura SDL e o ImGui a mostra. Grid e gizmos sao linhas do ImGui por cima
-//      (projetadas com a mesma matriz da camera), entao funcionam igual em qualquer API grafica.
+//   3. A imagem vira uma textura SDL e o ImGui a mostra. O grid do Game e geometria 3D com teste de profundidade;
+//      ferramentas da Scene permanecem como sobreposicoes projetadas.
 #pragma once
 #include "components.hpp"
 #include "voxel.hpp"
 #include "chunk_cache.hpp"
+#include "game_grid.hpp"
 #include "narrative_panel.hpp"
 #include "profiler.hpp"
 #include "perf_warnings.hpp"
@@ -105,6 +106,7 @@ struct Editor {
 
   // visualizacao
   tool::SoftRenderer rendererScene{640, 360}, rendererGame{640, 360};   // um por vista (ver renderView)
+  editor::game_grid::GameGrid gameGrid[2];                              // uma malha por camera do Game dividido
   tool::LightRig lightRig;       // Light Prism: luzes, clusters, cascatas e ambiente (um quadro para CPU e GPU)
   tool::Mesh cube = tool::Mesh::cube(0.5f), sphere = tool::Mesh::sphere(0.5f), plane = tool::Mesh::plane(0.5f);
   // Nivel de detalhe: esfera de baixa resolucao (8x5 = ~80 triangulos contra ~576) para objetos longe da camera.
@@ -758,13 +760,14 @@ struct Editor {
 
   // Renderiza a cena para um buffer RGBA w*h. `highlight` realca o objeto selecionado (so na janela Scene).
   // `zone` = onde contar o tempo no Profiler; `fx` = pos-processamento a aplicar na imagem pronta (nullptr = nenhum).
-  const tool::u8* renderView(const tool::Camera& cam, int w, int h, bool highlight, Zone zone = Zone::SceneRender, const tool::PostFx* fx = nullptr) {
+  const tool::u8* renderView(const tool::Camera& cam, int w, int h, bool highlight, Zone zone = Zone::SceneRender,
+                             const tool::PostFx* fx = nullptr, std::size_t gameGridSlot = 0) {
     const tool::u8* out = nullptr;
     const int vi = zone == Zone::GameRender ? 1 : 0;                       // vista: 0 = Scene, 1 = Game
     tool::SoftRenderer& renderer = vi ? rendererGame : rendererScene;      // cada vista tem o seu renderizador CPU
     {
       ZoneTimer zt(prof, zone);
-      out = renderScene(cam, w, h, highlight, vi);
+      out = renderScene(cam, w, h, highlight, vi, gameGridSlot);
     }
     if (out && sceneInfo.sky.enabled && !cam.ortho) { // skybox de imagens: preenche so o fundo (alfa 0), antes do pos-processamento
       ZoneTimer zt(prof, Zone::Sky);
@@ -792,7 +795,7 @@ struct Editor {
   }
 
 private:
-  const tool::u8* renderScene(const tool::Camera& cam, int w, int h, bool highlight, int vi) {
+  const tool::u8* renderScene(const tool::Camera& cam, int w, int h, bool highlight, int vi, std::size_t gameGridSlot) {
     ZoneTimer prepareTimer(prof, Zone::ScenePrepare);
     tool::SoftRenderer& renderer = vi ? rendererGame : rendererScene;   // renderizador e assinatura da vista (0 = Scene, 1 = Game)
     std::vector<tool::Light> lights; tool::Vec3 ambient; int sunIdx = -1;
@@ -805,6 +808,11 @@ private:
     const tool::Mat4 view = tool::Mat4::lookAt(cam.eye, cam.target, cam.up);
     const tool::Mat4 proj = cam.projection(static_cast<tool::f32>(w), static_cast<tool::f32>(h));
     const tool::LightFrame& lf = lightRig.build(lights, ambient, cam.eye, view, proj.m[0][0], proj.m[1][1], cam.nearZ, cam.farZ);
+    editor::game_grid::GameGrid* depthGrid = nullptr;
+    if (vi == 1 && showGridGame) {
+      depthGrid = &gameGrid[std::min<std::size_t>(gameGridSlot, 1u)];
+      depthGrid->Sync(cam, h);
+    }
     const bool shadows = lf.shadows();
     // "Sleeper" de sombras: se a assinatura do shadow map e igual a do quadro anterior, o renderizador reaproveita os mapas.
     const std::uint64_t sigNow = shadows ? shadowSignature(cam, w, h, lights) : 0;
@@ -944,6 +952,12 @@ private:
       } else {
         if (shadows) { sigGpu = sigNow; sigGpuValid = true; if (gpu.shadowPassSkipped()) ++prof.counters.shadowReused; }
         if (pointShadows) { psigGpu = psigNow; psigGpuValid = true; }
+        if (depthGrid) {
+          for (std::size_t i = 0; i < editor::game_grid::kBatchCount; ++i) {
+            const tool::Mesh& mesh = depthGrid->MeshAt(i);
+            if (!mesh.idx.empty()) gpu.draw(mesh, {}, editor::game_grid::GameGrid::MaterialAt(i));
+          }
+        }
         scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
           if (scene.world().has<Inactive>(e)) return;
           pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); gpu.draw(m, worldMat(e), mat); });
@@ -987,6 +1001,12 @@ private:
     renderer.setLighting(lf, reCpu, rePoint);
     if (shadows) { sigCpu[vi] = sigNow; sigCpuValid[vi] = true; if (renderer.shadowPassSkipped()) ++prof.counters.shadowReused; }
     if (pointShadows) { psigCpu[vi] = psigNow; psigCpuValid[vi] = true; } else psigCpuValid[vi] = false;
+    if (depthGrid) {
+      for (std::size_t i = 0; i < editor::game_grid::kBatchCount; ++i) {
+        const tool::Mesh& mesh = depthGrid->MeshAt(i);
+        if (!mesh.idx.empty()) renderer.draw(mesh, {}, editor::game_grid::GameGrid::MaterialAt(i));
+      }
+    }
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
       if (scene.world().has<Inactive>(e)) return;
       pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); renderer.draw(m, worldMat(e), mat); });

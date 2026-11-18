@@ -21,6 +21,7 @@
 #include "settings_model.hpp"
 #include "sui_panel.hpp"
 
+#include "SpriteUi/Core/DrawOrder.hpp"
 #include "SpriteUi/Elements/Checkbox.hpp"
 #include "SpriteUi/Elements/Dropdown.hpp"
 #include "SpriteUi/Elements/RadioButton.hpp"
@@ -172,8 +173,12 @@ class SettingsPanel {
         std::uint64_t paint = 1;
         const float bottom = rect_.y + rect_.h;
         items.push_back(sui::Canvas::solidItem(rect_.x, rect_.y, rect_.w, rect_.h, panelColor_, 0.f, owner, kContentClip, paint++));
+        const std::size_t stripStart = items.size();
         appendTabs(items, paint);
         strip_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, rect_.y + Metrics::kStripH, owner, kStripClip, paint);
+        for (std::size_t i = stripStart; i < items.size(); ++i) {
+            items[i].layer = static_cast<std::int32_t>(SU::UILayer::Docked);
+        }
         canvas_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y + Metrics::kStripH, bottom, owner, kContentClip, paint);
         if (tab_ == kGraphicsTab) appendControls(items, paint);
         overlay_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, bottom, owner, kWindowClip, paint);

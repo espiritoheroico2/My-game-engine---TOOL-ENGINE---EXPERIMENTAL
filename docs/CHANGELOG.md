@@ -18,6 +18,10 @@
 - O renderer 2D do SDL deixa de escolher Vulkan, evitando uma segunda instancia Vulkan em conflito com o dispositivo Diligent usado pelo editor.
 - Settings mostra setas para navegar pelas abas ocultas. O layout padrao separa Inspector e Settings verticalmente. A barra flutuante da Scene ganhou uma alca de arraste e os cliques no slider deixam de ser consumidos pela imagem da cena.
 - Hierarchy, Inspector, Settings, Scene, Game, Console, Help e Profiler compartilham margem interna de 14 px. Os graficos do Profiler mostram linhas de referencia e ignoram amostras nao finitas.
+- Grid, eixos e marcadores vetoriais X/Y/Z do Game agora sao meshes 3D transparentes, renderizados com teste de profundidade em CPU e GPU; cameras divididas mantem caches independentes. O teste `Editor.GameGrid` compara pixels com e sem um objeto opaco e confirma que o grid nao o cobre.
+- Faixa de abas do Settings usa a camada `Docked`, acima do fundo/conteudo, mantendo a ordem de pintura entre fundo, abas e rotulos.
+- Validacao: CTest completo CPU, 30/30 aprovado. CTest GPU, 32 testes aprovados; `gpu_test_opengl` e `spriteui_gpu_opengl` nao executaram porque `xvfb-run` nao esta disponivel. O teste de oclusao do grid foi repetido nas duas configuracoes.
+- Benchmark CPU do SpriteUI executado em Release: 20 janelas, 200 botoes e 1000 quadros medidos apos 20 de aquecimento; total de 1.2953 ms/quadro (772.0 quadros/s). A medicao e apenas uma referencia atual, nao uma comparacao antes/depois; detalhes e tempos por fase em `docs/IMPLEMENTATION_STATUS.md`.
 - A migracao do editor para SpriteUI continua parcial; as secoes indicadas como ImGui em `docs/UI.md` ainda nao foram convertidas.
 
 **Pendente (nesta versao)**
@@ -26,6 +30,7 @@
 - Limite de 8 buffers dinamicos no Vulkan (PBR com 9): correcao proposta, nao aplicada e nao verificada em runtime. DX12 com o mesmo HLSL nao foi testado nesta sessao.
 - Janelas de encaixe (docking) com testes em janela real: os testes sao headless (Xvfb/lavapipe).
 - Botao Browse da tela inicial: nao testado em ambiente sem janela; o caminho com dialogo do sistema nao e coberto pelo teste.
+- Verificacao visual das abas de Settings e do grid/eixos do Game ainda pendente em uma sessao interativa do editor e em GPU real.
 
 **Emissao e bloom**
 - Inspector > Emission: novo campo "Enable emission". So objetos com ele ligado emitem (cor extra e brilho). Cenas antigas com intensidade de emissao acima de 0 continuam emitindo.
@@ -55,6 +60,14 @@
 - Com a interface travada, o arrasto de janela ou aba e cancelado durante o gesto: a janela nao sai do encaixe. Antes, o travamento redockava todas as janelas no no raiz a cada quadro, juntando as abas numa so barra; isso foi removido.
 - Verificado no Xvfb: aba do Inspector arrastada para fora continuou no encaixe.
 - Campos de texto que se apagam sozinhos: ainda nao reproduzidos; nao considerar corrigido.
+
+**Simulacao de fisica ECS com muitos corpos**
+- O passo ocioso evita reconstruir formas e a BVH quando nao ha corpos dinamicos ativos nem cinemáticos em movimento e os dados de forma nao mudaram; alteracoes externas de transform/collider e mudancas na quantidade de corpos invalidam o cache. Os eventos `Exit` pendentes continuam sendo emitidos e acumuladores sao limpos.
+- Contatos esfera-caixa reutilizam o buffer de contatos; a matriz de inercia no mundo so e preparada para corpos envolvidos no solver, e esferas sem offset rotacionado evitam a matriz de forma desnecessaria.
+- O Profiler ganhou a zona **Physics simulation**, medindo `PhysicsWorld::Simulate` durante o Play. O selftest do spawner passou de 120 para 500 esferas e ha um teste de 500 corpos adormecidos que verifica a ausencia de rebuild da broadphase no passo ocioso.
+- Adicionados testes de regressao para collider esferico com offset rotacionado e atualizacao de formas movidas externamente durante um passo ocioso. Builds CPU e GPU concluiram; CPU: 31/31 testes CTest aprovados. GPU: 32 testes passaram; dois testes OpenGL nao executaram por falta de `xvfb-run`.
+- Amostra curta `--ecs 500 --play` (502 corpos, 60 quadros apos o spawn): CPU 1,29 ms/quadro, Physics 0,04 ms; Vulkan 1,40 ms/quadro, Physics 0,03 ms. As vistas nao renderizaram objetos nesta execucao (0 draws); portanto, e uma medicao limitada da simulacao, nao um benchmark visual nem uma comparacao antes/depois.
+- O crash do Editor interativo em `test ecs:500` ainda nao foi reproduzido nem diagnosticado; os testes headless nao substituem a validacao visual/interativa. Nenhum ganho consistente foi confirmado.
 
 Pendente desta versao: canal alpha no mesh, "use object as light", bloom mais forte e skybox, multi-material em mesh importado.
 

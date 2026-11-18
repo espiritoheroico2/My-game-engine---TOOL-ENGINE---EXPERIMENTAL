@@ -146,7 +146,10 @@ inline void Editor::stepPlay(float dt) {
         if (play.culled[i]) { play.culled[i] = 0; play.rb[i].WakeUp(); if (w.alive(play.ents[i])) w.setSimulating(play.ents[i], true); }
       play.culledCount = 0;
     }
-    play.world.Simulate(play.tf, play.rb, play.col, dt);
+    {
+      ZoneTimer physicsTimer(prof, Zone::Physics);
+      play.world.Simulate(play.tf, play.rb, play.col, dt);
+    }
     // 4) sincroniza
     for (size_t i = 0; i < play.ents.size(); ++i) {
       if (play.dead[i] || !play.rb[i].IsDynamic() || !w.alive(play.ents[i])) continue;

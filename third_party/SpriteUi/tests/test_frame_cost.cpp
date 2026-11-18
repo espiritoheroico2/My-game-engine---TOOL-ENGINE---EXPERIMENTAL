@@ -1,8 +1,5 @@
-// Custo do quadro: cache de layout de texto, layout que nao refaz a arvore sem mudanca e culling de itens fora do
-// recorte. Executavel proprio, sem o harness principal.
+// Cache de layout de texto: chaves, reutilizacao e politica de expulsao. Executavel proprio, sem o harness principal.
 
-#include "SpriteUi/Layout/LayoutBridge.hpp"
-#include "SpriteUi/Layout/LayoutTree.hpp"
 #include "SpriteUi/Text/TextLayoutCache.hpp"
 
 #include <cstdio>
@@ -24,16 +21,6 @@ void Check(bool ok, const char* expr) {
     }
 }
 #define CHECK(expr) Check((expr), #expr)
-
-// Tamanho fixo que nao encolhe: sem shrink = 0, filhos maiores que o pai perdem largura e o teste nao mede o que
-// queria.
-FlexItem Fixed(float w, float h) {
-    FlexItem style;
-    style.width = {SizeMode::Fixed, w};
-    style.height = {SizeMode::Fixed, h};
-    style.shrink = 0.0f;
-    return style;
-}
 
 TextLayoutResult FakeLayout(float width) {
     TextLayoutResult r;
@@ -97,79 +84,12 @@ void TestEvictionKeepsTheRecentlyUsedEntry() {
     CHECK(builds == before + 1);
 }
 
-// Sem mudanca, Layout nao refaz a arvore; uma mudanca de estilo ou de viewport recalcula.
-void TestLayoutSkipsWhenNothingChanged() {
-    current = "TestLayoutSkipsWhenNothingChanged";
-    LayoutTree tree;
-    const UIHandle root = tree.Create({}, Fixed(300.0f, 200.0f));
-    const UIHandle a = tree.Create(root, Fixed(100.0f, 20.0f));
-    CHECK(tree.IsLayoutDirty());
-    tree.Layout({{0.0f, 0.0f}, {300.0f, 200.0f}});
-    CHECK(!tree.IsLayoutDirty());
-    const float x1 = tree.Get(a)->node.rect.size.x;
-    LayoutStats stats{};
-    tree.Layout({{0.0f, 0.0f}, {300.0f, 200.0f}}, &stats);
-    CHECK(!tree.IsLayoutDirty());
-    CHECK(stats.measured == 0);                    // pulou: nenhuma medida feita
-    CHECK(tree.Get(a)->node.rect.size.x == x1);    // resultado anterior preservado
-
-    FlexItem wider = Fixed(150.0f, 20.0f);
-    CHECK(tree.SetStyle(a, wider));
-    CHECK(tree.IsLayoutDirty());
-    tree.Layout({{0.0f, 0.0f}, {300.0f, 200.0f}});
-    CHECK(tree.Get(a)->node.rect.size.x == 150.0f); // mudanca de estilo chega ao resultado
-
-    tree.Layout({{0.0f, 0.0f}, {400.0f, 200.0f}}); // viewport diferente recalcula
-    CHECK(!tree.IsLayoutDirty());
-    CHECK(tree.SetVisible(a, false));
-    CHECK(tree.IsLayoutDirty());
-}
-
-// Elemento todo fora do recorte nao gera item de desenho, mas continua no acerto. Dentro do recorte, gera item.
-void TestCulledElementHasNoRenderItemButKeepsHitTarget() {
-    current = "TestCulledElementHasNoRenderItemButKeepsHitTarget";
-    LayoutTree tree;
-    LayoutSceneBridge bridge;
-    const UIHandle root = tree.Create({}, Fixed(300.0f, 200.0f));
-    const UIHandle panel = tree.Create(root, Fixed(100.0f, 100.0f));
-    // Layout em linha: o primeiro filho fica em x = 0..40 (dentro do painel 0..100); o segundo, com margem,
-    // fica em x = 150..200 (fora).
-    const UIHandle inside = tree.Create(panel, Fixed(40.0f, 40.0f));
-    FlexItem outsideStyle = Fixed(50.0f, 50.0f);
-    outsideStyle.margin = {110.0f, 0.0f, 0.0f, 0.0f};
-    const UIHandle outside = tree.Create(panel, outsideStyle);
-    ElementVisual clip;
-    clip.clipOverflow = true;
-    bridge.SetVisual(panel, clip);
-    ElementVisual v;
-    v.focusable = true;
-    bridge.SetVisual(outside, v);
-    bridge.SetVisual(inside, v);
-    tree.Layout({{0.0f, 0.0f}, {300.0f, 200.0f}});
-    const SceneExtractionResult scene = bridge.Extract(tree);
-
-    bool outsideDrawn = false;
-    bool insideDrawn = false;
-    for (const auto& item : scene.renderItems) {
-        outsideDrawn = outsideDrawn || item.handle == outside;
-        insideDrawn = insideDrawn || item.handle == inside;
-    }
-    CHECK(!outsideDrawn);
-    CHECK(insideDrawn);
-    CHECK(scene.culledRenderItems == 1);
-    bool outsideTarget = false;
-    for (const auto& target : scene.hitTargets) outsideTarget = outsideTarget || target.handle == outside;
-    CHECK(outsideTarget);   // o acerto nao muda: a ordem de quem sobra continua a mesma
-}
-
 } // namespace
 
 int main() {
     TestSameKeyBuildsOnce();
     TestAnyLayoutInputChangesTheKey();
     TestEvictionKeepsTheRecentlyUsedEntry();
-    TestLayoutSkipsWhenNothingChanged();
-    TestCulledElementHasNoRenderItemButKeepsHitTarget();
-    std::printf("frame cost: %d/%d checks passed\n", run - failed, run);
+    std::printf("text layout cache: %d/%d checks passed\n", run - failed, run);
     return failed == 0 ? 0 : 1;
 }

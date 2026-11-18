@@ -36,6 +36,8 @@ void TestColorTableIsCompleteAndInRange() {
     CHECK(info.fallback.b >= 0.f && info.fallback.b <= 1.f && info.fallback.a >= 0.f && info.fallback.a <= 1.f);
   }
   CHECK(kColorCount == 14);
+  CHECK(infoOf(static_cast<Color>(kColorCount)).key == nullptr);
+  CHECK(infoOf(static_cast<Color>(255)).label == nullptr);
 }
 
 // Forma padrao: 125 por cento de escala, cantos 4, espaco 4, recuo 14.
@@ -78,6 +80,8 @@ void TestSetColorChangesAndClamps() {
   CHECK(t.color(Color::Accent).b == 0.5f);
   // Os outros tokens nao mudam.
   CHECK(t.color(Color::Panel) == infoOf(Color::Panel).fallback);
+  CHECK(!t.setColor(static_cast<Color>(255), Rgba{1.f, 1.f, 1.f, 1.f}));
+  CHECK(t.color(static_cast<Color>(255)) == Rgba{});
 }
 
 void TestResetColorsAndShape() {

@@ -73,6 +73,9 @@ add_library(SpriteUI
     src/Elements/MenuBar.cpp
     src/Elements/Image.cpp
     src/Elements/Graph.cpp
+    src/Elements/Splitter.cpp
+    src/Widgets/DockGuides.cpp
+    src/Text/UIScale.cpp
 )
 add_library(SpriteUi::SpriteUI ALIAS SpriteUI)
 

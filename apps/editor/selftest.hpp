@@ -390,8 +390,8 @@ inline int runSelfTest(const std::string& samplesDir) {
   { tool::Entity ca = ed.principalCameras()[0]; ed.scene.world().removeTag(ca, ed.scene.tag("Principal")); ed.scene.world().addTag(ca, ed.scene.tag("camPrincipal"));
     ed.projSettings.link("camPrincipal", "Principal");
     check(ed.principalCameras().size() >= 1 && ed.isPrincipal(ca), "a camera tagged with a Principal alias counts as Principal"); }
-  { editor::FrameProfiler pf; for (int i = 0; i < 50; ++i) { pf.beginFrame(); pf.add(Zone::Ui, 2.f); } const auto st = pf.stats();
-    check(st.avg >= 0.f && pf.zoneAvg(Zone::Ui) > 1.f, "profiler records zones");
+  { editor::FrameProfiler pf; for (int i = 0; i < 50; ++i) { pf.beginFrame(); pf.add(Zone::Ui, 2.f); pf.add(Zone::Physics, 1.f); } const auto st = pf.stats();
+    check(st.avg >= 0.f && pf.zoneAvg(Zone::Ui) > 1.f && pf.zoneAvg(Zone::Physics) > 0.5f, "profiler records zones");
     pf.frameStart = editor::FrameProfiler::Clock::now() - std::chrono::milliseconds(20);
     pf.add(Zone::Present, 5.f); pf.addWait(7.f); pf.beginFrame();
     check(pf.workMs[static_cast<size_t>(pf.head - 1)] >= 6.f && pf.workMs[static_cast<size_t>(pf.head - 1)] <= 12.f,
@@ -717,14 +717,14 @@ inline int runSelfTest(const std::string& samplesDir) {
   { // teste de ECS: N esferas filhas do ECScall, criadas durante o Play; o Stop desfaz tudo
     tool::World& w = ed.scene.world();
     size_t physBefore = 0; w.each<PhysicsComp>([&](tool::Entity e, PhysicsComp&) { if (!w.has<Inactive>(e)) ++physBefore; });
-    ed.startEcsTest(120);   // perFrame = 1 -> 120 quadros
+    ed.startEcsTest(500);   // perFrame = 3 -> 167 quadros
     check(ed.playing, "ECS test starts Play by itself");
-    for (int i = 0; i < 130; ++i) ed.tick(1.0 / 60.0);
+    for (int i = 0; i < 180; ++i) ed.tick(1.0 / 60.0);
     tool::Entity call = ed.findByName("ECScall");
     int children = 0; w.each<Parent>([&](tool::Entity, Parent& pa) { if (pa.e == call) ++children; });
-    check(children == 120, "ECS test: 120 spheres are children of ECScall");
-    check(ed.play.ents.size() == physBefore + 120, "ECS test: each sphere gets a Newtoon body (one rebuild per frame)");
-    check(w.get<SpawnerComp>(call) && w.get<SpawnerComp>(call)->spawned == 120 && !w.get<SpawnerComp>(call)->armed, "ECS test: spawner finished and disarmed");
+    check(children == 500, "ECS test: 500 spheres are children of ECScall");
+    check(ed.play.ents.size() == physBefore + 500, "ECS test: each sphere gets a Newtoon body (one rebuild per frame)");
+    check(w.get<SpawnerComp>(call) && w.get<SpawnerComp>(call)->spawned == 500 && !w.get<SpawnerComp>(call)->armed, "ECS test: spawner finished and disarmed");
     ed.stopPlay();
     int leftover = 0; w.each<Name>([&](tool::Entity, Name& nm) { if (std::string(nm.text) == "sphere") ++leftover; });
     check(leftover == 0, "ECS test: Stop removes every sphere");

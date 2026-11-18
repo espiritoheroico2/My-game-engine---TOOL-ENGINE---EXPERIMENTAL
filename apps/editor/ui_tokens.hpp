@@ -1,15 +1,14 @@
 #pragma once
 
-// Tokens de aparencia da interface SpriteUI: uma cor por elemento (painel, texto, divisor, botao...) e a forma (raio
-// dos cantos, espaco entre linhas, recuo do painel e escala de interface). A aba Aparencia de Configuracoes edita
-// estes valores com o seletor de cor da SpriteUI; os paineis leem a copia atual (sui::Theme::fromTokens).
+// Modelo de tokens de aparencia da interface SpriteUI: uma cor por elemento (painel, texto, divisor, botao...) e a
+// forma (raio dos cantos, espaco entre linhas, recuo do painel e escala de interface). O painel de Configuracoes,
+// a aplicacao visual e a persistencia ainda nao estao ligados a este modelo.
 //
 // Regras: cores ficam em sRGB reto (0 a 1), como o seletor mostra; a conversao para o espaco linear da SpriteUI e
-// feita em sui_panel.hpp. Valores fora da faixa sao presos (Clamp*). Sem SDL, sem ImGui e sem JSON: a gravacao em
-// editor_settings.json fica na ponte do Editor (settings_editor.hpp). Roda no ctest como Editor.UiTokens.
+// feita no adaptador da SpriteUI. Valores fora da faixa sao presos (Clamp*). Sem SDL, sem ImGui e sem JSON; roda no
+// ctest como Editor.UiTokens.
 //
-// Exemplo: Tokens::setColor(Color::Accent, {0.9f, 0.4f, 0.1f, 1.f}) muda o destaque; o proximo quadro dos paineis
-// usa a nova cor, sem reiniciar o editor.
+// Exemplo: Tokens::setColor(Color::Accent, {0.9f, 0.4f, 0.1f, 1.f}) altera o modelo do token de destaque.
 
 #include <algorithm>
 #include <array>
@@ -70,14 +69,16 @@ struct ColorInfo {
       {"popup", "Open lists (combo and menu)", {0.07f, 0.09f, 0.12f, 1.f}},
       {"menuBar", "Menu bar", {0.055f, 0.075f, 0.11f, 1.f}},
   };
-  return kInfo[static_cast<std::size_t>(c)];
+  const std::size_t index = static_cast<std::size_t>(c);
+  static constexpr ColorInfo kInvalidInfo{nullptr, nullptr, {}};
+  return index < kColorCount ? kInfo[index] : kInvalidInfo;
 }
 
 // Limites da forma (a aba Aparencia mostra a mesma faixa nos deslizantes).
 inline constexpr float kRoundingMin = 0.f, kRoundingMax = 12.f, kRoundingDefault = 4.f;
 inline constexpr float kSpacingMin = 0.f, kSpacingMax = 16.f, kSpacingDefault = 4.f;
 inline constexpr float kPaddingMin = 4.f, kPaddingMax = 32.f, kPaddingDefault = 14.f;
-inline constexpr float kUiScaleMin = 0.75f, kUiScaleMax = 2.0f, kUiScaleDefault = 1.25f;   // 125 por cento
+inline constexpr float kUiScaleMin = 0.7f, kUiScaleMax = 2.0f, kUiScaleDefault = 1.25f;    // 125 por cento
 
 // Forma da interface: arredondamento dos cantos, espaco entre linhas, recuo das bordas e escala de interface.
 struct Shape {
@@ -108,13 +109,19 @@ class Tokens {
  public:
   Tokens() { resetColors(); }
 
-  [[nodiscard]] const Rgba& color(Color c) const noexcept { return colors_[static_cast<std::size_t>(c)]; }
+  [[nodiscard]] const Rgba& color(Color c) const noexcept {
+    const std::size_t index = static_cast<std::size_t>(c);
+    static constexpr Rgba kInvalidColor{};
+    return index < kColorCount ? colors_[index] : kInvalidColor;
+  }
 
   // Grava uma cor (cada canal preso em 0 a 1; NaN vira 0). Devolve true se mudou.
   bool setColor(Color c, Rgba value) noexcept {
+    const std::size_t index = static_cast<std::size_t>(c);
+    if (index >= kColorCount) return false;
     Rgba clean{ClampOr(value.r, 0.f, 1.f, 0.f), ClampOr(value.g, 0.f, 1.f, 0.f), ClampOr(value.b, 0.f, 1.f, 0.f),
                ClampOr(value.a, 0.f, 1.f, 1.f)};
-    Rgba& slot = colors_[static_cast<std::size_t>(c)];
+    Rgba& slot = colors_[index];
     if (slot == clean) return false;
     slot = clean;
     return true;
