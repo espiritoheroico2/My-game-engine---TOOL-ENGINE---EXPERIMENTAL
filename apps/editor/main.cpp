@@ -2203,14 +2203,27 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
   return api;
 }
 
+// Renderer SDL da interface (SpriteUI). E independente da API da Cena e do Jogo (Diligent): a interface usa o driver de
+// GPU mais adequado (OpenGL primeiro, depois Direct3D, Metal e GLES) e so cai para software se nenhum abrir.
+// Vulkan fica de fora porque a Cena ja o usa. Driver escolhido vai para o log.
 SDL_Renderer* createEditorRenderer(SDL_Window* window, bool forceSoftware) {
   if (!window) return nullptr;
   if (forceSoftware) return SDL_CreateRenderer(window, "software");
+  static constexpr const char* kPreferred[] = {"opengl", "direct3d11", "metal", "opengles2", "direct3d12"};
+  auto accept = [&](const char* driver) -> SDL_Renderer* {
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, driver);
+    if (renderer) tool::logInfo(std::string("Interface SpriteUI: driver de render ") + SDL_GetRendererName(renderer));
+    return renderer;
+  };
+  for (const char* driver : kPreferred) {
+    if (SDL_Renderer* renderer = accept(driver)) return renderer;
+  }
   for (int i = 0; i < SDL_GetNumRenderDrivers(); ++i) {
     const char* driver = SDL_GetRenderDriver(i);
     if (!driver || std::strcmp(driver, "vulkan") == 0 || std::strcmp(driver, "software") == 0) continue;
-    if (SDL_Renderer* renderer = SDL_CreateRenderer(window, driver)) return renderer;
+    if (SDL_Renderer* renderer = accept(driver)) return renderer;
   }
+  tool::logWarn("Interface SpriteUI: nenhum driver de GPU abriu; usando software (CPU)");
   return SDL_CreateRenderer(window, "software");
 }
 
