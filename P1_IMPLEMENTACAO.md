@@ -29,14 +29,13 @@ Regra de validacao: nao considerar o P1 visualmente concluido antes da comparaca
    Hoje VS usa b4 (FrameBuffer) e b6 (ObjectBuffer); PS usa b0,b1,b2,b3,b5,b7. Total 8.
    **Trocar o b6 (ObjectBuffer) por um buffer de instancias (StructuredBuffer) NAO conta como UBO**,
    e o b6 novo (BatchCB, so com `first`) conta. Saldo: o mesmo numero de UBOs.
-2. **Storage hoje so vai para o pixel shader.** Em `engine/rhi_diligent/src/diligent_device.cpp`,
-   `setStorage` (linha ~457) chama `GetVariableByName(dl::SHADER_TYPE_PIXEL, ...)`.
-   Precisa ligar tambem no vertex shader.
+2. **Implementado:** `setStorage` em `engine/rhi_diligent/src/diligent_device.cpp` liga o buffer nos estagios
+   vertex e pixel quando a variavel existe; buffers estruturados sao aceitos pelo RHI.
 3. **`drawIndexed(count, n)` nao tem "base instance".** O shader sempre recebe `SV_InstanceID` a partir de 0.
    Por isso cada lote grava `first` num pequeno UBO (BatchCB) e o shader le `Instances[first + SV_InstanceID]`.
 4. **Nao existe desenho indireto no RHI.** P1 nao precisa disso. P3 precisa.
 
-## 2. Fase 1a - Buffer de instancias no RHI (Diligent)
+## 2. Fase 1a - Buffer de instancias no RHI (Diligent) - implementada
 
 Arquivo: `engine/rhi_diligent/src/diligent_device.cpp` e `engine/rhi/include/tool/rhi/rhi.hpp`.
 
@@ -56,10 +55,10 @@ Arquivo: `engine/rhi_diligent/src/diligent_device.cpp` e `engine/rhi/include/too
    `imp_.points`, `imp_.indices` no import da Light Prism; procure `createBuffer` com `Storage` ou
    `Structured` no `gpu_renderer.hpp`).
 
-**Verificacao da fase 1a:** o build passa; `tool_tests` passa; a engine abre e o jogo renderiza exatamente
-como antes (nada usa o novo caminho ainda).
+**Verificacao automatizada da fase 1a:** build e testes passam. A verificacao visual do renderizador continua
+pendente, conforme a lista da secao 7.
 
-## 3. Fase 1b - Shader PBR le instancias (so passe principal)
+## 3. Fase 1b - Shader PBR le instancias (so passe principal) - implementada
 
 Arquivo: `assets/shaders/pbr.hlsl`.
 
@@ -88,7 +87,7 @@ Arquivo: `assets/shaders/pbr.hlsl`.
    (slots 0 a 3 ja sao `imp_.points`, `imp_.spots`, `imp_.cells` e `imp_.indices`).
    **Mudou o HLSL? Mude aqui tambem** (o comentario do arquivo ja avisa isso).
 
-## 4. Fase 1c - Renderizador desenha por lote (so passe principal opaco)
+## 4. Fase 1c - Renderizador desenha por lote (so passe principal opaco) - implementada; validacao visual pendente
 
 Arquivo: `engine/render/include/tool/render/gpu_renderer.hpp`.
 
@@ -134,7 +133,7 @@ Arquivo: `engine/render/include/tool/render/gpu_renderer.hpp`.
 - Abra o log e procure erros de "setStorage" ou de "variable not found".
 - Me envie: `DrawStats` (draws, triangulos, bufferUploads, pipelineSwitches) antes e depois.
 
-## 5. Fase 1d - Sombras e prepass por lote
+## 5. Fase 1d - Sombras e prepass por lote - implementada; validacao visual pendente
 
 1. **Sombra (`assets/shaders/shadow.hlsl`):** `ShadowBuffer` passa a ter so `lightViewProj` (b0).
    Adicionar `Instances` (t0 do VS, em outro registro livre) e `BatchBuffer` (b1). O VS calcula
@@ -150,7 +149,7 @@ Arquivo: `engine/render/include/tool/render/gpu_renderer.hpp`.
 **Verificacao da fase 1d:** sombras com a mesma posicao de antes (comparar captura de tela);
 SSAO com a mesma aparencia; a luz do sol e as luzes pontuais nao mudam de lugar.
 
-## 6. Fase 1e - Brilho (bloom) e transparentes
+## 6. Fase 1e - Brilho (bloom) e transparentes - mantidos por objeto no escopo do P1
 
 - Brilho: o passe `emiPipe_` desenha so os objetos emissivos. **Mantenha por objeto** ate o fim do P1,
   porque a lista e pequena. Otimize depois, se o `DrawStats` mostrar que pesa.
@@ -158,10 +157,10 @@ SSAO com a mesma aparencia; a luz do sol e as luzes pontuais nao mudam de lugar.
 
 ## 7. Criterios de sucesso do P1
 
-- Imagem identica (ou diferenca so de precisao) em todas as fases.
-- `DrawStats.draws` cai de ~ N objetos para ~ numero de lotes (com 1000 esferas iguais, perto de 1).
-- `DrawStats.bufferUploads` cai (uma escrita de instancias por quadro, em vez de N escritas de objeto).
-- Frame time (benchmark `--ecs 1000 --play`, com `TOOL_BENCH_CSV`) nao piora. Mande o CSV.
+- [ ] Imagem identica (ou diferenca so de precisao) em todas as fases.
+- [ ] `DrawStats.draws` cai de ~ N objetos para ~ numero de lotes (com 1000 esferas iguais, perto de 1).
+- [ ] `DrawStats.bufferUploads` cai (uma escrita de instancias por quadro, em vez de N escritas de objeto).
+- [ ] Frame time (benchmark `--ecs 1000 --play`, com `TOOL_BENCH_CSV`) nao piora. Mande o CSV.
 
 ## 8. Plano P2 a P6 (depois do P1 validado)
 
