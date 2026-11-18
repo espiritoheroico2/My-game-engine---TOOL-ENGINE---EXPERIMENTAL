@@ -77,8 +77,6 @@ class Window final : public Element {
     Vec2 minSize{150.0f, 100.0f};  // Tamanho minimo no redimensionamento.
     float titleBarHeight = 30.0f;
     float resizeMargin = 6.0f;     // Faixa de cada borda que redimensiona.
-    // Deslocamento a partir do qual um Down na barra vira arraste. Um clique com menos que isso nao move a janela.
-    float dragThreshold = 6.0f;
     float buttonSize = 20.0f;
     float buttonGap = 4.0f;
 

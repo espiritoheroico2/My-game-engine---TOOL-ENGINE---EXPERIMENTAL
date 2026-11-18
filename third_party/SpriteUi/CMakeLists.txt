@@ -27,12 +27,10 @@ add_library(SpriteUI
     src/Text/LineBreak.cpp
     src/Text/TextLayout.cpp
     src/Text/TextLines.cpp
-    src/Text/UIScale.cpp
     src/Widgets/Widgets.cpp
     src/Widgets/VirtualList.cpp
     src/Widgets/Docking.cpp
     src/Widgets/DockInteraction.cpp
-    src/Widgets/DockGuides.cpp
     src/Widgets/DockOps.cpp
     src/Widgets/TextEdit.cpp
     src/Widgets/TextField.cpp
@@ -75,7 +73,6 @@ add_library(SpriteUI
     src/Elements/MenuBar.cpp
     src/Elements/Image.cpp
     src/Elements/Graph.cpp
-    src/Elements/Splitter.cpp
 )
 add_library(SpriteUi::SpriteUI ALIAS SpriteUI)
 
@@ -278,21 +275,6 @@ if(SPRITEUI_BUILD_TESTS)
     target_link_libraries(spriteui_dock_tests PRIVATE SpriteUi::SpriteUI)
     add_test(NAME SpriteUI.DockInteraction COMMAND spriteui_dock_tests)
 
-    # Camadas (z-order igual no desenho e no acerto) e roteamento de entrada (cliques, foco, desativados).
-    add_executable(spriteui_layers_input_tests tests/test_layers_and_input.cpp)
-    target_link_libraries(spriteui_layers_input_tests PRIVATE SpriteUi::SpriteUI)
-    add_test(NAME SpriteUI.LayersAndInput COMMAND spriteui_layers_input_tests)
-
-    # Divisor (Splitter): area de pegada, arraste nos dois sentidos e limites por painel.
-    add_executable(spriteui_splitter_tests tests/test_splitter.cpp)
-    target_link_libraries(spriteui_splitter_tests PRIVATE SpriteUi::SpriteUI)
-    add_test(NAME SpriteUI.Splitter COMMAND spriteui_splitter_tests)
-
-    # Custo do quadro: cache de layout de texto, layout sem mudanca e culling fora do recorte.
-    add_executable(spriteui_frame_cost_tests tests/test_frame_cost.cpp)
-    target_link_libraries(spriteui_frame_cost_tests PRIVATE SpriteUi::SpriteUI)
-    add_test(NAME SpriteUI.FrameCost COMMAND spriteui_frame_cost_tests)
-
     # Camada L4 (campo de texto): edicao, selecao, UTF-8, desfazer e persistencia do texto.
     add_executable(spriteui_text_edit_tests tests/test_text_edit.cpp)
     target_link_libraries(spriteui_text_edit_tests PRIVATE SpriteUi::SpriteUI)
@@ -336,13 +318,6 @@ if(SPRITEUI_BUILD_TESTS)
         target_compile_definitions(spriteui_truetype_tests PRIVATE
             "SPRITEUI_TEST_FONT_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/Fonts/Xmind/Xmind-VariableFont_wght.ttf\"")
         add_test(NAME SpriteUI.TruetypeAtlas COMMAND spriteui_truetype_tests)
-
-        # Escala de interface (UI scale): bucket por escala, altura coerente do glifo e snap a pixel fisico.
-        add_executable(spriteui_ui_scale_tests tests/test_ui_scale.cpp)
-        target_link_libraries(spriteui_ui_scale_tests PRIVATE SpriteUi::SpriteUI SpriteUi::TextStb)
-        target_compile_definitions(spriteui_ui_scale_tests PRIVATE
-            "SPRITEUI_UI_SCALE_TEST_FONT=\"${CMAKE_CURRENT_SOURCE_DIR}/Fonts/Xmind/static/Xmind-Regular.ttf\"")
-        add_test(NAME SpriteUI.UIScale COMMAND spriteui_ui_scale_tests)
     endif()
 
     # Visual tests write PNG screenshots here (also asserted on pixel values).
@@ -528,14 +503,6 @@ endif()
 if(SPRITEUI_BUILD_BENCHMARKS)
     add_executable(spriteui_benchmarks benchmarks/spriteui_benchmarks.cpp)
     target_link_libraries(spriteui_benchmarks PRIVATE SpriteUi::SpriteUI)
-
-    # Quadro interativo (200 botoes, 20 janelas, fonte TrueType real). Precisa do atlas stb.
-    if(TARGET SpriteUi::TextStb)
-        add_executable(spriteui_frame_benchmark benchmarks/spriteui_frame_benchmark.cpp)
-        target_link_libraries(spriteui_frame_benchmark PRIVATE SpriteUi::SpriteUI SpriteUi::TextStb)
-        target_compile_definitions(spriteui_frame_benchmark PRIVATE
-            "SPRITEUI_BENCH_FONT_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/Fonts/Xmind/static/Xmind-Regular.ttf\"")
-    endif()
 endif()
 
 include(GNUInstallDirs)

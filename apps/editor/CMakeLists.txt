@@ -40,11 +40,12 @@ if(TOOL_WITH_SPRITEUI)
   target_link_libraries(editor_help_model_tests PRIVATE SpriteUi::SpriteUI)
   add_test(NAME Editor.HelpModel COMMAND editor_help_model_tests)
 
-  # Bloco "engine" do project.json (project_engine_settings.hpp): padroes, ida e volta, faixas.
+  # Bloco "engine" do project.json: modelo puro, limites e ida-e-volta JSON.
   add_executable(editor_project_engine_settings_tests tests/test_project_engine_settings.cpp)
   target_include_directories(editor_project_engine_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(editor_project_engine_settings_tests PRIVATE tool::core)
   add_test(NAME Editor.ProjectEngineSettings COMMAND editor_project_engine_settings_tests)
+
   target_compile_definitions(tool_editor PRIVATE TOOL_WITH_SPRITEUI=1)
 endif()
 
@@ -69,6 +70,12 @@ target_include_directories(editor_profiler_model_tests PRIVATE ${CMAKE_CURRENT_S
 target_link_libraries(editor_profiler_model_tests PRIVATE tool::core)
 add_test(NAME Editor.ProfilerModel COMMAND editor_profiler_model_tests)
 
+# Exportacao do Profiler: snapshots completos e serializacao Markdown, sem janela nem SDL.
+add_executable(editor_profiler_export_tests tests/test_profiler_export.cpp)
+target_include_directories(editor_profiler_export_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_profiler_export_tests PRIVATE tool::core)
+add_test(NAME Editor.ProfilerExport COMMAND editor_profiler_export_tests)
+
 # Modelo da barra de status (statusbar_model.hpp): textos, tons e refresh de 4 vezes por segundo.
 add_executable(editor_statusbar_model_tests tests/test_statusbar_model.cpp)
 target_include_directories(editor_statusbar_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -91,16 +98,6 @@ add_executable(editor_mainmenu_model_tests tests/test_mainmenu_model.cpp)
 target_include_directories(editor_mainmenu_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(editor_mainmenu_model_tests PRIVATE tool::core)
 add_test(NAME Editor.MainMenuModel COMMAND editor_mainmenu_model_tests)
-
-# Icones da interface (ui_icons.hpp): desenhos de 12 x 12 usados nas abas e na barra de menus.
-add_executable(editor_ui_icons_tests tests/test_ui_icons.cpp)
-target_include_directories(editor_ui_icons_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_test(NAME Editor.UiIcons COMMAND editor_ui_icons_tests)
-
-# Tokens de aparencia (ui_tokens.hpp): cores por elemento e forma (raio, espaco, recuo, escala).
-add_executable(editor_ui_tokens_tests tests/test_ui_tokens.cpp)
-target_include_directories(editor_ui_tokens_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_test(NAME Editor.UiTokens COMMAND editor_ui_tokens_tests)
 
 # Modelo da janela Configuracoes (settings_model.hpp): abas, limites de escolha, tamanho do jogo, sombra e divisao.
 add_executable(editor_settings_model_tests tests/test_settings_model.cpp)

@@ -1,7 +1,6 @@
 // Barra de menus (MenuBar): clique em cabecalho e item, troca por passagem, cascata com inversao a esquerda,
 // Escape nivel a nivel, teclado, Alt, atraso de submenu, atalhos, rolagem e itens de desenho. Valores calculados
 // a mao nos comentarios. Janela de 400 x 300; barra de 26 px; cabecalhos de 80; linhas de 24; separador de 7.
-#include "SpriteUi/Core/DrawOrder.hpp"
 #include "SpriteUi/Elements/MenuBar.hpp"
 
 #include <cmath>
@@ -283,131 +282,6 @@ void TestMenuBarItems() {
     CHECK(BuildMenuBarItems(bar, style, 0, 0.0f, 0).size() == 12);
 }
 
-// Menus de teste com item de caixa e icones: Exibir tem "Mostrar grade" (caixa), separador e "Zoom".
-std::vector<MenuBarEntry> ViewMenus() {
-    MenuItem grid = Action("Mostrar grade", "Ctrl+G");
-    grid.checkable = true;
-    grid.icon = "grid";
-    MenuItem save = Action("Salvar", "Ctrl+S");
-    save.icon = "save";
-    return {
-        {"Arquivo", {save, Action("Sair")}, false},
-        {"Exibir", {grid, Separator(), Action("Zoom")}, false},
-    };
-}
-
-Vec2 CenterOf(Rect rect) {
-    return {rect.position.x + 0.5f * rect.size.x, rect.position.y + 0.5f * rect.size.y};
-}
-
-// Fluxo pedido: abrir, navegar com setas, marcar a caixa com Enter (o menu continua aberto), Esc fecha e o valor
-// marcado sobrevive ao fechamento.
-void TestCheckboxFlowOpenNavigateCheckEscape() {
-    MenuBar bar;
-    bar.border = {{0.0f, 0.0f}, {400.0f, 26.0f}};
-    bar.control.SetMenus(ViewMenus());
-
-    (void)ClickAt(bar, {120.0f, 13.0f});                    // Cabecalho 1 (Exibir).
-    CHECK(bar.control.IsOpen() && bar.control.ActiveMenu() == 1);
-    CHECK(bar.control.Dropdown().Highlighted(0) == 0);                 // Abre no primeiro item selecionavel.
-
-    (void)bar.KeyPressed(MenuKey::Down, kWindow);           // Pula o separador.
-    CHECK(bar.control.Dropdown().Highlighted(0) == 2);
-    (void)bar.KeyPressed(MenuKey::Up, kWindow);
-    CHECK(bar.control.Dropdown().Highlighted(0) == 0);
-
-    MenuBarEvents e = bar.KeyPressed(MenuKey::Enter, kWindow);
-    CHECK(e.changed && !e.activated && !e.closed);           // Caixa: nao executa nem fecha.
-    CHECK(bar.control.IsOpen());
-    CHECK(bar.control.Menus()[1].items[0].checked);
-
-    e = bar.KeyPressed(MenuKey::Escape, kWindow);
-    CHECK(e.closed && !bar.control.IsOpen());
-    CHECK(bar.control.Menus()[1].items[0].checked);          // O valor novo nao se perde ao fechar.
-
-    (void)ClickAt(bar, {120.0f, 13.0f});                    // Reabre: continua marcada.
-    CHECK(bar.control.IsOpen() && bar.control.Menus()[1].items[0].checked);
-}
-
-// Clique numa caixa alterna e mantem o menu aberto; clique numa acao vizinha ainda executa e fecha.
-void TestCheckboxClickTogglesAndKeepsMenuOpen() {
-    MenuBar bar;
-    bar.border = {{0.0f, 0.0f}, {400.0f, 26.0f}};
-    bar.control.SetMenus(ViewMenus());
-    (void)ClickAt(bar, {120.0f, 13.0f});
-    const Rect firstRow = bar.RowRect(0, 0);
-
-    MenuBarEvents e = ClickAt(bar, CenterOf(firstRow));
-    CHECK(e.changed && !e.closed && bar.control.IsOpen());
-    CHECK(bar.control.Menus()[1].items[0].checked);
-    e = ClickAt(bar, CenterOf(firstRow));
-    CHECK(bar.control.IsOpen() && !bar.control.Menus()[1].items[0].checked);
-
-    e = ClickAt(bar, CenterOf(bar.RowRect(0, 2)));          // Zoom: acao comum, executa e fecha.
-    CHECK(e.activated && e.closed && !bar.control.IsOpen());
-    CHECK(bar.control.ActivationPath() == std::vector<std::size_t>{2});
-}
-
-// Icone e atalho: as colunas ficam na linha, o icone a esquerda, o atalho alinhado a direita com a folga do icone.
-void TestIconAndShortcutColumns() {
-    MenuBar bar;
-    bar.border = {{0.0f, 0.0f}, {400.0f, 26.0f}};
-    bar.control.SetMenus(ViewMenus());
-    (void)ClickAt(bar, {120.0f, 13.0f});
-    const Rect row = bar.RowRect(0, 0);
-    const Rect icon = bar.IconRect(0, 0);
-    CHECK(Near(icon.size.x, MenuBar::kIconSize) && Near(icon.size.y, MenuBar::kIconSize));
-    CHECK(Near(icon.position.x - row.position.x, 0.5f * (MenuBar::ContentInsetX() - MenuBar::kIconSize)));
-    CHECK(Near(CenterOf(icon).y, CenterOf(row).y));
-    CHECK(bar.IconRect(0, 99).size.y == 0.0f);               // Linha inexistente: vazio.
-
-    const Rect shortcut = bar.ShortcutRect(0, 0);
-    CHECK(Near(shortcut.position.y, row.position.y) && Near(shortcut.size.y, row.size.y));
-    CHECK(Near(shortcut.position.x + shortcut.size.x, row.position.x + row.size.x - 0.5f * MenuBar::ContentInsetX()));
-    CHECK(shortcut.size.x <= row.size.x);
-    CHECK(bar.ShortcutRect(0, 99).size.y == 0.0f);
-}
-
-// Popup na camada de menus: o popup sai da camada de fundo, e a faixa da barra continua nela.
-// Caixa marcada acrescenta a marca (um item a mais que a caixa vazia).
-void TestPopupLayerAndCheckMark() {
-    const MenuBarStyle style;
-    MenuBar bar;
-    bar.border = {{0.0f, 0.0f}, {400.0f, 26.0f}};
-    bar.control.SetMenus(ViewMenus());
-    (void)ClickAt(bar, {120.0f, 13.0f});
-    const auto open = BuildMenuBarItems(bar, style, 0, 0.0f, 0);
-    CHECK(!open.empty() && open.front().layer != static_cast<std::int32_t>(UILayer::Popup));
-    std::size_t popupItems = 0;
-    for (const auto& item : open) {
-        if (item.layer == static_cast<std::int32_t>(UILayer::Popup)) ++popupItems;
-    }
-    CHECK(popupItems > 0);
-    CHECK(open.size() - popupItems == 3);                    // Faixa e dois cabecalhos ficam na camada da barra.
-
-    (void)bar.KeyPressed(MenuKey::Enter, kWindow);          // Marca a caixa.
-    CHECK(BuildMenuBarItems(bar, style, 0, 0.0f, 0).size() == open.size() + 1);
-}
-
-// Destaque do cabecalho com o ponteiro em cima: vale com a barra fechada e some ao sair da faixa.
-void TestHeaderHoverHighlight() {
-    MenuBar bar;
-    SetUpBar(bar);
-    CHECK(bar.HoveredHeader() == Widgets::NoControlIndex);
-    (void)bar.OnPointer(PointerAt(PointerPhase::Move, {120.0f, 13.0f}, true), kWindow);
-    CHECK(bar.HoveredHeader() == 1);
-    CHECK(!bar.control.IsOpen());                            // Hover so destaca com a barra fechada.
-    (void)bar.OnPointer(PointerAt(PointerPhase::Leave, {-5.0f, 13.0f}, false), kWindow);
-    CHECK(bar.HoveredHeader() == Widgets::NoControlIndex);
-}
-
-// Altura da barra: 28 px a 100 por cento; a 125 por cento vai para 35 (28 x 1.25 arredondado ao pixel fisico).
-void TestMenuBarHeightForScale() {
-    CHECK(Near(MenuBarHeightFor(1.0f), 28.0f));
-    CHECK(Near(MenuBarHeightFor(1.25f), 35.0f));
-    CHECK(Near(MenuBarHeightFor(2.0f), 56.0f));
-}
-
 } // namespace
 
 int main() {
@@ -425,12 +299,6 @@ int main() {
     TestLongMenuScrollsToHighlight();
     TestHeaderStripScrollsToActive();
     TestMenuBarItems();
-    TestCheckboxFlowOpenNavigateCheckEscape();
-    TestCheckboxClickTogglesAndKeepsMenuOpen();
-    TestIconAndShortcutColumns();
-    TestPopupLayerAndCheckMark();
-    TestHeaderHoverHighlight();
-    TestMenuBarHeightForScale();
 
     std::printf("menu bar: %d checks, %d failed\n", run, failed);
     return failed == 0 ? 0 : 1;

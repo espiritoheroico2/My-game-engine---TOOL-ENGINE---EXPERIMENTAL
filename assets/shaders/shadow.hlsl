@@ -1,8 +1,12 @@
 // Passe de profundidade para sombras: desenha so a posicao vista do sol e grava o z da luz (0..1) num alvo R32F.
-cbuffer ShadowBuffer : register(b0) { float4x4 lightViewProj; float4x4 world; };
+cbuffer ShadowBuffer : register(b0) { float4x4 lightViewProj; };
+struct ShadowInstance { float4x4 world; };
+StructuredBuffer<ShadowInstance> Instances : register(t0);
+cbuffer BatchBuffer : register(b1) { uint4 batchInfo; };
 struct VSOut { float4 clip : SV_Position; float depth : TEXCOORD0; };
-VSOut VSMain(float3 pos : ATTRIB0) {
+VSOut VSMain(float3 pos : ATTRIB0, uint iid : SV_InstanceID) {
   VSOut o;
+  float4x4 world = Instances[batchInfo.x + iid].world;
   o.clip = mul(lightViewProj, mul(world, float4(pos, 1.0)));
   o.depth = o.clip.z;
   return o;

@@ -4,6 +4,7 @@
 // cada uma tem o seu mapa de profundidade. Shaders: assets/shaders/pbr.hlsl + assets/shaders/lightprism/.
 #pragma once
 #include "tool/render/lighting.hpp"
+#include "tool/render/instance_batch.hpp"
 #include "tool/render/soft_renderer.hpp"
 #include "tool/rhi/rhi.hpp"
 
@@ -21,6 +22,12 @@
 #include <unordered_map>
 
 namespace tool {
+
+using render::BatchItem;
+using render::BatchPlan;
+using render::InstanceBatch;
+using render::InstanceGPU;
+using render::planInstanceBatches;
 
 // Le um .hlsl resolvendo `#include "arquivo"`. Como o compilador HLSL, o include e relativo ao ARQUIVO que o contem
 // (ex.: Common/ClusterLighting.hlsli inclui "PBR.hlsli" e acha Common/PBR.hlsli). `file` e relativo a `dir`.
@@ -55,10 +62,13 @@ inline bool loadHlsl(const std::string& dir, const std::string& file, std::strin
 // os proprios structs da biblioteca (LightPrism::GlobalLightingGPU, CsmGPU, IblGPU, ClusterGridGPU), que ja batem com o HLSL.
 struct FrameCB { Mat4 viewProj; Mat4 view; f32 camera[3]; f32 pad = 0; };
 struct ObjectCB { Mat4 world; f32 color[4]; f32 metallic, roughness, receiveShadow, pad; f32 texInfo[4]; f32 emissive[4]; f32 fogColor[4]; f32 fogParams[4]; }; // texInfo: largura, altura, 1 = tem textura; emissive: rgb = cor x intensidade
-struct ShadowCB { Mat4 lightViewProj, world; };
+struct ShadowCB { Mat4 lightViewProj; };
+struct ShadowInstanceGPU { Mat4 world; };
+struct BatchCB { u32 first; u32 pad[3]; };
 // Parametros do bloom (espelho de bloom.hlsl): tamanhos em pixels, direcao do blur, limiar e forca.
 struct BloomCB { f32 srcSize[2]; f32 haloSize[2]; f32 dir[2]; f32 threshold, strength; };
-static_assert(sizeof(FrameCB) == 144 && sizeof(ObjectCB) == 160 && sizeof(ShadowCB) == 128 && sizeof(BloomCB) == 32, "layout de cbuffer");
+static_assert(sizeof(FrameCB) == 144 && sizeof(ObjectCB) == 160 && sizeof(ShadowCB) == 64 && sizeof(ShadowInstanceGPU) == 64 && sizeof(BatchCB) == 16 && sizeof(BloomCB) == 32, "layout de cbuffer");
+static_assert(sizeof(InstanceGPU) == sizeof(ObjectCB), "layout de instancia deve bater com ObjectCB");
 // Sombras de luzes pontuais/spot (espelho de PointShadowCB em lightprism/Common/PointShadow.hlsli).
 struct PointShadowLightGPU { f32 posType[4]; f32 params[4]; Mat4 vp[6]; };
 struct PointShadowGPU { u32 count; u32 pad[3]; PointShadowLightGPU lights[kMaxPointShadowLights]; };
@@ -67,7 +77,7 @@ static_assert(sizeof(LightPrism::CsmGPU) == 352 && sizeof(LightPrism::Ibl::IblGP
 
 // Nomes dos recursos no pbr.hlsl (ordem = slots do pipeline). Mudou no HLSL? Mude aqui tambem.
 inline const std::vector<std::string>& pbrUniformNames() {
-  static const std::vector<std::string> n = {"FrameBuffer", "ObjectBuffer", "GlobalLightCB", "SunLightCB", "CsmCB", "IblCB", "ClusterGridCB", "PointShadowCB"};
+  static const std::vector<std::string> n = {"FrameBuffer", "BatchBuffer", "GlobalLightCB", "SunLightCB", "CsmCB", "IblCB", "ClusterGridCB", "PointShadowCB"};
   return n;
 }
 inline const std::vector<std::string>& pbrTextureNames() {
@@ -75,7 +85,7 @@ inline const std::vector<std::string>& pbrTextureNames() {
   return n;
 }
 inline const std::vector<std::string>& pbrStorageNames() {
-  static const std::vector<std::string> n = {"PointLightsBuffer", "SpotLightsBuffer", "LightGrid", "LightIndexList"};
+  static const std::vector<std::string> n = {"PointLightsBuffer", "SpotLightsBuffer", "LightGrid", "LightIndexList", "Instances"};
   return n;
 }
 
@@ -101,6 +111,8 @@ public:
 
     std::string src;
     if (!loadHlsl(shaderDir, "pbr.hlsl", src)) { debug().report("TOOL-E140", Severity::Error, "nao achei pbr.hlsl em " + shaderDir); release(); return false; }
+    std::string legacySrc;
+    if (!loadHlsl(shaderDir, "pbr_object.hlsl", legacySrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei pbr_object.hlsl em " + shaderDir); release(); return false; }
     std::string sh;
     if (!loadHlsl(shaderDir, "shadow.hlsl", sh)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow.hlsl em " + shaderDir); release(); return false; }
     std::string ssaoSrc, prepassSrc;
@@ -125,6 +137,9 @@ public:
     rhi::ShaderDesc vs; vs.stage = rhi::ShaderStage::Vertex; vs.entry = "VSMain"; vs.name = "pbr.vs"; vs.source = src;
     rhi::ShaderDesc ps; ps.stage = rhi::ShaderStage::Pixel; ps.entry = "PSMain"; ps.name = "pbr.ps"; ps.source = src;
     vs_ = mk(vs); ps_ = mk(ps);
+    rhi::ShaderDesc legacyVs; legacyVs.stage = rhi::ShaderStage::Vertex; legacyVs.entry = "VSMain"; legacyVs.name = "pbr_object.vs"; legacyVs.source = legacySrc;
+    rhi::ShaderDesc legacyPs; legacyPs.stage = rhi::ShaderStage::Pixel; legacyPs.entry = "PSMain"; legacyPs.name = "pbr_object.ps"; legacyPs.source = legacySrc;
+    legacyVs_ = mk(legacyVs); legacyPs_ = mk(legacyPs);
     rhi::PipelineDesc pd; pd.vs = vs_; pd.ps = ps_; pd.name = "pbr";
     pd.layout = {{3, 0}, {3, 12}, {2, 24}}; pd.vertexStride = 32;
     pd.uniformNames = pbrUniformNames(); pd.textureNames = pbrTextureNames(); pd.storageNames = pbrStorageNames();
@@ -133,13 +148,18 @@ public:
     pd.color = colorFmt_;
     pipe_ = dev.createPipeline(pd);
     // Passe de emissao (bloom so do que emite): o mesmo VS e cbuffers do PBR, pixel = emissao; nao escreve profundidade.
-    rhi::ShaderDesc emi = ps; emi.entry = "EmissionPS"; emi.name = "pbr.emi";
+    rhi::ShaderDesc emi = legacyPs; emi.entry = "EmissionPS"; emi.name = "pbr_object.emi";
     emiPs_ = mk(emi);
-    rhi::PipelineDesc ed = pd; ed.ps = emiPs_; ed.name = "emission"; ed.depthWrite = false; ed.color = rhi::Format::RGBA16F;
+    rhi::PipelineDesc ed; ed.vs = legacyVs_; ed.ps = emiPs_; ed.name = "emission"; ed.depthWrite = false; ed.depthTest = true;
+    ed.layout = pd.layout; ed.vertexStride = pd.vertexStride; ed.color = rhi::Format::RGBA16F;
     ed.uniformNames = {"FrameBuffer", "ObjectBuffer"}; ed.textureNames.clear(); ed.storageNames.clear();
     emiPipe_ = dev.createPipeline(ed);
     // Transparente: mesmo PBR, com mistura alfa e sem escrever profundidade (o alfa vem de ObjectCB.color[3]).
-    rhi::PipelineDesc td = pd; td.name = "transparent"; td.blend = true; td.depthWrite = false;
+    rhi::PipelineDesc td; td.vs = legacyVs_; td.ps = legacyPs_; td.name = "transparent"; td.blend = true; td.depthWrite = false;
+    td.layout = pd.layout; td.vertexStride = pd.vertexStride; td.color = pd.color;
+    td.uniformNames = {"FrameBuffer", "ObjectBuffer", "GlobalLightCB", "SunLightCB", "CsmCB", "IblCB", "ClusterGridCB", "PointShadowCB"};
+    td.textureNames = pbrTextureNames();
+    td.storageNames = {"PointLightsBuffer", "SpotLightsBuffer", "LightGrid", "LightIndexList"};
     transPipe_ = dev.createPipeline(td);
 
     // passe de sombra: so posicao, grava z da luz num alvo R32F, sem culling (as duas faces projetam sombra)
@@ -148,7 +168,7 @@ public:
     svs.entry = "VSMain"; sps.entry = "PSMain";
     shVs_ = mk(svs); shPs_ = mk(sps);
     rhi::PipelineDesc sd; sd.vs = shVs_; sd.ps = shPs_; sd.name = "shadow"; sd.color = rhi::Format::R32F; sd.cull = rhi::CullMode::None;
-    sd.layout = {{3, 0}}; sd.vertexStride = 32; sd.uniformNames = {"ShadowBuffer"};
+    sd.layout = {{3, 0}}; sd.vertexStride = 32; sd.uniformNames = {"ShadowBuffer", "BatchBuffer"}; sd.storageNames = {"Instances"};
     shPipe_ = dev.createPipeline(sd);
     // passe de sombra de pontuais/spot: grava a distancia (clip.w) numa faixa R x 6R por luz
     rhi::ShaderDesc pvs = svs, pps = sps;
@@ -161,7 +181,7 @@ public:
     rhi::ShaderDesc prePs = pre; prePs.stage = rhi::ShaderStage::Pixel; prePs.entry = "PSMain"; prePs.name = "prepass.ps";
     preVs_ = mk(pre); prePs_ = mk(prePs);
     rhi::PipelineDesc pp; pp.vs = preVs_; pp.ps = prePs_; pp.name = "prepass";
-    pp.layout = {{3, 0}, {3, 12}, {2, 24}}; pp.vertexStride = 32; pp.uniformNames = {"FrameBuffer", "ObjectBuffer"};
+    pp.layout = {{3, 0}, {3, 12}, {2, 24}}; pp.vertexStride = 32; pp.uniformNames = {"FrameBuffer", "BatchBuffer"}; pp.storageNames = {"Instances"};
     pp.color = rhi::Format::RGBA16F; pp.cull = rhi::CullMode::Back;
     prePipe_ = dev.createPipeline(pp);
     rhi::ShaderDesc fsv; fsv.stage = rhi::ShaderStage::Vertex; fsv.entry = "VSMain"; fsv.name = "ssao.vs"; fsv.source = ssaoSrc;
@@ -199,6 +219,7 @@ public:
     ssaoCb_ = dev.createBuffer({sizeof(LightPrism::Ssao::SsaoGPU), rhi::BufferUsage::Uniform, true}, nullptr);
     frameCb_ = dev.createBuffer({sizeof(FrameCB), rhi::BufferUsage::Uniform, true}, nullptr);
     objCb_ = dev.createBuffer({sizeof(ObjectCB), rhi::BufferUsage::Uniform, true}, nullptr);
+    batchCb_ = dev.createBuffer({sizeof(BatchCB), rhi::BufferUsage::Uniform, true}, nullptr);
     shCb_ = dev.createBuffer({sizeof(ShadowCB), rhi::BufferUsage::Uniform, true}, nullptr);
     csmCb_ = dev.createBuffer({sizeof(LightPrism::CsmGPU), rhi::BufferUsage::Uniform, true}, nullptr);
     iblCb_ = dev.createBuffer({sizeof(LightPrism::Ibl::IblGPU), rhi::BufferUsage::Uniform, true}, nullptr);
@@ -212,7 +233,7 @@ public:
       brdfTex_ = dev.createTexture({lut.size, lut.size, 1, rhi::Format::RGBA8, false}, px.data());
     }
     pointCb_ = dev.createBuffer({sizeof(PointShadowGPU), rhi::BufferUsage::Uniform, true}, nullptr);
-    if (prePipe_.isNull() || ssaoPipe_.isNull() || blurPipe_.isNull() || fsVb_.isNull() || fsIb_.isNull() || ssaoCb_.isNull() || pipe_.isNull() || shPipe_.isNull() || ptPipe_.isNull() || frameCb_.isNull() || objCb_.isNull() || shCb_.isNull() || csmCb_.isNull() || iblCb_.isNull() || pointCb_.isNull()) { release(); return false; }
+    if (prePipe_.isNull() || ssaoPipe_.isNull() || blurPipe_.isNull() || fsVb_.isNull() || fsIb_.isNull() || ssaoCb_.isNull() || pipe_.isNull() || legacyVs_.isNull() || legacyPs_.isNull() || shPipe_.isNull() || ptPipe_.isNull() || frameCb_.isNull() || objCb_.isNull() || batchCb_.isNull() || shCb_.isNull() || csmCb_.isNull() || iblCb_.isNull() || pointCb_.isNull()) { release(); return false; }
     ensureShadowTargets(1024); // alvos "vazios" para o shader sempre ter as 4 texturas ligadas
     ensurePointTargets(64);    // idem para as sombras de pontuais/spot (4 faixas pequenas ate uma luz pedir a resolucao)
     resize(w, h);
@@ -371,19 +392,51 @@ public:
   void end() {
     if (!open_ || !dev_) return;
     open_ = false;
+    std::vector<BatchItem> castItems;
+    castItems.reserve(draws_.size());
+    for (const Draw& d : draws_) {
+      if (d.mat.castShadow) castItems.push_back({reinterpret_cast<u64>(d.mesh), 0u});
+    }
+    BatchPlan castPlan = planInstanceBatches(castItems, 4096);
+    std::vector<const Draw*> castDraws;
+    castDraws.reserve(draws_.size());
+    for (const Draw& d : draws_) if (d.mat.castShadow) castDraws.push_back(&d);
+    std::vector<ShadowInstanceGPU> castCpu;
+    castCpu.clear();
+    for (u32 k : castPlan.order) {
+      ShadowInstanceGPU inst{};
+      inst.world = castDraws[k]->world;
+      castCpu.push_back(inst);
+    }
+    if (!castCpu.empty()) {
+      if (castCpu.size() > shadowInstCap_) {
+        u32 newCap = shadowInstCap_ ? shadowInstCap_ : 64u;
+        while (newCap < castCpu.size()) newCap *= 2u;
+        if (!shadowInstBuf_.isNull()) dev_->destroy(shadowInstBuf_);
+        shadowInstBuf_ = dev_->createBuffer({static_cast<size_t>(newCap) * sizeof(ShadowInstanceGPU), rhi::BufferUsage::Storage, true, sizeof(ShadowInstanceGPU)}, nullptr);
+        shadowInstCap_ = newCap;
+      }
+      if (!shadowInstBuf_.isNull()) dev_->updateBuffer(shadowInstBuf_, castCpu.data(), castCpu.size() * sizeof(ShadowInstanceGPU));
+    }
     // ---- 1) sombras: um passe por cascata ----
     if (shadowOn_ && !shadowSkip_) {
       for (u32 k = 0; k < shadowCount_; ++k) {
         auto cl = dev_->beginCommands();
         cl->begin(shColor_[k], shDepth_, 1.f, 1.f, 1.f, 1.f); // limpa para "longe" (z = 1)
         cl->setPipeline(shPipe_);
-        for (const Draw& d : draws_) {
-          if (!d.mat.castShadow) continue;
-          ShadowCB sc{cascadeVp_[k], d.world};
-          dev_->updateBuffer(shCb_, &sc, sizeof sc);
-          cl->setUniform(0, shCb_);
+        ShadowCB sc{};
+        sc.lightViewProj = cascadeVp_[k];
+        dev_->updateBuffer(shCb_, &sc, sizeof sc);
+        cl->setUniform(0, shCb_);
+        if (!castCpu.empty()) cl->setStorage(0, shadowInstBuf_);
+        for (const InstanceBatch& b : castPlan.batches) {
+          BatchCB bc{};
+          bc.first = b.first;
+          dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+          cl->setUniform(1, batchCb_);
+          const Draw& d = *castDraws[castPlan.order[b.first]];
           cl->setVertexBuffer(d.mesh->vertex); cl->setIndexBuffer(d.mesh->index);
-          cl->drawIndexed(d.mesh->count, 1);
+          cl->drawIndexed(d.mesh->count, b.count);
         }
         cl->end(); dev_->submit(*cl);
       }
@@ -397,13 +450,19 @@ public:
         cl->setPipeline(ptPipe_);
         for (u32 f = 0; f < pointFaces_[i]; ++f) {
           cl->setViewport(0, f * pointRes_, pointRes_, pointRes_);
-          for (const Draw& d : draws_) {
-            if (!d.mat.castShadow) continue;
-            ShadowCB sc{pointVp_[i][f], d.world};
-            dev_->updateBuffer(shCb_, &sc, sizeof sc);
-            cl->setUniform(0, shCb_);
+          ShadowCB sc{};
+          sc.lightViewProj = pointVp_[i][f];
+          dev_->updateBuffer(shCb_, &sc, sizeof sc);
+          cl->setUniform(0, shCb_);
+          if (!castCpu.empty()) cl->setStorage(0, shadowInstBuf_);
+          for (const InstanceBatch& b : castPlan.batches) {
+            BatchCB bc{};
+            bc.first = b.first;
+            dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+            cl->setUniform(1, batchCb_);
+            const Draw& d = *castDraws[castPlan.order[b.first]];
             cl->setVertexBuffer(d.mesh->vertex); cl->setIndexBuffer(d.mesh->index);
-            cl->drawIndexed(d.mesh->count, 1);
+            cl->drawIndexed(d.mesh->count, b.count);
           }
         }
         cl->end(); dev_->submit(*cl);
@@ -419,16 +478,40 @@ public:
     std::stable_sort(draws_.begin(), draws_.end(), [](const Draw& a, const Draw& b) { return a.mesh->vertex.index < b.mesh->vertex.index; });
     // ---- 1c) SSAO: prepasso (normal de view + profundidade), AO bruto e blur. Sem SSAO o AO fica 1 (limpo). ----
     if (ssaoOn_) {
+      std::vector<BatchItem> preItems;
+      preItems.reserve(draws_.size());
+      for (const Draw& d : draws_) preItems.push_back({reinterpret_cast<u64>(d.mesh), 0u});
+      BatchPlan prePlan = planInstanceBatches(preItems, 4096);
+      std::vector<ShadowInstanceGPU> preCpu;
+      preCpu.reserve(prePlan.order.size());
+      for (u32 k : prePlan.order) {
+        ShadowInstanceGPU inst{};
+        inst.world = draws_[k].world;
+        preCpu.push_back(inst);
+      }
+      if (!preCpu.empty()) {
+        if (preCpu.size() > prepassInstCap_) {
+          u32 newCap = prepassInstCap_ ? prepassInstCap_ : 64u;
+          while (newCap < preCpu.size()) newCap *= 2u;
+          if (!prepassInstBuf_.isNull()) dev_->destroy(prepassInstBuf_);
+          prepassInstBuf_ = dev_->createBuffer({static_cast<size_t>(newCap) * sizeof(ShadowInstanceGPU), rhi::BufferUsage::Storage, true, sizeof(ShadowInstanceGPU)}, nullptr);
+          prepassInstCap_ = newCap;
+        }
+        if (!prepassInstBuf_.isNull()) dev_->updateBuffer(prepassInstBuf_, preCpu.data(), preCpu.size() * sizeof(ShadowInstanceGPU));
+      }
       auto pl = dev_->beginCommands();
       pl->begin(gbuf_, depth_, 0.f, 0.f, 0.f, 0.f); // w = 0: sem geometria
       pl->setPipeline(prePipe_);
       pl->setUniform(0, frameCb_);
-      for (const Draw& d : draws_) {
-        ObjectCB oc{}; oc.world = d.world;
-        dev_->updateBuffer(objCb_, &oc, sizeof oc);
-        pl->setUniform(1, objCb_);
+      if (!preCpu.empty()) pl->setStorage(0, prepassInstBuf_);
+      for (const InstanceBatch& b : prePlan.batches) {
+        BatchCB bc{};
+        bc.first = b.first;
+        dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+        pl->setUniform(1, batchCb_);
+        const Draw& d = draws_[prePlan.order[b.first]];
         pl->setVertexBuffer(d.mesh->vertex); pl->setIndexBuffer(d.mesh->index);
-        pl->drawIndexed(d.mesh->count, 1);
+        pl->drawIndexed(d.mesh->count, b.count);
       }
       pl->end(); dev_->submit(*pl);
       auto sc = dev_->beginCommands();
@@ -477,18 +560,54 @@ public:
     // Alvo UNORM (OpenGL): nao usamos (o OpenGL ainda nao tem iluminacao); mantemos o clear em linear para Vulkan/D3D12.
     cl_->begin(color_, depth_, clear_.x, clear_.y, clear_.z, clearAlpha_);
     bindScene(cl_.get(), pipe_);
-    const GpuMesh* last = nullptr;
+    std::vector<BatchItem> items;
+    items.reserve(draws_.size());
     for (const Draw& d : draws_) {
+      const u64 meshId = reinterpret_cast<u64>(d.mesh);
+      const u64 texId = d.tex.isNull() ? 0u : (static_cast<u64>(d.tex.generation) << 32) | d.tex.index;
+      items.push_back({meshId, texId});
+    }
+    BatchPlan plan = planInstanceBatches(items, 4096);
+    instCpu_.clear();
+    instCpu_.reserve(plan.order.size());
+    for (u32 k : plan.order) {
+      const Draw& d = draws_[k];
       ObjectCB oc{}; oc.world = d.world; oc.color[0] = d.mat.albedo.x; oc.color[1] = d.mat.albedo.y; oc.color[2] = d.mat.albedo.z; oc.color[3] = 1.f;
       oc.metallic = d.mat.metallic; oc.roughness = d.mat.roughness; oc.receiveShadow = d.mat.receiveShadow ? 1.f : 0.f; // o shader decide: sol (cascatas) e pontuais/spot
       oc.texInfo[0] = d.tw; oc.texInfo[1] = d.th; oc.texInfo[2] = d.tw > 0.f ? 1.f : 0.f;
       oc.emissive[0] = d.mat.emissive.x; oc.emissive[1] = d.mat.emissive.y; oc.emissive[2] = d.mat.emissive.z; oc.emissive[3] = 0.f;
       fillFog(oc, d.mat);
-      dev_->updateBuffer(objCb_, &oc, sizeof oc);
-      cl_->setUniform(1, objCb_);
+      InstanceGPU inst{};
+      std::memcpy(inst.world, &oc.world, sizeof oc.world);
+      std::memcpy(inst.color, oc.color, sizeof oc.color);
+      inst.metallic = oc.metallic; inst.roughness = oc.roughness; inst.receiveShadow = oc.receiveShadow; inst.pad = oc.pad;
+      std::memcpy(inst.texInfo, oc.texInfo, sizeof oc.texInfo);
+      std::memcpy(inst.emissive, oc.emissive, sizeof oc.emissive);
+      std::memcpy(inst.fogColor, oc.fogColor, sizeof oc.fogColor);
+      std::memcpy(inst.fogParams, oc.fogParams, sizeof oc.fogParams);
+      instCpu_.push_back(inst);
+    }
+    if (!instCpu_.empty()) {
+      if (instCpu_.size() > instCap_) {
+        u32 newCap = instCap_ ? instCap_ : 64u;
+        while (newCap < instCpu_.size()) newCap *= 2u;
+        if (!instBuf_.isNull()) dev_->destroy(instBuf_);
+        instBuf_ = dev_->createBuffer({static_cast<size_t>(newCap) * sizeof(InstanceGPU), rhi::BufferUsage::Storage, true, sizeof(InstanceGPU)}, nullptr);
+        instCap_ = instCap_ ? newCap : newCap;
+        if (instBuf_.isNull()) { cl_->end(); dev_->submit(*cl_); cl_.reset(); lastError_ = "storage buffer de instancias indisponivel"; releaseImports(); return; }
+      }
+      dev_->updateBuffer(instBuf_, instCpu_.data(), instCpu_.size() * sizeof(InstanceGPU));
+      cl_->setStorage(4, instBuf_);
+    }
+    for (const InstanceBatch& b : plan.batches) {
+      BatchCB bc{};
+      bc.first = b.first;
+      dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+      cl_->setUniform(1, batchCb_);
+      const Draw& d = draws_[plan.order[b.first]];
       cl_->setTexture(0, d.tex.isNull() ? white_ : d.tex);
-      if (d.mesh != last) { cl_->setVertexBuffer(d.mesh->vertex); cl_->setIndexBuffer(d.mesh->index); last = d.mesh; }
-      cl_->drawIndexed(d.mesh->count, 1);
+      cl_->setVertexBuffer(d.mesh->vertex); cl_->setIndexBuffer(d.mesh->index);
+      cl_->drawIndexed(d.mesh->count, b.count);
     }
     cl_->end(); dev_->submit(*cl_); cl_.reset();
     // Brilho do bloom: limpa em preto (nada emite) e desenha so os objetos com emissao, com a profundidade do desenho
@@ -541,7 +660,7 @@ public:
     out_ = color_;
     if (bloomOn_ && !bloomA_.isNull() && !bloomThrPipe_.isNull()) { runBloom(); out_ = outFull_; }
     releaseImports();
-    drawCount_ = static_cast<u32>(draws_.size());
+    drawCount_ = static_cast<u32>(plan.batches.size());
   }
 
   bool readback(std::vector<u8>& rgba, u32& w, u32& h) { return dev_ && dev_->readTexture(out_, rgba, w, h); }
@@ -696,12 +815,13 @@ private:
     for (auto& [k, t] : texs_) dev_->destroy(t);
     texs_.clear();
     if (!white_.isNull()) { dev_->destroy(white_); white_ = kNullHandle; }
-    for (auto* h : {&frameCb_, &objCb_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &brdfTex_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &vs_, &ps_, &shVs_, &shPs_, &ptVs_, &ptPs_,
+    for (auto* h : {&frameCb_, &objCb_, &batchCb_, &instBuf_, &shadowInstBuf_, &prepassInstBuf_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &brdfTex_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &vs_, &ps_, &legacyVs_, &legacyPs_, &shVs_, &shPs_, &ptVs_, &ptPs_,
                     &prePipe_, &ssaoPipe_, &blurPipe_, &fsVb_, &fsIb_, &ssaoCb_, &preVs_, &prePs_, &fsVs_, &ssaoPs_, &blurPs_,
                     &emiPipe_, &emiPs_, &transPipe_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     for (auto& t : shColor_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     for (auto& t : pointStrip_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     pointW_ = 0; pointOn_ = false; pointCount_ = 0; pointValid_ = false;
+    instCap_ = 0; shadowInstCap_ = 0; prepassInstCap_ = 0; instCpu_.clear();
     clusters_.reset(); lp_.reset();
     shW_ = 0; shRes_ = 0; shadowCount_ = 0; shadowValid_ = false; draws_.clear(); dev_ = nullptr;
   }
@@ -709,11 +829,13 @@ private:
   rhi::IDevice* dev_ = nullptr;
   std::unique_ptr<LightPrism::IGraphicsDevice> lp_;
   std::unique_ptr<LightPrism::ClusterSystem> clusters_;
-  rhi::ShaderId vs_, ps_, shVs_, shPs_, ptVs_, ptPs_, preVs_, prePs_, fsVs_, ssaoPs_, blurPs_;
+  rhi::ShaderId vs_, ps_, legacyVs_, legacyPs_, shVs_, shPs_, ptVs_, ptPs_, preVs_, prePs_, fsVs_, ssaoPs_, blurPs_;
   rhi::PipelineId prePipe_, ssaoPipe_, blurPipe_;
   rhi::BufferId fsVb_, fsIb_, ssaoCb_;
   rhi::PipelineId pipe_, shPipe_, ptPipe_;
-  rhi::BufferId frameCb_, objCb_, shCb_, csmCb_, iblCb_, pointCb_;
+  rhi::BufferId frameCb_, objCb_, batchCb_, instBuf_, shadowInstBuf_, prepassInstBuf_, shCb_, csmCb_, iblCb_, pointCb_;
+  u32 instCap_ = 0, shadowInstCap_ = 0, prepassInstCap_ = 0;
+  std::vector<InstanceGPU> instCpu_;
   rhi::TextureId brdfTex_;
   rhi::TextureId pointStrip_[kMaxPointShadowLights], pointDepth_;
   u32 pointW_ = 0, pointCount_ = 0, pointRes_ = 512;

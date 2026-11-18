@@ -1,7 +1,5 @@
 #pragma once
-// Configuracoes da ENGINE e do USUARIO guardadas por projeto: o bloco "engine" do Project/project.json.
-// Pura: so tool::Json (sem SDL, sem ImGui), para o teste rodar sem janela. Ao ler, cada valor e limitado a faixa
-// valida; projeto antigo (sem o bloco) recebe os padroes. Quem aplica os valores na janela e o Editor.
+
 #include "tool/core/json.hpp"
 
 #include <algorithm>
@@ -10,40 +8,35 @@
 namespace editor {
 
 struct EngineSettings {
-  std::string language = "en";      // idioma da interface (codigo: en, pt, ...)
-  float uiScale = 1.25f;            // escala da interface, 1.0 a 2.0 (padrao 125 por cento)
-  std::string uiRenderer = "auto";  // driver de render da SpriteUI: "auto", "opengl" ou "software"
-  int graphicsApi = 0;              // API da Cena e do Jogo: 0 Software, 1 Vulkan, 2 OpenGL, 3 D3D12, 4 D3D11
-  float renderScale = 1.f;          // escala de render da cena, 0.25 a 2.0
-  int fpsMode = 4;                  // limite de quadros, 0 a 4 (ver settings_model)
+    std::string language = "en";
+    float uiScale = 1.25f;
+    int renderer = 0;
+    int graphicsApi = 0;
+    float renderScale = 0.5f;
+    int fpsLimit = 4;
 
-  bool operator==(const EngineSettings& o) const = default;
+    tool::Json toJson() const {
+        tool::Json j = tool::Json::object();
+        j.set("language", language);
+        j.set("scale", static_cast<double>(uiScale));
+        j.set("renderer", renderer);
+        j.set("api", graphicsApi);
+        j.set("renderScale", static_cast<double>(renderScale));
+        j.set("fpsLimit", fpsLimit);
+        return j;
+    }
 
-  [[nodiscard]] tool::Json toJson() const {
-    tool::Json j = tool::Json::object();
-    j.set("language", language);
-    j.set("uiScale", static_cast<double>(uiScale));
-    j.set("uiRenderer", uiRenderer);
-    j.set("graphicsApi", graphicsApi);
-    j.set("renderScale", static_cast<double>(renderScale));
-    j.set("fpsMode", fpsMode);
-    return j;
-  }
-
-  // Le o bloco; qualquer campo ausente ou fora da faixa vira o padrao (ou o valor mais proximo permitido).
-  [[nodiscard]] static EngineSettings fromJson(const tool::Json& j) {
-    EngineSettings s;
-    if (!j.isObject()) return s;
-    const std::string lang = j["language"].asString().substr(0, 16);
-    if (!lang.empty()) s.language = lang;
-    s.uiScale = static_cast<float>(std::clamp(j["uiScale"].asNumber(s.uiScale), 1.0, 2.0));
-    const std::string renderer = j["uiRenderer"].asString();
-    s.uiRenderer = (renderer == "opengl" || renderer == "software") ? renderer : "auto";
-    s.graphicsApi = static_cast<int>(std::clamp(j["graphicsApi"].asNumber(s.graphicsApi), 0.0, 4.0));
-    s.renderScale = static_cast<float>(std::clamp(j["renderScale"].asNumber(s.renderScale), 0.25, 2.0));
-    s.fpsMode = static_cast<int>(std::clamp(j["fpsMode"].asNumber(s.fpsMode), 0.0, 4.0));
-    return s;
-  }
+    static EngineSettings fromJson(const tool::Json& j) {
+        EngineSettings e;
+        if (!j.isObject()) return e;
+        if (j["language"].isString()) e.language = j["language"].asString();
+        e.uiScale = std::clamp(static_cast<float>(j["scale"].asNumber(e.uiScale)), 0.7f, 2.5f);
+        e.renderer = std::clamp(static_cast<int>(j["renderer"].asNumber(e.renderer)), 0, 4);
+        e.graphicsApi = std::clamp(static_cast<int>(j["api"].asNumber(e.graphicsApi)), 0, 4);
+        e.renderScale = std::clamp(static_cast<float>(j["renderScale"].asNumber(e.renderScale)), 0.25f, 2.0f);
+        e.fpsLimit = std::clamp(static_cast<int>(j["fpsLimit"].asNumber(e.fpsLimit)), 0, 4);
+        return e;
+    }
 };
 
-}  // namespace editor
+} // namespace editor

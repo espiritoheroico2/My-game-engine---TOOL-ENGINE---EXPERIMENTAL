@@ -2,8 +2,6 @@
 // Executavel proprio, sem o harness principal.
 
 #include "SpriteUi/Widgets/DockInteraction.hpp"
-#include "SpriteUi/Core/DrawOrder.hpp"
-#include "SpriteUi/Widgets/DockGuides.hpp"
 #include "SpriteUi/Widgets/DockOps.hpp"
 
 #include <array>
@@ -389,96 +387,6 @@ void TestDividerRejectsAreaTooSmallForTwoMinimums() {
     CHECK(!DragSplitDivider(leaf, 10.0f, 10.0f)); // folha nao tem divisor
 }
 
-// Clique com 2 px de tremor na barra: nao e arrasto, nao tira a janela do encaixe.
-void TestTwoPixelTitleClickKeepsWindowDocked() {
-    current = "TestTwoPixelTitleClickKeepsWindowDocked";
-    DockDragController c;
-    c.BeginPress(kWindow, {50, 50});
-    CHECK(!c.Move({52, 51}));
-    CHECK(!c.IsDragging());
-    const DockDropResult r = c.Release({52, 51}, kLeaves);
-    CHECK(r.action == DockAction::None);   // nem Float (desencaixar), nem Dock/Tab
-    CHECK(r.targetLeaf == UIHandle{});
-}
-
-// Limiar padrao de 6 px: 5 px nao arrasta, 7 px arrasta.
-void TestDefaultDragThresholdIsSixPixels() {
-    current = "TestDefaultDragThresholdIsSixPixels";
-    CHECK(DockInteractionConfig{}.dragThreshold == 6.0f);
-    DockDragController c;
-    c.BeginPress(kWindow, {50, 50});
-    CHECK(!c.Move({55, 50}));
-    CHECK(c.Move({57, 50}));
-}
-
-// Histerese: o encaixe nao troca enquanto o ponteiro treme na divisa entre duas zonas.
-void TestDropSlotHysteresisDoesNotFlicker() {
-    current = "TestDropSlotHysteresisDoesNotFlicker";
-    const Rect leaf{{0, 0}, {100, 100}};   // zona de 25 px em cada borda
-    // Sem encaixe anterior: a regra normal.
-    CHECK(ComputeDropSlotSticky(leaf, {24, 50}, 0.25f, DockSlot::None, 0.15f) == DockSlot::Left);
-    CHECK(ComputeDropSlotSticky(leaf, {26, 50}, 0.25f, DockSlot::None, 0.15f) == DockSlot::Center);
-    // Com Left anterior: 26 px ainda e Left (dentro da margem de 15 por cento); 30 px vai para o centro.
-    CHECK(ComputeDropSlotSticky(leaf, {26, 50}, 0.25f, DockSlot::Left, 0.15f) == DockSlot::Left);
-    CHECK(ComputeDropSlotSticky(leaf, {30, 50}, 0.25f, DockSlot::Left, 0.15f) == DockSlot::Center);
-    // Com Center anterior: uma borda a 22 px (dentro da zona, fora da margem de saida) ainda e Center.
-    CHECK(ComputeDropSlotSticky(leaf, {22, 50}, 0.25f, DockSlot::Center, 0.15f) == DockSlot::Center);
-    CHECK(ComputeDropSlotSticky(leaf, {5, 50}, 0.25f, DockSlot::Center, 0.15f) == DockSlot::Left);
-    // Histerese zero desliga a regra.
-    CHECK(ComputeDropSlotSticky(leaf, {26, 50}, 0.25f, DockSlot::Left, 0.0f) == DockSlot::Center);
-}
-
-// Durante o arrasto, Track devolve o mesmo encaixe que Release usaria, com a histerese.
-void TestTrackPreviewMatchesReleaseWithHysteresis() {
-    current = "TestTrackPreviewMatchesReleaseWithHysteresis";
-    const std::array<DockLeafRect, 1> leaves = {DockLeafRect{UIHandle{1, 1}, Rect{{0, 0}, {100, 100}}}};
-    DockDragController c;
-    c.BeginPress(kWindow, {50, 50});
-    CHECK(c.Move({24, 50}));                         // arrasto ativo
-    DockDropResult t = c.Track({24, 50}, leaves);
-    CHECK(t.action == DockAction::Dock && t.slot == DockSlot::Left);
-    t = c.Track({26, 50}, leaves);                   // treme na divisa: continua Left
-    CHECK(t.action == DockAction::Dock && t.slot == DockSlot::Left);
-    t = c.Track({30, 50}, leaves);                   // entrou de vez no centro
-    CHECK(t.action == DockAction::Tab);
-    const DockDropResult r = c.Release({30, 50}, leaves);
-    CHECK(r.action == DockAction::Tab);
-}
-
-// Fora de todas as folhas, a previa e Float; Track sem arrasto nao faz nada.
-void TestTrackOutsideLeavesAndWithoutDrag() {
-    current = "TestTrackOutsideLeavesAndWithoutDrag";
-    DockDragController c;
-    CHECK(c.Track({50, 50}, kLeaves).action == DockAction::None);   // sem arrasto
-    c.BeginPress(kWindow, {50, 50});
-    c.Move({200, 50});
-    CHECK(c.Track({500, 500}, kLeaves).action == DockAction::Float);
-}
-
-// Icones de encaixe: cinco itens na camada de arrasto, com opacidade media, so sobre a folha dada.
-void TestDockGuidesUseDragLayerAndMediumAlpha() {
-    current = "TestDockGuidesUseDragLayerAndMediumAlpha";
-    const Rect leaf{{100, 100}, {300, 200}};
-    const auto items = BuildDockGuideItems(UIHandle{7, 1}, leaf, DockSlot::Right);
-    CHECK(items.size() == 5);
-    if (items.size() != 5) return;
-    for (const auto& item : items) {
-        CHECK(item.layer == static_cast<std::int32_t>(UILayer::DragPreview));
-        CHECK((item.handle == UIHandle{7, 1}));
-        const float alpha = item.tintPremultipliedLinear.w;
-        CHECK(alpha >= 0.45f && alpha <= 0.60f);
-        const Rect box{item.layout.resolvedPosition, item.layout.resolvedSize};
-        const Vec2 far{box.position.x + box.size.x - 1.0f, box.position.y + box.size.y - 1.0f};
-        CHECK(leaf.Contains(box.position) && leaf.Contains(far));
-    }
-    // Ordem: Left, Right, Top, Bottom, Center. Right e o destacado, com alfa maior.
-    CHECK(items[1].tintPremultipliedLinear.w > items[0].tintPremultipliedLinear.w);
-    CHECK(items[0].layout.resolvedPosition.x < items[1].layout.resolvedPosition.x);
-    CHECK(items[2].layout.resolvedPosition.y < items[3].layout.resolvedPosition.y);
-    CHECK(BuildDockGuideItems(UIHandle{}, leaf, DockSlot::Left).empty());        // sem dono
-    CHECK(BuildDockGuideItems(UIHandle{7, 1}, Rect{{0, 0}, {0, 0}}, DockSlot::Left).empty()); // sem area
-}
-
 } // namespace
 
 int main() {
@@ -509,12 +417,6 @@ int main() {
     TestDividerStopsAtMinimumSides();
     TestDividerOfColumnUsesHeight();
     TestDividerRejectsAreaTooSmallForTwoMinimums();
-    TestTwoPixelTitleClickKeepsWindowDocked();
-    TestDefaultDragThresholdIsSixPixels();
-    TestDropSlotHysteresisDoesNotFlicker();
-    TestTrackPreviewMatchesReleaseWithHysteresis();
-    TestTrackOutsideLeavesAndWithoutDrag();
-    TestDockGuidesUseDragLayerAndMediumAlpha();
     std::printf("dock interaction: %d/%d checks passed\n", run - failed, run);
     return failed == 0 ? 0 : 1;
 }

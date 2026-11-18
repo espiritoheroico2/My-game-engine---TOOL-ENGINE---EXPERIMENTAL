@@ -48,10 +48,7 @@ struct MenuBarStyle {
     float cornerRadius = 0.0f; // Raio dos cantos do popup e do destaque das linhas; zero = retos.
     Vec4 bar{0.12f, 0.12f, 0.15f, 1.0f};
     Vec4 header{0.12f, 0.12f, 0.15f, 1.0f};
-    Vec4 headerHover{0.17f, 0.18f, 0.23f, 1.0f}; // Cabecalho com o ponteiro em cima (menu fechado ou outro aberto).
     Vec4 headerOpen{0.2f, 0.22f, 0.28f, 1.0f};
-    Vec4 check{0.9f, 0.9f, 0.95f, 1.0f};         // Marca de uma caixa de selecao ligada.
-    float checkSize = 10.0f;                     // Lado da marca (o quadro da caixa tem a mesma folga).
     Vec4 popup{0.1f, 0.1f, 0.12f, 1.0f};
     Vec4 popupBorder{0.3f, 0.32f, 0.38f, 1.0f};
     Vec4 highlight{0.05f, 0.2f, 0.55f, 1.0f};
@@ -104,21 +101,6 @@ class MenuBar final : public Element {
     // Popup do nivel depth no canvas. Vazio quando o nivel nao esta aberto. Chame Layout() se a janela mudar.
     [[nodiscard]] Rect PopupRect(std::size_t depth) const noexcept;
 
-    // Cabecalho com o ponteiro em cima (NoControlIndex se nenhum). Some quando o ponteiro sai da barra.
-    [[nodiscard]] std::size_t HoveredHeader() const noexcept { return hoveredHeader_; }
-
-    // Recuo a partir da borda esquerda da linha do popup onde o icone e a caixa de selecao ficam. O rotulo do item
-    // comeca em RowRect().x + ContentInsetX(), para que a coluna de icone nunca seja coberta pelo texto.
-    [[nodiscard]] static float ContentInsetX() noexcept { return kContentInsetX; }
-    // Quadro do icone do item (lado kIconSize, centrado na coluna de icone da linha). Vazio se a linha nao existe.
-    // O icone em si e desenhado pelo host: o modelo guarda so a chave (MenuItem::icon).
-    [[nodiscard]] Rect IconRect(std::size_t depth, std::size_t index) const noexcept;
-    // Quadro do atalho: alinhado a direita da linha, com a mesma folga da coluna de icone. O texto e do host.
-    [[nodiscard]] Rect ShortcutRect(std::size_t depth, std::size_t index) const noexcept;
-    static constexpr float kContentInsetX = 24.0f;
-    static constexpr float kIconSize = 14.0f;
-    static constexpr float kShortcutColumnWidth = 96.0f;
-
     // Linha do item index no nivel depth, ja com a rolagem do popup. Vazio se o nivel nao esta aberto.
     [[nodiscard]] Rect RowRect(std::size_t depth, std::size_t index) const noexcept;
 
@@ -144,14 +126,9 @@ class MenuBar final : public Element {
     std::vector<float> popupScroll_;
     std::size_t lastActive_ = Widgets::NoControlIndex;
     std::size_t headerCursor_ = 0;
-    std::size_t hoveredHeader_ = Widgets::NoControlIndex;
     bool barActive_ = false;
     float hoverTime_ = 0.0f;
 };
-
-// Altura da faixa da barra de menus para uma escala de interface: 28 px a 100 por cento, arredondada para pixel
-// fisico (1.25 -> 35 px). O host usa este valor como altura da linha da barra no layout.
-[[nodiscard]] float MenuBarHeightFor(float uiScale) noexcept;
 
 // Itens da faixa, dos cabecalhos e dos popups abertos. clipIndex recorta a faixa e os cabecalhos. Os popups
 // nao sao recortados pela faixa, pois descem sobre a interface; ficam dentro da janela pelo Layout().

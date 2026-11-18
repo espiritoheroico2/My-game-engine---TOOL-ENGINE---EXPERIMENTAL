@@ -144,7 +144,7 @@ void TestTokensDocumentTheEditorScale() {
     CHECK(Near(tokens.spaceSm, 8.0f));
     CHECK(Near(tokens.spaceMd, 16.0f));
     CHECK(Near(tokens.controlHeight, 30.0f));
-    CHECK(Near(tokens.buttonHeight, 28.0f));
+    CHECK(Near(tokens.buttonHeight, 34.0f));
 }
 
 } // namespace

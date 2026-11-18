@@ -79,7 +79,7 @@ void TestCheckboxFollowsValue() {
 void TestTabsUseModelNamesAndActiveTab() {
   Elm::TabBar tabs;
   SyncTabs(tabs, 2);
-  CHECK(tabs.control.labels.size() == 8);
+  CHECK(tabs.control.labels.size() == 6);
   CHECK(tabs.control.activeIndex == 2);
   SyncTabs(tabs, 42);   // indice invalido: nenhuma aba ativa escolhida
   CHECK(tabs.control.activeIndex == 0);

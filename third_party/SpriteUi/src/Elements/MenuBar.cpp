@@ -1,9 +1,7 @@
 #include "SpriteUi/Elements/MenuBar.hpp"
 
-#include "SpriteUi/Core/DrawOrder.hpp"
 #include "SpriteUi/Elements/Paint.hpp"
 #include "SpriteUi/Rendering/Primitives.hpp"
-#include "SpriteUi/Text/UIScale.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -21,8 +19,6 @@ using Widgets::NoControlIndex;
 
 // Recuo dos separadores dentro da largura do popup.
 constexpr float kSeparatorInset = 8.0f;
-// Altura da faixa a 100 por cento de escala (ver MenuBarHeightFor).
-constexpr float kMenuBarBaseHeight = 28.0f;
 
 bool ContainsPoint(Rect rect, Vec2 point) noexcept {
     return point.x >= rect.position.x && point.x <= rect.position.x + rect.size.x &&
@@ -75,11 +71,6 @@ MenuBarEvents MenuBar::OnPointer(const PointerEvent& event, Rect window) noexcep
     if (states.disabled || !IsFinite(event.position)) return events;
 
     const bool hovering = event.phase == PointerPhase::Move || event.phase == PointerPhase::Enter;
-    if (event.phase == PointerPhase::Leave) {
-        hoveredHeader_ = NoControlIndex;
-    } else if (hovering) {
-        hoveredHeader_ = HeaderAt(event.position);
-    }
     if (hovering && control.IsOpen()) {
         const std::size_t header = HeaderAt(event.position);
         if (header != NoControlIndex) {
@@ -201,27 +192,6 @@ Rect MenuBar::HeaderRect(std::size_t index) const noexcept {
     if (index >= control.Menus().size()) return {};
     const float x = border.position.x + static_cast<float>(index) * headerWidth - headerScrollX;
     return {{x, border.position.y}, {headerWidth, border.size.y}};
-}
-
-Rect MenuBar::IconRect(std::size_t depth, std::size_t index) const noexcept {
-    const Rect row = RowRect(depth, index);
-    if (row.size.y <= 0.0f) return {};
-    const float x = row.position.x + 0.5f * (kContentInsetX - kIconSize);
-    const float y = row.position.y + 0.5f * (row.size.y - kIconSize);
-    return {{x, y}, {kIconSize, kIconSize}};
-}
-
-Rect MenuBar::ShortcutRect(std::size_t depth, std::size_t index) const noexcept {
-    const Rect row = RowRect(depth, index);
-    if (row.size.y <= 0.0f) return {};
-    // Coluna do atalho: a largura do texto nao e conhecida pelo core, entao o host alinha o texto a direita dela.
-    const float width = std::min(kShortcutColumnWidth, row.size.x);
-    const float right = row.position.x + row.size.x - 0.5f * kContentInsetX;
-    return {{right - width, row.position.y}, {width, row.size.y}};
-}
-
-float MenuBarHeightFor(float uiScale) noexcept {
-    return std::round(kMenuBarBaseHeight * Text::SanitizeUIScale(uiScale));
 }
 
 Rect MenuBar::PopupRect(std::size_t depth) const noexcept {
@@ -359,12 +329,7 @@ std::vector<Rendering::UIRenderItem> BuildMenuBarItems(const MenuBar& bar, const
             header.position.x >= strip.position.x + strip.size.x) {
             continue;  // Fora da faixa: nao gera item.
         }
-        Vec4 color = style.header;
-        if (i == open) {
-            color = style.headerOpen;
-        } else if (i == bar.HoveredHeader()) {
-            color = style.headerHover;
-        }
+        const Vec4 color = i == open ? style.headerOpen : style.header;
         out.push_back(Rendering::MakeSolidRect(bar.handle, header, color, clipIndex, zOrder, paint++));
     }
 
@@ -372,7 +337,6 @@ std::vector<Rendering::UIRenderItem> BuildMenuBarItems(const MenuBar& bar, const
     for (std::size_t d = 0; d < bar.control.Dropdown().Depth(); ++d) {
         const Rect popup = bar.PopupRect(d);
         if (popup.size.y <= 0.0f) continue;
-        const std::size_t popupBegin = out.size();
         // Contorno antes das linhas: cada destaque fica por dentro dele (ver RowInsideBorder).
         AppendBox(bar.handle, popup, style.cornerRadius, style.borderWidth, style.popup, style.popupBorder,
                   Rendering::NoClipIndex, popupZ, paint, out);
@@ -388,30 +352,10 @@ std::vector<Rendering::UIRenderItem> BuildMenuBarItems(const MenuBar& bar, const
                                 {std::max(0.0f, row.size.x - 2.0f * kSeparatorInset), style.separatorThickness}};
                 out.push_back(Rendering::MakeSolidRect(bar.handle, line, style.separator, Rendering::NoClipIndex,
                                                        popupZ, paint++));
-                continue;
-            }
-            if (i == highlighted) {
+            } else if (i == highlighted) {
                 AppendFill(bar.handle, RowInsideBorder(row, popup, style.borderWidth), rowRadius, style.highlight,
                            Rendering::NoClipIndex, popupZ, paint, out);
             }
-            if (items[i].checkable) {
-                // Caixa na coluna de icone: quadro com contorno e, se ligada, marca cheia por dentro.
-                const float s = style.checkSize;
-                const float column = MenuBar::ContentInsetX();
-                const Rect box{{row.position.x + 0.5f * (column - s), row.position.y + 0.5f * (row.size.y - s)},
-                               {s, s}};
-                AppendBox(bar.handle, box, 0.0f, style.borderWidth, style.popup, style.popupBorder,
-                          Rendering::NoClipIndex, popupZ, paint, out);
-                if (items[i].checked) {
-                    const Rect mark{{box.position.x + 2.0f, box.position.y + 2.0f},
-                                    {std::max(0.0f, s - 4.0f), std::max(0.0f, s - 4.0f)}};
-                    AppendFill(bar.handle, mark, 0.0f, style.check, Rendering::NoClipIndex, popupZ, paint, out);
-                }
-            }
-        }
-        // Popups ficam na camada de menus (acima da janela, abaixo do arrasto e das dicas).
-        for (std::size_t k = popupBegin; k < out.size(); ++k) {
-            out[k].layer = static_cast<std::int32_t>(UILayer::Popup);
         }
     }
     return out;

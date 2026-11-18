@@ -6,9 +6,6 @@
 //
 // Click inverte o valor exatamente uma vez (Down e Up dentro, mesmo ponteiro). Arrastar para fora e soltar
 // nao muda o valor. Espaco inverte com foco. Desabilitado nao muda nada.
-//
-// Area de clique: a linha do controle (caixa e rotulo filho), que e o que o desenho ocupa. Altura padrao: 28 px a
-// 100 por cento (kStandardControlHeight). A caixa de 18 px fica centrada nessa linha.
 
 #include "SpriteUi/Core/Math.hpp"
 #include "SpriteUi/Elements/Element.hpp"
@@ -44,8 +41,6 @@ struct CheckboxEvents {
 class Checkbox final : public Element {
   public:
     bool checked = false;
-
-    Checkbox() noexcept { minSize.y = kStandardControlHeight; }
 
     [[nodiscard]] CheckboxEvents OnPointer(const PointerEvent& event) noexcept;
 

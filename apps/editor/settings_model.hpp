@@ -11,11 +11,27 @@
 
 namespace editor::settings_model {
 
-inline constexpr int kTabCount = 8;
+inline constexpr int kTabCount = 6;
 
 // Nomes das abas, na ordem da barra (a chave e a mesma usada pela traducao, T(...)).
-inline constexpr const char* kTabNames[kTabCount] = {"Appearance", "Language", "Graphics", "Game",
-                                                     "Lighting",   "Tags",     "Project",  "Physics"};
+inline constexpr const char* kTabNames[kTabCount] = {
+    "Appearance", "Settings", "Game", "Lighting", "Optimizing", "Language"};
+
+// Limites da aba Optimizing. A escala da interface usa a mesma faixa do tema (70% a 200%);
+// o cache de malhas evita crescer sem limite e o modo ocioso reduz o trabalho entre interacoes.
+inline constexpr int kChunkCacheMin = 256;
+inline constexpr int kChunkCacheMax = 32768;
+inline constexpr float kInterfaceScaleMin = 0.7f;
+inline constexpr float kInterfaceScaleMax = 2.0f;
+
+[[nodiscard]] inline int ClampChunkCacheSize(int value) noexcept {
+    return std::clamp(value, kChunkCacheMin, kChunkCacheMax);
+}
+
+[[nodiscard]] inline float ClampInterfaceScale(float value) noexcept {
+    if (value != value) return 1.25f;
+    return std::clamp(value, kInterfaceScaleMin, kInterfaceScaleMax);
+}
 
 // Indice de combo ou de radio, prendido em [0, count - 1]. Com count zero, devolve zero.
 [[nodiscard]] inline int ClampChoice(int index, int count) noexcept {

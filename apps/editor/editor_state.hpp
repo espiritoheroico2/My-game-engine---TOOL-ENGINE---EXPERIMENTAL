@@ -273,6 +273,7 @@ struct Editor {
   int resMode = 0, customW = 1280, customH = 720;
   bool pixelFilter = false; // ampliar a imagem com pixels nitidos (nearest) em vez de suave (linear)
   int fpsMode = 4;          // 0 = VSync; 1 = 30; 2 = 60; 3 = 120; 4 = sem limite (padrao)
+  bool idleRendering = true; // economiza redesenho quando a interface e a cena estao paradas
   // Ocioso: sem evento (mouse, teclado, janela) ha 3 quadros e sem Play, as vistas 3D nao sao redesenhadas (economiza GPU/CPU).
   int idleFrames = 0;
   // Ocioso = nada muda na tela: sem Play, sem emissor de particulas animando (ou pausado) e sem interacao ha 3 quadros.

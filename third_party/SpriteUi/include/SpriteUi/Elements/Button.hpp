@@ -7,9 +7,6 @@
 // holdSeconds.
 //
 // Teclado: Enter e Espaco ativam o botao quando ele esta focado (o chamador traduz a tecla em ActivateByKey).
-//
-// Area de clique: o proprio fundo (cantos arredondados incluidos). Ponto fora do desenho nao pressiona nem clica.
-// Altura padrao: 28 px a 100 por cento (kStandardControlHeight), como altura minima do elemento.
 
 #include "SpriteUi/Core/Math.hpp"
 #include "SpriteUi/Elements/Element.hpp"
@@ -46,10 +43,7 @@ class Button final : public Element {
     float cornerRadius = 4.0f; // 0 = retangulo reto.
     float holdSeconds = 0.25f; // Tempo pressionado a partir do qual o botao esta em Hold.
 
-    Button() noexcept { minSize.y = kStandardControlHeight; }
-
-    // Aplica um evento de ponteiro. So conta o que cai no fundo desenhado. Desabilitado: limpa hover e pressionado
-    // e nao emite nada.
+    // Aplica um evento de ponteiro. Desabilitado: limpa hover e pressionado e nao emite nada.
     [[nodiscard]] ButtonEvents OnPointer(const PointerEvent& event) noexcept;
 
     // Enter ou Espaco com foco. Sem foco ou desabilitado, nao faz nada.

@@ -29,6 +29,9 @@ struct RecordingTarget {
   int shadowQuality = -1;
   float renderScale = -1.f;
   bool shadows = false;
+  int chunkCacheMax = -1;
+  float interfaceScale = -1.f;
+  bool idleRendering = false;
   int calls = 0;
 
   int apiRequested() const { return api; }
@@ -44,6 +47,9 @@ struct RecordingTarget {
   void setFps(int) { ++calls; }
   void setShadows(bool on) { shadows = on; ++calls; }
   void setShadowQuality(int i) { shadowQuality = i; ++calls; }
+  void setChunkCacheMax(int i) { chunkCacheMax = i; ++calls; }
+  void setInterfaceScale(float s) { interfaceScale = s; ++calls; }
+  void setIdleRendering(bool on) { idleRendering = on; ++calls; }
 };
 
 void TestApiChangeCallsApplyWithRequestedValue() {
@@ -74,6 +80,17 @@ void TestRenderScaleAndShadowsPassValues() {
   CHECK(t.shadows);
 }
 
+void TestOptimizingRequestsPassValues() {
+  RecordingTarget t;
+  ApplyChanges(t, Requests{
+      Change{Field::ChunkCacheMax, 16384, 0.f, false},
+      Change{Field::InterfaceScale, 0, 1.25f, false},
+      Change{Field::IdleRendering, 0, 0.f, true}});
+  CHECK(t.chunkCacheMax == 16384);
+  CHECK(t.interfaceScale == 1.25f);
+  CHECK(t.idleRendering);
+}
+
 void TestEmptyRequestsDoNothing() {
   RecordingTarget t;
   ApplyChanges(t, Requests{});
@@ -87,6 +104,7 @@ int main() {
   TestSameApiDoesNotApply();
   TestTabAndShadowQualityPassIndex();
   TestRenderScaleAndShadowsPassValues();
+  TestOptimizingRequestsPassValues();
   TestEmptyRequestsDoNothing();
   std::printf("settings changes: %d/%d checks passed\n", run - failed, run);
   return failed == 0 ? 0 : 1;

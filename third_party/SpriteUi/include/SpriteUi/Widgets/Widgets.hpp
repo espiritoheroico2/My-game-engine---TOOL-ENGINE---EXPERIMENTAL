@@ -149,10 +149,6 @@ struct UIWindowComponent {
     float titleBarHeight = 30.0f;
     ResizeEdge activeResizeEdge = ResizeEdge::None;
     bool isDragging = false;
-    // Limiar do arraste pela barra de titulo (ver ProcessWindowInteraction). Abaixo dele, a janela nao sai do lugar.
-    float dragThreshold = 6.0f;
-    bool dragPending = false;   // Pressionou a barra; ainda nao passou do limiar
-    Vec2 pressPosition{};
     // Estilo visual (StylePresets.hpp). O padrao Classic mantem a aparencia atual: cantos retos, sem sombra e
     // sem animacao. A paleta e opcional: sem valor, a janela usa as cores do preset.
     StyleKind style = StyleKind::Classic;

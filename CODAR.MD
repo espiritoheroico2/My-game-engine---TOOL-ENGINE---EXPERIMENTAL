@@ -1,5 +1,20 @@
 # CODAR.MD — tarefas de código pendentes (para resolver no código)
 
+## Estado P1 - Instanciamento no renderizador (2026-11-18)
+
+- Fases 1a-1d: implementadas (binding VS/PS, PBR instanciado, passe opaco, prepass SSAO e sombras por lote).
+- Transparências e bloom permanecem por objeto, conforme o escopo do P1.
+- Verificação automatizada anterior: build CPU+GPU concluído; `tool_tests` passou com 197 testes; Vulkan passou. Os dois testes OpenGL não executaram porque `xvfb-run` não estava disponível.
+- Pendente: validação visual em cena real e benchmark; executar `--ecs 1000 --play`, comparar imagem, e registrar `DrawStats`, CSV e log Vulkan.
+
+## Estado da tarefa - Export Data do Profiler
+
+- Implementado na janela Profiler: botão `Export data` registra cinco snapshots, um por segundo, e salva todas as linhas e os históricos dos gráficos em Markdown no diretório de trabalho atual.
+- O Profiler informa progresso, caminho salvo ou erro de gravação. A coleta continua se a janela for fechada durante os cinco segundos.
+- Builds atualizados CPU e GPU aprovados; `Editor.ProfilerModel` e `Editor.ProfilerExport` passaram nas duas configurações.
+- Teste automatizado de captura, cadência e formatação Markdown: 33 verificações aprovadas.
+- Pendente: testar a interação visual no editor e confirmar que o arquivo exportado abre corretamente em uso real.
+
 Este documento lista o que falta na engine para a interface ficar completa.
 Cada tarefa tem: contexto, arquivos, passos e critério de aceite. Idioma padrão da engine: inglês.
 

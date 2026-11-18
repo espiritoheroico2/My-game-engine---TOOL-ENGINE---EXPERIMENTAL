@@ -21,8 +21,6 @@
 
 namespace editor {
 
-// Idioma padrao quando nao ha configuracao salva (ou o codigo salvo nao existe mais). O texto-chave ja e ingles,
-// entao o padrao nao precisa de arquivo: e o codigo "en", sempre presente na lista de pacotes.
 inline constexpr const char* kDefaultLanguage = "en";
 
 struct LangPack {
@@ -56,13 +54,6 @@ public:
     std::sort(packs_.begin() + 1, packs_.end(), [](const LangPack& a, const LangPack& b) { return a.name < b.name; });
   }
 
-  // Escolhe o idioma pelo codigo. Codigo vazio ou desconhecido cai no padrao (ingles) e devolve false.
-  bool selectOrDefault(const std::string& code) {
-    if (!code.empty() && select(code)) return true;
-    select(kDefaultLanguage);
-    return false;
-  }
-
   // Tabela vazia = textos-chave (ingles).
   bool select(const std::string& code) {
     for (auto& p : packs_) {
@@ -78,6 +69,12 @@ public:
         if (v.isString() && !v.asString().empty()) table_[k] = v.asString();
       return true;
     }
+    return false;
+  }
+
+  bool selectOrDefault(const std::string& code) {
+    if (select(code)) return true;
+    select(kDefaultLanguage);
     return false;
   }
 

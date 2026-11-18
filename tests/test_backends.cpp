@@ -6,7 +6,11 @@
 #include <cstdlib>
 
 TEST(sdl3_window_headless_creates_and_pumps) {
+#ifdef _WIN32
+  _putenv_s("SDL_VIDEODRIVER", "dummy");
+#else
   setenv("SDL_VIDEODRIVER", "dummy", 1);
+#endif
   tool::SdlWindow w({"teste", 320, 200, true, false});
   CHECK(w.ok());
   tool::RawInput in;

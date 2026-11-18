@@ -3,7 +3,6 @@
 // Auxiliares de apresentacao compartilhados pelos elementos: variacao de cor por estado, contorno e formas arredondadas.
 
 #include "SpriteUi/Core/Math.hpp"
-#include "SpriteUi/Elements/PointerEvent.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
 
 #include <cstdint>
@@ -30,15 +29,6 @@ void AppendRoundedItem(UIHandle owner, Rect rect, Vec4 color, float zOrder, std:
 // Parte de row que cai dentro do contorno de popup (recuado pela largura). Linhas de lista usam isso: o contorno
 // e desenhado antes das linhas, e a linha nao pode cobri-lo. Entre linhas vizinhas nao sobra fresta.
 [[nodiscard]] Rect RowInsideBorder(Rect row, Rect popup, float borderWidth) noexcept;
-
-// Area desenhada de um controle: o retangulo com cantos de raio radius (zero = reto; o raio e limitado a metade
-// do menor lado, entao raio grande vira pilula). Nos cantos, so conta o interior do arco. Usado para que o clique
-// siga o desenho e nao a caixa do elemento.
-[[nodiscard]] bool ContainsDrawn(Rect drawn, float radius, Vec2 point) noexcept;
-
-// Evento visto pelo controle, restrito a area desenhada. Fora dela o ponteiro nao esta 'dentro': Down nao
-// inicia pressao, Up nao gera Click, e Enter ou Move viram Leave, para o hover sumir. Sem posicao finita, fora.
-[[nodiscard]] PointerEvent WithinDrawn(const PointerEvent& event, Rect drawn, float radius) noexcept;
 
 // Fundo sem contorno: retangulo reto quando radius e zero, retangulo arredondado (MakeRoundedRect) quando
 // positivo. Um item; paint avanca um.

@@ -23,10 +23,21 @@ void Check(bool ok, const char* expr, int line) {
 #define CHECK(expr) Check((expr), #expr, __LINE__)
 
 void TestTabNamesMatchTheBar() {
-  CHECK(kTabCount == 8);
+  CHECK(kTabCount == 6);
   CHECK(std::strcmp(kTabNames[0], "Appearance") == 0);
-  CHECK(std::strcmp(kTabNames[2], "Graphics") == 0);
-  CHECK(std::strcmp(kTabNames[7], "Physics") == 0);
+  CHECK(std::strcmp(kTabNames[1], "Settings") == 0);
+  CHECK(std::strcmp(kTabNames[4], "Optimizing") == 0);
+  CHECK(std::strcmp(kTabNames[5], "Language") == 0);
+}
+
+void TestOptimizingLimits() {
+  CHECK(ClampChunkCacheSize(1) == kChunkCacheMin);
+  CHECK(ClampChunkCacheSize(8192) == 8192);
+  CHECK(ClampChunkCacheSize(99999) == kChunkCacheMax);
+  CHECK(ClampInterfaceScale(0.1f) == kInterfaceScaleMin);
+  CHECK(ClampInterfaceScale(1.25f) == 1.25f);
+  CHECK(ClampInterfaceScale(9.f) == kInterfaceScaleMax);
+  CHECK(ClampInterfaceScale(NAN) == 1.25f);
 }
 
 void TestClampChoiceStaysInRange() {
@@ -80,6 +91,7 @@ void TestSplitIndexRoundTrip() {
 
 int main() {
   TestTabNamesMatchTheBar();
+  TestOptimizingLimits();
   TestClampChoiceStaysInRange();
   TestDefaultRenderScaleDependsOnApi();
   TestFixedGameSizeFromModes();
