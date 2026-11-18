@@ -60,4 +60,4 @@ Os filtros acima rodam na CPU porque a imagem final já é lida da GPU para a CP
 2. Entradas de movimento e profundidade (vetores de movimento por objeto).
 3. Apresentação sem readback.
 
-Por isso o FSR fica para uma etapa posterior; não foi implementado nesta etapa. A análise de FSR (versões, licenças, o que faz sentido aqui) está em `docs/FSR.md`; o desempenho de pós-processamento e sombras está em `docs/RENDER_PERF.md`.
+Por isso o FSR fica para uma etapa posterior; não foi implementado nesta etapa. A análise de FSR (versões, licenças, o que faz sentido aqui) está em `docs/FSR.md`; o desempenho consolidado está em `docs/PERFORMANCE_PLAN.md` e `docs/PERFORMANCE_AUDIT.md`.

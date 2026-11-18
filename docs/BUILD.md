@@ -35,3 +35,18 @@ See section 6 of `HOW_TO_BUILD.txt`.
 
 ## GPU backends (Vulkan / OpenGL)
 Preset `editor-gpu` builds DiligentCore (vendored clone in `third_party/DiligentCore`). First build takes ~12 minutes. Without it the editor runs on the CPU renderer. The editor switches API at runtime in Settings > Graphics.
+
+## Build time - medidas e decisões
+
+`main.cpp` e vendored QuickJS sao os maiores traduções; SDL3 também custa bastante em builds frescos.
+Medidas anteriores em Linux/Ninja mostraram que uma configuração Release podia levar 150 s, enquanto
+uma diretoria sem tipo de build foi aproximadamente 45 s em ambiente de duas núcleos. Estes números
+são referências do ambiente medido, não metas garantidas em Windows/MSVC.
+
+Recomendacoes:
+- reutilizar uma pasta de build por configuração;
+- não alterar o Release global apenas para acelerar uma tarefa iterativa;
+- testar `main.cpp` com `-O1` e comparar frame time antes de tornar isso padrão;
+- não desligar backends SDL necessários ao editor por ganho pequeno;
+- vendorizar/pinar SpriteUI em vez de usar uma pasta externa;
+- pin ou vendorizar DiligentCore para evitar clones em builds frescos.

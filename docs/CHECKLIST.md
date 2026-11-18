@@ -1,5 +1,8 @@
 # Checklist do ToolEngine
 
+> Lista detalhada por versão. Para prioridade atual e critérios de conclusão consolidados, veja
+> [`ROADMAP.md`](ROADMAP.md). Não trate itens antigos como bloqueadores atuais sem conferir o roteiro.
+
 Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.md`.
 
 ### SpriteUI (migracao incremental em andamento)

@@ -53,7 +53,7 @@
 -- Platform: Windows-10.0.26300
 -- 64-bit:   TRUE
 -- Compiler: C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
--- Revision: SDL3-3.2.8-2d2e658
+-- Revision: SDL3-3.2.8-f974d2f
 -- Vendor:   
 -- 
 -- Subsystems:
@@ -533,8 +533,8 @@ suppress it.
 -- Looking for pthread_create in pthread
 -- Looking for pthread_create in pthread - not found
 -- Found Threads: TRUE
--- Configuring done (226.0s)
--- Generating done (15.4s)
+-- Configuring done (254.9s)
+-- Generating done (14.6s)
 -- Build files have been written to: C:/Users/espir/Downloads/ACTToolEngine-source/My game engine - TOOL ENGINE - EXPERIMENTAL/out
 Versão do MSBuild 18.11.1-1.26513.3+940033be3 para .NET Framework
 
@@ -1520,6 +1520,11 @@ C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXP
   MenuBar.cpp
   Image.cpp
   Graph.cpp
+  Splitter.cpp
+  Gerando Código...
+  Compilando...
+  DockGuides.cpp
+  UIScale.cpp
   Gerando Código...
   TextField.cpp
   TextField.cpp
@@ -1647,16 +1652,19 @@ C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXP
 C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_types.hpp(105,101): warning C4324: 'Newtoon::Joint': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
   
-C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_world.hpp(67,38): warning C4324: 'Newtoon::PhysicsWorld::Contact': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_world.hpp(67,65): warning C4324: 'Newtoon::PhysicsWorld::ShapeInput': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
   
-C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_world.hpp(67,75): warning C4324: 'Newtoon::PhysicsWorld::Contact': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_world.hpp(68,38): warning C4324: 'Newtoon::PhysicsWorld::Contact': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
   
-C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_world.hpp(67,181): warning C4324: 'Newtoon::PhysicsWorld::Contact': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_world.hpp(68,75): warning C4324: 'Newtoon::PhysicsWorld::Contact': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
   
-C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_world.hpp(319,63): warning C4324: 'Newtoon::PhysicsWorld::PairInfo': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_world.hpp(68,181): warning C4324: 'Newtoon::PhysicsWorld::Contact': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
+  (compilando o arquivo fonte '../../../apps/editor/main.cpp')
+  
+C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\physics\include\tool\physics\newtoon_world.hpp(384,63): warning C4324: 'Newtoon::PhysicsWorld::PairInfo': a estrutura foi preenchida devido ao especificador de alinhamento [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
   
 C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\engine\render\include\tool\render\bloom.hpp(35,73): warning C4456: a declaração de 'b' oculta uma declaração local anterior [C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\out\apps\editor\tool_editor.vcxproj]
@@ -1728,7 +1736,7 @@ C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\
   (compilando o arquivo fonte '../../../apps/editor/main.cpp')
       C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\algorithm(4248,24):
       o contexto de instanciação do modelo (o mais antigo primeiro) é
-          C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\main.cpp(1656,50):
+          C:\Users\espir\Downloads\ACTToolEngine-source\My game engine - TOOL ENGINE - EXPERIMENTAL\apps\editor\main.cpp(1655,50):
           consulte a referência à instanciação '_OutIt std::transform<std::_String_iterator<std::_String_val<std::_Simple_types<_Elem>>>,std::_String_iterator<std::_String_val<std::_Simple_types<_Elem>>>,int(__cdecl *)(int)>(const _InIt,const _InIt,_OutIt,_Fn)' do modelo que está sendo compilada
           with
           [

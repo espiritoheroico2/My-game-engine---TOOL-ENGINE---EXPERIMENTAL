@@ -38,7 +38,11 @@ docs/           notas de construção
 ```
 Dependências apontam sempre para baixo: scene → events/ecs → debug → core.
 
-Status: **0.7.19-beta (em andamento)** - veja `docs/CHANGELOG.md`, `docs/LIGHT_PRISM.md`, `docs/UI_SPRITE_PLAN.md`, `docs/SCRIPT_ERRORS.md`, `docs/LIGHTING_REVIEW.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/NEXT_STEPS.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`, `docs/REPO_WEIGHT.md` (peso do repositorio), `docs/SHADER_AUDIT.md` (shaders GLSL/HLSL e limite de buffers do Vulkan).
+Status: **0.7.19-beta (em andamento)** - veja `docs/CHANGELOG.md`, `docs/LIGHT_PRISM.md`, `docs/UI_SPRITE_PLAN.md`, `docs/SCRIPT_ERRORS.md`, `docs/LIGHTING_REVIEW.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`, `docs/REPO_WEIGHT.md` (peso do repositorio), `docs/SHADER_AUDIT.md` (shaders GLSL/HLSL e limite de buffers do Vulkan).
+
+Para a ordem recomendada de implementacao, prioridades, criterios de aceite e tarefas consolidadas:
+**`docs/ROADMAP.md`**. O roteiro vence duvidas entre documentos de tarefa antigos; os documentos
+especializados continuam contendo os detalhes tecnicos e historicos.
 
 O que ficou pendente, e o que foi feito na ultima sessao: ver a secao *0.7.19-beta (em andamento)* em `docs/CHANGELOG.md`.
 

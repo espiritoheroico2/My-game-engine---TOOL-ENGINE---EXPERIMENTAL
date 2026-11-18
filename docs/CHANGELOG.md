@@ -1,5 +1,8 @@
 # Changelog
 
+> Histórico de versões. Para o estado atual consolidado e o que fazer em seguida, veja
+> [`ROADMAP.md`](ROADMAP.md).
+
 ## 0.7.19-beta (em andamento)
 
 **Sessao de manutencao (SpriteUI, fonte, shaders, repositorio)**
@@ -21,7 +24,7 @@
 - Grid, eixos e marcadores vetoriais X/Y/Z do Game agora sao meshes 3D transparentes, renderizados com teste de profundidade em CPU e GPU; cameras divididas mantem caches independentes. O teste `Editor.GameGrid` compara pixels com e sem um objeto opaco e confirma que o grid nao o cobre.
 - Faixa de abas do Settings usa a camada `Docked`, acima do fundo/conteudo, mantendo a ordem de pintura entre fundo, abas e rotulos.
 - Validacao: CTest completo CPU, 30/30 aprovado. CTest GPU, 32 testes aprovados; `gpu_test_opengl` e `spriteui_gpu_opengl` nao executaram porque `xvfb-run` nao esta disponivel. O teste de oclusao do grid foi repetido nas duas configuracoes.
-- Benchmark CPU do SpriteUI executado em Release: 20 janelas, 200 botoes e 1000 quadros medidos apos 20 de aquecimento; total de 1.2953 ms/quadro (772.0 quadros/s). A medicao e apenas uma referencia atual, nao uma comparacao antes/depois; detalhes e tempos por fase em `docs/IMPLEMENTATION_STATUS.md`.
+- Benchmark CPU do SpriteUI executado em Release: 20 janelas, 200 botoes e 1000 quadros medidos apos 20 de aquecimento; total de 1.2953 ms/quadro (772.0 quadros/s). A medicao e apenas uma referencia atual, nao uma comparacao antes/depois; os detalhes consolidados estao em `docs/ROADMAP.md`.
 - A migracao do editor para SpriteUI continua parcial; as secoes indicadas como ImGui em `docs/UI.md` ainda nao foram convertidas.
 
 **Pendente (nesta versao)**
@@ -686,7 +689,7 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - **Narrative em execução**: gatilhos Start / Update / Create(objeto); blocos SavePoint / LoadPoint (`Project/Saves`); ações log/spawn/destroy/ui_show/ui_hide/particles_on/off; **toda cena ganha grafo + código** (`Assets/Narrative`, `Assets/Scripts/Scenes`) e o Play executa o grafo.
 - **Desempenho**: pós-fx em ponto fixo + pool de threads persistente (`tool::parallelFor`); **sleeper de sombras** (reaproveita o shadow map se luz/casters não mudaram, CPU e GPU).
 - **Build**: preset `editor-gpu-dx12` (Windows) para Direct3D 12.
-- Docs: `JS_VS_CPP.md`, `DX12_DXR.md`, `TEXTURES.md`, `UI_FX.md`, `RENDER_PERF.md`.
+- Docs: `JS_VS_CPP.md`, `DX12_DXR.md`, `TEXTURES.md`, `UI_FX.md`, `ROADMAP.md`.
 - Correção de build no Windows: `far` é macro do windows.h (selftest.hpp); recursos não implementados aparecem BLOQUEADOS no menu "+ Add Resource".
 - Correções: `d` das Tools não era lido ao carregar; avisos de sombra/parâmetro não usado.
 - **Não feito (planejado):** sombras de point light, texturas/normal map/materiais .tmat, shader por objeto, NTC, DXR, pós-fx na GPU.
@@ -738,7 +741,7 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - **Tags editáveis**: adicionar/remover/renomear no Inspector (renomeia em todos os objetos e nos arquivos das outras cenas).
 - **Settings > Tags**: tags pré-definidas (`Principal`, `player`, `enemy`) e **ligações** (ex.: `jogador` → `player`); salvas em `Project/project.json`.
 - **Scripts**: todo objeto nasce com `Assets/Scripts/<Objeto>.tool.js` (ToolObject com `start`, `update`, `OnDelete`, `DeleteAndReuse`);
-  edição e salvamento no Inspector. *A execução dos scripts ainda não existe* (ver NEXT_STEPS.md).
+  edição e salvamento no Inspector. *A execução dos scripts ainda não existe* (ver `ROADMAP.md`).
 - **Settings > Lighting**: sol, ambiente, sombras (qualidade, distância, suavidade, força, bias) e pós-processamento global, por cena.
 - **Settings > Graphics**: qualidade de sombra, detalhes da GPU. **Settings > Project**: preset de plataforma de exportação (guardado, **desativado**).
 - **Profiler**: FPS médio/mín/máx, 1% low, jitter, gráfico, tempo por zona (eventos, update, painéis, render Scene/Game, pós-fx, UI, present),

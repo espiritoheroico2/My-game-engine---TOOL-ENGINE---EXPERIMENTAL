@@ -22,4 +22,4 @@ Só a linguagem do **código de jogo escrito pelo usuário** (lógica de gamepla
 2. **Mover lógica comum para blocos nativos** (já feito): Tools, Narrative (Start/Update/Create/SavePoint), UI e Partículas cobrem o que mais se repete em jogos sem escrever código — e rodam em C++.
 3. **Script = cola.** Regra prática: se algo roda por objeto por quadro em laço grande (ex.: IA de 1000 inimigos), vira **Tool nativo** ou módulo C++ (plugin), não script.
 4. **Orçamento por quadro:** o Profiler já tem zonas; ao ligar a VM, medir o tempo de script por quadro e avisar quando passar de ~2 ms.
-5. Revisar quando houver benchmarks reais com a VM ligada (item 1 do `NEXT_STEPS.md`).
+5. Revisar quando houver benchmarks reais com a VM ligada (Fase A do `ROADMAP.md`).
