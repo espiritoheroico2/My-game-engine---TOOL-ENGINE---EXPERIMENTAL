@@ -9,7 +9,7 @@ a partir do tamanho das estruturas (medicao no seu computador vem na etapa 1).
 |---|---|---|
 | Interface do editor | SpriteUI gera a geometria na CPU; `SDL_RenderGeometry` desenha no driver do SDL (GPU quando ha driver) | `apps/editor/spriteui_host.hpp`, `main.cpp` (`createEditorRenderer`) |
 | Cena e Jogo no editor | Diligent (ou rasterizador de CPU) renderiza, copia da GPU para a CPU (readback) e envia a textura ao SDL a cada quadro | `apps/editor/editor_state.hpp` (`readbackAsync`), `main.cpp` (`SDL_UpdateTexture`) |
-| Adapter GPU do SpriteUI | Existe no repositorio do SpriteUI (`adapters/toolengine`, commit `b9bef4a`), mas nao esta no `third_party` vendorizado | `SpriteUi/Adapters/ToolEngineRhi.hpp` |
+| Adapter GPU do SpriteUI | Ja esta no `third_party` vendorizado (`adapters/toolengine`), identico ao do repositorio do SpriteUI (`b9bef4a`). Shaders em `assets/shaders` tambem identicos | `third_party/SpriteUi/adapters/toolengine/include/SpriteUi/Adapters/ToolEngineRhi.hpp` |
 | Jogo (runtime) | Nao usa SpriteUI. Nao ha plugin de interface | - |
 | Plugins | A engine nao tem sistema de plugins; so existe `mod` (ModTool) | `engine/mod` |
 | Eventos | Barramento `tool::EventBus` com `subscribe`/`emit` e arbitro (`EventArbiter`) | `engine/events` |
@@ -130,7 +130,7 @@ sequenceDiagram
 | Etapa | Entrega | Criterio de aceite |
 |---|---|---|
 | 1. Medicao | Tempo por quadro do editor com 0, 200 e 1000 botoes, UI parada e UI mudando | Tabela com ms por quadro e por driver (OpenGL, D3D11) no seu computador |
-| 2. Adapter | Vendorizar `adapters/toolengine` (commit `b9bef4a`) no `third_party` | Build do engine e `spriteui_gpu_test` passam |
+| 2. Adapter | Ja vendorizado (nada a fazer). Validar o `spriteui_gpu_test` com GPU ou Xvfb | Teste GPU passa com OpenGL e Vulkan |
 | 3. Instancias | Trocar `BuildVertices` por desenho instanciado com `SpriteInstanceGPU` | Pixels iguais aos do teste GPU; banda cai ~2,6x |
 | 4. Dirty | Upload so das instancias mudadas | UI parada custa menos de 0,1 ms por quadro com 1000 botoes |
 | 5. Plugin | `IUiPlugin`, escolha em `ui.backend`, opcao de CMake | Jogo compila com e sem a UI; `none` nao linka SpriteUI |
@@ -146,4 +146,4 @@ sequenceDiagram
 
 1. Aprova a etapa 1 (medicao) antes de mexer no adapter?
 2. O plugin comeca estatico (sem DLL)? Recomendo sim.
-3. Sobre o SpriteUI: posso trazer o adapter e os shaders do repositorio dele para o `third_party` deste projeto?
+3. (Resolvido) O adapter e os shaders ja estao no projeto; nada a copiar.
