@@ -51,6 +51,27 @@ Resultado da revisão: o que foi feito e o que ainda falta. Detalhes em docs/EST
 - "GPU %" não é medido. É preciso consultas de tempo da GPU (timestamp queries) no RHI. A linha "GPU zone ms"
   mede só o tempo de CPU gasto na zona de GPU.
 
+### T11. Build do Windows: LNK C4743 (vftable) e avisos de compilação
+- O log do build mostra ~297 linhas "vftable possui tamanho diferente" (LNK C4743, 393 no total). Causa: as libs do
+  DiligentCore foram compiladas com outro CRT / `_ITERATOR_DEBUG_LEVEL` que o projeto (`CMakeLists.txt` linha 8:
+  MultiThreaded, Debug em Debug). Correção: compilar o Diligent com o mesmo runtime e nível de depuração do projeto.
+- Avisos do próprio projeto a corrigir: C4324 (newtoon_types.hpp, newtoon_world.hpp), C4456/C4457 (bloom.hpp:35,
+  soft_renderer.hpp:289), C4146, C4702, C4701.
+- Teste que você faz: o log do build novo deve ter zero "C4743" e a contagem de avisos de C4324/C4456/C4457 deve cair.
+
+### T12. Crash do teste ECS (Concluído no código, falta seu teste)
+- Antes: exceção de memória (`std::bad_alloc`) não tratada fechava o editor sem aviso.
+- Agora: `main` captura a exceção e grava `crash_report.txt`; o spawner para sozinho quando falta memória
+  ("out of memory after N spheres"); o console avisa a memória estimada (~7 KB por esfera) para N grande.
+- Teste que você faz: `test ECS: 10000` (deve rodar); depois N maior, para ver o aviso ou a parada controlada.
+  Se fechar mesmo assim, envie o `crash_report.txt` e o log do console.
+
+### T13. Janelas: camada, clique e arraste (Parcial)
+- Feito: regras puras em `apps/editor/window_manager.hpp/.cpp` (camada numérica, popup captura clique, arraste só
+  pelo grip, saída do dock com limiar de 16 px). Testes: `Editor.WindowManager` (30 verificações).
+- Falta: ligar essas regras aos painéis do editor (hoje cada painel tem o próprio clique e a própria ordem de desenho).
+  Decisão pendente: usar este gerenciador ou o DrawOrder/InputRouter do SpriteUI.
+
 ### Enxugamento e limpeza
 - Ver a seção "Enxugamento do projeto" abaixo (aguardando aprovação).
 

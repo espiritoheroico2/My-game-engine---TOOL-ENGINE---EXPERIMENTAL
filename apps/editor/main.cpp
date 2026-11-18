@@ -61,6 +61,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <exception>
 #include <new>
 #include <cstdio>
 #include <cstdlib>
@@ -2319,7 +2320,26 @@ void loadUiFont(ImGuiIO& io) {
   io.Fonts->AddFontDefault(&fontConfig);
 }
 
+// Sem isto, qualquer excecao nao tratada (ex.: falta de memoria com muitas esferas) fecha o editor sem aviso.
+// O relatorio vai para stderr e para crash_report.txt, na pasta de trabalho.
+static int runEditorMain(int argc, char** argv);
+
 int main(int argc, char** argv) {
+  try {
+    return runEditorMain(argc, argv);
+  } catch (const std::bad_alloc&) {
+    std::fprintf(stderr, "ToolEditor: memoria insuficiente (bad_alloc). Veja crash_report.txt.\n");
+    if (FILE* f = std::fopen("crash_report.txt", "w")) { std::fprintf(f, "Memoria insuficiente (std::bad_alloc). Reduza o teste ECS ou feche outros programas.\n"); std::fclose(f); }
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "ToolEditor: erro nao tratado: %s. Veja crash_report.txt.\n", e.what());
+    if (FILE* f = std::fopen("crash_report.txt", "w")) { std::fprintf(f, "Erro nao tratado: %s\n", e.what()); std::fclose(f); }
+  } catch (...) {
+    std::fprintf(stderr, "ToolEditor: erro nao tratado desconhecido. Veja crash_report.txt.\n");
+  }
+  return 1;
+}
+
+static int runEditorMain(int argc, char** argv) {
   int maxFrames = 0; int startApi = -1; bool startPlaying = false, selfTest = false, playerMode = false;
   long long ecsCount = 0;   // --ecs N: benchmark de N esferas (ver abaixo)
   long long voxelCount = 0; // --voxel N: benchmark de N chunks de terreno (16x16x16 blocos cada)

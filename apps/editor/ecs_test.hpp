@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <new>
 #include <string>
 
 namespace editor {
@@ -51,6 +52,7 @@ inline void Editor::tickSpawners(float) {
     const long long n = std::min<long long>(sp->perFrame, sp->total - sp->spawned);
     const tool::Mat4 pm = worldMat(e);
     bool any = false;
+    try {
     for (long long i = 0; i < n; ++i) {
       const tool::Entity s = w.create();
       Name nm; std::snprintf(nm.text, sizeof nm.text, "sphere"); w.add<Name>(s, nm);
@@ -71,6 +73,12 @@ inline void Editor::tickSpawners(float) {
       w.add<Parent>(s, Parent{e});
       any = pushRuntimeBody(s) || any;
     }
+    } catch (const std::bad_alloc&) {
+      // Memoria acabou: para o teste aqui, mantendo o editor aberto (o Stop desfaz as esferas).
+      sp->armed = false; sp->logged = true;
+      tool::logWarn("ECS test: out of memory after " + std::to_string(sp->spawned) + " spheres. Stopped the test; press Stop to clear them.");
+      continue;
+    }
     if (any) { play.world.Rebuild(play.tf, play.rb, play.col); play.built = true; }   // um Rebuild por quadro, nao um por esfera
     sp->spawned += n;
     if (sp->spawned >= sp->total && !sp->logged) {
@@ -83,6 +91,9 @@ inline void Editor::tickSpawners(float) {
 }
 
 inline void Editor::startEcsTest(long long n) {
+  // Medido em 2026-11-18: ~7 KB de memoria por esfera (50 mil esferas = ~370 MB). Avisa antes de comecar.
+  const double estimateMB = static_cast<double>(n) * 7.0 / 1024.0;
+  if (estimateMB > 1024.0) tool::logWarn("test ECS: " + std::to_string(n) + " spheres need about " + std::to_string(static_cast<int>(estimateMB)) + " MB of RAM. If the editor closes, use a smaller N.");
   auto& w = scene.world();
   tool::Entity call = findByName("ECScall");
   if (!w.alive(call)) call = make("ECScall");

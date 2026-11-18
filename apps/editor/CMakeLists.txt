@@ -54,6 +54,10 @@ target_link_libraries(tool_ui_test PRIVATE imgui_lib tool::core)
 add_test(NAME ui_editor COMMAND tool_ui_test)
 
 # Presets do visual em JSON (ui_presets.hpp): ida e volta, limites, leitura tolerante e arquivos.
+add_executable(editor_window_manager_tests tests/test_window_manager.cpp window_manager.cpp)
+target_include_directories(editor_window_manager_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.WindowManager COMMAND editor_window_manager_tests)
+
 add_executable(editor_ui_presets_tests tests/test_ui_presets.cpp)
 target_include_directories(editor_ui_presets_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(editor_ui_presets_tests PRIVATE tool::core)
