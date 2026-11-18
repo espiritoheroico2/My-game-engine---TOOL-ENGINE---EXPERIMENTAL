@@ -39,6 +39,12 @@ if(TOOL_WITH_SPRITEUI)
   target_include_directories(editor_help_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(editor_help_model_tests PRIVATE SpriteUi::SpriteUI)
   add_test(NAME Editor.HelpModel COMMAND editor_help_model_tests)
+
+  # Bloco "engine" do project.json (project_engine_settings.hpp): padroes, ida e volta, faixas.
+  add_executable(editor_project_engine_settings_tests tests/test_project_engine_settings.cpp)
+  target_include_directories(editor_project_engine_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_project_engine_settings_tests PRIVATE tool::core)
+  add_test(NAME Editor.ProjectEngineSettings COMMAND editor_project_engine_settings_tests)
   target_compile_definitions(tool_editor PRIVATE TOOL_WITH_SPRITEUI=1)
 endif()
 
