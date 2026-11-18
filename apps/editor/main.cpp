@@ -2184,7 +2184,7 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
   if (f) {
     std::stringstream ss; ss << f.rdbuf();
     if (auto j = tool::Json::parse(ss.str())) {
-      editor::I18n::get().select((*j)["language"].asString());
+      editor::I18n::get().selectOrDefault((*j)["language"].asString());   // sem idioma salvo: ingles
       ed.showGridScene = editor::ser::flag(*j, "showGridScene", true); ed.showGridGame = editor::ser::flag(*j, "showGridGame", false); ed.showGizmos = editor::ser::flag(*j, "showGizmos", true);
       ed.resMode = std::clamp(static_cast<int>(editor::ser::num(*j, "resMode", 0.f)), 0, 5);
       ed.customW = static_cast<int>(editor::ser::num(*j, "customW", 1280.f)); ed.customH = static_cast<int>(editor::ser::num(*j, "customH", 720.f));
@@ -2203,14 +2203,27 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
   return api;
 }
 
+// Renderer SDL da interface (SpriteUI). E independente da API da Cena e do Jogo (Diligent): a interface usa o driver de
+// GPU mais adequado (OpenGL primeiro, depois Direct3D, Metal e GLES) e so cai para software se nenhum abrir.
+// Vulkan fica de fora porque a Cena ja o usa. Driver escolhido vai para o log.
 SDL_Renderer* createEditorRenderer(SDL_Window* window, bool forceSoftware) {
   if (!window) return nullptr;
   if (forceSoftware) return SDL_CreateRenderer(window, "software");
+  static constexpr const char* kPreferred[] = {"opengl", "direct3d11", "metal", "opengles2", "direct3d12"};
+  auto accept = [&](const char* driver) -> SDL_Renderer* {
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, driver);
+    if (renderer) tool::logInfo(std::string("Interface SpriteUI: driver de render ") + SDL_GetRendererName(renderer));
+    return renderer;
+  };
+  for (const char* driver : kPreferred) {
+    if (SDL_Renderer* renderer = accept(driver)) return renderer;
+  }
   for (int i = 0; i < SDL_GetNumRenderDrivers(); ++i) {
     const char* driver = SDL_GetRenderDriver(i);
     if (!driver || std::strcmp(driver, "vulkan") == 0 || std::strcmp(driver, "software") == 0) continue;
-    if (SDL_Renderer* renderer = SDL_CreateRenderer(window, driver)) return renderer;
+    if (SDL_Renderer* renderer = accept(driver)) return renderer;
   }
+  tool::logWarn("Interface SpriteUI: nenhum driver de GPU abriu; usando software (CPU)");
   return SDL_CreateRenderer(window, "software");
 }
 
@@ -2316,7 +2329,7 @@ int main(int argc, char** argv) {
 
   Editor ed;
   editor::I18n::get().scan("assets/lang");
-  editor::I18n::get().select("en");
+  editor::I18n::get().select(editor::kDefaultLanguage);   // ingles sem configuracao salva
   ed.theme.scan("assets/themes");
   ed.theme.apply();
   std::string lastScene, lastProject; int savedApi = 0;
@@ -2431,6 +2444,12 @@ int main(int argc, char** argv) {
   const bool bench = ecsCount > 0 || voxelCount > 0;
   std::vector<double> benchMs;
   std::array<double, static_cast<size_t>(editor::Zone::Count)> benchZoneMs{};
+  // TOOL_BENCH_CSV=<arquivo>: grava cada quadro medido (ms total e de cada zona) para achar a origem dos picos.
+  std::FILE* benchCsv = nullptr;
+  if (const char* csvPath = std::getenv("TOOL_BENCH_CSV")) {
+    benchCsv = std::fopen(csvPath, "w");
+    if (benchCsv) { std::fprintf(benchCsv, "frame,total_ms"); for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::fprintf(benchCsv, ",z%d", z); std::fprintf(benchCsv, "\n"); }
+  }
   bool benchArmed = false;
 #ifdef TOOL_WITH_SPRITEUI
   editor::SpriteUiDiagnostics spriteUiDiagnostics;
@@ -2768,8 +2787,10 @@ int main(int argc, char** argv) {
       if (benchArmed && !armed) {   // nascimento terminou: mede os proximos quadros
         benchMs.push_back(static_cast<double>(SDL_GetTicksNS() - frameStart) / 1e6);
         for (size_t z = 0; z < benchZoneMs.size(); ++z) benchZoneMs[z] += ed.prof.cur[z];
+        if (benchCsv) { std::fprintf(benchCsv, "%zu,%.3f", benchMs.size(), benchMs.back()); for (size_t z = 0; z < benchZoneMs.size(); ++z) std::fprintf(benchCsv, ",%.3f", ed.prof.cur[z]); std::fprintf(benchCsv, "\n"); }
         if (benchMs.size() >= static_cast<size_t>(benchFrames)) {
           std::vector<double> s = benchMs; std::sort(s.begin(), s.end());
+          if (benchCsv) { std::fclose(benchCsv); benchCsv = nullptr; }
           double sum = 0; for (double v : s) sum += v;
           std::printf("ECS bench: %s, %zu bodies, %zu frames\n", ecsCount > 0 ? (std::to_string(ecsCount) + " spheres").c_str() : (std::to_string(voxelCount) + " voxel chunks").c_str(), ed.play.ents.size(), s.size());
           std::printf("ECS bench: avg %.2f ms (%.1f fps), p50 %.2f ms, p95 %.2f ms, max %.2f ms\n", sum / s.size(), 1000.0 * s.size() / sum,

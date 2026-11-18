@@ -10,6 +10,7 @@
 // SEGURANCA: o arquivo e texto editavel -> toda leitura limita tamanho/quantidade e so aceita alvos conhecidos.
 #pragma once
 #include "project.hpp"
+#include "project_engine_settings.hpp"
 
 #include <array>
 #include <string>
@@ -56,6 +57,8 @@ struct ProjectSettings {
   std::string projectName, author;
   // "Editor info": dados do estudio e do jogo que vao para o pacote exportado (export.json).
   struct Info { std::string studio, country, city, version = "1.0.0.0", description, copyright, website; } info;
+  // Configuracoes da engine e do usuario deste projeto (bloco "engine" do project.json).
+  EngineSettings engine;
 
   // Uma string por campo obrigatorio que ainda falta (ou tem valor invalido). Vazio = pronto para exportar.
   std::vector<std::string> missingInfo() const {
@@ -119,6 +122,7 @@ struct ProjectSettings {
     in.set("studio", info.studio); in.set("country", info.country); in.set("city", info.city); in.set("version", info.version);
     in.set("description", info.description); in.set("copyright", info.copyright); in.set("website", info.website);
     j.set("editorInfo", in);
+    j.set("engine", engine.toJson());
     return j;
   }
   void fromJson(const tool::Json& j) {
@@ -138,6 +142,7 @@ struct ProjectSettings {
     exportPreset.platform = std::clamp(static_cast<int>(ser::num(ex, "platform", 0.f)), 0, static_cast<int>(kExportPlatforms.size()) - 1);
     ser::copyStr(exportPreset.appName, sizeof exportPreset.appName, ex["appName"].asString().empty() ? "MyGame" : ex["appName"].asString());
     exportPreset.compressAssets = ser::flag(ex, "compressAssets", true); exportPreset.stripEditorData = ser::flag(ex, "stripEditorData", true);
+    engine = EngineSettings::fromJson(j["engine"]);
   }
   bool save(const Project& p) const { return writeTextFile(p.root / "project.json", toJson().dump()); }
   bool load(const Project& p) {

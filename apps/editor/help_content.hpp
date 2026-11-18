@@ -2071,6 +2071,121 @@ export function damage(base, armor) {
 - Mantenha bibliotecas pequenas e sem laços pesados por quadro. Laços pesados pertencem a uma Tool nativa.
 - Situacao: as bibliotecas sao salvas e listadas hoje; rodam quando o runtime de scripts (QuickJS) estiver ativo.
 )H"},
+  {"spriteui", "Code", "Build a UI with SpriteUI", "Criar uma interface com SpriteUI",
+R"H(# What SpriteUI is
+SpriteUI is the UI library of the engine: buttons, checkboxes, sliders, windows and text. Your code creates the elements, reads their events and sends the frame to the renderer. Today the editor draws the UI through the SDL renderer (on the GPU when a driver is available). Drawing the UI in the game through Diligent, in the same frame as the 3D scene, is planned and not ready yet.
+# Step 1 - Turn it on
+Build with the option TOOL_WITH_SPRITEUI=ON (it is on by default in the editor build). In your code include the headers you use, like the example below.
+# Step 2 - Create elements and place them
+Each element has a border (position and size in logical pixels). Set it once, or update it when the window resizes.
+# Step 3 - Read events
+Every frame, pass the pointer (or key) events to the element. It returns what happened: clicked, pressStarted, pressEnded. When something happens, emit an event on the engine bus; any code that subscribed to that number receives it.
+# Step 4 - Draw every frame
+Build the frame with the RenderExtractor and send it to the backend. The backend uses the GPU when you run the game with Diligent; the software backend works without a GPU.
+# Full example
+```
+// Exemplo: um botao na tela. O clique dispara um evento do engine; o botao sai como FramePacket para o backend.
+#include "SpriteUi/Elements/Button.hpp"
+#include "SpriteUi/Rendering/DrawList.hpp"
+#include "tool/events/events.hpp"
+
+#include <cstdint>
+
+namespace Elm = ToolEngine::SpriteUi::Elements;
+namespace SR = ToolEngine::SpriteUi::Rendering;
+namespace SU = ToolEngine::SpriteUi;
+
+constexpr tool::EventId kEventStart = 1;   // numero unico do evento (o mesmo usado em subscribe)
+
+struct StartMenu {
+  Elm::Button startButton;
+  Elm::ButtonStyle style;
+  SR::RenderExtractor extractor;
+  std::uint64_t frame = 0;
+
+  StartMenu() { startButton.border = SU::Rect{SU::Vec2{20.f, 20.f}, SU::Vec2{160.f, 40.f}}; }
+
+  // Chamado pela entrada (mouse ou teclado) a cada evento de ponteiro.
+  void onPointer(Elm::PointerPhase phase, SU::Vec2 p, tool::EventBus& bus, double now) {
+    const bool inside = startButton.border.Contains(p);
+    const Elm::ButtonEvents ev = startButton.OnPointer(Elm::PointerEvent{phase, p, 0u, inside});
+    if (ev.clicked) bus.emit(kEventStart, now);
+  }
+
+  // Chamado a cada quadro: vira geometria pronta para o backend (GPU ou CPU).
+  SR::FramePacket build() {
+    const auto items = Elm::BuildButtonBackground(startButton, style, 0.f, 1);
+    return extractor.Build(++frame, items);
+  }
+};
+
+void wire(tool::EventBus& bus) {
+  bus.subscribe(kEventStart, [](const std::any&) { /* abrir o jogo, trocar de cena... */ });
+}
+```
+# Rules that avoid bugs
+- Event numbers must be unique. Use one constant per event, as in kEventStart.
+- Do not draw in the event handler: handle the event there, draw in build().
+- A label needs a text layout; add it in the next step of your UI (the example draws only the background).
+# Where to go next
+Planned: the game will choose whether to use SpriteUI, as a plugin rendered on the GPU. This is not available yet.)H",
+R"H(# O que e o SpriteUI
+O SpriteUI e a biblioteca de interface da engine: botoes, caixas de selecao, deslizantes, janelas e texto. Seu codigo cria os elementos, le os eventos deles e envia o quadro para o renderizador. Hoje o editor desenha a interface pelo renderizador SDL (na GPU quando ha driver). Desenhar a interface no jogo pelo Diligent, no mesmo quadro da cena 3D, esta planejado e ainda nao esta pronto.
+# Passo 1 - Ative
+Compile com a opcao TOOL_WITH_SPRITEUI=ON (ja vem ligada no build do editor). No seu codigo, inclua os cabecalhos que usar, como no exemplo abaixo.
+# Passo 2 - Crie os elementos e posicione
+Cada elemento tem uma caixa (border): posicao e tamanho em pixels logicos. Defina uma vez, ou atualize quando a janela mudar de tamanho.
+# Passo 3 - Leia os eventos
+A cada quadro, passe os eventos do ponteiro (ou da tecla) para o elemento. Ele devolve o que aconteceu: clicked, pressStarted, pressEnded. Quando algo acontece, emita um evento no barramento da engine; todo codigo que assinou aquele numero recebe o aviso.
+# Passo 4 - Desenhe a cada quadro
+Monte o quadro com o RenderExtractor e envie ao backend. Hoje o editor usa o renderizador SDL (GPU quando ha driver); o desenho da UI no jogo pelo Diligent esta planejado e ainda nao esta pronto.
+# Exemplo completo
+```
+// Exemplo: um botao na tela. O clique dispara um evento do engine; o botao sai como FramePacket para o backend.
+#include "SpriteUi/Elements/Button.hpp"
+#include "SpriteUi/Rendering/DrawList.hpp"
+#include "tool/events/events.hpp"
+
+#include <cstdint>
+
+namespace Elm = ToolEngine::SpriteUi::Elements;
+namespace SR = ToolEngine::SpriteUi::Rendering;
+namespace SU = ToolEngine::SpriteUi;
+
+constexpr tool::EventId kEventStart = 1;   // numero unico do evento (o mesmo usado em subscribe)
+
+struct StartMenu {
+  Elm::Button startButton;
+  Elm::ButtonStyle style;
+  SR::RenderExtractor extractor;
+  std::uint64_t frame = 0;
+
+  StartMenu() { startButton.border = SU::Rect{SU::Vec2{20.f, 20.f}, SU::Vec2{160.f, 40.f}}; }
+
+  // Chamado pela entrada (mouse ou teclado) a cada evento de ponteiro.
+  void onPointer(Elm::PointerPhase phase, SU::Vec2 p, tool::EventBus& bus, double now) {
+    const bool inside = startButton.border.Contains(p);
+    const Elm::ButtonEvents ev = startButton.OnPointer(Elm::PointerEvent{phase, p, 0u, inside});
+    if (ev.clicked) bus.emit(kEventStart, now);
+  }
+
+  // Chamado a cada quadro: vira geometria pronta para o backend (GPU ou CPU).
+  SR::FramePacket build() {
+    const auto items = Elm::BuildButtonBackground(startButton, style, 0.f, 1);
+    return extractor.Build(++frame, items);
+  }
+};
+
+void wire(tool::EventBus& bus) {
+  bus.subscribe(kEventStart, [](const std::any&) { /* abrir o jogo, trocar de cena... */ });
+}
+```
+# Regras que evitam erros
+- Numeros de evento devem ser unicos. Use uma constante por evento, como kEventStart.
+- Nao desenhe dentro do tratador de evento: trate o evento ali e desenhe em build().
+- Rotulo precisa de layout de texto; adicione no proximo passo da sua interface (o exemplo desenha so o fundo).
+# Proximos passos
+Planejado: o jogo vai escolher se usa o SpriteUI, como plugin desenhado na GPU. Isso ainda nao esta disponivel.)H"},
   };
   return t;
 }

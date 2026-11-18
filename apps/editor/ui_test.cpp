@@ -15,6 +15,13 @@ int main() {
   auto& i = editor::I18n::get();
   i.scan(std::string(TOOL_SOURCE_DIR) + "/assets/lang");
   CHECK(std::string(editor::T("Hierarchy")) == "Hierarchy"); // padrao: ingles, sem arquivo nenhum carregado
+  // Idioma padrao: ingles; codigo salvo vazio ou inexistente cai nele (sem configuracao salva, a UI sai em ingles).
+  CHECK(std::string(editor::kDefaultLanguage) == "en");
+  CHECK(i.select("pt-BR") && !i.selectOrDefault("") && i.code() == "en");
+  CHECK(std::string(editor::T("Hierarchy")) == "Hierarchy");
+  CHECK(i.select("pt-BR") && !i.selectOrDefault("xx-inexistente") && i.code() == "en");
+  CHECK(i.selectOrDefault("pt-BR") && i.code() == "pt-BR");
+  CHECK(i.select(editor::kDefaultLanguage) && i.code() == "en");
   CHECK(i.packs().size() >= 3);
   CHECK(i.select("pt-BR"));
   CHECK(std::string(editor::T("Hierarchy")) == "Hierarquia");
