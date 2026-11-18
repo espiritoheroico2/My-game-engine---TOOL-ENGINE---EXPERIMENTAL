@@ -2444,6 +2444,12 @@ int main(int argc, char** argv) {
   const bool bench = ecsCount > 0 || voxelCount > 0;
   std::vector<double> benchMs;
   std::array<double, static_cast<size_t>(editor::Zone::Count)> benchZoneMs{};
+  // TOOL_BENCH_CSV=<arquivo>: grava cada quadro medido (ms total e de cada zona) para achar a origem dos picos.
+  std::FILE* benchCsv = nullptr;
+  if (const char* csvPath = std::getenv("TOOL_BENCH_CSV")) {
+    benchCsv = std::fopen(csvPath, "w");
+    if (benchCsv) { std::fprintf(benchCsv, "frame,total_ms"); for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::fprintf(benchCsv, ",z%d", z); std::fprintf(benchCsv, "\n"); }
+  }
   bool benchArmed = false;
 #ifdef TOOL_WITH_SPRITEUI
   editor::SpriteUiDiagnostics spriteUiDiagnostics;
@@ -2781,8 +2787,10 @@ int main(int argc, char** argv) {
       if (benchArmed && !armed) {   // nascimento terminou: mede os proximos quadros
         benchMs.push_back(static_cast<double>(SDL_GetTicksNS() - frameStart) / 1e6);
         for (size_t z = 0; z < benchZoneMs.size(); ++z) benchZoneMs[z] += ed.prof.cur[z];
+        if (benchCsv) { std::fprintf(benchCsv, "%zu,%.3f", benchMs.size(), benchMs.back()); for (size_t z = 0; z < benchZoneMs.size(); ++z) std::fprintf(benchCsv, ",%.3f", ed.prof.cur[z]); std::fprintf(benchCsv, "\n"); }
         if (benchMs.size() >= static_cast<size_t>(benchFrames)) {
           std::vector<double> s = benchMs; std::sort(s.begin(), s.end());
+          if (benchCsv) { std::fclose(benchCsv); benchCsv = nullptr; }
           double sum = 0; for (double v : s) sum += v;
           std::printf("ECS bench: %s, %zu bodies, %zu frames\n", ecsCount > 0 ? (std::to_string(ecsCount) + " spheres").c_str() : (std::to_string(voxelCount) + " voxel chunks").c_str(), ed.play.ents.size(), s.size());
           std::printf("ECS bench: avg %.2f ms (%.1f fps), p50 %.2f ms, p95 %.2f ms, max %.2f ms\n", sum / s.size(), 1000.0 * s.size() / sum,
