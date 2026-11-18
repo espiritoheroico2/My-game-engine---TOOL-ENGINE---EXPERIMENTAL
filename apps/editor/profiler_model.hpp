@@ -104,6 +104,7 @@ struct Row {
   Cell cells[kMaxCells];
   float fraction = 0.f;             // Bar: 0..1 (preenchimento da barra)
   int graph = -1;                   // Graph: indice do historico (0 ou 1)
+  bool emphasis = false;            // Prioridade: o painel desenha em negrito e com fonte maior
 };
 
 class ProfilerModel {
@@ -144,6 +145,39 @@ class ProfilerModel {
     scale_[0] = stableScale(scale_[0], targetFrame, kFrameScaleFloor);
     scale_[1] = stableScale(scale_[1], targetWork, kWorkScaleFloor);
 
+    // ---- Prioridade: o que mais importa, em destaque (negrito e fonte maior). Os detalhes continuam abaixo.
+    {
+      Row& h = beginRow(RowKind::Heading);
+      copyText(h.text, kTextChars, tr("Priority"));
+      h.emphasis = true;
+    }
+    {
+      Row& r = beginRow(RowKind::Cells); r.emphasis = true;
+      cell(r, tr("draw calls"), static_cast<double>(ex.gpuDraws), 0, 6);
+      cell(r, tr("objects drawn"), static_cast<double>(prof.last.draws), 0, 6);
+      cell(r, tr("triangles"), static_cast<double>(prof.last.tris), 0, 10);
+    }
+    {
+      Row& r = beginRow(RowKind::Cells); r.emphasis = true;
+      cell(r, tr("CPU % (editor)"), num(sys.editorCpu), 1, 6);
+      cell(r, tr("CPU work ms"), num(st.workAvg), 2, 7);
+      cell(r, tr("GPU zone ms"), num(prof.zoneAvg(editor::Zone::GpuRender)), 2, 7);
+    }
+    {
+      Row& r = beginRow(RowKind::Cells); r.emphasis = true;
+      const float renderMs = prof.zoneAvg(editor::Zone::SceneRender) + prof.zoneAvg(editor::Zone::GameRender) + prof.zoneAvg(editor::Zone::Ui);
+      cell(r, tr("render ms"), num(renderMs), 2, 7);
+      cell(r, tr("process MB"), prof.memoryMB, 0, 6);
+      cell(r, tr("VRAM MB"), sys.vramUsedMB, 0, 7);
+    }
+    {
+      Row& r = beginRow(RowKind::Cells); r.emphasis = true;
+      cell(r, tr("delay avg ms"), num(st.avg), 2, 7);
+      cell(r, tr("delay p99 ms"), num(st.p99), 2, 7);
+      cell(r, tr("delay max ms"), num(st.max), 2, 7);
+      cell(r, tr("jitter ms"), num(st.jitter), 2, 7);
+    }
+    text(tr("GPU % is not measured yet: it needs GPU timestamp queries in the RHI (see CODAR.MD)."));
     // ---- Frames
     heading(tr("Frames"));
     {
@@ -160,7 +194,7 @@ class ProfilerModel {
       cell(r, tr("jitter ms"), num(st.jitter), 2, 7);
     }
     text(prof.paused ? tr("Graph paused (frozen)") : tr("Graph live"));
-    graphRow(0, tr("frame time (ms), last frames"), st.max);
+    graphRow(0, tr("frame time (ms), last frames"), st.max).emphasis = true;
     {
       Row& r = beginRow(RowKind::Cells);
       cell(r, tr("CPU work avg ms"), num(st.workAvg), 2, 7);
@@ -372,7 +406,7 @@ class ProfilerModel {
     Row& r = beginRow(RowKind::Cells);
     cell(r, label, 0, 0, 0, value);
   }
-  void graphRow(int g, const char* caption, float shownMax) {
+  Row& graphRow(int g, const char* caption, float shownMax) {
     Row& r = beginRow(RowKind::Graph);
     r.graph = g;
     copyText(r.text, kTextChars, caption);
@@ -380,6 +414,7 @@ class ProfilerModel {
     formatCell(static_cast<double>(shownMax), 1, 6, r.cells[0].value, kValueChars);
     copyText(r.cells[0].label, kLabelChars, "max");
     r.cells[0].valueWidth = 6;
+    return r;
   }
 
   // Adiciona uma celula numerica de largura fixa (ou uma celula de texto quando valueWidth == 0 e `text` vem).

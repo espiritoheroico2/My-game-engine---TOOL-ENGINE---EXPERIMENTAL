@@ -60,6 +60,8 @@ struct Theme {
   static constexpr float kHeadingFont = 14.f;
   static constexpr float kFont = 13.f;
   static constexpr float kSmallFont = 11.f;
+  static constexpr float kEmphasisFont = 17.f;    // Prioridade: valores principais
+  static constexpr float kEmphasisHeading = 19.f; // Prioridade: titulo da secao
   static constexpr float kLabelW = 170.f;         // Bar: largura do rotulo antes da barra
   static constexpr float kBarValueW = 64.f;       // Bar: largura reservada ao valor
   static constexpr float kBarH = 8.f;
@@ -261,6 +263,13 @@ class ProfilerPanel {
     return "...";
   }
 
+  // Negrito simulado (nao ha fonte em negrito nos assets): o mesmo texto desenhado de novo, 0,7 px ao lado.
+  float addBold(float x, float y, const std::string& s, float size, SU::Vec4 color, float maxW, bool alignRight = false) {
+    const float w = addText(x, y, s, size, color, maxW, alignRight);
+    addText(x + 0.7f, y, s, size, color, maxW, alignRight);
+    return w;
+  }
+
   // Texto de largura limitada, medido e guardado. Retorna a largura desenhada (para alinhar o que vem depois).
   float addText(float x, float y, const std::string& s, float size, SU::Vec4 color, float maxW, bool alignRight = false) {
     if (s.empty() || maxW <= 0.f) return 0.f;
@@ -325,8 +334,13 @@ class ProfilerPanel {
 
         case pm::RowKind::Heading:
           y += Theme::kGap;
-          addText(x0, y, r.text, Theme::kHeadingFont, colors_.heading, inner);
-          y += lineHeight(Theme::kHeadingFont) + 3.f;
+          if (r.emphasis) {
+            addBold(x0, y, r.text, Theme::kEmphasisHeading, colors_.heading, inner);
+            y += lineHeight(Theme::kEmphasisHeading) + 3.f;
+          } else {
+            addText(x0, y, r.text, Theme::kHeadingFont, colors_.heading, inner);
+            y += lineHeight(Theme::kHeadingFont) + 3.f;
+          }
           addSolid(x0, y, inner, 1.f, colors_.divider, 0.2f);
           y += 6.f;
           break;
@@ -389,13 +403,19 @@ class ProfilerPanel {
             y += rowH;
           } else if (n > 0) {
             // Varias celulas: rotulo pequeno em cima, valor embaixo, cada um na sua coluna.
+            // Prioridade (r.emphasis): valor maior e em negrito; rotulo um degrau maior.
+            const float labelSize = r.emphasis ? Theme::kFont : Theme::kSmallFont;
+            const float valueSize = r.emphasis ? Theme::kEmphasisFont : Theme::kFont;
+            const float lhLabel = lineHeight(labelSize);
+            const float lhValue = lineHeight(valueSize);
             const float colW = inner / static_cast<float>(n);
             for (int c = 0; c < n; ++c) {
               const float cx = x0 + colW * static_cast<float>(c);
-              addText(cx, y, r.cells[c].label, Theme::kSmallFont, colors_.textDim, colW - 6.f);
-              addText(cx, y + lhSmall + 1.f, r.cells[c].value, Theme::kFont, colors_.text, colW - 6.f);
+              addText(cx, y, r.cells[c].label, labelSize, colors_.textDim, colW - 6.f);
+              if (r.emphasis) addBold(cx, y + lhLabel + 1.f, r.cells[c].value, valueSize, colors_.text, colW - 6.f);
+              else addText(cx, y + lhLabel + 1.f, r.cells[c].value, valueSize, colors_.text, colW - 6.f);
             }
-            y += lhSmall + 1.f + lhFont + 6.f;
+            y += lhLabel + 1.f + lhValue + 6.f;
           } else {
             y += rowH;
           }

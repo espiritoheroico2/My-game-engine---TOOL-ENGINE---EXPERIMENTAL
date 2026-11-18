@@ -68,7 +68,7 @@ Arquivo: `assets/shaders/pbr.hlsl`.
      float4 fogColor;
      float4 fogParams;
    };
-   StructuredBuffer<InstanceData> Instances : register(t15); // t15 livre (t14 = AoMap)
+   StructuredBuffer<InstanceData> Instances : register(t17); // NAO usar t15: e o IblBrdfLut (conflito corrigido em 2026-11-18)
    cbuffer BatchBuffer : register(b6) { uint batchFirst; uint3 _padB; };
    ```
 2. `VSIn` ganha `uint iid : SV_InstanceID;`.
@@ -228,3 +228,29 @@ Entregue: lista de arquivos alterados por fase, saida do tool_tests, e o que NAO
 
 Ao concluir cada fase, o usuario faz o teste visual indicado na secao 4/5/6 e envia os resultados.
 Nao marque o P1 como concluido sem o teste visual.
+
+
+---
+
+## 12. Revisao de 2026-11-18 (tarde): estado real e o que mudou
+
+- Fases 1a a 1d: implementadas no `main` (HLSL e renderizador). Brilho e transparentes continuam por objeto (escopo do P1).
+- **Conflito de registrador corrigido:** `Instances` estava em `t15`, o mesmo de `IblBrdfLut`. Agora e `t17`.
+  Verificacao automatica: `python3 tools/shaders/check_bindings.py` (tambem roda no ctest como `Shaders.Bindings`).
+- **GLSL regenerado:** os GLSL estavam desatualizados (sem instanciamento). Regenere com
+  `python3 tools/shaders/build_glsl.py` e confira com `--check`. Atencao: esse caminho ainda e traducao
+  (HLSL -> SPIR-V -> GLSL). A decisao de GLSL nativo esta no CODAR.MD, tarefa T8.
+- **Diagnostico do D3D12 pendente:** o backend nao define o compilador de shader (`SHADER_COMPILER_DEFAULT`) e o
+  DXC (`dxcompiler.dll`) nao e copiado pelo CMake. Ver CODAR.MD, tarefa T7, com o passo a passo para o seu build.
+
+### Prompt para a proxima etapa (cole no VS Code)
+
+```text
+Contexto: engine C++20 ToolEngine, branch ui-integrado. Leia docs/P1_IMPLEMENTACAO.md secao 12 e CODAR.MD (tarefas T7 e T8).
+1. Rode python3 tools/shaders/check_bindings.py. Deve sair sem conflito.
+2. Tarefa T7 (D3D12): em engine/rhi_diligent/src/diligent_device.cpp, em createShader, passe a guardar a saida do
+   compilador (ShaderCreateInfo::ppCompilerOutput) e registre o texto no debug() quando falhar. Nao troque o
+   compilador ainda. Confira no Diligent vendorizado se o campo existe antes de usar.
+3. Nao mude os shaders HLSL sem rodar check_bindings.py.
+4. Compile tool_tests e tool_editor e rode ctest. Diga o que nao pode ser verificado sem GPU.
+```

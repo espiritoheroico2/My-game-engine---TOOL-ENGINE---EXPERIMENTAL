@@ -1,5 +1,62 @@
 # CODAR.MD — tarefas de código pendentes (para resolver no código)
 
+## Revisão de 2026-11-18 (tarde): arquitetura, shaders, API e profiler
+
+Resultado da revisão: o que foi feito e o que ainda falta. Detalhes em docs/ESTADO_ATUAL.md.
+
+### Feito nesta revisão
+- P1 (instanciamento): conflito `t15` (Instances x IblBrdfLut) corrigido: Instances agora em `t17`.
+- Verificação de bindings sem GPU: `tools/shaders/check_bindings.py` (ctest `Shaders.Bindings`).
+- GLSL 430 regenerado: estava desatualizado e sem instanciamento; OpenGL agora lê as instâncias.
+- Troca de API: o pedido responde na hora (o seletor já mostra a escolha e o status "Switching to ..."),
+  e a troca pesada roda no inicio do quadro seguinte. Pedidos seguidos valem só o último.
+- Profiler: seção "Priority" no topo, com draw calls, objetos, triângulos, CPU %, tempo de CPU,
+  tempo de GPU (zona), render ms, memória do processo, VRAM e atraso (média, p99, máximo, jitter).
+  Essas linhas saem em destaque (fonte maior e negrito simulado). O gráfico de frame time também.
+
+### Teste que o usuário faz (validação)
+1. Build do editor e `ctest`: deve dar 100% (32 testes).
+2. Clicar em Settings > API grafica: o radio deve mudar na hora, com o status "Switching to ..."; uma troca
+   por clique (sem clicar varias vezes). Anote o tempo de troca (a janela pode ficar parada por ~1 s, isso ainda e o passo 2 abaixo).
+3. Profiler: confirme que a seção Priority aparece primeiro, com os números em negrito e maiores.
+4. Cena com `--ecs 1000 --play` em Vulkan e em OpenGL: a imagem deve ser igual nos dois. Envie prints.
+5. D3D12 (Windows): envie o log completo ao iniciar com D3D12. Procure "compil", "shader", "dxcompiler", "TOOL-E152".
+
+### T7. D3D12 não funciona: diagnóstico (prioridade alta)
+- Causa provável: o backend não escolhe o compilador (`SHADER_COMPILER_DEFAULT`) e o DXC
+  (`dxcompiler.dll`) pode não estar junto do executável. O erro aparece só como "falha ao compilar shader".
+- Passos: (a) em `createShader` (diligent_device.cpp), capturar `ppCompilerOutput` do ShaderCreateInfo
+  e registrar o texto no debug(); (b) confirmar a versão vendorizada do Diligent antes de usar o campo;
+  (c) no CMake, copiar `dxcompiler.dll` e `dxil.dll` para o diretório do executável quando D3D12 estiver ligado.
+- Critério: o log do D3D12 mostra o erro exato do compilador (ou o shader compila).
+- Não verificado aqui: não há Diligent compilado neste ambiente nem Windows.
+
+### T8. Shaders nativos em HLSL e GLSL (sem tradução) — decisão de arquitetura
+- Hoje: o GLSL é gerado do HLSL (glslang + spirv-cross) e tem ajustes manuais (inversão de Y, renomeação
+  de texturas). Isso e tradução, e foi a fonte de problemas.
+- Proposta: `assets/shaders/hlsl/` (D3D11, D3D12, Vulkan) e `assets/shaders/glsl/` (OpenGL 430), escritos à mão.
+  Mesmo contrato de nomes e registradores nos dois. O `check_bindings.py` passa a comparar os dois.
+  O `build_glsl.py` vira ferramenta de comparação, não de produção.
+- Passos: (1) criar a pasta glsl nativa com pbr, prepass, shadow, shadow_point, ssao, bloom, spriteui;
+  (2) fazer o RHI escolher a pasta pelo backend (`ShaderDesc::lang` já existe); (3) testar cada API.
+- Critério: `check_bindings.py` passa nas duas pastas; a imagem é igual em OpenGL e Vulkan.
+
+### T9. Troca de API sem travar (fase 2)
+- Hoje a troca roda num quadro só (destruir dispositivo, compilar shaders, criar pipelines). Isso ainda trava
+  a janela por um tempo.
+- Passo: transformar `applyApi` em máquina de estados que avança um passo por quadro
+  (encerrar, criar dispositivo, criar shaders, criar pipelines), com o aviso "Trocando..." em cada passo.
+
+### T10. Medição de GPU no profiler
+- "GPU %" não é medido. É preciso consultas de tempo da GPU (timestamp queries) no RHI. A linha "GPU zone ms"
+  mede só o tempo de CPU gasto na zona de GPU.
+
+### Enxugamento e limpeza
+- Ver a seção "Enxugamento do projeto" abaixo (aguardando aprovação).
+
+---
+
+
 ## Estado P1 - Instanciamento no renderizador (2026-11-18)
 
 - Fases 1a-1d: implementadas (binding VS/PS, PBR instanciado, passe opaco, prepass SSAO e sombras por lote).

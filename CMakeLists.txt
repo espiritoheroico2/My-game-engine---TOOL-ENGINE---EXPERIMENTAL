@@ -25,6 +25,11 @@ include(cmake/Warnings.cmake)
 
 include(cmake/Dependencies.cmake)
 enable_testing()
+# Conflitos de registrador/binding nos shaders (HLSL por variante e GLSL gerado). Nao precisa de GPU.
+find_program(TOOL_PYTHON python3)
+if(TOOL_PYTHON)
+  add_test(NAME Shaders.Bindings COMMAND ${TOOL_PYTHON} ${CMAKE_SOURCE_DIR}/tools/shaders/check_bindings.py)
+endif()
 add_compile_definitions(TOOL_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_compile_definitions(TOOL_DYNAMIC_HEAP_MB=${TOOL_DYNAMIC_HEAP_MB})
 if(WIN32)

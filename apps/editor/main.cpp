@@ -1532,7 +1532,7 @@ void drawGraphicsTab(Editor& ed) {
   ImGui::EndDisabled();
   ImGui::TextDisabled("%s", T("Build with the 'editor-gpu-dx11' preset to enable Direct3D 11."));
 #endif
-  if (pick != ed.apiRequested) { ed.applyApi(pick); ed.settingsDirty = true; }   // so quando o usuario muda o radio (nao a cada quadro)
+  if (pick != ed.apiRequested) { ed.requestApi(pick); ed.settingsDirty = true; }   // so quando o usuario muda o radio (nao a cada quadro)
   ImGui::SeparatorText(T("Quality"));
   bool c = false;
   ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
@@ -1924,7 +1924,7 @@ struct SettingsEditorTarget {
   Editor& ed;
   int apiRequested() const { return ed.apiRequested; }
   void setTab(int i) { ed.settingsTab = i; }
-  void applyApi(int api) { ed.applyApi(api); ed.settingsDirty = true; }
+  void applyApi(int api) { ed.requestApi(api); ed.settingsDirty = true; }   // pedido: a troca acontece no inicio do proximo quadro
   void setResMode(int i) { ed.resMode = i; ed.settingsDirty = true; }
   void setCustomW(int w) { ed.customW = w; ed.settingsDirty = true; }
   void setCustomH(int h) { ed.customH = h; ed.settingsDirty = true; }
@@ -2553,6 +2553,7 @@ int main(int argc, char** argv) {
 #endif
   while (!quit) {
     const Uint64 frameStart = SDL_GetTicksNS();
+    ed.applyPendingApi();   // troca de API pedida no quadro anterior (com o aviso ja desenhado)
     if (ed.fpsDirty && renderer) { SDL_SetRenderVSync(renderer, ed.fpsMode == 0 && !headless ? 1 : 0); ed.fpsDirty = false; }
     tool::debug().beginFrame();
     ed.prof.beginFrame();

@@ -1,7 +1,7 @@
 // ToolEngine - shader PBR com a iluminacao da Light Prism (entradas: VSMain, PSMain).
 // Os modulos da LightPrism estao em assets/shaders/lightprism (copia de third_party/LightPrism/shaders; Shadow.hlsli adaptado).
 // Registradores (unicos por tipo): t0 AlbedoMap; t1/t2 luzes pontuais/spot; t3..t6 mapas de sombra das cascatas;
-// t8/t9 clusters (LightGrid, LightIndexList); b0 Globals; b1 sol; b2 CSM; b3 ambiente (IBL SH9); b4 FrameBuffer (so VS);
+// t8/t9 clusters (LightGrid, LightIndexList); t17 Instances (VS); t15 IblBrdfLut; b0 Globals; b1 sol; b2 CSM; b3 ambiente (IBL SH9); b4 FrameBuffer (so VS);
 // b5 ClusterGrid; b6 ObjectBuffer (so VS); b7 PointShadowCB; t10..t13 mapas de sombra de pontuais/spot.
 // LIMITE DE BUFFERS: o pipeline soma os cbuffers dos dois estagios (VS + PS) e o Vulkan aceita 8 UBO dinamicos.
 // Contagem medida no SPIR-V (VS: b4, b6 = 2; PS: b0,b1,b2,b3,b5,b7 + b6 = 7; total 9). Para caber em 8, a neblina
@@ -39,7 +39,7 @@ struct InstanceData {
   float4 fogColor;
   float4 fogParams;
 };
-StructuredBuffer<InstanceData> Instances : register(t15);
+StructuredBuffer<InstanceData> Instances : register(t17); // t15 = IblBrdfLut (Light Prism): nao reusar
 cbuffer BatchBuffer : register(b6) {
   uint4 batchInfo;
 };

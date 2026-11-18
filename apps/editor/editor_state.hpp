@@ -251,6 +251,8 @@ struct Editor {
   // API grafica: 0 = Software (CPU); 1 = Vulkan; 2 = OpenGL; 3 = D3D12 (so Windows)
   int apiChoice = 0, apiActive = 0;   // apiActive: API em uso; apiChoice: o que esta ativo agora (0 = CPU)
   int apiRequested = 0;               // o que o usuario escolheu (radio e projeto); sobrevive a uma falha de inicializacao
+  int apiPending = -1;                // troca pedida que ainda nao foi aplicada (-1 = nenhuma)
+  int apiPendingFrames = 0;           // quadros desenhados com o aviso "Trocando" antes de aplicar
   float renderScale = 0.5f;
   bool renderScaleSet = false; // o usuario mexeu na escala: nao sobrescrever ao trocar de API
   // Upscaling e antialiasing POR SOFTWARE (CPU, tool/render/upscale.hpp), aplicados no tamanho da janela.
@@ -317,6 +319,27 @@ struct Editor {
     sigGpuValid = false;
     psigGpuValid = false;
     gpuBadFrames = 0;
+  }
+  static const char* apiName(int c) {
+    return c == 0 ? "Software (CPU)" : c == 1 ? "Vulkan" : c == 2 ? "OpenGL" : c == 3 ? "Direct3D 12" : "Direct3D 11";
+  }
+  // Pedido de troca: responde na hora (o radio ja mostra a escolha) e deixa a troca pesada para o inicio do proximo
+  // quadro, depois que a interface desenhou o aviso. Pedidos seguidos valem so o ultimo.
+  void requestApi(int choice) {
+    apiRequested = choice;
+    if (choice == apiChoice && apiPending < 0) return;   // ja e essa a API: nada a fazer
+    apiPending = choice;
+    apiPendingFrames = 0;
+    apiStatus = std::string("Switching to ") + apiName(choice) + "...";
+  }
+  // Chamado no comeco de cada quadro: aplica a troca pendente depois de um quadro com o aviso.
+  void applyPendingApi() {
+    if (apiPending < 0) return;
+    if (apiPendingFrames++ < 1) return;
+    const int c = apiPending;
+    apiPending = -1;
+    apiPendingFrames = 0;
+    applyApi(c);
   }
   // Troca a API grafica em execucao; se falhar, volta para o renderizador em CPU e mostra o motivo.
   void applyApi(int choice) {
