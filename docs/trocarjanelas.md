@@ -72,7 +72,8 @@ Comando: `ctest -R EditorInfo`. Resultado da janela piloto: 9 checks passam (202
 
 ### 4.1 Janela Settings (prioridade alta)
 - **Sintoma relatado:** o menu interno de Configurações aparece vazio; as opções e os dados sumiram.
-- **Não investigado ainda.** Hipótese a verificar: a ponte `settings_bridge.hpp` não recebe os itens
+- **Reproduzido no print headless (2026-11-19):** as abas (Settings, Game, Lighting) aparecem e o corpo fica vazio.
+- **Causa ainda não investigada.** Hipótese a verificar: a ponte `settings_bridge.hpp` não recebe os itens
   depois da troca de aba, ou a lista de opções não é preenchida no quadro. Verificar com um teste de
   modelo (`Editor.SettingsModel`, `Editor.SettingsBridge`) e um print.
 - Refazer a janela Settings do zero no padrão deste documento (seção 1), e não só corrigir.
@@ -94,13 +95,20 @@ Comando: `ctest -R EditorInfo`. Resultado da janela piloto: 9 checks passam (202
 - Falta uma fonte em negrito (ou um traço de contorno) e um tamanho maior (20 px sugeridos).
 
 ### 4.5 Renderização CPU/GPU e draw calls
-- **Medição feita (Editor info):** 17 batches e 206 instâncias por quadro. Um batch vira um
-  `SDL_RenderGeometry`, então 17 chamadas de desenho para essa janela.
-- **Ainda não medido:** draw calls do editor inteiro (sem o game). Medir com `--screenshot` e um contador
-  de `SDL_RenderGeometry` ou dos batches de cada `FramePacket`.
-- **Alternância CPU/GPU:** hoje o modo software é usado com `--frames N` (`createEditorRenderer`), e a
-  escolha de API (`--api vulkan|opengl|d3d12|d3d11`) controla o caminho gráfico. Falta uma opção na
-  tela de configurações para escolher CPU ou GPU para a UI, com o mesmo `SDL_Renderer`.
+- **Medido (2026-11-19):**
+  - Editor info: 17 lotes por quadro antes; **4 depois** (206 instâncias). Causas corrigidas: `clipOverflow`
+    em campo e painel criava um clip por nó (quebra o lote), e o clip do texto só existe quando o texto
+    passa da caixa.
+  - Editor inteiro, modo software (`--frames 120`): **21,9 `SDL_RenderGeometry` da SpriteUI por quadro**.
+    O número é impresso no fim da execução.
+- **Medição só vale com as janelas SpriteUI criadas.** Antes, `--frames` desligava todas (`fontReady` exigia
+  `!headless`), então os prints antigos não tinham janela SpriteUI nenhuma. Corrigido: com `--screenshot`
+  as janelas SpriteUI aparecem.
+- **Unificar a UI (ainda não feito):** cada painel SpriteUI envia o próprio pacote com `draw`. Juntar os
+  pacotes num único envio por quadro, na ordem de pintura, reduz o custo de submissão; a redução real de
+  `SDL_RenderGeometry` vem de juntar lotes adjacentes com mesma textura e mesmo clip. Próximo passo.
+- **Alternância CPU/GPU da UI (ainda não feito):** o modo software é usado com `--frames N`. Falta opção
+  na tela de configurações.
 
 ### 4.6 Janelas que ainda são ImGui (inventário)
 Em `apps/editor/main.cpp` há 47 `ImGui::Begin`. As janelas a migrar, na ordem:

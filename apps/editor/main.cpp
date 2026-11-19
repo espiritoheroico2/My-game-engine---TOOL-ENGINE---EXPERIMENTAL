@@ -1377,7 +1377,7 @@ void drawSceneSui(Editor& ed, SDL_Renderer* sdl) {
   SDL_Texture* tex = updateSceneTexture(ed, sdl, cam, std::clamp(static_cast<int>(img.w), 64, 1920), std::clamp(static_cast<int>(img.h), 64, 1080), tw, th);
   // soltar um modelo/som do painel Assets cria o objeto na cena: a area da imagem e um alvo invisivel do ImGui
   ImGui::SetCursorScreenPos(ImVec2(img.x, img.y));
-  ImGui::InvisibleButton("##scenedrop", ImVec2(img.w, img.h));
+  ImGui::InvisibleButton("##scenedrop", ImVec2(std::max(1.f, img.w), std::max(1.f, img.h)));   // ImGui exige tamanho > 0
   if (ImGui::BeginDragDropTarget()) {
     if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_PATH")) ed_::instantiateAsset(ed, static_cast<const char*>(p->Data));
     ImGui::EndDragDropTarget();
@@ -2546,7 +2546,8 @@ static int runEditorMain(int argc, char** argv) {
   ToolEngine::SpriteUi::Text::TruetypeAtlas uiAtlas;
   editor::sui::SpriteUiSdlRenderer uiRenderer;
   // O modo --player tambem carrega a fonte: a janela do jogo desenha o texto da UI com ela (mesma fonte do editor).
-  const bool fontReady = !headless &&
+  // Em --frames as janelas SpriteUI nao aparecem, salvo com --screenshot (print com as janelas reais).
+  const bool fontReady = (!headless || !screenshotPath.empty()) &&
       editor::sui::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", uiAtlas, SDL_GetWindowDisplayScale(window)) &&
       uiRenderer.uploadAtlas(renderer, uiAtlas);
   const bool uiReady = fontReady && !playerMode;
@@ -2962,5 +2963,10 @@ static int runEditorMain(int argc, char** argv) {
 #endif
   SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
   std::printf("editor exited after %d frames\n", frame);
+  {
+    const auto calls = editor::sui::SpriteUiDrawCalls();
+    std::printf("SpriteUI: %llu SDL_RenderGeometry no total, %.1f por quadro\n", static_cast<unsigned long long>(calls),
+                frame > 0 ? static_cast<double>(calls) / frame : 0.0);
+  }
   return 0;
 }

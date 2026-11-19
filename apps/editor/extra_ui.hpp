@@ -35,7 +35,7 @@ inline void openHelp(const std::string& topic) { auto& h = helpState(); h.open =
 inline void helpIcon(const char* topic) {
   ImGuiWindow* win = ImGui::GetCurrentWindow(); if (!win || win->Collapsed) return;
   const float h = ImGui::GetFrameHeight();
-  const ImVec2 mn{win->Pos.x + win->Size.x - h * 2.f - 4.f, win->Pos.y + 2.f}, sz{h - 4.f, h - 4.f};
+  const ImVec2 mn{win->Pos.x + win->Size.x - h * 2.f - 4.f, win->Pos.y + 2.f}, sz{std::max(1.f, h - 4.f), std::max(1.f, h - 4.f)};   // ImGui exige tamanho > 0
   // Botao real (InvisibleButton): a janela nao "come" o clique como acontecia com IsMouseClicked na barra de titulo.
   const ImVec2 saved = ImGui::GetCursorScreenPos();
   ImGui::SetCursorScreenPos(mn);

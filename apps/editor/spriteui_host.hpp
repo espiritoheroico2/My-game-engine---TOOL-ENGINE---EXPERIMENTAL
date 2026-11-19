@@ -38,6 +38,13 @@ inline constexpr std::uint32_t kIconSlice = 2u;
 inline constexpr std::uint32_t kViewSliceBase = 8u;
 inline constexpr std::uint32_t kViewSlots = 4u;
 
+// Contador de chamadas SDL_RenderGeometry feitas pela SpriteUI (todos os renderizadores). Medicao de draw calls:
+// tool_editor --frames N imprime a media por quadro no fim.
+inline std::uint64_t& SpriteUiDrawCalls() {
+  static std::uint64_t calls = 0;
+  return calls;
+}
+
 class SpriteUiSdlRenderer {
  public:
   ~SpriteUiSdlRenderer() { destroy(); }
@@ -105,6 +112,7 @@ class SpriteUiSdlRenderer {
         SDL_SetRenderClipRect(renderer, nullptr);
         return false;
       }
+      ++SpriteUiDrawCalls();
     }
     return SDL_SetRenderClipRect(renderer, nullptr);
   }
