@@ -2,7 +2,7 @@
 
 // Moldura flutuante do Console (SpriteUI): posicao da janela, arraste pelo grip, X para fechar.
 // So regras e geometria, sem SDL nem desenho. O painel (console_panel.hpp) desenha a moldura e repassa os
-// cliques para ca. Testado sem janela em tests/test_console_frame.cpp (Editor.ConsoleFrame).
+// cliques para ca. Testado sem janela em tests/test_window_frame.cpp (Editor.ConsoleFrame).
 //
 // Padrao de moldura (docs/trocarjanelas.md, secao 1.1): grip a esquerda do titulo (so ele arrasta), X a direita.
 // O icone "?" ainda nao existe aqui (pendente, ver docs/trocarjanelas.md, secao 4.3).
@@ -13,7 +13,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace editor::console_frame {
+namespace editor::window_frame {
 
 namespace SU = ToolEngine::SpriteUi;
 namespace SW = ToolEngine::SpriteUi::Widgets;
@@ -30,13 +30,15 @@ enum class Event : unsigned char { None, Close, DragStart };
 
 class Frame {
  public:
-  // Primeira vez: centralizada na parte de baixo. Depois disso a posicao e a que o usuario arrastou.
-  // A janela nunca sai da area visivel: a posicao e prendida a cada quadro.
-  void place(float windowW, float windowH) {
-    const float w = std::min(Metrics::kWidth, std::max(1.f, windowW - 2.f * Metrics::kMargin));
+  // Primeira vez: na parte de baixo, centralizada (firstX < 0) ou em firstX. Depois disso a posicao e a que o
+  // usuario arrastou. A janela nunca sai da area visivel: a posicao e prendida a cada quadro.
+  // width: largura pedida (a janela encolhe se a tela for menor).
+  void place(float windowW, float windowH, float width = Metrics::kWidth, float firstX = -1.f) {
+    const float w = std::min(width, std::max(1.f, windowW - 2.f * Metrics::kMargin));
     const float h = std::min(Metrics::kHeight, std::max(1.f, windowH - 2.f * Metrics::kMargin));
     if (!placed_) {
-      pos_ = {std::floor((windowW - w) * 0.5f), std::max(0.f, std::floor(windowH - h - Metrics::kBottomGap))};
+      const float x = firstX >= 0.f ? firstX : (windowW - w) * 0.5f;
+      pos_ = {std::floor(x), std::max(0.f, std::floor(windowH - h - Metrics::kBottomGap))};
       placed_ = true;
     }
     pos_.x = std::clamp(pos_.x, 0.f, std::max(0.f, windowW - w));
@@ -94,4 +96,4 @@ class Frame {
   bool dragging_ = false;
 };
 
-}  // namespace editor::console_frame
+}  // namespace editor::window_frame

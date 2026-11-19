@@ -15,7 +15,7 @@
 //
 // Eventos que caem no painel nao chegam ao ImGui (handleEvent devolve true). Teclado so e consumido com um campo
 // focado; o campo liga o texto do SDL (SDL_StartTextInput) e desliga ao perder o foco.
-#include "console_frame.hpp"
+#include "window_frame.hpp"
 #include "console_model.hpp"
 #include "i18n.hpp"
 #include "spriteui_host.hpp"
@@ -45,7 +45,7 @@ namespace SR = ToolEngine::SpriteUi::Rendering;
 namespace ST = ToolEngine::SpriteUi::Text;
 namespace cm = editor::console_model;
 namespace SW = ToolEngine::SpriteUi::Widgets;
-namespace cf = editor::console_frame;
+namespace wf = editor::window_frame;
 
 struct Theme {
   static constexpr float kPad = sui::kPanelPadding;
@@ -255,9 +255,9 @@ class ConsolePanel {
   // Clique na moldura: X pede o fechamento (vai em Requests::close no proximo draw); grip inicia o arraste.
   // Devolve true quando o clique foi da moldura, para ele nao chegar ao conteudo.
   bool frameDown(float x, float y) {
-    const cf::Event ev = frame_.pointerDown({x, y});
-    if (ev == cf::Event::Close) closeRequested_ = true;
-    return ev != cf::Event::None;
+    const wf::Event ev = frame_.pointerDown({x, y});
+    if (ev == wf::Event::Close) closeRequested_ = true;
+    return ev != wf::Event::None;
   }
 
   void onMouseDown(const SDL_Event& e) {
@@ -681,8 +681,8 @@ class ConsolePanel {
     const std::uint32_t frameClip = addClip(frame.position.x, frame.position.y, frame.size.x, frame.size.y);
     const SU::Rect title = frame_.titleRect();
     const SU::Rect grip = frame_.gripRect();
-    addText(title.position.x + cf::Metrics::kGripWidth, title.position.y + title.size.y * 0.5f, T("Console"),
-            Theme::kFont + 1.f, colors_.text, title.size.x - cf::Metrics::kGripWidth, 0.95f, frameClip);
+    addText(title.position.x + wf::Metrics::kGripWidth, title.position.y + title.size.y * 0.5f, T("Console"),
+            Theme::kFont + 1.f, colors_.text, title.size.x - wf::Metrics::kGripWidth, 0.95f, frameClip);
     // Grip: 2 colunas x 3 pontos, no centro do icone.
     const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
     for (int c = 0; c < 2; ++c) {
@@ -836,8 +836,8 @@ class ConsolePanel {
   Focus focus_ = Focus::None;
   bool draggingSelection_ = false;
 
-  // Moldura flutuante (titulo, grip, X). A geometria e as regras ficam em console_frame.hpp.
-  cf::Frame frame_;
+  // Moldura flutuante (titulo, grip, X). A geometria e as regras ficam em window_frame.hpp.
+  wf::Frame frame_;
   SW::WindowFrameColors frameColors_{};
   bool closeRequested_ = false;
 };

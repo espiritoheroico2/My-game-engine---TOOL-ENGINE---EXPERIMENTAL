@@ -58,10 +58,10 @@ if(TOOL_WITH_SPRITEUI)
   add_test(NAME Editor.SuiPalette COMMAND sui_palette_tests)
 
   # Moldura do Console (console_frame.hpp): posicao, X, arraste pelo grip e limites. Sem janela.
-  add_executable(editor_console_frame_tests tests/test_console_frame.cpp)
-  target_include_directories(editor_console_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(editor_console_frame_tests PRIVATE SpriteUi::SpriteUI)
-  add_test(NAME Editor.ConsoleFrame COMMAND editor_console_frame_tests)
+  add_executable(editor_window_frame_tests tests/test_window_frame.cpp)
+  target_include_directories(editor_window_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_window_frame_tests PRIVATE SpriteUi::SpriteUI)
+  add_test(NAME Editor.WindowFrame COMMAND editor_window_frame_tests)
 
   # Captura headless da janela Editor info (SpriteUI). Nao e um teste do ctest: gera PPM para conferir visualmente.
   add_executable(editor_info_capture tools/editor_info_capture.cpp)

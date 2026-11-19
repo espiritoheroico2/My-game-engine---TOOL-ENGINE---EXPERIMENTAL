@@ -1,6 +1,6 @@
-// Testes da moldura do Console (console_frame.hpp): posicao, X, arraste pelo grip e limites da janela.
+// Testes da moldura do Console (window_frame.hpp): posicao, X, arraste pelo grip e limites da janela.
 // Sem janela e sem SDL. Roda no ctest como Editor.ConsoleFrame.
-#include "console_frame.hpp"
+#include "window_frame.hpp"
 
 #include <cstdio>
 
@@ -24,24 +24,24 @@ ToolEngine::SpriteUi::Vec2 Center(ToolEngine::SpriteUi::Rect r) {
 }  // namespace
 
 int main() {
-  namespace cf = editor::console_frame;
+  namespace wf = editor::window_frame;
   namespace SW = ToolEngine::SpriteUi::Widgets;
   using SU_Vec2 = ToolEngine::SpriteUi::Vec2;
 
   // 1. Primeira posicao: centralizada na horizontal, na parte de baixo, inteira dentro da janela.
   {
-    cf::Frame f;
+    wf::Frame f;
     f.place(1280.f, 800.f);
     const auto r = f.rect();
     Check(f.placed(), "primeira vez: a janela e posicionada");
-    Check(r.size.x == cf::Metrics::kWidth && r.size.y == cf::Metrics::kHeight, "tamanho padrao 720 x 280");
+    Check(r.size.x == wf::Metrics::kWidth && r.size.y == wf::Metrics::kHeight, "tamanho padrao 720 x 280");
     Check(r.position.x == (1280.f - r.size.x) * 0.5f, "centralizada na horizontal");
     Check(r.position.y + r.size.y <= 800.f && r.position.y > 800.f * 0.5f, "fica na parte de baixo da janela");
   }
 
   // 2. Janela pequena: a moldura encolhe e continua inteira dentro dela.
   {
-    cf::Frame f;
+    wf::Frame f;
     f.place(400.f, 200.f);
     const auto r = f.rect();
     Check(r.position.x >= 0.f && r.position.y >= 0.f, "janela pequena: origem nao sai da tela");
@@ -50,23 +50,23 @@ int main() {
 
   // 3. Clique no X fecha; a posicao nao muda.
   {
-    cf::Frame f;
+    wf::Frame f;
     f.place(1280.f, 800.f);
     const auto before = f.position();
     const auto closeRect = SW::WindowFrameButtonRect(f.rect(), f.metrics(), false, SW::WindowFrameButton::Close);
-    const cf::Event ev = f.pointerDown(Center(closeRect));
-    Check(ev == cf::Event::Close, "X: clique dispara o fechamento");
+    const wf::Event ev = f.pointerDown(Center(closeRect));
+    Check(ev == wf::Event::Close, "X: clique dispara o fechamento");
     Check(!f.dragging() && f.position().x == before.x && f.position().y == before.y, "X: nao arrasta a janela");
   }
 
   // 4. Grip arrasta a janela; o movimento segue o ponteiro e soltar encerra o arraste.
   {
-    cf::Frame f;
+    wf::Frame f;
     f.place(1280.f, 800.f);
     const SU_Vec2 start = f.position();
     const auto grip = f.gripRect();
-    const cf::Event ev = f.pointerDown(Center(grip));
-    Check(ev == cf::Event::DragStart && f.dragging(), "grip: inicia o arraste");
+    const wf::Event ev = f.pointerDown(Center(grip));
+    Check(ev == wf::Event::DragStart && f.dragging(), "grip: inicia o arraste");
     f.pointerMove({Center(grip).x + 60.f, Center(grip).y + 30.f});
     Check(f.position().x == start.x + 60.f && f.position().y == start.y + 30.f, "grip: a janela segue o ponteiro");
     f.pointerUp();
@@ -77,18 +77,18 @@ int main() {
 
   // 5. Clique no titulo (fora do grip) e no conteudo nao arrastam nem fecham.
   {
-    cf::Frame f;
+    wf::Frame f;
     f.place(1280.f, 800.f);
     const auto title = f.titleRect();
     const SU_Vec2 onTitle{title.position.x + title.size.x * 0.7f, title.position.y + title.size.y * 0.5f};
-    Check(f.pointerDown(onTitle) == cf::Event::None && !f.dragging(), "titulo fora do grip: nao arrasta");
+    Check(f.pointerDown(onTitle) == wf::Event::None && !f.dragging(), "titulo fora do grip: nao arrasta");
     const auto content = f.content();
-    Check(f.pointerDown(Center(content)) == cf::Event::None && !f.dragging(), "conteudo: clique nao arrasta nem fecha");
+    Check(f.pointerDown(Center(content)) == wf::Event::None && !f.dragging(), "conteudo: clique nao arrasta nem fecha");
   }
 
   // 6. Arraste para fora da tela: a janela para na borda visivel.
   {
-    cf::Frame f;
+    wf::Frame f;
     f.place(1280.f, 800.f);
     const auto grip = f.gripRect();
     f.pointerDown(Center(grip));
@@ -105,8 +105,8 @@ int main() {
 
   // 7. Antes do primeiro quadro, nenhum clique conta.
   {
-    cf::Frame f;
-    Check(f.pointerDown({10.f, 10.f}) == cf::Event::None, "sem janela posicionada: clique nao faz nada");
+    wf::Frame f;
+    Check(f.pointerDown({10.f, 10.f}) == wf::Event::None, "sem janela posicionada: clique nao faz nada");
   }
 
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);

@@ -2646,7 +2646,7 @@ static int runEditorMain(int argc, char** argv) {
 #ifdef TOOL_WITH_SPRITEUI
       const bool spriteUiHandled =
           spriteUiDiagnostics.handleEvent(e, ed.showSpriteUiDiagnostics);
-      const bool profHandled = profPanel && profPanel->handleEvent(e, ed.showProfiler, gProfilerFrame);
+      const bool profHandled = profPanel && profPanel->handleEvent(e, ed.showProfiler);
       const bool helpHandled = helpPanel && helpPanel->handleEvent(e, window, editor::helpState().open);   // janela Help SpriteUI
       const editor::testmap::Action testMapAction = testMapPanel ? testMapPanel->handleEvent(e, editor::testMapState().open, editor::testMapState().side) : editor::testmap::Action::None;
       if (testMapAction == editor::testmap::Action::Generate) testMapGenerate = true;
@@ -2736,7 +2736,6 @@ static int runEditorMain(int argc, char** argv) {
       if (ed.showHierarchy) drawHierarchy(ed);
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showInspector) drawInspector(ed);
-      if (profPanel) drawProfilerFrame(ed);
       ed_::scriptWindowUi(ed); // janela de edicao de script (fora do Inspector)
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showScene) drawSceneWindow(ed, renderer);
@@ -2767,22 +2766,18 @@ static int runEditorMain(int argc, char** argv) {
     drawViewPanels(ed, renderer);   // Scene e Jogo em SpriteUI: por cima do ImGui
 #ifdef TOOL_WITH_SPRITEUI
     const double nowSec = static_cast<double>(SDL_GetTicksNS()) * 1e-9;
-    if (profPanel) {
-      if (gProfilerExportRequested) {
-        profPanel->beginExport(nowSec);
-        gProfilerExportRequested = false;
-      }
-      const bool profilerVisible = ed.showProfiler && gProfilerFrame;
+    if (profPanel) {   // Profiler: moldura SpriteUI com o botao Exportar (sem janela ImGui)
+      if (profPanel->consumeExportRequest()) profPanel->beginExport(nowSec);
+      const bool profilerVisible = ed.showProfiler;
       if (profilerVisible || profPanel->exporting()) {
         if (profPanel->due(nowSec)) profPanel->refresh(nowSec, ed.prof, fillProfilerExtras(ed));   // so 4 vezes por segundo
         profPanel->tickExport(nowSec);
       }
-      gProfilerExportActive = profPanel->exporting();
-      gProfilerExportStatus = profPanel->exportStatus();
-      if (profilerVisible && !profPanel->draw(renderer, gProfilerRect)) {
+      if (profilerVisible && !profPanel->draw(renderer, window)) {
         tool::logError(std::string("Profiler SpriteUI render failed: ") + SDL_GetError());
         ed.showProfiler = false;
       }
+      if (profPanel->consumeClose()) ed.showProfiler = false;   // X da moldura
     }
     if (helpPanel) {   // por cima do Profiler; o "?" e F1 abrem o topico em helpState().pending
       editor::HelpState& help = editor::helpState();

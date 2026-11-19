@@ -28,6 +28,9 @@
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
+#include "SpriteUi/Widgets/WindowFrame.hpp"
+#include "SpriteUi/Widgets/WindowFramePaint.hpp"
+#include "window_frame.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -51,8 +54,13 @@ namespace SU = ToolEngine::SpriteUi;
 namespace SR = ToolEngine::SpriteUi::Rendering;
 namespace ST = ToolEngine::SpriteUi::Text;
 namespace pm = editor::profiler_model;
+namespace SW = ToolEngine::SpriteUi::Widgets;
+namespace wf = editor::window_frame;
 
 struct Theme {
+  static constexpr float kToolbarH = 30.f;        // barra do topo: botao Exportar e status
+  static constexpr float kBtnH = 24.f;
+  static constexpr float kBtnPad = 12.f;
   static constexpr float kWidth = 420.f;          // largura inicial recomendada (px)
   static constexpr float kPad = sui::kPanelPadding; // margem lateral do conteudo
   static constexpr float kScrollLane = 12.f;      // reserva a direita da lista para a barra de rolagem
@@ -89,6 +97,9 @@ struct Colors {
   SU::Vec4 graphA = Srgb(0.30f, 0.70f, 0.98f);    // grafico 0: tempo de quadro
   SU::Vec4 graphB = Srgb(0.95f, 0.62f, 0.25f);    // grafico 1: trabalho da CPU
   SU::Vec4 scroll = Srgb(0.45f, 0.48f, 0.55f, 0.75f);
+  SU::Vec4 btn = Srgb(0.13f, 0.16f, 0.21f);
+  SU::Vec4 btnPressed = Srgb(0.09f, 0.11f, 0.15f);
+  SU::Vec4 btnDisabled = Srgb(0.10f, 0.12f, 0.15f);
 };
 
 // Um retangulo ou um texto ja medido, em coordenadas locais da lista (sem rolagem).
@@ -106,6 +117,14 @@ class ProfilerPanel {
   // `sdl` e o renderizador compartilhado das janelas SpriteUI (o atlas ja foi enviado por quem o criou).
   ProfilerPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : atlas_{atlas}, sdl_{sdl} {
     buildTree();
+    // Moldura: mesmo visual do Console (corpo navy, aba de 30 px).
+    frameColors_.body = colors_.panel;
+    frameColors_.border = Srgb(0.160f, 0.220f, 0.330f);
+    frameColors_.borderDragging = Srgb(0.420f, 0.600f, 0.980f);
+    frameColors_.headerActive = Srgb(0.120f, 0.160f, 0.230f);
+    frameColors_.headerInactive = Srgb(0.090f, 0.120f, 0.180f);
+    frameColors_.headerDragging = Srgb(0.160f, 0.210f, 0.300f);
+    frameColors_.glyph = Srgb(0.910f, 0.918f, 0.933f);
   }
   ProfilerPanel(const ProfilerPanel&) = delete;
   ProfilerPanel& operator=(const ProfilerPanel&) = delete;
@@ -141,26 +160,75 @@ class ProfilerPanel {
     saveExport();
   }
 
-  // So consome a roda dentro do conteudo. Cliques e movimentos precisam chegar a janela hospedeira.
-  bool handleEvent(const SDL_Event& e, bool visible, bool hostVisible) {
-    if (!visible || !hostVisible) return false;
-    if (e.type != SDL_EVENT_MOUSE_WHEEL || !contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
-    scroll_ = std::clamp(scroll_ - e.wheel.y * Theme::kWheelStep, 0.f, maxScroll_);
-    return true;
+  // Moldura (X fecha, grip arrasta), botao Exportar e roda sobre a lista. Devolve true quando consumiu o evento.
+  bool handleEvent(const SDL_Event& e, bool visible) {
+    if (!visible) return false;
+    switch (e.type) {
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (e.button.button != SDL_BUTTON_LEFT) return false;
+        if (frameDown(e.button.x, e.button.y)) return true;
+        if (!exporting_ && insideRect(exportBox_, e.button.x, e.button.y)) {
+          exportPressed_ = true;
+          return true;
+        }
+        return false;
+      case SDL_EVENT_MOUSE_BUTTON_UP:
+        frame_.pointerUp();
+        if (e.button.button == SDL_BUTTON_LEFT && exportPressed_) {
+          exportPressed_ = false;
+          if (insideRect(exportBox_, e.button.x, e.button.y)) exportRequested_ = true;
+        }
+        return false;
+      case SDL_EVENT_MOUSE_MOTION:
+        if (frame_.dragging()) {
+          frame_.pointerMove({e.motion.x, e.motion.y});
+          return true;
+        }
+        return false;
+      case SDL_EVENT_MOUSE_WHEEL:
+        if (!contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
+        scroll_ = std::clamp(scroll_ - e.wheel.y * Theme::kWheelStep, 0.f, maxScroll_);
+        return true;
+      default:
+        return false;
+    }
   }
 
-  // Desenha dentro da area de conteudo da janela hospedeira. Retorna false so em falha do SDL.
-  bool draw(SDL_Renderer* renderer, sui::Box bounds) {
-    if (!renderer) return false;
-    if (bounds.w <= 0.f || bounds.h <= 0.f) {
+  // Pedidos da moldura e do botao, lidos e zerados pelo host.
+  bool consumeClose() {
+    const bool v = closeRequested_;
+    closeRequested_ = false;
+    return v;
+  }
+  bool consumeExportRequest() {
+    const bool v = exportRequested_;
+    exportRequested_ = false;
+    return v;
+  }
+
+  // Desenha a janela: moldura, barra do topo e a lista (rolagem). Retorna false so em falha do SDL.
+  bool draw(SDL_Renderer* renderer, SDL_Window* window) {
+    if (!renderer || !window) return false;
+    int winW = 0, winH = 0;
+    SDL_GetWindowSize(window, &winW, &winH);
+    if (winW <= 0 || winH <= 0) {
+      hasPacket_ = false;
+      return true;
+    }
+    // Primeira posicao: canto inferior esquerdo, com a largura de antes (420 px). O Console nasce no centro.
+    frame_.place(static_cast<float>(winW), static_cast<float>(winH), Theme::kWidth, 16.f);
+    const SU::Rect content = frame_.content();
+    const SU::Rect area{{content.position.x, content.position.y + Theme::kToolbarH},
+                        {content.size.x, std::max(0.f, content.size.y - Theme::kToolbarH)}};
+    if (area.size.x <= 0.f || area.size.y <= 0.f) {
       hasPacket_ = false;
       return true;
     }
 
-    const float panelW = bounds.w;
-    const float panelH = bounds.h;
-    const float panelX = bounds.x;
-    const float panelY = bounds.y;
+    const float panelW = area.size.x;
+    const float panelH = area.size.y;
+    const float panelX = area.position.x;
+    const float panelY = area.position.y;
     if (std::abs(panelW - contentWidth_) > 0.5f) {
       contentWidth_ = panelW;
       rebuild();
@@ -184,6 +252,7 @@ class ProfilerPanel {
     std::vector<SR::UIRenderItem> extra;
     appendContent(extra, list, listClip);
     appendFrameDecorations(extra, listClip);
+    appendWindow(extra, content);
     scene.renderItems.insert(scene.renderItems.end(), extra.begin(), extra.end());
     packet_ = extractor_.Build(++frameId_, scene.renderItems, nullptr, clips);
     hasPacket_ = SR::IsFramePacketValid(packet_);
@@ -196,6 +265,73 @@ class ProfilerPanel {
   [[nodiscard]] bool hasPacket() const { return hasPacket_; }
 
  private:
+  // ---------- Moldura, barra do topo e botao (por quadro) ----------
+  bool frameDown(float x, float y) {
+    const wf::Event ev = frame_.pointerDown({x, y});
+    if (ev == wf::Event::Close) closeRequested_ = true;
+    return ev != wf::Event::None;
+  }
+
+  static bool insideRect(SU::Rect r, float x, float y) {
+    return x >= r.position.x && y >= r.position.y && x < r.position.x + r.size.x && y < r.position.y + r.size.y;
+  }
+
+  // Texto de uma linha, centrado em yMid, para a moldura e a barra (fora da lista: nao rola).
+  void textItem(std::vector<SR::UIRenderItem>& out, std::uint64_t& paint, float x, float yMid, const std::string& s, float size,
+                SU::Vec4 color, float maxW) {
+    if (s.empty() || maxW <= 0.f) return;
+    const ST::TextLayoutResult lay = layoutOf(fit(s, size, maxW), size);
+    SU::UILayoutRect box;
+    box.resolvedPosition = {x, yMid - lay.lineHeight * 0.5f};
+    box.resolvedSize = {lay.size.x, lay.size.y};
+    auto items = ST::GenerateTextRenderItems(lay, box, color, kAtlasSlice, SR::NoClipIndex, 0.95f, paint, panel_, 0u);
+    paint += items.size() + 1;
+    out.insert(out.end(), items.begin(), items.end());
+  }
+
+  // Moldura SpriteUI (corpo, aba, X), titulo, grip e barra do topo com o botao Exportar e o status.
+  void appendWindow(std::vector<SR::UIRenderItem>& out, const SU::Rect& content) {
+    std::uint64_t paint = 100000;
+    SW::WindowFrameState state;
+    state.active = true;
+    state.dragging = frame_.dragging();
+    state.docked = false;
+    auto frameItems = SW::BuildWindowFrameItems(panel_, frame_.rect(), frame_.metrics(), state, frameColors_, -2.f, paint);
+    paint += frameItems.size() + 1;
+    out.insert(out.end(), frameItems.begin(), frameItems.end());
+
+    const SU::Rect title = frame_.titleRect();
+    textItem(out, paint, title.position.x + wf::Metrics::kGripWidth, title.position.y + title.size.y * 0.5f, T("Profiler"),
+             Theme::kHeadingFont + 1.f, colors_.text, title.size.x - wf::Metrics::kGripWidth);
+
+    // Grip: 2 colunas x 3 pontos, no centro do icone.
+    const SU::Rect grip = frame_.gripRect();
+    const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
+    for (int c = 0; c < 2; ++c) {
+      for (int r = 0; r < 3; ++r) {
+        out.push_back(solidItem(cx - 3.f + 4.f * static_cast<float>(c), cy - 4.f + 4.f * static_cast<float>(r), 2.f, 2.f,
+                                colors_.textDim, 0.95f, SR::NoClipIndex, paint++));
+      }
+    }
+
+    // Barra do topo: botao Exportar (apagado enquanto exporta) e o status ao lado.
+    const float barY = content.position.y;
+    const std::string label = T("Export data");
+    const float labelW = layoutOf(label, Theme::kFont).size.x;
+    const float btnW = labelW + 2.f * Theme::kBtnPad;
+    exportBox_ = SU::Rect{{content.position.x + Theme::kPad * 0.5f, barY + (Theme::kToolbarH - Theme::kBtnH) * 0.5f},
+                          {btnW, Theme::kBtnH}};
+    const SU::Vec4 fill = exporting_ ? colors_.btnDisabled : (exportPressed_ ? colors_.btnPressed : colors_.btn);
+    out.push_back(solidItem(exportBox_.position.x, exportBox_.position.y, btnW, Theme::kBtnH, fill, 0.2f, SR::NoClipIndex, paint++));
+    textItem(out, paint, exportBox_.position.x + Theme::kBtnPad, barY + Theme::kToolbarH * 0.5f, label, Theme::kFont,
+             exporting_ ? colors_.textDim : colors_.text, labelW);
+    if (!exportStatus_.empty()) {
+      const float sx = exportBox_.position.x + btnW + 12.f;
+      const float right = content.position.x + content.size.x - Theme::kPad * 0.5f;
+      textItem(out, paint, sx, barY + Theme::kToolbarH * 0.5f, exportStatus_, Theme::kFont, colors_.textDim, right - sx);
+    }
+  }
+
   // ---------- Arvore de layout: painel e lista ----------
   void buildTree() {
     SU::FlexItem panel;
@@ -496,6 +632,14 @@ class ProfilerPanel {
   std::uint64_t frameId_ = 0;
   bool hasPacket_ = false;
   bool exporting_ = false;
+
+  // Moldura e pedidos da janela (X, grip e botao Exportar)
+  wf::Frame frame_;
+  SW::WindowFrameColors frameColors_{};
+  SU::Rect exportBox_{};
+  bool closeRequested_ = false;
+  bool exportRequested_ = false;
+  bool exportPressed_ = false;
   double exportStart_ = 0.0;
   profiler_export::CaptureSchedule exportSchedule_;
   std::vector<profiler_export::Snapshot> exportSamples_;
