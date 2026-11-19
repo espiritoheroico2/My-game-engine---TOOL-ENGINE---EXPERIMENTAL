@@ -225,6 +225,39 @@ um teste que o responsavel executa (ver `docs/CODAR.MD` da branch `ui-settings-r
       multicamada em janela real; desenhar o grip (icone) em cada janela.
     - Criterio: teste visual T-1 a T-4 do `CODAR.MD` sem falhas.
 
+#### Inventario das janelas ainda em ImGui (2026-11-19)
+
+Contagem feita com `grep` em `apps/editor`. "Host" = janela ImGui que hoje so enquadra conteudo SpriteUI.
+
+| Janela | Arquivo | Linhas | Situacao | Observacao |
+|---|---|---:|---|---|
+| Editor info | `export_ui.hpp` | 136 (com Export) | ImGui | Formulario com InputText e InputTextMultiline; rascunho antes de salvar |
+| Export game | `export_ui.hpp` | (acima) | ImGui | Combo de plataforma, botao, aviso de campos faltando |
+| Input Map | `extra_ui.hpp` | 540 (com recursos) | ImGui | Inclui popups "addres" e "remres" |
+| Script | `script_window.hpp` | 183 | ImGui | BeginChild de completar e de problemas |
+| Assets e Scenes | `assets_panel.hpp` | 480 | ImGui | Listas, menus de contexto, 8 modais (renomear, apagar, nova pasta, novo arquivo, nova cena) |
+| Edit file (texto) | `assets_panel.hpp` | (acima) | ImGui | Janela de texto de arquivo |
+| Narrative Controller | `narrative_panel.hpp` | 280 | ImGui + ImNodes | Ultima na ordem; grafo com ImNodes precisa de decisao propria |
+| Project dialog (inicio) | `project_dialog.hpp` | 139 | ImGui (fallback) | Tela de inicio ja e SpriteUI; este e o `--imgui-start` e o caminho sem fonte |
+| Hierarchy | `main.cpp` | ~350-480 | Host ImGui | Conteudo SpriteUI (`hierPanel`); menus de criar e renomear ainda ImGui |
+| Inspector | `main.cpp` | ~667-900 | Host ImGui | Conteudo SpriteUI (`inspPanel`); popup "Add Component" ainda ImGui |
+| Profiler | `main.cpp` | ~629 | Host ImGui | Conteudo SpriteUI (`profPanel`) |
+| Console | `main.cpp` | ~650 | Host ImGui | Conteudo SpriteUI (`consolePanel`) |
+| Scene e Game | `main.cpp` | ~892-1440 | Host ImGui | Imagem da cena e barra flutuante; menu de contexto da cena em ImGui |
+| Settings | `main.cpp` | ~2018 | Host ImGui | Conteudo SpriteUI (`settingsPanel`) |
+
+Decisao necessaria antes de remover qualquer host: **moldura SpriteUI** (titulo, grip, encaixe, camada) para
+as janelas. Sem ela, o ImGui continua sendo a moldura mesmo quando o conteudo e SpriteUI.
+
+Ordem proposta (uma janela por commit, cada uma com modelo testavel quando possivel):
+1. Moldura SpriteUI (`WindowFrame`) ligada ao `WindowManager`/roteador, testada com Settings.
+2. Editor info e Export game (formularios simples).
+3. Input Map e Script.
+4. Assets, Scenes e Edit file (maior volume de popups).
+5. Hierarchy, Inspector, Profiler, Console, Scene e Game (hosts).
+6. Narrative Controller (ImNodes).
+7. Remover ImGui do build (item 11).
+
 ### Fase D: fechar tarefas tecnicas pendentes
 
 14. **D3D12, T7** [ ] (mesmo item 2 da Fase A; ver la)
