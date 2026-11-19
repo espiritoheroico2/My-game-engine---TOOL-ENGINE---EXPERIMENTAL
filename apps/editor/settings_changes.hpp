@@ -15,7 +15,7 @@ namespace editor::settings_changes {
 // Campo que o usuario mexeu.
 enum class Field : std::uint8_t {
     Tab, Api, ResMode, CustomW, CustomH, RenderScale, Upscale, Aa, PixelFilter, Fps,
-    Shadows, ShadowQuality, ChunkCacheMax, InterfaceScale, IdleRendering
+    Shadows, ShadowQuality, ChunkCacheMax, InterfaceScale, IdleRendering, Palette
 };
 
 struct Change {
@@ -33,6 +33,7 @@ void ApplyChanges(Target& target, const Requests& requests) {
     for (const Change& c : requests) {
         switch (c.field) {
             case Field::Tab: target.setTab(c.index); break;
+            case Field::Palette: target.setPalette(c.index); break;
             case Field::Api:
                 if (c.index != target.apiRequested()) target.applyApi(c.index);
                 break;

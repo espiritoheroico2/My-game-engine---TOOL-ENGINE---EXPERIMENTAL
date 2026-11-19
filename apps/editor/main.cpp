@@ -40,6 +40,7 @@
 #include "inspector_panel.hpp"
 #include "settings_changes.hpp"
 #include "settings_panel.hpp"
+#include "sui_palette.hpp"
 #include "panel_router.hpp"
 #ifdef TOOL_WITH_SPRITEUI
 #include "scene_view_panel.hpp"
@@ -1910,6 +1911,7 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   editor::settings_panel::Values v;
   auto& L = ed.sceneInfo.render.lighting;
   v.tab = ed.settingsTab < 0 ? 1 : ed.settingsTab;
+  v.palette = static_cast<int>(editor::palette::activeIndex());
   v.api = ed.apiRequested;
   v.apiBuilt = settingsApiBuilt();
   v.apiStatus = F("Active API: %s", ed.apiStatus.c_str());
@@ -1943,6 +1945,7 @@ struct SettingsEditorTarget {
   Editor& ed;
   int apiRequested() const { return ed.apiRequested; }
   void setTab(int i) { ed.settingsTab = i; }
+  void setPalette(int i) { editor::palette::activeIndex() = static_cast<std::size_t>(i < 0 ? 0 : i); }
   void applyApi(int api) { ed.requestApi(api); ed.settingsDirty = true; }   // pedido: a troca acontece no inicio do proximo quadro
   void setResMode(int i) { ed.resMode = i; ed.settingsDirty = true; }
   void setCustomW(int w) { ed.customW = w; ed.settingsDirty = true; }

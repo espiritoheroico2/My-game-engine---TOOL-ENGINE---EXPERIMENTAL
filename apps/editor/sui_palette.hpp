@@ -26,7 +26,7 @@ struct Palette {
   Rgb error;          // erros e avisos
 };
 
-inline constexpr std::size_t kCount = 3;
+inline constexpr std::size_t kCount = 4;
 
 // Presets. Ordem fixa: o indice e o que a aba Appearance grava.
 inline constexpr std::array<Palette, kCount> kPresets{{
@@ -42,6 +42,10 @@ inline constexpr std::array<Palette, kCount> kPresets{{
     {"Light",
      {0.940f, 0.940f, 0.950f}, {0.990f, 0.990f, 1.000f}, {0.100f, 0.110f, 0.130f}, {0.380f, 0.400f, 0.450f},
      {0.160f, 0.450f, 0.900f}, {0.160f, 0.450f, 0.900f}, {0.760f, 0.770f, 0.800f}, {0.800f, 0.150f, 0.150f}},
+    // Noturno: quase preto e azulado, texto suave e destaque frio, para uso no escuro. Fica no fim (indice 3).
+    {"Night",
+     {0.020f, 0.022f, 0.030f}, {0.050f, 0.055f, 0.072f}, {0.890f, 0.900f, 0.920f}, {0.560f, 0.580f, 0.640f},
+     {0.350f, 0.560f, 1.000f}, {0.350f, 0.560f, 1.000f}, {0.120f, 0.130f, 0.165f}, {1.000f, 0.450f, 0.400f}},
 }};
 
 // Indice da paleta em uso. Padrao 0 (Azul escuro).

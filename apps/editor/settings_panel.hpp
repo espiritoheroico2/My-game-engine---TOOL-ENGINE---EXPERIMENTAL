@@ -51,6 +51,7 @@ namespace SR = SU::Rendering;
 namespace ST = SU::Text;
 
 inline constexpr int kGraphicsTab = 1;   // indice da aba Settings em kTabNames
+inline constexpr std::size_t kAppearanceTab = 0;   // indice da secao Appearance em kTabNames
 
 // Valores que a janela mostra. O main.cpp copia do Editor a cada quadro.
 struct Values {
@@ -69,6 +70,7 @@ struct Values {
     int aa = 0;
     bool pixelFilter = false;
     int fps = 0;
+    int palette = 0;          // indice da paleta em uso (Configuracoes > Appearance)
     bool shadows = false;
     int shadowQuality = 0;   // indice (0 a 3), ja convertido pelo main.cpp
     std::string adapter;
@@ -78,7 +80,8 @@ struct Values {
 };
 
 struct Metrics {
-    static constexpr float kStripH = 30.f;
+    static constexpr float kStripH = 0.f;   // faixa de abas removida: o conteudo comeca no topo do painel
+    static constexpr float kHeaderH = 30.f;   // cabecalho de cada secao (recolhivel)
     static constexpr float kPad = sui::kPanelPadding;
     static constexpr float kStripArrowW = 24.f;
     static constexpr float kLabelW = 190.f;
@@ -150,19 +153,21 @@ class SettingsPanel {
         canvas_.clear();
         overlay_.clear();
         steps_.clear();
-        syncTabs(v);
-        layoutStrip();
-        if (tab_ == kGraphicsTab) {
-            syncScroll();
-            layoutGraphics(v);
+        if (v.tab != revealedTab_) {   // abrir uma secao pela janela de Configuracoes a deixa aberta
+            revealedTab_ = v.tab;
+            open_[static_cast<std::size_t>(v.tab)] = true;
         }
+        refreshColors();
+        // Mede o conteudo, prende o deslocamento ao tamanho real e refaz o layout uma vez com ele.
+        layoutSections(v);
+        syncScroll();
+        canvas_.clear();
+        layoutSections(v);
         syncElements(v);
-        if (tab_ == kGraphicsTab) {
-            layoutDropdowns();
-            dropdownTexts();
-            radioTexts();
-            drawScrollbar();
-        }
+        layoutDropdowns();
+        dropdownTexts();
+        radioTexts();
+        drawScrollbar();
 
         const std::vector<SR::ClipRectGPU> clips{
             {rect_.x, rect_.y, rect_.x + rect_.w, rect_.y + rect_.h},
@@ -173,16 +178,10 @@ class SettingsPanel {
         std::uint64_t paint = 1;
         const float bottom = rect_.y + rect_.h;
         items.push_back(sui::Canvas::solidItem(rect_.x, rect_.y, rect_.w, rect_.h, panelColor_, 0.f, owner, kContentClip, paint++));
-        const std::size_t stripStart = items.size();
-        appendTabs(items, paint);
-        strip_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, rect_.y + Metrics::kStripH, owner, kStripClip, paint);
-        for (std::size_t i = stripStart; i < items.size(); ++i) {
-            items[i].layer = static_cast<std::int32_t>(SU::UILayer::Docked);
-        }
-        canvas_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y + Metrics::kStripH, bottom, owner, kContentClip, paint);
-        if (tab_ == kGraphicsTab) appendControls(items, paint);
+        canvas_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, bottom, owner, kContentClip, paint);
+        if (open_[kGraphicsTab]) appendControls(items, paint);
         overlay_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, bottom, owner, kWindowClip, paint);
-        if (tab_ == kGraphicsTab) appendPopups(items, paint);
+        if (open_[kGraphicsTab]) appendPopups(items, paint);
 
         packet_ = extractor_.Build(++frameId_, items, nullptr, clips);
         if (!SR::IsFramePacketValid(packet_)) return true;
@@ -281,17 +280,74 @@ class SettingsPanel {
 
     // ---------- Layout da aba Graficos (coordenadas da janela, ja com a rolagem) ----------
     // Cada bloco devolve o y da linha seguinte. contentH_ guarda a altura total (com as margens) para a rolagem.
-    void layoutGraphics(const Values& v) {
+    // Secoes recolheis, uma embaixo da outra. Cada cabecalho e clicavel; o corpo so existe se a secao esta aberta.
+    void layoutSections(const Values& v) {
         labelW_ = std::min(Metrics::kLabelW, rect_.w * 0.5f);
         controlW_ = rect_.w - 2.f * Metrics::kPad - labelW_;
-        const float top = Metrics::kStripH + Metrics::kPad - scroll_.scrollOffset.y;
+        const float top = Metrics::kPad - scroll_.scrollOffset.y;
+        const float headerW = rect_.w - 2.f * Metrics::kPad;
+        for (auto& row : paletteRows_) row = sui::Box{};   // linhas de tema so existem com a secao aberta
         float y = top;
+        for (std::size_t i = 0; i < sm::kTabCount; ++i) {
+            headers_[i] = sui::Box{Metrics::kPad, y, headerW, Metrics::kHeaderH};
+            drawHeader(i, y, headerW);
+            y += Metrics::kHeaderH + Metrics::kGap;
+            if (!open_[i]) continue;
+            if (i == kGraphicsTab) {
+                y = layoutGraphicsBody(v, y);
+            } else if (i == kAppearanceTab) {
+                y = layoutAppearance(v, y);
+            } else {
+                canvas_.addText(Metrics::kPad, y, std::string(T("Not available in this version yet")), Metrics::kFont,
+                                theme_.textDim, headerW);
+                y += Metrics::kTextH;
+            }
+            y += 2.f * Metrics::kGap;
+        }
+        contentH_ = (y - top) + 2.f * Metrics::kPad;
+    }
+
+    void drawHeader(std::size_t i, float y, float w) {
+        canvas_.addSolid(Metrics::kPad, y, w, Metrics::kHeaderH, theme_.surface, 0.2f);
+        canvas_.addText(Metrics::kPad + 10.f, y + 7.f, std::string(T(sm::kTabNames[i])), Metrics::kFont + 1.f, theme_.text,
+                        w - 40.f);
+        const float cx = Metrics::kPad + w - 18.f, cy = y + Metrics::kHeaderH * 0.5f;
+        canvas_.addSolid(cx - 6.f, cy - 1.f, 12.f, 2.f, theme_.scroll, 0.25f);                      // "-"
+        if (!open_[i]) canvas_.addSolid(cx - 1.f, cy - 6.f, 2.f, 12.f, theme_.scroll, 0.25f);      // "+" quando fechada
+    }
+
+    // Corpo da secao Settings (graficos), a partir de y. Devolve o y final.
+    float layoutGraphicsBody(const Values& v, float y) {
         text(Metrics::kPad, y, v.apiStatus, Metrics::kFont, textWidth());
         y += Metrics::kTextH + 6.f;
         y = layoutApis(v, y);
         y = layoutQuality(v, y);
         y = layoutGpu(v, y);
-        contentH_ = (y - top) + 2.f * Metrics::kPad;
+        return y;
+    }
+
+    // Corpo da secao Appearance: escolha da paleta (a linha marcada e a ativa).
+    float layoutAppearance(const Values& v, float y) {
+        canvas_.addText(Metrics::kPad, y, std::string(T("Theme")), Metrics::kFont, theme_.textDim, textWidth());
+        y += Metrics::kTextH + 6.f;
+        const auto& presets = editor::palette::kPresets;
+        for (std::size_t k = 0; k < editor::palette::kCount; ++k) {
+            paletteRows_[k] = sui::Box{Metrics::kPad, y, textWidth(), Metrics::kRowH};
+            const bool selected = static_cast<int>(k) == v.palette;
+            canvas_.addSolid(paletteRows_[k].x, y, paletteRows_[k].w, Metrics::kRowH,
+                             selected ? theme_.accent : theme_.surface, 0.2f);
+            canvas_.addText(Metrics::kPad + 10.f, y + 5.f, std::string(T(presets[k].name)), Metrics::kFont, theme_.text,
+                            textWidth() - 20.f);
+            y += Metrics::kRowH + Metrics::kGap;
+        }
+        return y;
+    }
+
+    // Tema lido a cada quadro: trocar a paleta muda esta janela na hora.
+    void refreshColors() {
+        theme_ = sui::Theme{};
+        panelColor_ = theme_.panel;
+        headingColor_ = theme_.scroll;
     }
 
     float layoutApis(const Values& v, float y) {
@@ -524,12 +580,33 @@ class SettingsPanel {
             return false;
         }
         const SU::Vec2 p{x - rect_.x, y - rect_.y};
-        if (p.y < Metrics::kStripH) return stripPointer(phase, p);
-        if (tab_ != kGraphicsTab) return false;
+        if (phase == Elm::PointerPhase::Up && sectionPointer(p)) return true;
+        if (phase == Elm::PointerPhase::Up && paletteRowPointer(p)) return true;
         if (phase == Elm::PointerPhase::Down && scrollbarPointer(p)) return true;
+        if (!open_[kGraphicsTab]) return true;
         if (phase == Elm::PointerPhase::Down && stepperClick(p)) return true;
         contentPointer(phase, p);
         return true;
+    }
+
+    bool sectionPointer(const SU::Vec2& p) {
+        for (std::size_t i = 0; i < sm::kTabCount; ++i) {
+            if (headers_[i].contains(p.x, p.y)) {
+                open_[i] = !open_[i];
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool paletteRowPointer(const SU::Vec2& p) {
+        for (std::size_t k = 0; k < editor::palette::kCount; ++k) {
+            if (paletteRows_[k].contains(p.x, p.y)) {
+                pending_.push_back({sc::Field::Palette, static_cast<int>(k), 0.f, false});
+                return true;
+            }
+        }
+        return false;
     }
 
     bool stripPointer(Elm::PointerPhase phase, const SU::Vec2& p) {
@@ -658,6 +735,13 @@ class SettingsPanel {
     sui::Canvas overlay_;   // textos das listas abertas (por cima dos controles)
     sui::SpriteUiSdlRenderer& sdl_;
     sui::Theme theme_;
+    std::array<bool, sm::kTabCount> open_ = [] {
+        std::array<bool, sm::kTabCount> a{};
+        a[kGraphicsTab] = true;   // Settings abre aberta
+        return a;
+    }();
+    std::array<sui::Box, sm::kTabCount> headers_{};                      // cabecalhos (coordenadas locais)
+    std::array<sui::Box, editor::palette::kCount> paletteRows_{};        // linhas de tema (coordenadas locais)
     SU::Vec4 panelColor_ = sui::Srgb(0.055f, 0.075f, 0.11f, 0.97f);
     SU::Vec4 headingColor_ = sui::Srgb(0.45f, 0.72f, 0.96f);
     SU::Vec4 btnColor_ = sui::Srgb(0.13f, 0.16f, 0.21f);
