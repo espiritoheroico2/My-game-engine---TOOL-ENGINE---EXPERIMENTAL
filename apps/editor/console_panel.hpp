@@ -15,6 +15,7 @@
 //
 // Eventos que caem no painel nao chegam ao ImGui (handleEvent devolve true). Teclado so e consumido com um campo
 // focado; o campo liga o texto do SDL (SDL_StartTextInput) e desliga ao perder o foco.
+#include "console_frame.hpp"
 #include "console_model.hpp"
 #include "i18n.hpp"
 #include "spriteui_host.hpp"
@@ -24,6 +25,8 @@
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
+#include "SpriteUi/Widgets/WindowFrame.hpp"
+#include "SpriteUi/Widgets/WindowFramePaint.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -41,6 +44,8 @@ namespace SU = ToolEngine::SpriteUi;
 namespace SR = ToolEngine::SpriteUi::Rendering;
 namespace ST = ToolEngine::SpriteUi::Text;
 namespace cm = editor::console_model;
+namespace SW = ToolEngine::SpriteUi::Widgets;
+namespace cf = editor::console_frame;
 
 struct Theme {
   static constexpr float kPad = sui::kPanelPadding;
@@ -108,6 +113,7 @@ struct Source {
 
 // O que o painel pede ao Editor. Preenchido em draw(); o chamador aplica.
 struct Requests {
+  bool close = false;          // X da moldura (o Editor fecha a janela)
   bool clear = false;          // limpar o log
   bool checkScripts = false;   // verificar os scripts da cena
   std::string command;         // comando da linha de comando (vazio = nada)
@@ -119,6 +125,14 @@ class ConsolePanel {
   // O atlas e o renderizador SDL sao do editor (mesmos do resto das janelas SpriteUI). O atlas sobe uma vez, na main.
   ConsolePanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : atlas_{atlas}, sdl_{sdl} {
     panel_ = tree_.Create({}, panelStyle());
+    // Moldura: mesmas cores do painel (fundo navy) e aba de 30 px.
+    frameColors_.body = colors_.panel;
+    frameColors_.border = Srgb(0.160f, 0.220f, 0.330f);
+    frameColors_.borderDragging = Srgb(0.420f, 0.600f, 0.980f);
+    frameColors_.headerActive = Srgb(0.120f, 0.160f, 0.230f);
+    frameColors_.headerInactive = Srgb(0.090f, 0.120f, 0.180f);
+    frameColors_.headerDragging = Srgb(0.160f, 0.210f, 0.300f);
+    frameColors_.glyph = Srgb(0.910f, 0.918f, 0.933f);
   }
   ConsolePanel(const ConsolePanel&) = delete;
   ConsolePanel& operator=(const ConsolePanel&) = delete;
@@ -134,12 +148,18 @@ class ConsolePanel {
         }
         return false;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (e.button.button == SDL_BUTTON_LEFT && frameDown(e.button.x, e.button.y)) return true;
         onMouseDown(e);
         return false;
       case SDL_EVENT_MOUSE_BUTTON_UP:
+        frame_.pointerUp();
         onMouseUp(e);
         return false;
       case SDL_EVENT_MOUSE_MOTION:
+        if (frame_.dragging()) {
+          frame_.pointerMove({e.motion.x, e.motion.y});
+          return true;
+        }
         if (draggingSelection_) moveCaretFromPointer(e.motion.x, e.motion.y, true);
         return false;
       case SDL_EVENT_TEXT_INPUT:
@@ -155,25 +175,35 @@ class ConsolePanel {
   }
 
   [[nodiscard]] bool wantsTextCursor(float x, float y) const {
+    if (frame_.dragging()) return false;
     if (draggingSelection_) return true;
     const Hit hover = contains(x, y) ? hitTest(x, y) : Hit{};
     return hover.target == Target::Filter || hover.target == Target::Command;
   }
 
   // Calcula o quadro e desenha. Retorna false so em falha do SDL. Os pedidos do usuario saem em `out`.
-  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool visible, sui::Box bounds, const Source& src, Requests& out) {
+  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool visible, const Source& src, Requests& out) {
     if (!visible) {
       resetInteraction();
       return true;
     }
     if (!renderer || !window) return false;
-    if (bounds.w <= 0.f || bounds.h <= 0.f) {
+    int winW = 0, winH = 0;
+    SDL_GetWindowSize(window, &winW, &winH);
+    if (winW <= 0 || winH <= 0) {
       resetInteraction();
       return true;
     }
     window_ = window;
 
-    layoutPanel(bounds);
+    frame_.place(static_cast<float>(winW), static_cast<float>(winH));
+    const SU::Rect content = frame_.content();
+    layoutPanel(sui::Box{content.position.x, content.position.y, content.size.x, content.size.y});
+    if (closeRequested_) {
+      out.close = true;
+      closeRequested_ = false;
+      resetInteraction();
+    }
     if (pending_.target != Target::None) {
       applyClick(pending_, src.entries, out);
       pending_ = Hit{};
@@ -222,6 +252,14 @@ class ConsolePanel {
   }
 
   // ---------- Eventos ----------
+  // Clique na moldura: X pede o fechamento (vai em Requests::close no proximo draw); grip inicia o arraste.
+  // Devolve true quando o clique foi da moldura, para ele nao chegar ao conteudo.
+  bool frameDown(float x, float y) {
+    const cf::Event ev = frame_.pointerDown({x, y});
+    if (ev == cf::Event::Close) closeRequested_ = true;
+    return ev != cf::Event::None;
+  }
+
   void onMouseDown(const SDL_Event& e) {
     if (e.button.button != SDL_BUTTON_LEFT) return;
     pressed_ = Hit{};
@@ -388,6 +426,7 @@ class ConsolePanel {
     pressed_ = Hit{};
     pending_ = Hit{};
     draggingSelection_ = false;
+    frame_.reset();
     setFocus(Focus::None);
   }
 
@@ -627,11 +666,39 @@ class ConsolePanel {
     dirty_ = false;
   }
 
+  // ---------- Moldura: corpo, aba, X (SpriteUI), titulo e grip (escritos aqui, a moldura nao os desenha) ----------
+  void addFrame() {
+    const SU::Rect frame = frame_.rect();
+    // Por tras do conteudo (zOrder -2), como na janela Editor info.
+    SW::WindowFrameState state;
+    state.active = true;
+    state.dragging = frame_.dragging();
+    state.docked = false;
+    auto frameItems = SW::BuildWindowFrameItems(panel_, frame, frame_.metrics(), state, frameColors_, -2.f, paint_);
+    paint_ += frameItems.size() + 1;
+    items_.insert(items_.end(), frameItems.begin(), frameItems.end());
+
+    const std::uint32_t frameClip = addClip(frame.position.x, frame.position.y, frame.size.x, frame.size.y);
+    const SU::Rect title = frame_.titleRect();
+    const SU::Rect grip = frame_.gripRect();
+    addText(title.position.x + cf::Metrics::kGripWidth, title.position.y + title.size.y * 0.5f, T("Console"),
+            Theme::kFont + 1.f, colors_.text, title.size.x - cf::Metrics::kGripWidth, 0.95f, frameClip);
+    // Grip: 2 colunas x 3 pontos, no centro do icone.
+    const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
+    for (int c = 0; c < 2; ++c) {
+      for (int r = 0; r < 3; ++r) {
+        addSolid(cx - 3.f + 4.f * static_cast<float>(c), cy - 4.f + 4.f * static_cast<float>(r), 2.f, 2.f, colors_.textDim,
+                 0.95f, frameClip);
+      }
+    }
+  }
+
   // ---------- Quadro ----------
   void buildItems(const Source& src, const Hit& hover, bool down) {
     items_.clear();
     clips_.clear();
     paint_ = 1;
+    addFrame();
     const float px = panelBounds_.x, py = panelBounds_.y;
     const std::uint32_t panelClip = addClip(px, py, panelW_, panelH_);
     addSolid(px, py, panelW_, panelH_, colors_.panel, 0.f, panelClip);
@@ -768,6 +835,11 @@ class ConsolePanel {
   Hit pressed_{}, pending_{};
   Focus focus_ = Focus::None;
   bool draggingSelection_ = false;
+
+  // Moldura flutuante (titulo, grip, X). A geometria e as regras ficam em console_frame.hpp.
+  cf::Frame frame_;
+  SW::WindowFrameColors frameColors_{};
+  bool closeRequested_ = false;
 };
 
 }  // namespace editor::console_panel

@@ -120,7 +120,7 @@ Em `apps/editor/main.cpp` há 47 `ImGui::Begin`. As janelas a migrar, na ordem:
 |---|---|---|
 | Editor info | SpriteUI com moldura e testes; ImGui ainda no menu | Piloto deste processo |
 | Settings | Host ImGui + conteúdo SpriteUI | Refazer (seção 4.1) |
-| Console | ImGui | Já tem `console_panel.hpp` |
+| Console | SpriteUI com moldura (título, grip, X), teste `Editor.ConsoleFrame`. "?" e negrito pendentes. **Etapa 6 (sua aprovação) pendente**: o código ImGui antigo (`drawConsoleFrame`) ficou como legado até lá | `console_frame.hpp` + `console_panel.hpp` |
 | Profiler | ImGui | Já tem `profiler_panel.hpp` |
 | Hierarchy | ImGui | Já tem `hierarchy_panel.hpp`; mais complexa |
 | Inspector | ImGui | Já tem `inspector_panel.hpp`; mais complexa |

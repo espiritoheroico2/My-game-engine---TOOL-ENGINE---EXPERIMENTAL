@@ -527,8 +527,6 @@ editor::sui::Box gProfilerRect;       // area de conteudo da janela dockavel Pro
 bool gProfilerExportRequested = false;
 bool gProfilerExportActive = false;
 std::string gProfilerExportStatus;
-bool gConsoleFrame = false;          // a janela ImGui do Console esta visivel neste quadro
-editor::sui::Box gConsoleRect;        // area de conteudo da janela dockavel Console
 
 // Dados do objeto selecionado para o painel. Os ponteiros valem neste quadro.
 editor::inspector_panel::Context inspectorContext(Editor& ed) {
@@ -643,6 +641,13 @@ void drawProfilerFrame(Editor& ed) {
   ImGui::End();
 }
 
+#endif
+
+// LEGADO (nao chamado desde a migracao do Console para a moldura SpriteUI). Remover na etapa 7 do
+// docs/trocarjanelas.md, so depois da aprovacao visual do usuario.
+#ifdef TOOL_WITH_SPRITEUI
+bool gConsoleFrame = false;
+editor::sui::Box gConsoleRect;
 void drawConsoleFrame(Editor& ed) {
   gConsoleFrame = false;
   if (!ed.showConsole) return;
@@ -2646,7 +2651,7 @@ static int runEditorMain(int argc, char** argv) {
       const editor::testmap::Action testMapAction = testMapPanel ? testMapPanel->handleEvent(e, editor::testMapState().open, editor::testMapState().side) : editor::testmap::Action::None;
       if (testMapAction == editor::testmap::Action::Generate) testMapGenerate = true;
       const bool menuHandled = menuPanel && menuPanel->handleEvent(e);
-      const bool consoleHandled = consolePanel && consolePanel->handleEvent(e, ed.showConsole && gConsoleFrame);
+      const bool consoleHandled = consolePanel && consolePanel->handleEvent(e, ed.showConsole);
       const bool hierHandled = hierPanel && hierPanel->handleEvent(e);
       // Pontos cobertos por outro painel SpriteUI (ex.: lista de menu aberta) nao chegam ao Settings.
       const bool pointerEvt = isPointerEvent(e);
@@ -2732,7 +2737,6 @@ static int runEditorMain(int argc, char** argv) {
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showInspector) drawInspector(ed);
       if (profPanel) drawProfilerFrame(ed);
-      if (consolePanel) drawConsoleFrame(ed);
       ed_::scriptWindowUi(ed); // janela de edicao de script (fora do Inspector)
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showScene) drawSceneWindow(ed, renderer);
@@ -2848,10 +2852,11 @@ static int runEditorMain(int argc, char** argv) {
       const editor::console_panel::Source source{ed.console, ed.consoleSerial, tool::debug().count(tool::Severity::Error),
                                                  tool::debug().count(tool::Severity::Warning)};
       editor::console_panel::Requests requests;
-      if (!consolePanel->draw(renderer, window, ed.showConsole && gConsoleFrame, gConsoleRect, source, requests)) {
+      if (!consolePanel->draw(renderer, window, ed.showConsole, source, requests)) {
         tool::logError(std::string("Console SpriteUI render failed: ") + SDL_GetError());
         ed.showConsole = false;
       }
+      if (requests.close) ed.showConsole = false;   // X da moldura SpriteUI
       applyConsoleRequests(ed, requests);
     }
     if (statusPanel) {   // por ultimo: a barra fica por cima do Profiler e da Ajuda (mesmo renderer, depois do RenderDrawData)
@@ -2877,7 +2882,7 @@ static int runEditorMain(int argc, char** argv) {
     SDL_GetMouseState(&mouseX, &mouseY);
     const bool textFieldHovered =
         (hierPanel && ed.showHierarchy && gHierarchyFrame && hierPanel->wantsTextCursor(mouseX, mouseY)) ||
-        (consolePanel && ed.showConsole && gConsoleFrame && consolePanel->wantsTextCursor(mouseX, mouseY)) ||
+        (consolePanel && ed.showConsole && consolePanel->wantsTextCursor(mouseX, mouseY)) ||
         (inspPanel && ed.showInspector && gInspectorFrame && inspPanel->wantsTextCursor(mouseX, mouseY)) ||
         (helpPanel && editor::helpState().open && helpPanel->wantsTextCursor(mouseX, mouseY));
     if (textFieldHovered && spriteTextCursor) {
