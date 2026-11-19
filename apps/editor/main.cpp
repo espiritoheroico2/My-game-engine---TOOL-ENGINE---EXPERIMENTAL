@@ -40,6 +40,7 @@
 #include "inspector_panel.hpp"
 #include "settings_changes.hpp"
 #include "settings_panel.hpp"
+#include "panel_router.hpp"
 #ifdef TOOL_WITH_SPRITEUI
 #include "scene_view_panel.hpp"
 #include "game_view_panel.hpp"
@@ -1872,6 +1873,23 @@ void drawProjectTab(Editor& ed) {
 bool gSettingsSpriteOn = false;   // o painel SpriteUI existe
 bool gSettingsFrame = false;      // a janela ImGui esta aberta neste quadro
 editor::sui::Box gSettingsRect;   // area da janela (faixa e conteudo), em pixels
+editor::panel_router::PanelRouter gPanelRouter;   // quem recebe ponteiro quando paineis SpriteUI se sobrepoem
+
+// Eventos de ponteiro (os que o roteador decide). Teclado nao passa por ele.
+inline bool isPointerEvent(const SDL_Event& e) {
+  return e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_UP || e.type == SDL_EVENT_MOUSE_MOTION ||
+         e.type == SDL_EVENT_MOUSE_WHEEL;
+}
+inline float pointerX(const SDL_Event& e) {
+  if (e.type == SDL_EVENT_MOUSE_MOTION) return e.motion.x;
+  if (e.type == SDL_EVENT_MOUSE_WHEEL) return e.wheel.mouse_x;
+  return e.button.x;
+}
+inline float pointerY(const SDL_Event& e) {
+  if (e.type == SDL_EVENT_MOUSE_MOTION) return e.motion.y;
+  if (e.type == SDL_EVENT_MOUSE_WHEEL) return e.wheel.mouse_y;
+  return e.button.y;
+}
 
 // Quais APIs de render estao compiladas (o radio so mostra essas).
 std::array<bool, editor::settings_bridge::kApiCount> settingsApiBuilt() {
@@ -2577,6 +2595,24 @@ static int runEditorMain(int argc, char** argv) {
     if (ed.fpsDirty && renderer) { SDL_SetRenderVSync(renderer, ed.fpsMode == 0 && !headless ? 1 : 0); ed.fpsDirty = false; }
     tool::debug().beginFrame();
     ed.prof.beginFrame();
+    // Areas dos paineis SpriteUI para o roteador: vem do quadro anterior (o layout so muda ao redimensionar).
+    gPanelRouter.beginFrame();
+#ifdef TOOL_WITH_SPRITEUI
+    namespace pr = editor::panel_router;
+    if (menuPanel) {
+      const ImVec2 screen = ImGui::GetIO().DisplaySize;
+      gPanelRouter.add(pr::kMenuBarHandle, {0.f, 0.f, screen.x, ImGui::GetFrameHeight()}, ToolEngine::SpriteUi::UILayer::Docked);
+      if (menuPanel->popupOpen()) {
+        // Lista aberta: fundo de captura (cliques fora dela nao chegam as janelas de tras) e a propria lista por cima.
+        gPanelRouter.add(pr::kMenuBarHandle, {0.f, 0.f, screen.x, screen.y}, ToolEngine::SpriteUi::UILayer::Popup);
+        const editor::sui::Box pb = menuPanel->popupBox();
+        gPanelRouter.add(pr::kMenuBarHandle, {pb.x, pb.y, pb.w, pb.h}, ToolEngine::SpriteUi::UILayer::Popup);
+      }
+    }
+    if (settingsPanel && ed.showSettings && gSettingsFrame)
+      gPanelRouter.add(pr::kSettingsHandle, {gSettingsRect.x, gSettingsRect.y, gSettingsRect.w, gSettingsRect.h},
+                       ToolEngine::SpriteUi::UILayer::Docked);
+#endif
     SDL_Event e;
     // Ocioso: espera ate 16 ms pelo proximo evento (em vez de girar o quadro sem parar). O evento volta para a fila.
     // A espera vem ANTES da zona de medicao: nao e trabalho e nao deve aparecer como "Events + input".
@@ -2605,10 +2641,17 @@ static int runEditorMain(int argc, char** argv) {
       const bool menuHandled = menuPanel && menuPanel->handleEvent(e);
       const bool consoleHandled = consolePanel && consolePanel->handleEvent(e, ed.showConsole && gConsoleFrame);
       const bool hierHandled = hierPanel && hierPanel->handleEvent(e);
-      const bool setHandled = settingsPanel && settingsPanel->handleEvent(e);
+      // Pontos cobertos por outro painel SpriteUI (ex.: lista de menu aberta) nao chegam ao Settings.
+      const bool pointerEvt = isPointerEvent(e);
+      const float ptrX = pointerEvt ? pointerX(e) : 0.f;
+      const float ptrY = pointerEvt ? pointerY(e) : 0.f;
+      const bool settingsMayReceive = !pointerEvt || gPanelRouter.mayReceive(editor::panel_router::kSettingsHandle, ptrX, ptrY);
+      const bool setHandled = settingsPanel && settingsMayReceive && settingsPanel->handleEvent(e);
       const bool inspHandled = inspPanel && inspPanel->handleEvent(e);
       forwardViewEvent(e);   // paineis Scene e Jogo: veem o evento, sem consumir
-      if (!spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !menuHandled && testMapAction == editor::testmap::Action::None) ImGui_ImplSDL3_ProcessEvent(&e);
+      // ImGui so recebe o ponteiro se nenhum painel SpriteUI registrado cobre o ponto: senao as janelas ImGui de tras reagiriam.
+      const bool ownedBySui = pointerEvt && gPanelRouter.coveredBySui(ptrX, ptrY);
+      if (!spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
 #else
       ImGui_ImplSDL3_ProcessEvent(&e);
 #endif

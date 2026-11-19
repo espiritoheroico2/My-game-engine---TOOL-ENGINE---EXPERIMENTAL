@@ -105,6 +105,10 @@ public:
         return renderer_.draw(renderer, packet_);
     }
 
+  // Estado do menu para o roteador de paineis: se a lista de um menu esta aberta e onde (pixels da janela).
+  [[nodiscard]] bool popupOpen() const { return bar_.IsOpen(); }
+  [[nodiscard]] sui::Box popupBox() const { return toBox(bar_.PopupRect()); }
+
 private:
     struct Style {
         SU::Vec4 bar = sui::Srgb(0.055f, 0.075f, 0.11f);
