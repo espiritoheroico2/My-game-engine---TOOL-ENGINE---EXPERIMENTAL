@@ -34,6 +34,14 @@ if(TOOL_WITH_SPRITEUI)
   endif()
   add_test(NAME Editor.StartScreenModel COMMAND editor_start_screen_model_tests)
 
+  add_executable(editor_info_model_tests tests/test_editor_info_model.cpp)
+  target_include_directories(editor_info_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_info_model_tests PRIVATE SpriteUi::SpriteUI tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_info_model_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.EditorInfoModel COMMAND editor_info_model_tests)
+
   # Modelo da janela Help (help_model.hpp): blocos do texto, busca por idioma e edicao da busca.
   add_executable(editor_help_model_tests tests/test_help_model.cpp)
   target_include_directories(editor_help_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
