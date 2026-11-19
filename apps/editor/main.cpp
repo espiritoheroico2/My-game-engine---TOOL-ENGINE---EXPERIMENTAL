@@ -569,6 +569,8 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   // Voxel: os blocos do objeto e quantos estao preenchidos.
   c.voxel = w.get<ed_::VoxelChunk>(e);
   if (c.voxel) c.voxelSolid = editor::solidCount(*c.voxel);
+  // Particulas do objeto (componente direto: o painel le e grava nos campos, como nas outras secoes).
+  c.particles = w.get<ed_::ParticleComp>(e);
   // UI de jogo do objeto e os nomes das cameras da cena (a escolha de onde a UI aparece).
   c.ui = w.get<ed_::UiCanvas>(e);
   w.each<ed_::CameraComp>([&](tool::Entity ce, ed_::CameraComp&) {
@@ -657,6 +659,10 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     if (auto* vc = ed.scene.world().get<ed_::VoxelChunk>(ed.selected)) editor::clearChunk(*vc);
   };
   h.removeUi = [&ed] { ed.scene.world().remove<ed_::UiCanvas>(ed.selected); };
+  h.smokePreset = [&ed] {
+    if (auto* p = ed.scene.world().get<ed_::ParticleComp>(ed.selected)) editor::applySmokePreset(*p);
+  };
+  h.removeParticles = [&ed] { ed.scene.world().remove<ed_::ParticleComp>(ed.selected); };
   h.addUiElem = [&ed](int kind) {   // valores iniciais de cada tipo: os mesmos do botao "+" do ImGui
     auto* u = ed.scene.world().get<ed_::UiCanvas>(ed.selected);
     if (!u || u->count >= ed_::kMaxUi) return;
@@ -817,7 +823,11 @@ void drawInspector(Editor& ed) {
 #else
   editor::uiCanvasUi(ed);
 #endif
+#ifdef TOOL_WITH_SPRITEUI
+  if (!gInspectorSpriteOn) editor::particleUi(ed);   // com o painel SpriteUI, as particulas ficam na sua secao
+#else
   editor::particleUi(ed);
+#endif
   editor::addResourceUi(ed);
 #ifdef TOOL_WITH_SPRITEUI
   if (!gInspectorSpriteOn) scriptUi(ed);   // com o painel SpriteUI, o script fica na secao ToolObject Script

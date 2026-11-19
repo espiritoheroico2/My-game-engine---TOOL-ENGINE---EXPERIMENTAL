@@ -138,6 +138,22 @@ int main() {
   const float hUiOne = uiOne.prepare(withUi, hooks, 300.f);
   Check(hUiOne > hUiEmpty, "cada elemento da Game UI acrescenta bloco na secao");
 
+  // 10. Secao Particles. A secao inteira ocupa altura; a trajetoria (fechada no inicio) ocupa mais quando aberta.
+  editor::ParticleComp particles{};
+  IP::Context withParticles = base;
+  withParticles.particles = &particles;
+  IP::InspectorPanel particlePanel(atlas, renderer);
+  const float hParticles = particlePanel.prepare(withParticles, hooks, 300.f);
+  Check(hParticles > hEmpty, "a secao Particles ocupa altura");
+  particles.route = true;
+  particles.routeCount = 3;
+  IP::InspectorPanel routePanel(atlas, renderer);
+  const float hRouteClosed = routePanel.prepare(withParticles, hooks, 300.f);
+  IP::InspectorPanel routeOpen(atlas, renderer);
+  routeOpen.setAllSections(true);   // abre a trajetoria (fechada por padrao, como no ImGui)
+  const float hRouteOpen = routeOpen.prepare(withParticles, hooks, 300.f);
+  Check(hRouteOpen > hRouteClosed, "a trajetoria com pontos ocupa altura quando aberta");
+
   (void)removed;   // o clique no botao Remove e testado a mao (coordenadas dependem do layout)
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;

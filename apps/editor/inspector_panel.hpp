@@ -6,8 +6,8 @@
 // e so mudam em acao do usuario (clique, arrasto ou digitacao). Desenhar e ler nao escrevem nada.
 //
 // Secoes em SpriteUI: nome, ativo e travado; Transform; Mesh Renderer (com as partes de modelo importado); Light
-// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; Voxel; Game UI; ToolObject Script
-// e Tags. Particulas, recursos e o rodape (Add Component, Collapse All, Open All) continuam em ImGui
+// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; Voxel; Game UI; Particles; ToolObject Script
+// e Tags. Recursos e o rodape (Add Component, Collapse All, Open All) continuam em ImGui
 // logo abaixo deste bloco (main.cpp: drawInspector).
 //
 // Exemplo: a Luz do sol tem cor, intensidade e sombra. Clicar na amostra da cor abre o seletor; arrastar a area
@@ -97,6 +97,7 @@ struct Context {
     unsigned voxelSolid = 0;             // blocos preenchidos no chunk
     UiCanvas* ui = nullptr;              // UI de jogo do objeto (nullptr: nao tem)
     std::vector<std::string> cameraNames;   // cameras da cena (para escolher onde a UI aparece)
+    ParticleComp* particles = nullptr;   // particulas do objeto (nullptr: nao tem)
 };
 
 // Acoes com efeito fora do objeto (o Editor, no main.cpp). Cada uma faz o que o ImGui fazia.
@@ -129,6 +130,8 @@ struct Hooks {
     std::function<void()> removeUi;                                // tira a UI de jogo do objeto
     std::function<void(int)> addUiElem;                            // novo elemento: 0 texto, 1 painel, 2 botao, 3 barra
     std::function<void(std::size_t)> removeUiElem;                 // tira um elemento da UI
+    std::function<void()> smokePreset;                             // "Smoke preset": valores de fumaca nas particulas
+    std::function<void()> removeParticles;                         // tira as particulas do objeto
 };
 
 // Metricas do painel, em pixels logicos.
@@ -210,6 +213,7 @@ class InspectorPanel {
         if (ctx.tools) tools();
         if (ctx.voxel) voxel();
         if (ctx.ui) uiCanvas();
+        if (ctx.particles) particles();
         script();
         tags();
         return y_ + Metrics::kPad;
@@ -797,6 +801,137 @@ class InspectorPanel {
             y_ += kCell + kCellGap;   // proxima linha da grade
         }
         y_ += Metrics::kGap;
+        endSection();
+    }
+
+    // Subgrupo recolhivel dentro de uma secao (estado no modelo). Use sub() para abrir e endSub() para fechar a
+    // moldura, mesmo quando estiver fechado (so o cabecalho).
+    bool sub(im::Section s, const char* title, float& top) {
+        top = y_;
+        const float w = width_ - innerX_ - Metrics::kPad;
+        Control& h = add(Kind::Header, rect(innerX_, y_, w, Metrics::kRowH), nextKey());
+        h.section = s;
+        h.disabled = false;
+        h.onClick = [this, s] { expanders_.Toggle(s); };
+        canvas_.addSolid(innerX_, y_, w, Metrics::kRowH, headerColor_, Metrics::kZFill);
+        canvas_.addText(innerX_ + 8.f, y_ + 5.f, title, Metrics::kFont, headingColor_, w - 30.f);
+        canvas_.addText(innerX_ + w - 12.f, y_ + 4.f, expanders_.IsOpen(s) ? "-" : "+", Metrics::kFont + 1.f, theme_.textDim, 12.f);
+        y_ += Metrics::kRowH + Metrics::kGap;
+        return expanders_.IsOpen(s);
+    }
+
+    void endSub(float top) {
+        frames_.push_back(rect(innerX_ - 4.f, top, width_ - innerX_ - Metrics::kPad + 8.f, y_ - top));
+    }
+
+    // Numero inteiro na linha (mesma aparencia do campo numerico; grava arredondado).
+    void intRow(const char* text, int* target, int lo, int hi) {
+        label(y_, text);
+        Control& c = add(Kind::Num, rect(ctrlX_, y_, ctrlW_, Metrics::kRowH), nextKey());
+        c.value = static_cast<float>(*target);
+        c.decimals = 0;
+        c.range = {static_cast<float>(lo), static_cast<float>(hi)};
+        c.text = std::to_string(*target);
+        c.setF = [target](float v) { *target = static_cast<int>(std::lround(v)); };
+        if (!editing(c.key)) {
+            canvas_.addSolid(ctrlX_, y_, ctrlW_, Metrics::kRowH, c.disabled ? fieldDisabled_ : fieldColor_, Metrics::kZField);
+            canvas_.addText(ctrlX_ + 6.f, y_ + 5.f, c.text, Metrics::kFont, c.disabled ? theme_.textDim : theme_.text, ctrlW_ - 10.f);
+        }
+        nextRow();
+    }
+
+    // Particulas: emissao, forma, area de nascimento, cores, opacidade, trajetoria, tornado e movimento. Os
+    // subgrupos recolhem como o pos-processamento (estado no modelo).
+    void particles() {
+        ParticleComp& p = *ctx_.particles;
+        if (!beginSection(im::Section::Particles, T("Particles"))) return;
+        checkField(T("Emitting"), &p.emitting);
+        intRow(T("Max particles"), &p.maxParticles, 1, 5000);
+        numberRow(T("Rate (per second)"), &p.rate, 1, {0.f, 5000.f});
+        numberRow(T("Lifetime (s)"), &p.lifetime, 2, {0.05f, 60.f});
+        numberRow(T("Speed"), &p.speed, 2, {0.f, 500.f});
+        slider(T("Spread (deg)"), &p.spread, {0.f, 180.f});
+
+        float top = 0.f;
+        if (sub(im::Section::ParticleShape, T("Shape and spawn area"), top)) {
+            button(ctrlX_, T("Smoke preset"), [this] { hooks_.smokePreset(); }, Metrics::kButtonW);
+            nextRow();
+            drop(T("Shape"), tr({"Dot", "Square", "Triangle", "Star", "Ring", "Streak (motion)", "Smoke"}),
+                 static_cast<std::size_t>(std::clamp(p.form, 0, 6)), [&p](std::size_t i) { p.form = static_cast<int>(i); });
+            drop(T("Spawn area"), tr({"Point", "Random box", "Random sphere"}), static_cast<std::size_t>(std::clamp(p.area, 0, 2)),
+                 [&p](std::size_t i) { p.area = static_cast<int>(i); });
+            if (p.area) vecRow(T("Area size"), p.areaSize, 2, {0.f, 100.f});
+            numberRow(T("Size start"), &p.size, 3, {0.001f, 50.f});
+            numberRow(T("Size end"), &p.sizeEnd, 3, {0.f, 50.f});
+        }
+        endSub(top);
+
+        if (sub(im::Section::ParticleColors, T("Colors and opacity"), top)) {
+            canvas_.addText(innerX_, y_, T("Four colors over the lifetime: start, 1/3, 2/3 and end. Colors keep their brightness (no darkening)."),
+                            Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+            nextRow();
+            swatch(T("Color 1 (start)"), p.color);
+            swatch(T("Color 2"), p.color2);
+            swatch(T("Color 3"), p.color3);
+            swatch(T("Color 4 (end)"), p.colorEnd);
+            slider(T("Opacity"), &p.alpha, {0.f, 1.f});
+            checkField(T("Opacity over time"), &p.fadeOpacity);
+            if (p.fadeOpacity) numberRow(T("Opacity delay (s)"), &p.fadeDelay, 2, {0.f, p.lifetime});
+        }
+        endSub(top);
+
+        if (sub(im::Section::ParticleRoute, T("Trace route"), top)) {
+            checkField(T("Follow the route"), &p.route);
+            canvas_.addText(innerX_, y_, T("Points are local to this object. Each particle travels the smooth curve through them over its lifetime. The Scene view draws the route while this object is selected."),
+                            Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+            nextRow();
+            for (int i = 0; i < p.routeCount; ++i) {
+                const std::string name = F("Point %d", i + 1);
+                vecRow(name.c_str(), p.routePts[i], 2);
+                button(ctrlX_, T("Remove point"), [&p, i] {
+                    for (int k = i; k + 1 < p.routeCount; ++k) for (int c = 0; c < 3; ++c) p.routePts[k][c] = p.routePts[k + 1][c];
+                    --p.routeCount;
+                }, Metrics::kButtonW);
+                nextRow();
+            }
+            if (p.routeCount < 8) {
+                button(innerX_, T("Add point"), [&p] {
+                    float* last = p.routeCount > 0 ? p.routePts[p.routeCount - 1] : nullptr;
+                    float* dst = p.routePts[p.routeCount];
+                    dst[0] = last ? last[0] + 1.f : 0.f;
+                    dst[1] = last ? last[1] : 0.f;
+                    dst[2] = last ? last[2] : 0.f;
+                    ++p.routeCount;
+                }, Metrics::kButtonW);
+            }
+            if (p.routeCount > 0) button(innerX_ + Metrics::kButtonW + Metrics::kGap, T("Clear route"), [&p] { p.routeCount = 0; }, Metrics::kButtonW);
+            nextRow();
+        }
+        endSub(top);
+
+        if (sub(im::Section::ParticleTornado, T("Tornado"), top)) {
+            checkField(T("Spin (tornado)"), &p.tornado);
+            if (p.tornado) {
+                slider(T("Turns per second"), &p.tornadoSpeed, {0.f, 6.f});
+                numberRow(T("Base radius"), &p.tornadoRadius, 2, {0.f, 50.f});
+                numberRow(T("Height"), &p.tornadoHeight, 2, {0.f, 100.f});
+                canvas_.addText(innerX_, y_, T("The particles rise and spread out like a funnel. If Trace route is on, the route wins."),
+                                Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+                nextRow();
+            }
+        }
+        endSub(top);
+
+        canvas_.addText(innerX_, y_ + 5.f, T("Motion"), Metrics::kFont + 1.f, headingColor_, width_ - innerX_ - Metrics::kPad);
+        nextRow();
+        slider(T("Gravity scale (world physics)"), &p.gravityScale, {-3.f, 3.f});
+        slider(T("Bounce on floor"), &p.bounce, {0.f, 1.f});
+        if (p.bounce > 0.f) numberRow(T("Floor Y"), &p.floorY, 2);
+        canvas_.addText(innerX_, y_, T("Emits along the object's +Y axis. Drawn over the view with real colour and opacity (no depth test)."),
+                        Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+        nextRow();
+        button(ctrlX_, T("Remove Particles"), [this] { hooks_.removeParticles(); }, Metrics::kRemoveW);
+        nextRow();
         endSection();
     }
 

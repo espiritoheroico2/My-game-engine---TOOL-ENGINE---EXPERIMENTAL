@@ -23,17 +23,22 @@ namespace editor::inspector_model {
 
 // Secoes de componente com expansor (cabecalho clicavel). O cabecalho do objeto (nome, ativo, travado) nao tem.
 // PostFx e o subgrupo "Post-processing (this camera)" dentro da Camera.
-enum class Section : std::uint8_t { Transform, MeshRenderer, Light, GlobalLight, Camera, Audio, PostFx, Tags, Script, Physics, Tools, Voxel, UiCanvas };
-inline constexpr std::size_t kSectionCount = 13;
+enum class Section : std::uint8_t {
+    Transform, MeshRenderer, Light, GlobalLight, Camera, Audio, PostFx, Tags, Script, Physics, Tools, Voxel, UiCanvas,
+    Particles, ParticleShape, ParticleColors, ParticleRoute, ParticleTornado
+};
+inline constexpr std::size_t kSectionCount = 18;
 
 // Estado de aberto e fechado de cada secao (como o DefaultOpen do ImGui).
 struct Expanders {
     std::array<bool, kSectionCount> open{};
 
-    // Tudo aberto, menos o pos-processamento (fechado no inicio, como o TreeNode do ImGui).
+    // Tudo aberto, menos os que o ImGui abria fechados (pos-processamento, trajetoria e tornado: TreeNode sem padrao).
     Expanders() {
         open.fill(true);
         open[static_cast<std::size_t>(Section::PostFx)] = false;
+        open[static_cast<std::size_t>(Section::ParticleRoute)] = false;
+        open[static_cast<std::size_t>(Section::ParticleTornado)] = false;
     }
 
     // Ler o estado nao muda nada. So Toggle e SetAll mudam.
