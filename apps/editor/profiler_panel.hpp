@@ -216,7 +216,7 @@ class ProfilerPanel {
       return true;
     }
     // Primeira posicao: canto inferior esquerdo, com a largura de antes (420 px). O Console nasce no centro.
-    frame_.place(static_cast<float>(winW), static_cast<float>(winH), Theme::kWidth, 16.f);
+    frame_.place(static_cast<float>(winW), static_cast<float>(winH), Theme::kWidth, wf::Metrics::kHeight, 16.f);
     const SU::Rect content = frame_.content();
     const SU::Rect area{{content.position.x, content.position.y + Theme::kToolbarH},
                         {content.size.x, std::max(0.f, content.size.y - Theme::kToolbarH)}};

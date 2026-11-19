@@ -26,9 +26,12 @@
 #include "i18n.hpp"
 #include "image_io.hpp"
 #include "sui_panel.hpp"
+#include "window_frame.hpp"
 
 #include "SpriteUi/Rendering/Sprite.hpp"
 #include "SpriteUi/Widgets/DragDrop.hpp"
+#include "SpriteUi/Widgets/WindowFrame.hpp"
+#include "SpriteUi/Widgets/WindowFramePaint.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -48,6 +51,8 @@ namespace SU = ToolEngine::SpriteUi;
 namespace SR = ToolEngine::SpriteUi::Rendering;
 namespace ST = ToolEngine::SpriteUi::Text;
 namespace cm = editor::console_model;
+namespace SW = ToolEngine::SpriteUi::Widgets;
+namespace wf = editor::window_frame;
 
 // Acoes que o painel pede ao Editor. Algumas usam id (o objeto), outras parent (novo pai), kind (menu Create) ou text.
 enum class Act : std::uint8_t { Select, Activate, Reparent, Detach, ToggleHidden, ToggleLocked, Rename, Duplicate, Delete, Create };
@@ -125,13 +130,40 @@ inline constexpr const char* kLockPath = "assets/icons/lock.png";
 class HierarchyPanel {
  public:
     HierarchyPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl)
-        : toolbar_{atlas}, list_{atlas}, overlay_{atlas}, sdl_{sdl} {}
+        : toolbar_{atlas}, list_{atlas}, overlay_{atlas}, chrome_{atlas}, sdl_{sdl} {
+        // Moldura: mesmo visual do Console e do Profiler.
+        frameColors_.body = sui::Srgb(0.055f, 0.075f, 0.110f);
+        frameColors_.border = sui::Srgb(0.160f, 0.220f, 0.330f);
+        frameColors_.borderDragging = sui::Srgb(0.420f, 0.600f, 0.980f);
+        frameColors_.headerActive = sui::Srgb(0.120f, 0.160f, 0.230f);
+        frameColors_.headerInactive = sui::Srgb(0.090f, 0.120f, 0.180f);
+        frameColors_.headerDragging = sui::Srgb(0.160f, 0.210f, 0.300f);
+        frameColors_.glyph = sui::Srgb(0.910f, 0.918f, 0.933f);
+    }
     HierarchyPanel(const HierarchyPanel&) = delete;
     HierarchyPanel& operator=(const HierarchyPanel&) = delete;
+
+    // Pedido do X da moldura (lido e zerado pelo host).
+    bool consumeClose() {
+        const bool v = closeRequested_;
+        closeRequested_ = false;
+        return v;
+    }
 
     // true quando o evento e da janela (o editor nao o passa ao ImGui).
     bool handleEvent(const SDL_Event& e) {
         if (!visible_) return false;
+        // Moldura primeiro: X fecha, so o grip arrasta. Soltar o botao encerra o arraste.
+        if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) {
+            const wf::Event ev = frame_.pointerDown({e.button.x, e.button.y});
+            if (ev == wf::Event::Close) closeRequested_ = true;
+            if (ev != wf::Event::None) return true;
+        }
+        if (e.type == SDL_EVENT_MOUSE_BUTTON_UP) frame_.pointerUp();
+        if (e.type == SDL_EVENT_MOUSE_MOTION && frame_.dragging()) {
+            frame_.pointerMove({e.motion.x, e.motion.y});
+            return true;
+        }
         switch (e.type) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (e.button.button == SDL_BUTTON_LEFT) return onDown(e.button.x, e.button.y, e.button.timestamp / 1000000u);
@@ -156,12 +188,18 @@ class HierarchyPanel {
         }
     }
 
-    // Desenha a janela na area `rect` (coordenadas da janela, ja medidas pelo ImGui). Os pedidos saem em `out`.
-    bool draw(SDL_Renderer* renderer, SDL_Window* window, sui::Box rect, bool visible, Source src, Requests& out) {
-        rect_ = rect;
+    // Desenha a janela (moldura SpriteUI, barra, lista e menu). Os pedidos saem em `out`.
+    bool draw(SDL_Renderer* renderer, SDL_Window* window, bool visible, Source src, Requests& out) {
         visible_ = visible;
         window_ = window;
         if (!visible) return true;
+        int winW = 0, winH = 0;
+        SDL_GetWindowSize(window, &winW, &winH);
+        if (winW <= 0 || winH <= 0) return true;
+        // Primeira posicao: a esquerda, na parte de baixo, com a altura da lista (cabe ~10 linhas).
+        frame_.place(static_cast<float>(winW), static_cast<float>(winH), kFrameW, kFrameH, 16.f);
+        const SU::Rect content = frame_.content();
+        rect_ = sui::Box{content.position.x, content.position.y, content.size.x, content.size.y};
         if (!iconsTried_) {
             iconsTried_ = true;
             loadIcons(renderer);
@@ -176,12 +214,16 @@ class HierarchyPanel {
         buildList();
         buildOverlay();
 
+        const SU::Rect frameRect = frame_.rect();
         const std::vector<SR::ClipRectGPU> clips{{rect_.x, rect_.y, rect_.x + rect_.w, rect_.y + rect_.h},
-                                                 {rect_.x, rect_.y + Metrics::kToolbarH, rect_.x + rect_.w, rect_.y + rect_.h}};
+                                                 {rect_.x, rect_.y + Metrics::kToolbarH, rect_.x + rect_.w, rect_.y + rect_.h},
+                                                 {frameRect.position.x, frameRect.position.y, frameRect.position.x + frameRect.size.x,
+                                                  frameRect.position.y + frameRect.size.y}};
         const sui::Box list = listBox();
         const SU::UIHandle owner = sui::handleFor(0);
         std::vector<SR::UIRenderItem> items;
         std::uint64_t paint = 1;
+        appendFrame(items, paint, owner);
         items.push_back(sui::Canvas::solidItem(rect_.x, rect_.y, rect_.w, rect_.h, theme_.panel, 0.f, owner, 0u, paint++));
         toolbar_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, rect_.y + rect_.h, owner, 0u, paint);
         list_.appendItems(items, rect_.x, rect_.y, 0.f, list.y + rect_.y, list.y + rect_.y + list.h, owner, 1u, paint);
@@ -636,6 +678,35 @@ class HierarchyPanel {
     }
 
     // ---------- Desenho ----------
+    // Moldura SpriteUI (corpo, aba e X), titulo e grip. Por tras do conteudo (zOrder -2).
+    void appendFrame(std::vector<SR::UIRenderItem>& out, std::uint64_t& paint, SU::UIHandle owner) {
+        SW::WindowFrameState state;
+        state.active = true;
+        state.dragging = frame_.dragging();
+        state.docked = false;
+        auto frameItems = SW::BuildWindowFrameItems(owner, frame_.rect(), frame_.metrics(), state, frameColors_, -2.f, paint);
+        paint += frameItems.size() + 1;
+        out.insert(out.end(), frameItems.begin(), frameItems.end());
+
+        const SU::Rect title = frame_.titleRect();
+        const float size = Metrics::kFont + 1.f;
+        chrome_.clear();
+        chrome_.addText(title.position.x + wf::Metrics::kGripWidth,
+                        title.position.y + (title.size.y - chrome_.lineHeight(size)) * 0.5f, std::string(T("Hierarchy")), size,
+                        theme_.text, title.size.x - wf::Metrics::kGripWidth);
+        chrome_.appendItems(out, 0.f, 0.f, 0.f, -1e9f, 1e9f, owner, 2u, paint);
+
+        // Grip: 2 colunas x 3 pontos, no centro do icone.
+        const SU::Rect grip = frame_.gripRect();
+        const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
+        for (int c = 0; c < 2; ++c) {
+            for (int r = 0; r < 3; ++r) {
+                out.push_back(sui::Canvas::solidItem(cx - 3.f + 4.f * static_cast<float>(c), cy - 4.f + 4.f * static_cast<float>(r),
+                                                     2.f, 2.f, theme_.textDim, 0.95f, owner, 2u, paint++));
+            }
+        }
+    }
+
     void buildToolbar() {
         toolbar_.clear();
         buttons_.clear();
@@ -758,6 +829,7 @@ class HierarchyPanel {
     sui::Canvas toolbar_;
     sui::Canvas list_;
     sui::Canvas overlay_;
+    sui::Canvas chrome_;   // titulo da moldura
     sui::SpriteUiSdlRenderer& sdl_;
     sui::Theme theme_;
     Colors colors_;
@@ -767,6 +839,12 @@ class HierarchyPanel {
     SR::RenderExtractor extractor_;
     SR::FramePacket packet_;
     std::uint64_t frameId_ = 0;
+
+    static constexpr float kFrameW = 288.f;   // tamanho inicial da janela (px)
+    static constexpr float kFrameH = 520.f;
+    wf::Frame frame_;
+    SW::WindowFrameColors frameColors_{};
+    bool closeRequested_ = false;
 
     sui::Box rect_;
     bool visible_ = false;

@@ -2733,7 +2733,6 @@ static int runEditorMain(int argc, char** argv) {
       if (ed.lockInterface) lockWindows();
       keepFloatingWindowsOnScreen(ImGui::GetMainViewport());
       const bool focusTabs = layoutFocus > 0 && --layoutFocus == 0; // seleciona as abas ativas do layout padrao (Inspector, Scene, Assets)
-      if (ed.showHierarchy) drawHierarchy(ed);
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showInspector) drawInspector(ed);
       ed_::scriptWindowUi(ed); // janela de edicao de script (fora do Inspector)
@@ -2802,15 +2801,16 @@ static int runEditorMain(int argc, char** argv) {
         tool::logInfo("Test map: " + std::to_string(made) + " chunks");
       }
     }
-    if (hierPanel) {   // Hierarchy: lista desenhada pelo painel SpriteUI, por cima da moldura ImGui
-      const bool shown = ed.showHierarchy && gHierarchyFrame;
+    if (hierPanel) {   // Hierarchy: janela SpriteUI com moldura propria (sem janela ImGui)
+      const bool shown = ed.showHierarchy;
       editor::hierarchy_panel::Requests requests;
       const editor::hierarchy_panel::Source source = shown ? hierarchySource(ed) : editor::hierarchy_panel::Source{};
-      if (!hierPanel->draw(renderer, window, gHierarchyRect, shown, source, requests)) {
+      if (!hierPanel->draw(renderer, window, shown, source, requests)) {
         tool::logError(std::string("Hierarchy SpriteUI render failed: ") + SDL_GetError());
         hierPanel.reset();
         gHierarchySpriteOn = false;
       }
+      if (hierPanel && hierPanel->consumeClose()) ed.showHierarchy = false;   // X da moldura
       applyHierarchyRequests(ed, requests);
     }
     if (inspPanel) {   // Inspector: componentes do objeto, no bloco reservado pelo ImGui (drawInspectorBlock)
@@ -2876,7 +2876,7 @@ static int runEditorMain(int argc, char** argv) {
     float mouseX = 0.f, mouseY = 0.f;
     SDL_GetMouseState(&mouseX, &mouseY);
     const bool textFieldHovered =
-        (hierPanel && ed.showHierarchy && gHierarchyFrame && hierPanel->wantsTextCursor(mouseX, mouseY)) ||
+        (hierPanel && ed.showHierarchy && hierPanel->wantsTextCursor(mouseX, mouseY)) ||
         (consolePanel && ed.showConsole && consolePanel->wantsTextCursor(mouseX, mouseY)) ||
         (inspPanel && ed.showInspector && gInspectorFrame && inspPanel->wantsTextCursor(mouseX, mouseY)) ||
         (helpPanel && editor::helpState().open && helpPanel->wantsTextCursor(mouseX, mouseY));

@@ -33,9 +33,9 @@ class Frame {
   // Primeira vez: na parte de baixo, centralizada (firstX < 0) ou em firstX. Depois disso a posicao e a que o
   // usuario arrastou. A janela nunca sai da area visivel: a posicao e prendida a cada quadro.
   // width: largura pedida (a janela encolhe se a tela for menor).
-  void place(float windowW, float windowH, float width = Metrics::kWidth, float firstX = -1.f) {
+  void place(float windowW, float windowH, float width = Metrics::kWidth, float height = Metrics::kHeight, float firstX = -1.f) {
     const float w = std::min(width, std::max(1.f, windowW - 2.f * Metrics::kMargin));
-    const float h = std::min(Metrics::kHeight, std::max(1.f, windowH - 2.f * Metrics::kMargin));
+    const float h = std::min(height, std::max(1.f, windowH - 2.f * Metrics::kMargin));
     if (!placed_) {
       const float x = firstX >= 0.f ? firstX : (windowW - w) * 0.5f;
       pos_ = {std::floor(x), std::max(0.f, std::floor(windowH - h - Metrics::kBottomGap))};
