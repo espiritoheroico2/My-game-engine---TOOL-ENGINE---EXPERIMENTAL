@@ -185,6 +185,11 @@ class View {
     return extractor_.Build(in.frameId, scene.renderItems, nullptr, clips);
   }
 
+  // Estado para testes: retangulo da moldura, posicao da janela e metricas do cabecalho.
+  [[nodiscard]] SU::Rect frameRect() const { return frame_; }
+  [[nodiscard]] SU::Vec2 windowPos() const { return windowPos_; }
+  [[nodiscard]] bool dragging() const { return dragging_; }
+  [[nodiscard]] const SW::WindowFrameMetrics& frameMetrics() const { return metrics_; }
   [[nodiscard]] SU::UIHandle fieldHandle(Field f) const { return fields_[static_cast<std::size_t>(f)]; }
   [[nodiscard]] SU::UIHandle saveHandle() const { return save_; }
   [[nodiscard]] SU::Rect rectOf(SU::UIHandle handle) const { return nodeRect(handle); }

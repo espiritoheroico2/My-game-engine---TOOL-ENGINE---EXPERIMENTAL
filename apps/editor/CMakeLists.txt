@@ -42,6 +42,16 @@ if(TOOL_WITH_SPRITEUI)
   endif()
   add_test(NAME Editor.EditorInfoModel COMMAND editor_info_model_tests)
 
+  # Testes de elementos da janela Editor info (X, grip, campo, Save, batches). Padrao para as outras janelas.
+  add_executable(editor_info_view_tests tests/test_editor_info_view.cpp)
+  target_include_directories(editor_info_view_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(editor_info_view_tests PRIVATE EDITOR_FONT_PATH="${CMAKE_SOURCE_DIR}/assets/fonts/Xmind-Regular.ttf")
+  target_link_libraries(editor_info_view_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_info_view_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.EditorInfoView COMMAND editor_info_view_tests)
+
   # Captura headless da janela Editor info (SpriteUI). Nao e um teste do ctest: gera PPM para conferir visualmente.
   add_executable(editor_info_capture tools/editor_info_capture.cpp)
   target_include_directories(editor_info_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
