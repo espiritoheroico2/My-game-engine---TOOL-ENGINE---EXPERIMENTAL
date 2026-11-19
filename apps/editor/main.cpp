@@ -571,6 +571,22 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   if (c.voxel) c.voxelSolid = editor::solidCount(*c.voxel);
   // Particulas do objeto (componente direto: o painel le e grava nos campos, como nas outras secoes).
   c.particles = w.get<ed_::ParticleComp>(e);
+  // Recursos: o que o objeto ainda pode receber e o que ele tem (listas do Add / Remove Resource).
+  using R = editor::inspector_model::Resource;
+  const auto addR = [&c](R r) { c.addable.push_back(static_cast<int>(r)); };
+  const auto remR = [&c](R r) { c.removable.push_back(static_cast<int>(r)); };
+  if (!w.has<ed_::PhysicsComp>(e)) addR(R::Physics); else remR(R::Physics);
+  for (int k = 0; k < static_cast<int>(ed_::ToolKind::Count); ++k) addR(static_cast<R>(static_cast<int>(R::ToolJump) + k));
+  if (w.has<ed_::ToolsComp>(e)) remR(R::ToolsAll);
+  if (!w.has<ed_::MeshRenderer>(e)) addR(R::Mesh); else remR(R::Mesh);
+  if (!w.has<ed_::LightComp>(e)) addR(R::PointLight); else remR(R::PointLight);
+  if (w.has<ed_::GlobalLight>(e)) remR(R::GlobalLight);
+  if (!w.has<ed_::CameraComp>(e)) addR(R::Camera); else remR(R::Camera);
+  if (!w.has<ed_::AudioSource>(e)) addR(R::Audio); else remR(R::Audio);
+  if (!w.has<ed_::ParticleComp>(e)) addR(R::Particles); else remR(R::Particles);
+  if (!w.has<ed_::ScriptComp>(e)) addR(R::Script); else remR(R::Script);
+  if (!w.has<ed_::UiCanvas>(e)) addR(R::GameUi); else remR(R::GameUi);
+  if (!w.has<ed_::VoxelChunk>(e)) addR(R::Voxel); else remR(R::Voxel);
   // UI de jogo do objeto e os nomes das cameras da cena (a escolha de onde a UI aparece).
   c.ui = w.get<ed_::UiCanvas>(e);
   w.each<ed_::CameraComp>([&](tool::Entity ce, ed_::CameraComp&) {
@@ -659,6 +675,78 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     if (auto* vc = ed.scene.world().get<ed_::VoxelChunk>(ed.selected)) editor::clearChunk(*vc);
   };
   h.removeUi = [&ed] { ed.scene.world().remove<ed_::UiCanvas>(ed.selected); };
+  h.addResource = [&ed](int id) {   // mesmas regras do menu "+ Add Resource" do ImGui
+    using R = editor::inspector_model::Resource;
+    tool::World& w = ed.scene.world();
+    const tool::Entity sel = ed.selected;
+    const R r = static_cast<R>(id);
+    if (r == R::Physics) {
+      ed_::PhysicsComp pc;
+      if (auto* m = w.get<ed_::MeshRenderer>(sel)) if (m->shape == 2) pc.body = 0;
+      w.add<ed_::PhysicsComp>(sel, pc);
+    } else if (r == R::Mesh) {
+      w.add<ed_::MeshRenderer>(sel, ed_::MeshRenderer{});
+    } else if (r == R::PointLight) {
+      tool::Light l; l.type = tool::LightType::Point; l.range = 12.f; l.intensity = 18.f; l.color = {1.f, 0.7f, 0.4f}; l.castShadow = true;
+      w.add<ed_::LightComp>(sel, ed_::LightComp{l});
+    } else if (r == R::Camera) {
+      w.add<ed_::CameraComp>(sel);
+    } else if (r == R::Audio) {
+      w.add<ed_::AudioSource>(sel);
+    } else if (r == R::Particles) {
+      w.add<ed_::ParticleComp>(sel);
+    } else if (r == R::Script) {
+      ed.attachScript(sel);
+    } else if (r == R::GameUi) {
+      ed_::UiCanvas u; ed_::UiElem& e = u.items[u.count++];
+      std::snprintf(e.text, sizeof e.text, "%s", "Hello UI");
+      w.add<ed_::UiCanvas>(sel, u);
+    } else if (r == R::Voxel) {
+      ed_::VoxelChunk vc; editor::fillTerrain(vc, 0, 0);
+      w.add<ed_::VoxelChunk>(sel, vc);
+    } else if (static_cast<int>(r) >= static_cast<int>(R::ToolJump) && static_cast<int>(r) <= static_cast<int>(R::ToolScriptLib)) {
+      const int k = static_cast<int>(r) - static_cast<int>(R::ToolJump);   // tipo da ferramenta (ToolKind)
+      auto* tl = w.get<ed_::ToolsComp>(sel);
+      if (!tl) { w.add<ed_::ToolsComp>(sel, ed_::ToolsComp{}); tl = w.get<ed_::ToolsComp>(sel); }
+      if (tl->count >= ed_::kMaxTools) return;
+      ed_::ToolItem& it = tl->items[tl->count++];
+      it = ed_::ToolItem{};
+      it.kind = k;
+      if (k == 0) { std::snprintf(it.action, sizeof it.action, "%s", "jump"); it.a = 1.5f; }
+      if (k == 1) { std::snprintf(it.action, sizeof it.action, "%s", "moveX"); std::snprintf(it.target, sizeof it.target, "%s", "moveY"); it.a = 5.f; it.b = 1.f; }
+      if (k == 2) { it.b = 4.f; it.c = 8.f; it.d = 6.f; it.mode = 1; }
+      if (k == 3) it.b = 90.f;
+      if (k == 5) {   // cria um arquivo de biblioteca no projeto
+        static int n = 0;
+        const std::string rel = "Assets/Scripts/Libs/Lib" + std::to_string(++n + static_cast<int>(ed.created)) + ".js";
+        if (editor::scriptPathOk(ed.project, rel) &&
+            editor::writeScript(ed.project, rel, "// Library for this object. Functions here become part of its code once the script runtime is on.\nexport function hello(obj) {\n  console.log(\"hello from a library\", obj.name);\n}\n"))
+          std::snprintf(it.action, sizeof it.action, "%s", rel.c_str());
+      }
+    }
+  };
+  h.removeResource = [&ed](int id) {   // mesmas regras do menu "- Remove Resource" do ImGui
+    using R = editor::inspector_model::Resource;
+    tool::World& w = ed.scene.world();
+    const tool::Entity sel = ed.selected;
+    switch (static_cast<R>(id)) {
+      case R::Physics: w.remove<ed_::PhysicsComp>(sel); break;
+      case R::ToolsAll: w.remove<ed_::ToolsComp>(sel); break;
+      case R::Mesh: w.remove<ed_::MeshRenderer>(sel); break;
+      case R::PointLight: w.remove<ed_::LightComp>(sel); break;
+      case R::GlobalLight: w.remove<ed_::GlobalLight>(sel); break;
+      case R::Camera: w.remove<ed_::CameraComp>(sel); break;
+      case R::Audio:
+        if (auto* a = w.get<ed_::AudioSource>(sel)) ed.mixer.stop(a->voice);
+        w.remove<ed_::AudioSource>(sel);
+        break;
+      case R::Particles: w.remove<ed_::ParticleComp>(sel); break;
+      case R::GameUi: w.remove<ed_::UiCanvas>(sel); break;
+      case R::Voxel: w.remove<ed_::VoxelChunk>(sel); break;
+      case R::Script: w.remove<ed_::ScriptComp>(sel); break;
+      default: break;
+    }
+  };
   h.smokePreset = [&ed] {
     if (auto* p = ed.scene.world().get<ed_::ParticleComp>(ed.selected)) editor::applySmokePreset(*p);
   };
@@ -828,7 +916,11 @@ void drawInspector(Editor& ed) {
 #else
   editor::particleUi(ed);
 #endif
+#ifdef TOOL_WITH_SPRITEUI
+  if (!gInspectorSpriteOn) editor::addResourceUi(ed);   // com o painel SpriteUI, os recursos ficam na sua secao
+#else
   editor::addResourceUi(ed);
+#endif
 #ifdef TOOL_WITH_SPRITEUI
   if (!gInspectorSpriteOn) scriptUi(ed);   // com o painel SpriteUI, o script fica na secao ToolObject Script
 #else

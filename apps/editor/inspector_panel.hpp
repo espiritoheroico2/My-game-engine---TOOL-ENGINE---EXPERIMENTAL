@@ -98,6 +98,8 @@ struct Context {
     UiCanvas* ui = nullptr;              // UI de jogo do objeto (nullptr: nao tem)
     std::vector<std::string> cameraNames;   // cameras da cena (para escolher onde a UI aparece)
     ParticleComp* particles = nullptr;   // particulas do objeto (nullptr: nao tem)
+    std::vector<int> addable;            // recursos (im::Resource) que o objeto ainda pode receber
+    std::vector<int> removable;          // recursos (im::Resource) que o objeto tem
 };
 
 // Acoes com efeito fora do objeto (o Editor, no main.cpp). Cada uma faz o que o ImGui fazia.
@@ -132,6 +134,8 @@ struct Hooks {
     std::function<void(std::size_t)> removeUiElem;                 // tira um elemento da UI
     std::function<void()> smokePreset;                             // "Smoke preset": valores de fumaca nas particulas
     std::function<void()> removeParticles;                         // tira as particulas do objeto
+    std::function<void(int)> addResource;                          // adiciona um recurso (im::Resource)
+    std::function<void(int)> removeResource;                       // tira um recurso (im::Resource)
 };
 
 // Metricas do painel, em pixels logicos.
@@ -214,6 +218,7 @@ class InspectorPanel {
         if (ctx.voxel) voxel();
         if (ctx.ui) uiCanvas();
         if (ctx.particles) particles();
+        resources();
         script();
         tags();
         return y_ + Metrics::kPad;
@@ -931,6 +936,46 @@ class InspectorPanel {
                         Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
         nextRow();
         button(ctrlX_, T("Remove Particles"), [this] { hooks_.removeParticles(); }, Metrics::kRemoveW);
+        nextRow();
+        endSection();
+    }
+
+    // Nomes dos recursos (ordem de im::Resource), como aparecem no menu do ImGui.
+    static const char* resourceLabel(int id) {
+        static const char* names[] = {
+            "Physics body (Newtoon)", "Tool: Jump", "Tool: Move", "Tool: Follow Target", "Tool: Spin", "Tool: On Collision",
+            "Tool: Script library", "Mesh (cube)", "Point Light", "Camera", "Audio Source", "Particle System", "ToolObject Script",
+            "Game UI (canvas)", "Voxel chunk (blocks)", "Tools (all)", "Global Light"};
+        const std::size_t i = static_cast<std::size_t>(id);
+        return i < std::size(names) ? names[i] : "";
+    }
+
+    // Adicionar e remover recursos: duas listas (o menu popup do ImGui virou lista). Cada lista mostra so o que cabe
+    // no objeto. Os recursos planejados aparecem em texto, sem opcao.
+    void resources() {
+        if (!beginSection(im::Section::Resources, T("Resources"))) return;
+        std::vector<std::string> add{T("(choose)")};
+        std::vector<int> addIds;
+        for (int id : ctx_.addable) {
+            add.emplace_back(T(resourceLabel(id)));
+            addIds.push_back(id);
+        }
+        drop(T("+ Add Resource"), std::move(add), 0, [this, addIds](std::size_t i) {
+            if (i > 0 && i - 1 < addIds.size()) hooks_.addResource(addIds[i - 1]);
+        }, !ctx_.addable.empty());
+        nextRow();
+        std::vector<std::string> remove{T("(choose)")};
+        std::vector<int> removeIds;
+        for (int id : ctx_.removable) {
+            remove.emplace_back(T(resourceLabel(id)));
+            removeIds.push_back(id);
+        }
+        drop(T("- Remove Resource"), std::move(remove), 0, [this, removeIds](std::size_t i) {
+            if (i > 0 && i - 1 < removeIds.size()) hooks_.removeResource(removeIds[i - 1]);
+        }, !ctx_.removable.empty());
+        nextRow();
+        canvas_.addText(innerX_, y_, T("Coming in a future update (locked): Textures / Normal map, Material (.tmat) and custom shader, Point light shadows, Compress as NTC, Ray tracing (DXR)."),
+                        Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
         nextRow();
         endSection();
     }

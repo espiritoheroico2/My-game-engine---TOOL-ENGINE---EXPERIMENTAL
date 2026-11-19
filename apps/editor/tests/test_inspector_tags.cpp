@@ -154,6 +154,13 @@ int main() {
   const float hRouteOpen = routeOpen.prepare(withParticles, hooks, 300.f);
   Check(hRouteOpen > hRouteClosed, "a trajetoria com pontos ocupa altura quando aberta");
 
+  // 11. Secao Resources (Add / Remove Resource). Com objeto, a secao existe; sem objeto, so o aviso.
+  IP::Context noObject;
+  noObject.hasObject = false;
+  IP::InspectorPanel nothing(atlas, renderer);
+  const float hNoObject = nothing.prepare(noObject, hooks, 300.f);
+  Check(hEmpty > hNoObject, "com objeto, a secao Resources aparece (mais altura que o aviso sem objeto)");
+
   (void)removed;   // o clique no botao Remove e testado a mao (coordenadas dependem do layout)
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;
