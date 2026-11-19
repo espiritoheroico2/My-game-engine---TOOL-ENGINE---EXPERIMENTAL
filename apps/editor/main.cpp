@@ -569,6 +569,11 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   // Voxel: os blocos do objeto e quantos estao preenchidos.
   c.voxel = w.get<ed_::VoxelChunk>(e);
   if (c.voxel) c.voxelSolid = editor::solidCount(*c.voxel);
+  // UI de jogo do objeto e os nomes das cameras da cena (a escolha de onde a UI aparece).
+  c.ui = w.get<ed_::UiCanvas>(e);
+  w.each<ed_::CameraComp>([&](tool::Entity ce, ed_::CameraComp&) {
+    if (auto* n = w.get<ed_::Name>(ce)) c.cameraNames.emplace_back(n->text);
+  });
   // Fisica: o componente, a gravidade da cena e, no Play, a velocidade e o estado do corpo.
   c.physics = w.get<ed_::PhysicsComp>(e);
   for (int k = 0; k < 3; ++k) c.worldGravity[k] = static_cast<float>(ed.sceneInfo.physics.gravity[k]);
@@ -650,6 +655,36 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   };
   h.voxelClear = [&ed] {
     if (auto* vc = ed.scene.world().get<ed_::VoxelChunk>(ed.selected)) editor::clearChunk(*vc);
+  };
+  h.removeUi = [&ed] { ed.scene.world().remove<ed_::UiCanvas>(ed.selected); };
+  h.addUiElem = [&ed](int kind) {   // valores iniciais de cada tipo: os mesmos do botao "+" do ImGui
+    auto* u = ed.scene.world().get<ed_::UiCanvas>(ed.selected);
+    if (!u || u->count >= ed_::kMaxUi) return;
+    ed_::UiElem& e = u->items[u->count++];
+    e = ed_::UiElem{};
+    if (kind == 0) {   // texto
+      e.y = 0.05f + 0.07f * static_cast<float>(u->count);
+      std::snprintf(e.text, sizeof e.text, "%s", "Score: {score}");
+    } else if (kind == 2) {   // botao
+      e.kind = 2; e.x = 0.4f; e.y = 0.8f;
+      e.color[0] = 0.9f; e.color[1] = 0.8f; e.color[2] = 0.3f;
+      std::snprintf(e.text, sizeof e.text, "%s", "Play");
+      std::snprintf(e.action, sizeof e.action, "%s", "play_clicked");
+    } else if (kind == 3) {   // barra
+      e.kind = 3; e.w = 0.3f; e.h = 0.03f; e.y = 0.92f;
+      std::snprintf(e.action, sizeof e.action, "%s", "health");
+      e.color[1] = 0.8f; e.color[2] = 0.2f;
+    } else {   // painel
+      e.kind = 1;
+      e.color[0] = e.color[1] = e.color[2] = 0.1f; e.color[3] = 0.6f;
+      e.text[0] = 0;
+    }
+  };
+  h.removeUiElem = [&ed](std::size_t i) {   // desloca os elementos seguintes, como o ImGui fazia
+    auto* u = ed.scene.world().get<ed_::UiCanvas>(ed.selected);
+    if (!u || static_cast<int>(i) >= u->count) return;
+    for (int k = static_cast<int>(i); k + 1 < u->count; ++k) u->items[k] = u->items[k + 1];
+    --u->count;
   };
   h.removeTool = [&ed](std::size_t i) {   // desloca os itens seguintes, como o ImGui fazia
     auto* tl = ed.scene.world().get<ed_::ToolsComp>(ed.selected);
@@ -777,7 +812,11 @@ void drawInspector(Editor& ed) {
 #else
   editor::voxelUi(ed);
 #endif
+#ifdef TOOL_WITH_SPRITEUI
+  if (!gInspectorSpriteOn) editor::uiCanvasUi(ed);   // com o painel SpriteUI, a UI de jogo fica na sua secao
+#else
   editor::uiCanvasUi(ed);
+#endif
   editor::particleUi(ed);
   editor::addResourceUi(ed);
 #ifdef TOOL_WITH_SPRITEUI

@@ -6,8 +6,8 @@
 // e so mudam em acao do usuario (clique, arrasto ou digitacao). Desenhar e ler nao escrevem nada.
 //
 // Secoes em SpriteUI: nome, ativo e travado; Transform; Mesh Renderer (com as partes de modelo importado); Light
-// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; Voxel; ToolObject Script
-// e Tags. UI, particulas, recursos e o rodape (Add Component, Collapse All, Open All) continuam em ImGui
+// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; Voxel; Game UI; ToolObject Script
+// e Tags. Particulas, recursos e o rodape (Add Component, Collapse All, Open All) continuam em ImGui
 // logo abaixo deste bloco (main.cpp: drawInspector).
 //
 // Exemplo: a Luz do sol tem cor, intensidade e sombra. Clicar na amostra da cor abre o seletor; arrastar a area
@@ -95,6 +95,8 @@ struct Context {
     bool hasPhysics = false;             // o objeto tem Physics (algumas ferramentas precisam)
     VoxelChunk* voxel = nullptr;         // blocos do objeto (nullptr: nao tem)
     unsigned voxelSolid = 0;             // blocos preenchidos no chunk
+    UiCanvas* ui = nullptr;              // UI de jogo do objeto (nullptr: nao tem)
+    std::vector<std::string> cameraNames;   // cameras da cena (para escolher onde a UI aparece)
 };
 
 // Acoes com efeito fora do objeto (o Editor, no main.cpp). Cada uma faz o que o ImGui fazia.
@@ -124,6 +126,9 @@ struct Hooks {
     std::function<void(int, int, int, int)> voxelPaint;            // pinta um bloco: x, camada, z, tipo do pincel
     std::function<void()> voxelFill;                               // preenche o terreno
     std::function<void()> voxelClear;                              // limpa o chunk
+    std::function<void()> removeUi;                                // tira a UI de jogo do objeto
+    std::function<void(int)> addUiElem;                            // novo elemento: 0 texto, 1 painel, 2 botao, 3 barra
+    std::function<void(std::size_t)> removeUiElem;                 // tira um elemento da UI
 };
 
 // Metricas do painel, em pixels logicos.
@@ -204,6 +209,7 @@ class InspectorPanel {
         if (ctx.physics) physics();
         if (ctx.tools) tools();
         if (ctx.voxel) voxel();
+        if (ctx.ui) uiCanvas();
         script();
         tags();
         return y_ + Metrics::kPad;
@@ -791,6 +797,68 @@ class InspectorPanel {
             y_ += kCell + kCellGap;   // proxima linha da grade
         }
         y_ += Metrics::kGap;
+        endSection();
+    }
+
+    // UI de jogo (camada sobre a camera): visivel, camera onde aparece (vazio = todas as Principais), elementos
+    // (texto, painel, botao, barra) com posicao, tamanho, cor e escala, e os botoes para adicionar. A lista e fixa
+    // (sem recolher por elemento), como as ferramentas.
+    void uiCanvas() {
+        UiCanvas& ui = *ctx_.ui;
+        if (!beginSection(im::Section::UiCanvas, T("Game UI (camera layer)"))) return;
+        checkField(T("Visible"), &ui.visible);
+        std::vector<std::string> options{T("(all Principal cameras)")};
+        std::size_t selected = 0;
+        for (const std::string& name : ctx_.cameraNames) {
+            if (name == ui.camera) selected = options.size();
+            options.push_back(name);
+        }
+        if (ui.camera[0] && selected == 0) {
+            options.push_back(ui.camera);
+            selected = options.size() - 1;
+        }
+        const std::vector<std::string> list = options;
+        drop(T("Camera"), std::move(options), selected, [&ui, list](std::size_t i) {
+            if (i == 0 || i >= list.size()) ui.camera[0] = 0;
+            else std::snprintf(ui.camera, sizeof ui.camera, "%s", list[i].c_str());
+        });
+        static const char* kinds[] = {"Text", "Panel", "Button", "Bar"};
+        for (int i = 0; i < ui.count && i < kMaxUi; ++i) {
+            UiElem& it = ui.items[i];
+            const std::size_t idx = static_cast<std::size_t>(i);
+            const int k = std::clamp(it.kind, 0, 3);
+            canvas_.addText(innerX_, y_ + 5.f, F("%s: %s", T(kinds[k]), it.text), Metrics::kFont, headingColor_, ctrlX_ - innerX_ - 6.f);
+            button(ctrlX_, T("Remove"), [this, idx] { hooks_.removeUiElem(idx); }, Metrics::kButtonW);
+            nextRow();
+            drop(T("Type"), tr({"Text", "Panel", "Button", "Bar"}), static_cast<std::size_t>(k), [&it](std::size_t t) { it.kind = static_cast<int>(t); });
+            textRow(T("Text (use {variable})"), it.text, sizeof it.text);
+            if (it.kind == 2) textRow(T("Event name (on click)"), it.action, sizeof it.action);
+            if (it.kind == 3) {
+                textRow(T("Variable"), it.action, sizeof it.action);
+                numberRow(T("Full at"), &it.maxValue, 2, {0.0001f, 1e9f});
+            }
+            slider(T("Position X"), &it.x, {0.f, 1.f});
+            slider(T("Position Y"), &it.y, {0.f, 1.f});
+            slider(T("Width"), &it.w, {0.f, 1.f});
+            slider(T("Height"), &it.h, {0.f, 1.f});
+            swatch(T("Color"), it.color);
+            slider(T("Color opacity"), &it.color[3], {0.f, 1.f});
+            slider(T("Font scale"), &it.fontScale, {0.5f, 4.f});
+            y_ += Metrics::kGap;   // respiro entre elementos
+        }
+        if (ui.count < kMaxUi) {
+            button(innerX_, T("+ Text"), [this] { hooks_.addUiElem(0); }, Metrics::kButtonW);
+            button(innerX_ + Metrics::kButtonW + Metrics::kGap, T("+ Button"), [this] { hooks_.addUiElem(2); }, Metrics::kButtonW);
+            nextRow();
+            button(innerX_, T("+ Bar"), [this] { hooks_.addUiElem(3); }, Metrics::kButtonW);
+            button(innerX_ + Metrics::kButtonW + Metrics::kGap, T("+ Panel"), [this] { hooks_.addUiElem(1); }, Metrics::kButtonW);
+            nextRow();
+        }
+        canvas_.addText(innerX_, y_, T("Appears over the Game view of the chosen camera. Button clicks (while playing) send their event name."),
+                        Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+        nextRow();
+        button(ctrlX_, T("Remove UI"), [this] { hooks_.removeUi(); }, Metrics::kButtonW);
+        nextRow();
         endSection();
     }
 

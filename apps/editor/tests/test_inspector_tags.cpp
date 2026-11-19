@@ -127,6 +127,17 @@ int main() {
   Check(hVoxelClosed < hVoxel, "secao Voxel fechada ocupa menos altura");
   voxelPanel.setAllSections(true);
 
+  // 9. Secao Game UI. Cada elemento acrescenta o seu bloco (titulo, Remove, tipo, textos, posicao, cor).
+  editor::UiCanvas ui{};
+  IP::Context withUi = base;
+  withUi.ui = &ui;
+  IP::InspectorPanel uiEmpty(atlas, renderer);
+  const float hUiEmpty = uiEmpty.prepare(withUi, hooks, 300.f);
+  ui.count = 1;
+  IP::InspectorPanel uiOne(atlas, renderer);
+  const float hUiOne = uiOne.prepare(withUi, hooks, 300.f);
+  Check(hUiOne > hUiEmpty, "cada elemento da Game UI acrescenta bloco na secao");
+
   (void)removed;   // o clique no botao Remove e testado a mao (coordenadas dependem do layout)
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;
