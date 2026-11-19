@@ -563,6 +563,17 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   c.playing = ed.playing;
   if (ed.playing) c.scriptStatus = ed.scriptHost.statusOf(e.index, e.generation);
   c.scriptRuntime = ed_::ScriptHost::compiledIn();
+  // Fisica: o componente, a gravidade da cena e, no Play, a velocidade e o estado do corpo.
+  c.physics = w.get<ed_::PhysicsComp>(e);
+  for (int k = 0; k < 3; ++k) c.worldGravity[k] = static_cast<float>(ed.sceneInfo.physics.gravity[k]);
+  if (ed.playing && ed.play.built) {
+    auto it = ed.play.indexOf.find(e.index);
+    if (it != ed.play.indexOf.end()) {
+      const auto& rb = ed.play.rb[it->second];
+      c.playPhysics = F("Play: velocity %.2f, %.2f, %.2f  %s%s", static_cast<double>(rb.velocity.x), static_cast<double>(rb.velocity.y),
+                        static_cast<double>(rb.velocity.z), rb.grounded ? "grounded " : "", rb.isSleeping ? "asleep" : "");
+    }
+  }
   // Tags: todas as da cena e quais o objeto tem (secao Tags do painel SpriteUI).
   const tool::TagMask mask = w.tagMask(e);
   for (tool::TagId i = 0; i < ed.scene.tags().size(); ++i) {
@@ -608,6 +619,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   h.openScriptExternal = [&ed](const std::string& rel) { editor::openInExternalEditor(ed, rel); };
   h.openScriptWindow = [&ed] { ed_::openScriptWindow(ed); };
   h.reloadScripts = [&ed] { ed.startScripts(); };
+  h.removePhysics = [&ed] { ed.scene.world().remove<ed_::PhysicsComp>(ed.selected); };
   h.setPartOverride = [&ed](int pi, bool on) {   // material editado por parte de um modelo importado
     tool::World& w = ed.scene.world();
     const auto* mr = w.get<ed_::MeshRenderer>(ed.selected);
@@ -713,7 +725,11 @@ void drawInspector(Editor& ed) {
   // Travado: as secoes de ImGui abaixo ficam so de leitura (o bloco SpriteUI cuida do proprio estado).
   const bool lockedNow = w.has<ed_::Locked>(ed.selected);
   ImGui::BeginDisabled(lockedNow);
+#ifdef TOOL_WITH_SPRITEUI
+  if (!gInspectorSpriteOn) editor::physicsUi(ed);   // com o painel SpriteUI, a fisica fica na sua secao
+#else
   editor::physicsUi(ed);
+#endif
   editor::toolsUi(ed);
   editor::voxelUi(ed);
   editor::uiCanvasUi(ed);

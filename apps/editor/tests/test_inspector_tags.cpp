@@ -82,6 +82,22 @@ int main() {
   const float hPlaying = onPlay.prepare(playing, hooks, 300.f);
   Check(hPlaying > hScripted, "durante o Play a secao mostra status e Reload (mais altura)");
 
+  // 6. Secao Physics. Com fisica dinamica ha mais campos (massa, arrastes, gravidade) do que com corpo estatico.
+  editor::PhysicsComp phys{};
+  phys.body = 0;   // estatico
+  IP::Context staticBody = base;
+  staticBody.physics = &phys;
+  IP::InspectorPanel staticPanel(atlas, renderer);
+  const float hStatic = staticPanel.prepare(staticBody, hooks, 300.f);
+  phys.body = 1;   // dinamico
+  IP::InspectorPanel dynamicPanel(atlas, renderer);
+  const float hDynamic = dynamicPanel.prepare(staticBody, hooks, 300.f);
+  Check(hDynamic > hStatic, "fisica dinamica ocupa mais altura que estatica");
+  phys.overrideGravity = true;
+  IP::InspectorPanel ownGravity(atlas, renderer);
+  const float hOwnGravity = ownGravity.prepare(staticBody, hooks, 300.f);
+  Check(hOwnGravity > hDynamic, "gravidade propria (Vector physics) mostra o campo e os atalhos");
+
   (void)removed;   // o clique no botao Remove e testado a mao (coordenadas dependem do layout)
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;

@@ -6,9 +6,9 @@
 // e so mudam em acao do usuario (clique, arrasto ou digitacao). Desenhar e ler nao escrevem nada.
 //
 // Secoes em SpriteUI: nome, ativo e travado; Transform; Mesh Renderer (com as partes de modelo importado); Light
-// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; ToolObject Script e Tags. Fisica, voxel,
-// UI, particulas, recursos e o rodape (Add Component, Collapse All, Open All) continuam em ImGui logo abaixo deste
-// bloco (main.cpp: drawInspector).
+// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; ToolObject Script e Tags.
+// Voxel, UI, particulas, recursos, ferramentas e o rodape (Add Component, Collapse All, Open All) continuam em ImGui
+// logo abaixo deste bloco (main.cpp: drawInspector).
 //
 // Exemplo: a Luz do sol tem cor, intensidade e sombra. Clicar na amostra da cor abre o seletor; arrastar a area
 // de saturacao muda a cor do objeto na hora. Digitar "2,5" na intensidade grava 2.5 quando o numero e valido.
@@ -44,6 +44,7 @@
 #include <cstdio>
 #include <functional>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <unordered_map>
@@ -87,6 +88,9 @@ struct Context {
     bool playing = false;                // Play ligado: mostra o status do script
     std::string scriptStatus;            // status vindo do ScriptHost (so com Play)
     bool scriptRuntime = true;           // a build tem o runtime de script (QuickJS)
+    PhysicsComp* physics = nullptr;      // fisica do objeto (nullptr: nao tem)
+    float worldGravity[3] = {0.f, -9.81f, 0.f};   // gravidade da cena (mostrada quando o objeto nao tem a sua)
+    std::string playPhysics;             // velocidade e estado no Play (vazio fora do Play)
 };
 
 // Acoes com efeito fora do objeto (o Editor, no main.cpp). Cada uma faz o que o ImGui fazia.
@@ -109,6 +113,7 @@ struct Hooks {
     std::function<void(const std::string&)> openScriptExternal;    // abre o arquivo no editor de codigo
     std::function<void()> openScriptWindow;                        // abre a janela de edicao do script
     std::function<void()> reloadScripts;                           // reinicia os scripts da cena (durante o Play)
+    std::function<void()> removePhysics;                           // tira a fisica do objeto
 };
 
 // Metricas do painel, em pixels logicos.
@@ -129,6 +134,7 @@ struct Metrics {
     static constexpr float kHelpW = 160.f;       // "Help: script examples"
     static constexpr float kEditW = 110.f;       // "Edit script", "Reload scripts"
     static constexpr float kExternalW = 120.f;   // "Edit external"
+    static constexpr float kRemoveW = 140.f;     // "Remove Physics"
     static constexpr float kAxisW = 14.f;
     static constexpr float kPopupW = 232.f;
     static constexpr float kPopupH = 210.f;
@@ -185,6 +191,7 @@ class InspectorPanel {
         if (ctx.global) global();
         if (ctx.camera) camera();
         if (ctx.audio) audio();
+        if (ctx.physics) physics();
         script();
         tags();
         return y_ + Metrics::kPad;
@@ -678,6 +685,59 @@ class InspectorPanel {
             }
         }
         frames_.push_back(rect(innerX_ - 4.f, top, w + 8.f, y_ - top));
+    }
+
+    // Fisica (Newtoon): corpo, colisor, massa, atrito e quique. Com corpo dinamico, gravidade e amortecimento. A
+    // gravidade propria (Vector physics) tem atalhos de direcao. Durante o Play mostra a velocidade e o estado.
+    void physics() {
+        PhysicsComp& p = *ctx_.physics;
+        if (!beginSection(im::Section::Physics, T("Physics (Newtoon)"))) return;
+        drop(T("Body"), tr({"Static", "Dynamic", "Kinematic"}), static_cast<std::size_t>(std::clamp(p.body, 0, 2)),
+             [&p](std::size_t i) { p.body = static_cast<int>(i); });
+        drop(T("Collider"), tr({"Auto (from mesh)", "Box", "Sphere"}), static_cast<std::size_t>(std::clamp(p.collider, 0, 2)),
+             [&p](std::size_t i) { p.collider = static_cast<int>(i); });
+        const bool dynamic = p.body == 1;
+        if (dynamic) {
+            numberRow(T("Mass (kg)"), &p.mass, 3, {0.001f, 100000.f});
+            slider(T("Gravity scale"), &p.gravityScale, {-3.f, 3.f});
+            slider(T("Linear drag"), &p.linearDamping, {0.f, 5.f});
+            slider(T("Angular drag"), &p.angularDamping, {0.f, 5.f});
+            checkField(T("Use gravity"), &p.useGravity);
+            checkField(T("Freeze rotation"), &p.freezeRotation);
+            checkField(T("CCD (fast small objects cannot pass through walls)"), &p.ccd);
+        }
+        slider(T("Friction"), &p.friction, {0.f, 2.f});
+        slider(T("Bounciness"), &p.bounciness, {0.f, 1.f});
+        checkField(T("Trigger (detects, does not push)"), &p.trigger);
+        if (dynamic) {
+            checkField(T("Vector physics (own gravity)"), &p.overrideGravity);
+            if (p.overrideGravity) {
+                vecRow(T("Gravity vector (m/s2)"), p.gravity, 2, {-1000.f, 1000.f});
+                static const struct Preset { const char* name; float v[3]; } presets[] = {
+                    {"Down", {0.f, -9.81f, 0.f}}, {"Up", {0.f, 9.81f, 0.f}}, {"Left", {-9.81f, 0.f, 0.f}},
+                    {"Right", {9.81f, 0.f, 0.f}}, {"Forward", {0.f, 0.f, -9.81f}}, {"Back", {0.f, 0.f, 9.81f}}, {"Zero", {0.f, 0.f, 0.f}}};
+                const float cell = (ctrlW_ - 3.f * Metrics::kGap) / 4.f;
+                for (std::size_t i = 0; i < std::size(presets); ++i) {
+                    if (i != 0 && i % 4 == 0) nextRow();
+                    const Preset pr = presets[i];
+                    button(ctrlX_ + static_cast<float>(i % 4) * (cell + Metrics::kGap), T(pr.name),
+                           [&p, pr] { for (int k = 0; k < 3; ++k) p.gravity[k] = pr.v[k]; }, cell);
+                }
+                nextRow();
+            } else {
+                canvas_.addText(innerX_, y_ + 5.f, F("World gravity: %.2f, %.2f, %.2f", static_cast<double>(ctx_.worldGravity[0]),
+                                                     static_cast<double>(ctx_.worldGravity[1]), static_cast<double>(ctx_.worldGravity[2])),
+                                Metrics::kSmallFont + 1.f, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+                nextRow();
+            }
+        }
+        if (!ctx_.playPhysics.empty()) {
+            canvas_.addText(innerX_, y_ + 5.f, ctx_.playPhysics, Metrics::kSmallFont + 1.f, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+            nextRow();
+        }
+        button(ctrlX_, T("Remove Physics"), [this] { hooks_.removePhysics(); }, Metrics::kRemoveW);
+        nextRow();
+        endSection();
     }
 
     // Script do objeto (ToolObject Script). Sem script: so o botao de criar o arquivo (opcional). Com script: liga e
