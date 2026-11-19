@@ -6,8 +6,8 @@
 // e so mudam em acao do usuario (clique, arrasto ou digitacao). Desenhar e ler nao escrevem nada.
 //
 // Secoes em SpriteUI: nome, ativo e travado; Transform; Mesh Renderer (com as partes de modelo importado); Light
-// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; ToolObject Script e Tags.
-// Voxel, UI, particulas, recursos, ferramentas e o rodape (Add Component, Collapse All, Open All) continuam em ImGui
+// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; ToolObject Script e Tags.
+// Voxel, UI, particulas, recursos e o rodape (Add Component, Collapse All, Open All) continuam em ImGui
 // logo abaixo deste bloco (main.cpp: drawInspector).
 //
 // Exemplo: a Luz do sol tem cor, intensidade e sombra. Clicar na amostra da cor abre o seletor; arrastar a area
@@ -91,6 +91,8 @@ struct Context {
     PhysicsComp* physics = nullptr;      // fisica do objeto (nullptr: nao tem)
     float worldGravity[3] = {0.f, -9.81f, 0.f};   // gravidade da cena (mostrada quando o objeto nao tem a sua)
     std::string playPhysics;             // velocidade e estado no Play (vazio fora do Play)
+    ToolsComp* tools = nullptr;          // ferramentas prontas do objeto (nullptr: nao tem)
+    bool hasPhysics = false;             // o objeto tem Physics (algumas ferramentas precisam)
 };
 
 // Acoes com efeito fora do objeto (o Editor, no main.cpp). Cada uma faz o que o ImGui fazia.
@@ -114,6 +116,9 @@ struct Hooks {
     std::function<void()> openScriptWindow;                        // abre a janela de edicao do script
     std::function<void()> reloadScripts;                           // reinicia os scripts da cena (durante o Play)
     std::function<void()> removePhysics;                           // tira a fisica do objeto
+    std::function<std::vector<std::string>(int, int)> actionNames; // acoes do Input Map: (jogador 1..8, tipo 0 botao / 1 eixo)
+    std::function<void()> openToolsHelp;                           // "Help: JS library"
+    std::function<void(std::size_t)> removeTool;                   // tira a ferramenta da lista do objeto
 };
 
 // Metricas do painel, em pixels logicos.
@@ -192,6 +197,7 @@ class InspectorPanel {
         if (ctx.camera) camera();
         if (ctx.audio) audio();
         if (ctx.physics) physics();
+        if (ctx.tools) tools();
         script();
         tags();
         return y_ + Metrics::kPad;
@@ -737,6 +743,96 @@ class InspectorPanel {
         }
         button(ctrlX_, T("Remove Physics"), [this] { hooks_.removePhysics(); }, Metrics::kRemoveW);
         nextRow();
+        endSection();
+    }
+
+    // Escolha de acao do Input Map (mesma regra do combo do ImGui): "(none)" limpa; uma acao fora da lista aparece
+    // com o nome que ja estava gravado.
+    void actionRow(const char* text, char* buf, std::size_t cap, int player, int kind) {
+        std::vector<std::string> options{T("(none)")};
+        std::size_t selected = 0;
+        for (const std::string& name : hooks_.actionNames(player, kind)) {
+            if (name == buf) selected = options.size();
+            options.push_back(name);
+        }
+        if (buf[0] && selected == 0) {
+            options.push_back(buf);
+            selected = options.size() - 1;
+        }
+        const std::vector<std::string> list = options;
+        drop(text, std::move(options), selected, [buf, cap, list](std::size_t i) {
+            const std::string chosen = i == 0 || i >= list.size() ? std::string() : list[i];
+            std::snprintf(buf, cap, "%s", chosen.c_str());
+        });
+    }
+
+    // Ferramentas prontas do objeto (Jump, Move, Follow Target, Spin, On Collision, Script library). Cada uma tem um
+    // titulo com Remove, o Enabled e os campos do tipo. A lista aberta e fixa (sem recolher por ferramenta).
+    void tools() {
+        ToolsComp& tl = *ctx_.tools;
+        if (!beginSection(im::Section::Tools, T("Tools"))) return;
+        button(innerX_, T("Help: JS library"), [this] { hooks_.openToolsHelp(); }, Metrics::kHelpW);
+        nextRow();
+        static const char* names[] = {"Jump", "Move", "Follow Target", "Spin", "On Collision", "Script library"};
+        for (int i = 0; i < tl.count && i < kMaxTools; ++i) {
+            ToolItem& it = tl.items[i];
+            const std::size_t idx = static_cast<std::size_t>(i);
+            const int k = std::clamp(it.kind, 0, static_cast<int>(ToolKind::Count) - 1);
+            canvas_.addText(innerX_, y_ + 5.f, T(names[k]), Metrics::kFont, headingColor_, labelW_ - 6.f);
+            button(ctrlX_, T("Remove"), [this, idx] { hooks_.removeTool(idx); }, Metrics::kButtonW);
+            nextRow();
+            check(T("Enabled"), it.enabled, [&it](bool on) { it.enabled = on; });
+            drop(T("Player (controller map)"), {"1", "2", "3", "4", "5", "6", "7", "8"},
+                 static_cast<std::size_t>(std::clamp(it.player, 1, 8) - 1), [&it](std::size_t p) { it.player = static_cast<int>(p) + 1; });
+            switch (static_cast<ToolKind>(k)) {
+                case ToolKind::Jump:
+                    actionRow(T("Action"), it.action, sizeof it.action, it.player, 0);
+                    numberRow(T("Height (m)"), &it.a, 2, {0.1f, 50.f});
+                    check(T("Allow air jump"), it.b != 0.f, [&it](bool on) { it.b = on ? 1.f : 0.f; });
+                    break;
+                case ToolKind::Move:
+                    actionRow(T("X axis"), it.action, sizeof it.action, it.player, 1);
+                    actionRow(T("Y axis (forward)"), it.target, sizeof it.target, it.player, 1);
+                    numberRow(T("Speed (m/s)"), &it.a, 2, {0.1f, 100.f});
+                    check(T("Face direction"), it.b != 0.f, [&it](bool on) { it.b = on ? 1.f : 0.f; });
+                    check(T("Camera relative"), it.mode == 1, [&it](bool on) { it.mode = on ? 1 : 0; });
+                    break;
+                case ToolKind::FollowTarget:
+                    textRow(T("Target object name"), it.target, sizeof it.target);
+                    vecRow(T("Offset"), &it.a, 2);
+                    slider(T("Smoothing"), &it.d, {0.f, 20.f});
+                    check(T("Look at target"), it.mode == 1, [&it](bool on) { it.mode = on ? 1 : 0; });
+                    break;
+                case ToolKind::Spin:
+                    vecRow(T("Degrees / second (X Y Z)"), &it.a, 1);
+                    break;
+                case ToolKind::OnCollision:
+                    textRow(T("Only objects with tag"), it.target, sizeof it.target);
+                    drop(T("Action"), tr({"Log to Console", "Destroy the other object", "Destroy this object", "Bounce this object"}),
+                         static_cast<std::size_t>(std::clamp(it.mode, 0, 3)), [&it](std::size_t m) { it.mode = static_cast<int>(m); });
+                    if (it.mode == 3) numberRow(T("Bounce speed (m/s)"), &it.a, 1, {0.1f, 100.f});
+                    if (!ctx_.hasPhysics) {
+                        canvas_.addText(innerX_, y_, T("This tool needs a Physics component on the object."), Metrics::kSmallFont + 1.f,
+                                        warnColor_, width_ - innerX_ - Metrics::kPad);
+                        nextRow();
+                    }
+                    break;
+                case ToolKind::ScriptLib:
+                    textRow(T("Library file"), it.action, sizeof it.action);
+                    if (it.action[0]) {
+                        button(ctrlX_, T("Edit external"), [this, path = std::string(it.action)] { hooks_.openScriptExternal(path); },
+                               Metrics::kExternalW);
+                        nextRow();
+                    }
+                    canvas_.addText(innerX_, y_, T("Runs once the script runtime exists."), Metrics::kSmallFont, theme_.textDim,
+                                    width_ - innerX_ - Metrics::kPad);
+                    nextRow();
+                    break;
+                default:
+                    break;
+            }
+            y_ += Metrics::kGap;   // respiro entre ferramentas
+        }
         endSection();
     }
 

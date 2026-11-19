@@ -98,6 +98,23 @@ int main() {
   const float hOwnGravity = ownGravity.prepare(staticBody, hooks, 300.f);
   Check(hOwnGravity > hDynamic, "gravidade propria (Vector physics) mostra o campo e os atalhos");
 
+  // 7. Secao Tools. Cada ferramenta acrescenta o seu bloco (titulo, Remove, Enabled, Player e campos do tipo).
+  editor::ToolsComp tools{};
+  IP::Context noTools = base;
+  noTools.tools = &tools;
+  IP::InspectorPanel emptyTools(atlas, renderer);
+  const float hNoTools = emptyTools.prepare(noTools, hooks, 300.f);
+  tools.count = 1;
+  tools.items[0].kind = 4;   // On Collision (com a aviso de Physics)
+  IP::InspectorPanel oneTool(atlas, renderer);
+  const float hOneTool = oneTool.prepare(noTools, hooks, 300.f);
+  tools.count = 2;
+  tools.items[1].kind = 3;   // Spin
+  IP::InspectorPanel twoTools(atlas, renderer);
+  const float hTwoTools = twoTools.prepare(noTools, hooks, 300.f);
+  Check(hOneTool > hNoTools, "uma ferramenta acrescenta bloco na secao Tools");
+  Check(hTwoTools > hOneTool, "cada ferramenta nova deixa a secao mais alta");
+
   (void)removed;   // o clique no botao Remove e testado a mao (coordenadas dependem do layout)
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;

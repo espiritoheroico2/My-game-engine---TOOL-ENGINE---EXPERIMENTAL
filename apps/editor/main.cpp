@@ -563,6 +563,9 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   c.playing = ed.playing;
   if (ed.playing) c.scriptStatus = ed.scriptHost.statusOf(e.index, e.generation);
   c.scriptRuntime = ed_::ScriptHost::compiledIn();
+  // Ferramentas prontas do objeto e se ele tem fisica (algumas ferramentas precisam).
+  c.tools = w.get<ed_::ToolsComp>(e);
+  c.hasPhysics = w.has<ed_::PhysicsComp>(e);
   // Fisica: o componente, a gravidade da cena e, no Play, a velocidade e o estado do corpo.
   c.physics = w.get<ed_::PhysicsComp>(e);
   for (int k = 0; k < 3; ++k) c.worldGravity[k] = static_cast<float>(ed.sceneInfo.physics.gravity[k]);
@@ -620,6 +623,23 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   h.openScriptWindow = [&ed] { ed_::openScriptWindow(ed); };
   h.reloadScripts = [&ed] { ed.startScripts(); };
   h.removePhysics = [&ed] { ed.scene.world().remove<ed_::PhysicsComp>(ed.selected); };
+  h.actionNames = [&ed](int player, int kind) {   // mesma lista do combo de acao do ImGui (scheme do jogador)
+    std::vector<std::string> out;
+    const std::size_t si = static_cast<std::size_t>(std::clamp(player, 1, 8) - 1);
+    if (si < ed.inputMap.schemes.size()) {
+      for (const auto& r : ed.inputMap.schemes[si].rows) {
+        if (r.kind == kind) out.emplace_back(r.action);
+      }
+    }
+    return out;
+  };
+  h.openToolsHelp = [] { editor::openHelp("jslib"); };
+  h.removeTool = [&ed](std::size_t i) {   // desloca os itens seguintes, como o ImGui fazia
+    auto* tl = ed.scene.world().get<ed_::ToolsComp>(ed.selected);
+    if (!tl || static_cast<int>(i) >= tl->count) return;
+    for (int k = static_cast<int>(i); k + 1 < tl->count; ++k) tl->items[k] = tl->items[k + 1];
+    --tl->count;
+  };
   h.setPartOverride = [&ed](int pi, bool on) {   // material editado por parte de um modelo importado
     tool::World& w = ed.scene.world();
     const auto* mr = w.get<ed_::MeshRenderer>(ed.selected);
@@ -730,7 +750,11 @@ void drawInspector(Editor& ed) {
 #else
   editor::physicsUi(ed);
 #endif
+#ifdef TOOL_WITH_SPRITEUI
+  if (!gInspectorSpriteOn) editor::toolsUi(ed);   // com o painel SpriteUI, as ferramentas ficam na sua secao
+#else
   editor::toolsUi(ed);
+#endif
   editor::voxelUi(ed);
   editor::uiCanvasUi(ed);
   editor::particleUi(ed);
