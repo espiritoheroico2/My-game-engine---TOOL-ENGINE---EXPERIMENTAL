@@ -133,9 +133,10 @@ Para cada etapa, eu faço: modelo e teste automático primeiro, depois a janela 
 
 ---
 
-## 7. Erros e pendências encontrados nos documentos
+## 7. Erros nos documentos (corrigidos em `docs/ROADMAP.md`, seção 9)
 
-- `docs/ROADMAP.md`, linha 68: "Reproduzir o crash de `test ECS: 500/10000`". Provavelmente é `500/1000`. Confirme antes de corrigir.
-- `docs/ROADMAP.md`, item 9 (Settings SpriteUI): diz "Integrar `settings_bridge.hpp` ao painel ativo", mas a ponte **já está integrada** (`settings_panel.hpp` e `main.cpp` usam). O item deveria dizer "validar paridade".
-- As pendências T11 (alinhar CRT do Diligent com o projeto, C4743), T12 (teste ECS) e T13 (janelas) não estão no `ROADMAP.md`. Ficam aqui no CODAR.MD até você decidir onde guardá-las.
+- `docs/ROADMAP.md`: `test ECS: 500/10000` corrigido para `500/1000`. Confirme no teste T-5.
+- `docs/ROADMAP.md`: o item do Settings dizia para integrar `settings_bridge.hpp`, mas a ponte ja esta integrada.
+- As pendências T11, T12 e T13 agora estão no `docs/ROADMAP.md` (Fases A, C e D) e no `docs/CHECKLIST.md`.
 - Não verifiquei se `HOW_TO_BUILD.txt` e `COMO_COMPILAR.txt` (citados em `docs/BUILD.md`) existem no repositório.
+- `docs/CHANGELOG.md` e o relatório de 2026-11-18 divergem na contagem de arquivos GLSL (23 e 26). Conferir antes de citar.

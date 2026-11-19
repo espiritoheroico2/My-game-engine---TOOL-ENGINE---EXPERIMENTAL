@@ -5,6 +5,22 @@
 
 ## 0.7.19-beta (em andamento)
 
+**Janelas, roteamento de clique e estabilidade do teste ECS (2026-11-18 e 2026-11-19)**
+- SpriteUI: a camada (`Layer`) agora decide quem recebe o clique (antes so olhava a ordem de pintura). Cliques passavam por cima de menus e janelas de tras. `ElementVisual::layer` chega ao alvo e ao item de desenho; `BuildWindowItems` recebe a camada. Commit `a98825e`.
+- SpriteUI: arraste de janela so pelo grip (14 px a esquerda do titulo). O grip tem prioridade sobre a borda de redimensionar. Janela encaixada precisa passar de 16 px para sair do dock. Commit `a98825e`.
+- SpriteUI: `UIEventRouter::TopmostAt` consulta o alvo mais alto sem estado, com a mesma regra do clique. Commit `21b15ac`.
+- SpriteUI: `tests/test_layers_and_input.cpp` agora roda no CMake (`SpriteUI.LayersAndInput`), com 5 casos novos. 39/39 testes da SpriteUI passam nesta maquina.
+- Editor: regras de janela (`window_manager.*`, 30 verificacoes). Ainda nao ligadas aos paineis; o gerenciador do editor deve sair depois da migracao, com aprovacao. Commit `e16b7f2`.
+- Editor: teste ECS nao derruba o editor por falta de memoria: captura de excecao no topo (`crash_report.txt`), spawner para sozinho (`bad_alloc`) e aviso de memoria estimada (cerca de 7 KB por esfera). Commit `e16b7f2`. Nao reproduzido com janela.
+- Editor: `PanelRouter` (`apps/editor/panel_router.hpp`) com teste `Editor.PanelRouter`. Commit `89254f8`.
+- Branch `ui-settings-router` (commits `f2cdd24`, `a8b1676`, `c24f490`): menu e Configuracoes roteados pelo `PanelRouter`; lista de menu aberta bloqueia cliques atras dela; ImGui nao recebe ponteiro coberto por painel SpriteUI. Aguardando teste visual (`CODAR.MD` T-1 a T-4).
+- Build MSVC: aviso C4324 desligado (relleno de alinhamento intencional). Commit `1048fa7`.
+- Shaders: `Instances` em `t17` (conflito com `IblBrdfLut` em `t15`), `check_bindings.py` no ctest, GLSL regenerado. Commit `f974d2f`.
+- Validacao desta sessao: `ctest` do editor 34/34; `ctest` da SpriteUI 39/39; execucao headless do editor com 259 quadros sem erro. Nao validado: aparencia em janela real e GPU.
+- Documentacao: `docs/ROADMAP.md` reescrito com estado por item e fases; `CODAR.MD` na branch com os testes do responsavel. `docs/ESTADO_ATUAL.md`, `P1_IMPLEMENTACAO.md` e `CODAR.MD` (raiz) foram removidos no `908cbaf`.
+
+**Sessao de manutencao (SpriteUI, fonte, shaders, repositorio)**
+
 **Sessao de manutencao (SpriteUI, fonte, shaders, repositorio)**
 - Tela inicial do editor (criar/abrir projeto) agora e desenhada com SpriteUI, no lugar do dialogo ImGui. O dialogo antigo continua disponivel com `--imgui-start`, e tambem e usado se a fonte nao for encontrada. Codigo: `apps/editor/start_screen_model.hpp` (estado e acoes, sem SDL/ImGui) e `apps/editor/start_screen_spriteui.hpp` (layout, roteamento de clique, adaptador SDL).
 - Correcao de UV no SpriteUI da tela inicial: o UV de cada canto sai do `uvRect` do sprite (`uvAt` em `start_screen_spriteui.hpp`).

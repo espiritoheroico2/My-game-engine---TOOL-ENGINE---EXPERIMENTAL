@@ -7,10 +7,36 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 
 ### SpriteUI (migracao incremental em andamento)
 - [x] Painel experimental de diagnostico em `Window > SpriteUI diagnostics` (layout, input e extracao de FramePacket)
+- [x] Camada (`Layer`) no acerto de ponteiro, no visual e nos itens de desenho (`a98825e`)
+- [x] Arraste de janela so pelo grip (14 px a esquerda do titulo); grip tem prioridade sobre a borda (`a98825e`)
+- [x] Limiar de 16 px para sair do dock (`undockThreshold`), 6 px para janela solta (`a98825e`)
+- [x] `UIEventRouter::TopmostAt`: alvo mais alto sem estado, mesma regra do clique (`21b15ac`)
+- [x] Teste `SpriteUI.LayersAndInput` registrado no CMake: 39/39 testes da SpriteUI passam nesta maquina
+- [x] Menu e Settings roteados pelo `PanelRouter` (branch `ui-settings-router`, `f2cdd24`): lista aberta bloqueia cliques atras dela
 - [~] Geometria solida pelo SDL existente; ainda falta backend SpriteUI de producao e migracao de telas do editor
-- [ ] Texto, imagens/fontes e primeira tela principal migrada, mantendo ImGui como fallback
+- [~] Texto, imagens/fontes e primeira tela principal migrada (tela inicial); demais janelas em ImGui
+- [ ] Grip desenhado (icone) em cada janela do editor
+- [ ] Janela solta acima das encaixadas e barra de titulo sempre visivel: validar em janela real (depende da migracao das janelas)
+- [ ] Remocao do ImGui por etapas (ROADMAP, Fase C)
 
 ## Feito
+
+### 0.7.19-beta (em andamento: janelas, roteamento e estabilidade do teste ECS)
+- [x] Guarda de memoria no teste ECS: captura de `bad_alloc`, para controlado e aviso de memoria estimada (`e16b7f2`)
+- [x] Captura de excecao no topo do editor; grava `crash_report.txt` (`e16b7f2`)
+- [x] Regras de janela do editor (`window_manager.*`): 30 verificacoes, `Editor.WindowManager` (`e16b7f2`)
+- [x] Checador de bindings HLSL/GLSL (`Shaders.Bindings`) e `Instances` em `t17` (`f974d2f`)
+- [x] Profiler: secao Priority com destaque (`profiler_model.hpp`, `profiler_panel.hpp`)
+- [x] Troca de API: pedido responde no quadro; troca aplicada no quadro seguinte (`requestApi`, `applyPendingApi`)
+- [x] Aviso C4324 desligado no MSVC (`1048fa7`)
+- [x] Roteador de paineis do editor (`Editor.PanelRouter`) (`89254f8`)
+- [~] Roteador ligado ao menu e as Configuracoes: na branch `ui-settings-router` (`f2cdd24`), aguardando teste visual
+- [ ] T7 D3D12: captura de `ppCompilerOutput` e DLLs do compilador
+- [ ] T8 shaders nativos em pastas HLSL e GLSL separadas
+- [ ] T10 timestamps de GPU no RHI
+- [ ] T11 CRT e `_ITERATOR_DEBUG_LEVEL` do Diligent (LNK C4743); avisos C4456/C4457 do projeto
+- [ ] T12 teste ECS com janela (`test ECS: 10000` e cargas maiores)
+- [ ] T13 ligar as demais janelas ao roteador (depende da Fase C)
 
 ### 0.7.17-beta (AO, hierarquia e multi-material, projeto enxuto)
 - [x] SSAO (Light Prism `Post/Ssao`) na CPU e na GPU; AO so no ambiente; gpu_test compara GPU x CPU (Vulkan)
