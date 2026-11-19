@@ -557,6 +557,12 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   c.principalCount = ed.principalCameras().size();
   c.splitVertical = ed.sceneInfo.splitVertical;
   c.audio = w.get<ed_::AudioSource>(e);
+  // Script: o componente, o caminho do arquivo e, durante o Play, o status vindo do ScriptHost.
+  c.script = w.get<ed_::ScriptComp>(e);
+  if (c.script) c.scriptPath = c.script->path;
+  c.playing = ed.playing;
+  if (ed.playing) c.scriptStatus = ed.scriptHost.statusOf(e.index, e.generation);
+  c.scriptRuntime = ed_::ScriptHost::compiledIn();
   // Tags: todas as da cena e quais o objeto tem (secao Tags do painel SpriteUI).
   const tool::TagMask mask = w.tagMask(e);
   for (tool::TagId i = 0; i < ed.scene.tags().size(); ++i) {
@@ -597,6 +603,11 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   };
   h.addTagIndex = [&ed](std::size_t i) { ed.scene.world().addTag(ed.selected, static_cast<tool::TagId>(i)); };
   h.removeTagIndex = [&ed](std::size_t i) { ed.scene.world().removeTag(ed.selected, static_cast<tool::TagId>(i)); };
+  h.openScriptHelp = [] { editor::openHelp("script_examples"); };   // mesmas acoes do scriptUi (ImGui)
+  h.addScript = [&ed] { ed.attachScript(ed.selected); };
+  h.openScriptExternal = [&ed](const std::string& rel) { editor::openInExternalEditor(ed, rel); };
+  h.openScriptWindow = [&ed] { ed_::openScriptWindow(ed); };
+  h.reloadScripts = [&ed] { ed.startScripts(); };
   h.setPartOverride = [&ed](int pi, bool on) {   // material editado por parte de um modelo importado
     tool::World& w = ed.scene.world();
     const auto* mr = w.get<ed_::MeshRenderer>(ed.selected);
@@ -708,7 +719,11 @@ void drawInspector(Editor& ed) {
   editor::uiCanvasUi(ed);
   editor::particleUi(ed);
   editor::addResourceUi(ed);
+#ifdef TOOL_WITH_SPRITEUI
+  if (!gInspectorSpriteOn) scriptUi(ed);   // com o painel SpriteUI, o script fica na secao ToolObject Script
+#else
   scriptUi(ed);
+#endif
 #ifdef TOOL_WITH_SPRITEUI
   if (!gInspectorSpriteOn) tagsUi(ed);   // sem o painel SpriteUI, as tags ficam em ImGui; com ele, na secao Tags
 #else

@@ -64,6 +64,24 @@ int main() {
   const float hLocked = tagged.prepare(locked, hooks, 300.f);
   Check(hLocked == hTagged, "objeto travado: mesma altura (so os controles ficam desabilitados)");
 
+  // 5. Secao ToolObject Script. Sem script: so o Help e o Add Script. Com script: o arquivo, Edit script e a
+  //    checagem Script enabled, por isso o bloco e mais alto. Durante o Play entra o status e o Reload.
+  IP::InspectorPanel noScript(atlas, renderer);
+  const float hNoScript = noScript.prepare(base, hooks, 300.f);
+  editor::ScriptComp script{};
+  IP::Context withScript = base;
+  withScript.script = &script;
+  withScript.scriptPath = "scripts/player.js";
+  IP::InspectorPanel scripted(atlas, renderer);
+  const float hScripted = scripted.prepare(withScript, hooks, 300.f);
+  Check(hScripted > hNoScript, "com script a secao ocupa mais altura que sem script");
+  IP::Context playing = withScript;
+  playing.playing = true;
+  playing.scriptStatus = "running";
+  IP::InspectorPanel onPlay(atlas, renderer);
+  const float hPlaying = onPlay.prepare(playing, hooks, 300.f);
+  Check(hPlaying > hScripted, "durante o Play a secao mostra status e Reload (mais altura)");
+
   (void)removed;   // o clique no botao Remove e testado a mao (coordenadas dependem do layout)
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;

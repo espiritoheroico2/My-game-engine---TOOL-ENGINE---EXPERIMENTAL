@@ -5,10 +5,10 @@
 // biblioteca: Slider, Checkbox, Dropdown, ColorPicker, TextField e Button. Os valores vem dos componentes do objeto
 // e so mudam em acao do usuario (clique, arrasto ou digitacao). Desenhar e ler nao escrevem nada.
 //
-// Secoes em SpriteUI nesta rodada: nome, ativo e travado; Transform; Mesh Renderer (com as partes de modelo
-// importado); Light source; Global Light (sun); Camera (com o pos-processamento) e Audio Source. Fisica, voxel, UI,
-// particulas, recursos, script, tags e o rodape (Add Component, Collapse All, Open All) continuam em ImGui logo
-// abaixo deste bloco (main.cpp: drawInspector).
+// Secoes em SpriteUI: nome, ativo e travado; Transform; Mesh Renderer (com as partes de modelo importado); Light
+// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; ToolObject Script e Tags. Fisica, voxel,
+// UI, particulas, recursos e o rodape (Add Component, Collapse All, Open All) continuam em ImGui logo abaixo deste
+// bloco (main.cpp: drawInspector).
 //
 // Exemplo: a Luz do sol tem cor, intensidade e sombra. Clicar na amostra da cor abre o seletor; arrastar a area
 // de saturacao muda a cor do objeto na hora. Digitar "2,5" na intensidade grava 2.5 quando o numero e valido.
@@ -82,6 +82,11 @@ struct Context {
     AudioSource* audio = nullptr;
     std::vector<std::string> tagNames;   // todas as tags da cena (indice = id da tag)
     std::vector<bool> tagOn;             // quais o objeto tem
+    ScriptComp* script = nullptr;        // script do objeto (nullptr: nao tem)
+    std::string scriptPath;              // caminho relativo do script ("" se nao tem arquivo)
+    bool playing = false;                // Play ligado: mostra o status do script
+    std::string scriptStatus;            // status vindo do ScriptHost (so com Play)
+    bool scriptRuntime = true;           // a build tem o runtime de script (QuickJS)
 };
 
 // Acoes com efeito fora do objeto (o Editor, no main.cpp). Cada uma faz o que o ImGui fazia.
@@ -99,6 +104,11 @@ struct Hooks {
     std::function<bool(const std::string&)> addTagNamed;           // cria (se preciso) e atribui; false: limite de tags
     std::function<void(std::size_t)> addTagIndex;                  // atribui uma tag existente
     std::function<void(std::size_t)> removeTagIndex;               // tira uma tag do objeto
+    std::function<void()> openScriptHelp;                          // "Help: script examples"
+    std::function<void()> addScript;                               // cria o arquivo de script do objeto
+    std::function<void(const std::string&)> openScriptExternal;    // abre o arquivo no editor de codigo
+    std::function<void()> openScriptWindow;                        // abre a janela de edicao do script
+    std::function<void()> reloadScripts;                           // reinicia os scripts da cena (durante o Play)
 };
 
 // Metricas do painel, em pixels logicos.
@@ -116,6 +126,9 @@ struct Metrics {
     static constexpr float kCheckBox = 18.f;
     static constexpr float kCheckGap = 8.f;
     static constexpr float kButtonW = 110.f;
+    static constexpr float kHelpW = 160.f;       // "Help: script examples"
+    static constexpr float kEditW = 110.f;       // "Edit script", "Reload scripts"
+    static constexpr float kExternalW = 120.f;   // "Edit external"
     static constexpr float kAxisW = 14.f;
     static constexpr float kPopupW = 232.f;
     static constexpr float kPopupH = 210.f;
@@ -172,6 +185,7 @@ class InspectorPanel {
         if (ctx.global) global();
         if (ctx.camera) camera();
         if (ctx.audio) audio();
+        script();
         tags();
         return y_ + Metrics::kPad;
     }
@@ -664,6 +678,52 @@ class InspectorPanel {
             }
         }
         frames_.push_back(rect(innerX_ - 4.f, top, w + 8.f, y_ - top));
+    }
+
+    // Script do objeto (ToolObject Script). Sem script: so o botao de criar o arquivo (opcional). Com script: liga e
+    // desliga, mostra o arquivo, abre a janela de edicao ou o editor externo e, durante o Play, o status e o
+    // reinicio dos scripts. Fora do Play o script so e guardado e editado.
+    void script() {
+        if (!beginSection(im::Section::Script, T("ToolObject Script"))) return;
+        button(innerX_, T("Help: script examples"), [this] { hooks_.openScriptHelp(); }, Metrics::kHelpW);
+        nextRow();
+        if (!ctx_.script) {
+            button(ctrlX_, T("Add Script"), [this] { hooks_.addScript(); });
+            nextRow();
+            canvas_.addText(innerX_, y_, T("Creates a script file for this object (optional)."), Metrics::kSmallFont, theme_.textDim,
+                            width_ - innerX_ - Metrics::kPad);
+            nextRow();
+            endSection();
+            return;
+        }
+        checkField(T("Script enabled"), &ctx_.script->enabled);
+        label(y_, T("File"));
+        canvas_.addText(ctrlX_, y_ + 5.f, ctx_.scriptPath.empty() ? std::string(T("(no file)")) : ctx_.scriptPath, Metrics::kSmallFont + 1.f,
+                        theme_.textDim, ctrlW_);
+        nextRow();
+        button(ctrlX_, T("Edit script"), [this] { hooks_.openScriptWindow(); }, Metrics::kEditW);
+        if (!ctx_.scriptPath.empty()) {
+            button(ctrlX_ + Metrics::kEditW + Metrics::kGap, T("Edit external"), [this] { hooks_.openScriptExternal(ctx_.scriptPath); },
+                   Metrics::kExternalW);
+        }
+        nextRow();
+        if (ctx_.playing) {
+            canvas_.addText(innerX_, y_ + 5.f, std::string(T("Script status")) + ": " + ctx_.scriptStatus, Metrics::kSmallFont + 1.f,
+                            theme_.textDim, width_ - innerX_ - Metrics::kPad);
+            nextRow();
+            button(ctrlX_, T("Reload scripts"), [this] { hooks_.reloadScripts(); }, Metrics::kEditW);
+            nextRow();
+        } else {
+            canvas_.addText(innerX_, y_ + 5.f, T("Scripts run while the game is playing (Play)."), Metrics::kSmallFont + 1.f, theme_.textDim,
+                            width_ - innerX_ - Metrics::kPad);
+            nextRow();
+        }
+        if (!ctx_.scriptRuntime) {
+            canvas_.addText(innerX_, y_ + 5.f, T("This build has no script runtime (QuickJS is off)."), Metrics::kSmallFont + 1.f, warnColor_,
+                            width_ - innerX_ - Metrics::kPad);
+            nextRow();
+        }
+        endSection();
     }
 
     // Tags do objeto: uma linha por tag atribuida (Remove), campo para criar e o botao Add tag, e a lista das
