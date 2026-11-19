@@ -17,6 +17,9 @@
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
+#include "SpriteUi/Widgets/DockInteraction.hpp"
+#include "SpriteUi/Widgets/WindowFrame.hpp"
+#include "SpriteUi/Widgets/WindowFramePaint.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -29,6 +32,7 @@ namespace editor::infoui {
 namespace SU = ToolEngine::SpriteUi;
 namespace SR = ToolEngine::SpriteUi::Rendering;
 namespace ST = ToolEngine::SpriteUi::Text;
+namespace SW = ToolEngine::SpriteUi::Widgets;
 using editor::info::Field;
 using editor::info::kFieldCount;
 using editor::info::Key;
@@ -49,10 +53,11 @@ struct Theme {
   static constexpr float kTitleSize = 20.f;
   static constexpr float kLabelSize = 13.f;
   static constexpr float kFieldInset = 8.f;
-  // Titulo + 9 (rotulo, campo) + linha do botao + status + faltantes; 21 espacos entre 22 filhos.
+  static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth
+  // 9 (rotulo, campo) + linha do botao + status + faltantes = 21 filhos, 20 espacos. O titulo fica na moldura.
   static constexpr float kPanelHeight =
-      2.f * kPadding + kTitleHeight + static_cast<float>(kFieldCount) * (kLabelHeight + kFieldHeight) +
-      kButtonHeight + 2.f * kLineHeight + 21.f * kGap;
+      2.f * kPadding + static_cast<float>(kFieldCount) * (kLabelHeight + kFieldHeight) +
+      kButtonHeight + 2.f * kLineHeight + 20.f * kGap;
 };
 
 // Rotulo de cada campo, na ordem de editor::info::Field (mesmas chaves do formulario ImGui).
@@ -110,7 +115,7 @@ struct Shaped {
 
 class View {
  public:
-  enum class Action { None, Save };
+  enum class Action { None, Save, Close };
 
   View(Model& model, const ST::TruetypeAtlas& atlas) : model_{model}, atlas_{atlas} { buildTree(); }
 
@@ -119,12 +124,25 @@ class View {
     actions.clear();
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
 
-    // Largura: cabe na janela com 16 px de margem de cada lado.
+    // Janela flutuante com moldura (aba de titulo, X e grip). Largura: cabe com 16 px de margem de cada lado.
     const float panelWidth = std::min(Theme::kPanelWidth, windowWidth - 32.f);
-    setPanelWidth(panelWidth);
-    const float x = std::floor((windowWidth - panelWidth) * 0.5f);
-    const float y = std::max(0.f, std::floor((windowHeight - Theme::kPanelHeight) * 0.5f));
-    tree_.Layout({{x, y}, {panelWidth, Theme::kPanelHeight}});
+    const float frameHeight = Theme::kPanelHeight + metrics_.headerHeight + 2.f * metrics_.borderWidth;
+    if (!placed_) {   // primeira vez: centralizada
+      windowPos_ = {std::floor((windowWidth - panelWidth) * 0.5f),
+                    std::max(0.f, std::floor((windowHeight - frameHeight) * 0.5f))};
+      placed_ = true;
+    }
+    windowPos_.x = std::clamp(windowPos_.x, 0.f, std::max(0.f, windowWidth - panelWidth));
+    windowPos_.y = std::clamp(windowPos_.y, 0.f, std::max(0.f, windowHeight - frameHeight));
+    frame_ = SU::Rect{windowPos_, {panelWidth, frameHeight}};
+
+    handleFrameInput(in, actions);
+    frame_ = SU::Rect{windowPos_, {panelWidth, frameHeight}};
+
+    // Conteudo: dentro da borda e abaixo do cabecalho. O layout dos campos segue esse retangulo.
+    const SU::Rect content = SW::WindowFrameContent(frame_, metrics_);
+    setPanelWidth(content.size.x);
+    tree_.Layout({content.position, {content.size.x, Theme::kPanelHeight}});
 
     // Texto medido de cada campo e status/faltantes (muda com o modelo, por isso mede a cada quadro).
     for (std::size_t i = 0; i < kFieldCount; ++i) {
@@ -172,8 +190,48 @@ class View {
   [[nodiscard]] SU::Rect rectOf(SU::UIHandle handle) const { return nodeRect(handle); }
 
  private:
+  static bool inside(SU::Rect r, SU::Vec2 p) {
+    return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y &&
+           p.y < r.position.y + r.size.y;
+  }
+
+  // Moldura: X fecha (Action::Close); pressionar o grip inicia o arraste da janela. So o grip arrasta.
+  void handleFrameInput(const FrameInput& in, std::vector<Action>& actions) {
+    const SU::Vec2 p{in.pointerX, in.pointerY};
+    if (dragging_) {
+      if (in.pointerDown) {
+        windowPos_ = {p.x - grab_.x, p.y - grab_.y};
+      } else {
+        dragging_ = false;
+      }
+      return;
+    }
+    if (!in.pointerPressed) return;
+    if (SW::WindowFramePartAt(frame_, metrics_, false, p) == SW::WindowFramePart::Close) {
+      actions.push_back(Action::Close);
+      return;
+    }
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    if (inside(SW::WindowGripRect(bar, Theme::kGripWidth), p)) {
+      dragging_ = true;
+      grab_ = {p.x - windowPos_.x, p.y - windowPos_.y};
+    }
+  }
+
   // ---------- Arvore de layout ----------
   void buildTree() {
+    // Visual da moldura: cantos arredondados, aba de 30 px, borda azul ao arrastar.
+    metrics_.headerHeight = 30.f;
+    metrics_.cornerRadius = 6.f;
+    frameColors_.body = Srgb(0.110f, 0.118f, 0.137f);
+    frameColors_.border = Srgb(0.235f, 0.251f, 0.294f);
+    frameColors_.borderDragging = Srgb(0.420f, 0.600f, 0.980f);
+    frameColors_.headerActive = Srgb(0.165f, 0.184f, 0.231f);
+    frameColors_.headerInactive = Srgb(0.125f, 0.137f, 0.169f);
+    frameColors_.headerDragging = Srgb(0.200f, 0.230f, 0.302f);
+    frameColors_.glyph = Srgb(0.900f, 0.920f, 0.960f);
+    colors_.panel = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
+
     SU::FlexItem panel;
     panel.width = {SU::SizeMode::Fixed, Theme::kPanelWidth};
     panel.height = {SU::SizeMode::Fixed, Theme::kPanelHeight};
@@ -183,7 +241,6 @@ class View {
     panel.gap = Theme::kGap;
     panelHandle_ = tree_.Create({}, panel);
 
-    title_ = tree_.Create(panelHandle_, labelStyle(Theme::kTitleHeight));
     for (std::size_t i = 0; i < kFieldCount; ++i) {
       labels_[i] = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
       fields_[i] = tree_.Create(panelHandle_, fieldStyle());
@@ -331,7 +388,31 @@ class View {
       out.insert(out.end(), items.begin(), items.end());
     };
 
-    text(title_, shape(T("Editor info"), Theme::kTitleSize), nodeRect(title_).position, colors_.text, 0.9f);
+    // Moldura da SpriteUI (corpo, aba e X), com o visual do editor. Por tras dos campos (zOrder -2).
+    SW::WindowFrameState state;
+    state.active = true;
+    state.dragging = dragging_;
+    state.docked = false;
+    auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_, metrics_, state, frameColors_, -2.f, paint);
+    paint += frameItems.size() + 1;
+    out.insert(out.end(), frameItems.begin(), frameItems.end());
+
+    // Titulo e grip: a moldura nao desenha texto nem icone; o chamador escreve no retangulo do titulo.
+    const SU::Rect titleRect = SW::WindowFrameTitleRect(frame_, metrics_, false);
+    const Shaped title = shape(T("Editor info"), Theme::kTitleSize);
+    // O titulo comeca depois do grip (que fica a esquerda da aba).
+    text(panelHandle_, title,
+         {titleRect.position.x + Theme::kGripWidth, titleRect.position.y + (titleRect.size.y - title.layout.lineHeight) * 0.5f},
+         colors_.text, 0.95f);
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
+    const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
+    for (int c = 0; c < 2; ++c) {
+      for (int r = 0; r < 3; ++r) {
+        solid(panelHandle_, {{cx - 3.f + 4.f * static_cast<float>(c), cy - 4.f + 4.f * static_cast<float>(r)}, {2.f, 2.f}},
+              colors_.textDim, 0.95f);
+      }
+    }
 
     for (std::size_t i = 0; i < kFieldCount; ++i) {
       const auto field = static_cast<Field>(i);
@@ -405,6 +486,15 @@ class View {
   Shaped fieldText_[kFieldCount]{};
   float scroll_[kFieldCount]{};
   float lastX_ = 0.f, lastY_ = 0.f;
+
+  // Moldura: geometria e cores (SpriteUI). Definidas em buildTree.
+  SW::WindowFrameMetrics metrics_{};
+  SW::WindowFrameColors frameColors_{};
+  SU::Rect frame_{};
+  SU::Vec2 windowPos_{};
+  SU::Vec2 grab_{};
+  bool placed_ = false;
+  bool dragging_ = false;
 };
 
 }  // namespace editor::infoui
