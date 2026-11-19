@@ -2365,6 +2365,9 @@ static int runEditorMain(int argc, char** argv) {
   int mapSide = 0;          // --map N: mapa de N x N chunks de terreno, centrado na origem (ver Criar > Test map of chunks)
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--map") == 0) mapSide = std::atoi(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--frames") == 0) maxFrames = std::atoi(argv[i + 1]);
+  // --screenshot <arquivo.ppm> (com --frames N): grava o ultimo quadro, antes de apresentar. Headless, sem GPU.
+  std::string screenshotPath;
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--screenshot") == 0) screenshotPath = argv[i + 1];
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--ecs") == 0) ecsCount = std::atoll(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--voxel") == 0) voxelCount = std::atoll(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-frames") == 0) benchFrames = std::clamp(std::atoi(argv[i + 1]), 1, 10000);
@@ -2884,6 +2887,22 @@ static int runEditorMain(int argc, char** argv) {
       spriteTextCursorActive = false;
     }
 #endif
+    if (!screenshotPath.empty() && maxFrames > 0 && frame + 1 >= maxFrames) {
+      if (SDL_Surface* shot = SDL_RenderReadPixels(renderer, nullptr)) {
+        if (SDL_Surface* rgb = SDL_ConvertSurface(shot, SDL_PIXELFORMAT_RGB24)) {
+          if (FILE* f = std::fopen(screenshotPath.c_str(), "wb")) {
+            std::fprintf(f, "P6\n%d %d\n255\n", rgb->w, rgb->h);
+            const auto* base = static_cast<const unsigned char*>(rgb->pixels);
+            for (int y = 0; y < rgb->h; ++y)
+              std::fwrite(base + static_cast<std::size_t>(y) * static_cast<std::size_t>(rgb->pitch), 1,
+                          static_cast<std::size_t>(rgb->w) * 3, f);
+            std::fclose(f);
+          }
+          SDL_DestroySurface(rgb);
+        }
+        SDL_DestroySurface(shot);
+      }
+    }
     zone.restart(editor::Zone::Present);
     SDL_RenderPresent(renderer);
     zone.stop();
