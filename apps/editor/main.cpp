@@ -1909,7 +1909,7 @@ std::array<bool, editor::settings_bridge::kApiCount> settingsApiBuilt() {
 editor::settings_panel::Values settingsValues(Editor& ed) {
   editor::settings_panel::Values v;
   auto& L = ed.sceneInfo.render.lighting;
-  v.tab = ed.settingsTab < 0 ? 0 : ed.settingsTab;
+  v.tab = ed.settingsTab < 0 ? 1 : ed.settingsTab;
   v.api = ed.apiRequested;
   v.apiBuilt = settingsApiBuilt();
   v.apiStatus = F("Active API: %s", ed.apiStatus.c_str());
@@ -2024,7 +2024,7 @@ void drawSettings(Editor& ed) {
     gSettingsFrame = true;
     gSettingsRect = {origin.x, origin.y, avail.x, avail.y};
     ImGui::Dummy({avail.x, editor::settings_panel::Metrics::kStripH});
-    const int tab = ed.settingsTab < 0 ? 0 : ed.settingsTab;
+    const int tab = ed.settingsTab < 0 ? 1 : ed.settingsTab;
     if (tab != editor::settings_panel::kGraphicsTab) {
       ImGui::BeginChild("tabbody");
       ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);

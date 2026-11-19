@@ -73,7 +73,10 @@ Comando: `ctest -R EditorInfo`. Resultado da janela piloto: 9 checks passam (202
 ### 4.1 Janela Settings (prioridade alta)
 - **Sintoma relatado:** o menu interno de Configurações aparece vazio; as opções e os dados sumiram.
 - **Reproduzido no print headless (2026-11-19):** as abas (Settings, Game, Lighting) aparecem e o corpo fica vazio.
-- **Causa ainda não investigada.** Hipótese a verificar: a ponte `settings_bridge.hpp` não recebe os itens
+- **Causa encontrada (2026-11-19):** o editor abria na aba 0 (Appearance), que não desenha nada. Os controles
+  (API, escala, dropdown, caixas) só existem na aba 1 (Settings). **Correção feita:** abre na aba 1.
+- **Ainda vazias na SpriteUI:** Appearance, Game, Lighting, Optimizing e Language. A migração deve trazer
+  o conteúdo que existia na versão ImGui (`main.cpp`, função do Settings, ~linhas 2027-2050). Hipótese a verificar: a ponte `settings_bridge.hpp` não recebe os itens
   depois da troca de aba, ou a lista de opções não é preenchida no quadro. Verificar com um teste de
   modelo (`Editor.SettingsModel`, `Editor.SettingsBridge`) e um print.
 - Refazer a janela Settings do zero no padrão deste documento (seção 1), e não só corrigir.
