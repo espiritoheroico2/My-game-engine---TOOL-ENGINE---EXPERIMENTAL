@@ -23,8 +23,8 @@ namespace editor::inspector_model {
 
 // Secoes de componente com expansor (cabecalho clicavel). O cabecalho do objeto (nome, ativo, travado) nao tem.
 // PostFx e o subgrupo "Post-processing (this camera)" dentro da Camera.
-enum class Section : std::uint8_t { Transform, MeshRenderer, Light, GlobalLight, Camera, Audio, PostFx };
-inline constexpr std::size_t kSectionCount = 7;
+enum class Section : std::uint8_t { Transform, MeshRenderer, Light, GlobalLight, Camera, Audio, PostFx, Tags };
+inline constexpr std::size_t kSectionCount = 8;
 
 // Estado de aberto e fechado de cada secao (como o DefaultOpen do ImGui).
 struct Expanders {

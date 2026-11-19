@@ -52,6 +52,16 @@ if(TOOL_WITH_SPRITEUI)
   endif()
   add_test(NAME Editor.EditorInfoView COMMAND editor_info_view_tests)
 
+  # Secao Tags do Inspector (inspector_panel.hpp): entra no bloco e ocupa altura. Sem janela.
+  add_executable(editor_inspector_tags_tests tests/test_inspector_tags.cpp)
+  target_include_directories(editor_inspector_tags_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(editor_inspector_tags_tests PRIVATE EDITOR_FONT_PATH="${CMAKE_SOURCE_DIR}/assets/fonts/Xmind-Regular.ttf")
+  target_link_libraries(editor_inspector_tags_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_inspector_tags_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.InspectorTags COMMAND editor_inspector_tags_tests)
+
   # Paleta da SpriteUI: padrao, fallback e contraste do texto (sem janela, sem SpriteUI).
   add_executable(sui_palette_tests tests/test_sui_palette.cpp)
   target_include_directories(sui_palette_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

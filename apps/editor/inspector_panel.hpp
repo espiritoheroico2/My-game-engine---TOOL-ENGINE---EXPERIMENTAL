@@ -80,6 +80,8 @@ struct Context {
     std::size_t principalCount = 0;
     bool splitVertical = true;
     AudioSource* audio = nullptr;
+    std::vector<std::string> tagNames;   // todas as tags da cena (indice = id da tag)
+    std::vector<bool> tagOn;             // quais o objeto tem
 };
 
 // Acoes com efeito fora do objeto (o Editor, no main.cpp). Cada uma faz o que o ImGui fazia.
@@ -94,6 +96,9 @@ struct Hooks {
     std::function<void(bool)> setPrincipal;
     std::function<void(int, bool)> setPartOverride;                        // parte, ligado
     std::function<void(bool)> setSplitVertical;
+    std::function<bool(const std::string&)> addTagNamed;           // cria (se preciso) e atribui; false: limite de tags
+    std::function<void(std::size_t)> addTagIndex;                  // atribui uma tag existente
+    std::function<void(std::size_t)> removeTagIndex;               // tira uma tag do objeto
 };
 
 // Metricas do painel, em pixels logicos.
@@ -158,6 +163,7 @@ class InspectorPanel {
             lastObject_ = id;
             closePopups();
             endEdit();
+            tagMsg_.clear();
         }
         header();
         if (ctx.transform) transform();
@@ -166,6 +172,7 @@ class InspectorPanel {
         if (ctx.global) global();
         if (ctx.camera) camera();
         if (ctx.audio) audio();
+        tags();
         return y_ + Metrics::kPad;
     }
 
@@ -659,6 +666,40 @@ class InspectorPanel {
         frames_.push_back(rect(innerX_ - 4.f, top, w + 8.f, y_ - top));
     }
 
+    // Tags do objeto: uma linha por tag atribuida (Remove), campo para criar e o botao Add tag, e a lista das
+    // tags existentes que o objeto ainda nao tem. Renomear com duplo clique ainda nao existe (ver trocarjanelas.md).
+    void tags() {
+        if (!beginSection(im::Section::Tags, T("Tags"))) return;
+        for (std::size_t i = 0; i < ctx_.tagNames.size() && i < ctx_.tagOn.size(); ++i) {
+            if (!ctx_.tagOn[i]) continue;
+            label(y_, ctx_.tagNames[i].c_str());
+            button(ctrlX_, T("Remove"), [this, i] { hooks_.removeTagIndex(i); }, Metrics::kButtonW);
+            nextRow();
+        }
+        textRow(T("New tag"), newTag_, sizeof newTag_);
+        button(ctrlX_, T("Add tag"), [this] {
+            if (disabled_ || newTag_[0] == 0) return;
+            tagMsg_ = hooks_.addTagNamed(newTag_) ? std::string() : std::string(T("Too many tags (limit 128)."));
+            newTag_[0] = 0;
+        }, Metrics::kButtonW);
+        nextRow();
+        std::vector<std::string> options;
+        std::vector<std::size_t> ids;
+        for (std::size_t i = 0; i < ctx_.tagNames.size() && i < ctx_.tagOn.size(); ++i) {
+            if (ctx_.tagOn[i]) continue;
+            options.push_back(ctx_.tagNames[i]);
+            ids.push_back(i);
+        }
+        drop(T("Existing tag"), options, options.size(), [this, ids](std::size_t k) {
+            if (k < ids.size()) hooks_.addTagIndex(ids[k]);
+        });
+        if (!tagMsg_.empty()) {
+            canvas_.addText(innerX_, y_, tagMsg_, Metrics::kFont, theme_.error, width_ - innerX_ - Metrics::kPad);
+            nextRow();
+        }
+        endSection();
+    }
+
     void audio() {
         AudioSource& a = *ctx_.audio;
         if (!beginSection(im::Section::Audio, T("Audio Source"))) return;
@@ -1121,6 +1162,8 @@ class InspectorPanel {
     std::uint32_t keySeq_ = 1;
     bool disabled_ = false;
     unsigned lastObject_ = 0;
+    char newTag_[48] = "";        // campo "New tag" (buffer do componente; sobrevive entre quadros)
+    std::string tagMsg_;          // aviso da secao Tags (limite de tags)
 
     sui::Canvas canvas_;
     sui::Canvas overlay_;

@@ -557,6 +557,12 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   c.principalCount = ed.principalCameras().size();
   c.splitVertical = ed.sceneInfo.splitVertical;
   c.audio = w.get<ed_::AudioSource>(e);
+  // Tags: todas as da cena e quais o objeto tem (secao Tags do painel SpriteUI).
+  const tool::TagMask mask = w.tagMask(e);
+  for (tool::TagId i = 0; i < ed.scene.tags().size(); ++i) {
+    c.tagNames.emplace_back(ed.scene.tags().name(i));
+    c.tagOn.push_back(mask.test(i));
+  }
   return c;
 }
 
@@ -583,6 +589,14 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   };
   h.setPrincipal = [&ed](bool on) { ed.setPrincipal(ed.selected, on); };
   h.setSplitVertical = [&ed](bool vertical) { ed.sceneInfo.splitVertical = vertical; };
+  h.addTagNamed = [&ed](const std::string& name) {   // mesma regra do "Add tag" do ImGui
+    const tool::TagId id = ed.scene.tag(name.c_str());
+    if (id == tool::kInvalidIndex) return false;
+    ed.scene.world().addTag(ed.selected, id);
+    return true;
+  };
+  h.addTagIndex = [&ed](std::size_t i) { ed.scene.world().addTag(ed.selected, static_cast<tool::TagId>(i)); };
+  h.removeTagIndex = [&ed](std::size_t i) { ed.scene.world().removeTag(ed.selected, static_cast<tool::TagId>(i)); };
   h.setPartOverride = [&ed](int pi, bool on) {   // material editado por parte de um modelo importado
     tool::World& w = ed.scene.world();
     const auto* mr = w.get<ed_::MeshRenderer>(ed.selected);
@@ -695,7 +709,11 @@ void drawInspector(Editor& ed) {
   editor::particleUi(ed);
   editor::addResourceUi(ed);
   scriptUi(ed);
+#ifdef TOOL_WITH_SPRITEUI
+  if (!gInspectorSpriteOn) tagsUi(ed);   // sem o painel SpriteUI, as tags ficam em ImGui; com ele, na secao Tags
+#else
   tagsUi(ed);
+#endif
   // Rodape: adicionar componente (mesmo menu do "Add New"), abrir/fechar todas as secoes de componente.
   ImGui::Separator();
   if (ImGui::Button(T("Add Component"))) ImGui::OpenPopup("addres");
