@@ -98,6 +98,11 @@ Para cada teste, marque **OK**, **FALHOU** ou **NÃO TESTADO**. Em caso de falha
 1. Abra o Profiler e procure a linha sobre GPU %.
 2. **Esperado:** o texto termina com "see docs/ROADMAP.md, item 7".
 
+### T-7. Capturas da nova janela Editor info (SpriteUI, ainda fora do menu)
+1. Na pasta de build, rode `editor_info_capture` com a fonte e uma pasta de saída (ver o cabeçalho de `apps/editor/tools/editor_info_capture.cpp`). Ele grava três `.ppm`.
+2. Converta para PNG com a ferramenta que você preferir, e confira: campos com fundo, lista de faltantes em amarelo, "Saved." em verde no cenário 3.
+3. Esta janela **não** substitui a ImGui ainda. A ImGui "Editor info" continua sendo a do menu. A remoção só acontece depois do seu OK.
+
 ### Não testar ainda (ainda não migrados nesta branch)
 - Janela solta acima de janela encaixada, barra de título sempre visível, arraste só pelo grip, e docking das janelas do editor. Essas regras estão prontas na SpriteUI e no `WindowManager`, mas **os painéis do editor ainda não usam elas**. Teste depois da migração (passo 6).
 

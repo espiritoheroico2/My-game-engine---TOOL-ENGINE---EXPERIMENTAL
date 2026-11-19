@@ -42,6 +42,14 @@ if(TOOL_WITH_SPRITEUI)
   endif()
   add_test(NAME Editor.EditorInfoModel COMMAND editor_info_model_tests)
 
+  # Captura headless da janela Editor info (SpriteUI). Nao e um teste do ctest: gera PPM para conferir visualmente.
+  add_executable(editor_info_capture tools/editor_info_capture.cpp)
+  target_include_directories(editor_info_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_info_capture PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_info_capture PRIVATE tool::audio_miniaudio)
+  endif()
+
   # Modelo da janela Help (help_model.hpp): blocos do texto, busca por idioma e edicao da busca.
   add_executable(editor_help_model_tests tests/test_help_model.cpp)
   target_include_directories(editor_help_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
