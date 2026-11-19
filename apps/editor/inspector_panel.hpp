@@ -6,8 +6,8 @@
 // e so mudam em acao do usuario (clique, arrasto ou digitacao). Desenhar e ler nao escrevem nada.
 //
 // Secoes em SpriteUI: nome, ativo e travado; Transform; Mesh Renderer (com as partes de modelo importado); Light
-// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; ToolObject Script e Tags.
-// Voxel, UI, particulas, recursos e o rodape (Add Component, Collapse All, Open All) continuam em ImGui
+// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; Voxel; ToolObject Script
+// e Tags. UI, particulas, recursos e o rodape (Add Component, Collapse All, Open All) continuam em ImGui
 // logo abaixo deste bloco (main.cpp: drawInspector).
 //
 // Exemplo: a Luz do sol tem cor, intensidade e sombra. Clicar na amostra da cor abre o seletor; arrastar a area
@@ -93,6 +93,8 @@ struct Context {
     std::string playPhysics;             // velocidade e estado no Play (vazio fora do Play)
     ToolsComp* tools = nullptr;          // ferramentas prontas do objeto (nullptr: nao tem)
     bool hasPhysics = false;             // o objeto tem Physics (algumas ferramentas precisam)
+    VoxelChunk* voxel = nullptr;         // blocos do objeto (nullptr: nao tem)
+    unsigned voxelSolid = 0;             // blocos preenchidos no chunk
 };
 
 // Acoes com efeito fora do objeto (o Editor, no main.cpp). Cada uma faz o que o ImGui fazia.
@@ -119,6 +121,9 @@ struct Hooks {
     std::function<std::vector<std::string>(int, int)> actionNames; // acoes do Input Map: (jogador 1..8, tipo 0 botao / 1 eixo)
     std::function<void()> openToolsHelp;                           // "Help: JS library"
     std::function<void(std::size_t)> removeTool;                   // tira a ferramenta da lista do objeto
+    std::function<void(int, int, int, int)> voxelPaint;            // pinta um bloco: x, camada, z, tipo do pincel
+    std::function<void()> voxelFill;                               // preenche o terreno
+    std::function<void()> voxelClear;                              // limpa o chunk
 };
 
 // Metricas do painel, em pixels logicos.
@@ -198,6 +203,7 @@ class InspectorPanel {
         if (ctx.audio) audio();
         if (ctx.physics) physics();
         if (ctx.tools) tools();
+        if (ctx.voxel) voxel();
         script();
         tags();
         return y_ + Metrics::kPad;
@@ -285,7 +291,7 @@ class InspectorPanel {
 
   private:
     // ------------------------------------------------------------------ tipos
-    enum class Kind : std::uint8_t { Header, Slider, Check, Drop, Swatch, Num, Text, Button };
+    enum class Kind : std::uint8_t { Header, Slider, Check, Drop, Swatch, Num, Text, Button, Cell };
     enum class FieldKind : std::uint8_t { None, Number, Text, Hex };
 
     struct Control {
@@ -376,7 +382,7 @@ class InspectorPanel {
     }
 
     // Campo numerico: digitado. Escreve no objeto so quando o texto e um numero valido dentro do intervalo.
-    void numberCell(float x, float w, char axis, float* target, int decimals, im::Range range) {
+    void numberCell(float x, float w, char axis, float* target, int decimals, im::Range range, std::function<void()> changed = {}) {
         const float bx = x + (axis != 0 ? Metrics::kAxisW : 0.f);
         if (axis != 0) {
             const char letter[2] = {axis, 0};
@@ -387,7 +393,10 @@ class InspectorPanel {
         c.decimals = decimals;
         c.range = range;
         c.text = im::FormatNumber(*target, decimals);
-        c.setF = [target](float v) { *target = v; };
+        c.setF = [target, changed](float v) {
+            *target = v;
+            if (changed) changed();   // quem depende do valor (ex.: tamanho do bloco) reage aqui
+        };
         if (!editing(c.key)) canvas_.addSolid(bx, y_, w - (bx - x), Metrics::kRowH, c.disabled ? fieldDisabled_ : fieldColor_, Metrics::kZField);
         if (!editing(c.key)) canvas_.addText(bx + 6.f, y_ + 5.f, c.text, Metrics::kFont, c.disabled ? theme_.textDim : theme_.text, w - (bx - x) - 10.f);
     }
@@ -404,9 +413,9 @@ class InspectorPanel {
     }
 
     // Numero sozinho na linha (near, far, ortho size).
-    void numberRow(const char* text, float* target, int decimals, im::Range range = {-1e9f, 1e9f}) {
+    void numberRow(const char* text, float* target, int decimals, im::Range range = {-1e9f, 1e9f}, std::function<void()> changed = {}) {
         label(y_, text);
-        numberCell(ctrlX_, ctrlW_, 0, target, decimals, range);
+        numberCell(ctrlX_, ctrlW_, 0, target, decimals, range, std::move(changed));
         nextRow();
     }
 
@@ -746,6 +755,45 @@ class InspectorPanel {
         endSection();
     }
 
+    // Voxel (blocos do objeto): tamanho do bloco, pincel com cor, Fill terrain e Clear, a camada (y) e a grade 16x16
+    // da camada. Cada celula da grade pinta um bloco na camada escolhida. Fill, Clear e pintar ja mudam a revisao.
+    void voxel() {
+        VoxelChunk& vc = *ctx_.voxel;
+        if (!beginSection(im::Section::Voxel, T("Voxel chunk (blocks)"))) return;
+        label(y_, T("Solid blocks"));
+        canvas_.addText(ctrlX_, y_ + 5.f, F("%u / %d", ctx_.voxelSolid, kChunkBlocks), Metrics::kFont, theme_.text, ctrlW_);
+        nextRow();
+        numberRow(T("Block size (m)"), &vc.cell, 2, {0.05f, 10.f}, [&vc] { ++vc.revision; });
+        static const char* brushNames[kBlockTypes] = {"Air (erase)", "Grass", "Dirt", "Stone", "Sand", "Water", "Brick", "Snow"};
+        std::vector<std::string> brushes;
+        for (const char* n : brushNames) brushes.push_back(T(n));
+        drop(T("Brush"), brushes, static_cast<std::size_t>(std::clamp(voxelBrush_, 0, kBlockTypes - 1)),
+             [this](std::size_t i) { voxelBrush_ = static_cast<int>(i); });
+        if (voxelBrush_ > 0) swatch(T("Brush color"), vc.palette[voxelBrush_]);
+        button(innerX_, T("Fill terrain"), [this] { hooks_.voxelFill(); }, Metrics::kButtonW);
+        button(innerX_ + Metrics::kButtonW + Metrics::kGap, T("Clear"), [this] { hooks_.voxelClear(); }, Metrics::kButtonW);
+        nextRow();
+        std::vector<std::string> layers;
+        for (int i = 0; i < kChunkSize; ++i) layers.push_back(std::to_string(i));
+        drop(T("Layer (y)"), layers, static_cast<std::size_t>(std::clamp(voxelLayer_, 0, kChunkSize - 1)),
+             [this](std::size_t i) { voxelLayer_ = static_cast<int>(i); });
+        // Grade da camada: cada celula e um botao; a cor vem do bloco (ou escuro para o ar).
+        constexpr float kCell = 12.f;
+        constexpr float kCellGap = 2.f;
+        for (int z = 0; z < kChunkSize; ++z) {
+            for (int x = 0; x < kChunkSize; ++x) {
+                const unsigned char t = vc.at(x, voxelLayer_, z);
+                Control& c = add(Kind::Cell, rect(innerX_ + static_cast<float>(x) * (kCell + kCellGap), y_, kCell, kCell), nextKey());
+                const SU::Vec4 col = t ? sui::Srgb(vc.palette[t][0], vc.palette[t][1], vc.palette[t][2]) : sui::Srgb(0.18f, 0.18f, 0.2f);
+                canvas_.addSolid(c.box.position.x, c.box.position.y, kCell, kCell, col, Metrics::kZField);
+                c.onClick = [this, x, z, layer = voxelLayer_, brush = voxelBrush_] { hooks_.voxelPaint(x, layer, z, brush); };
+            }
+            y_ += kCell + kCellGap;   // proxima linha da grade
+        }
+        y_ += Metrics::kGap;
+        endSection();
+    }
+
     // Escolha de acao do Input Map (mesma regra do combo do ImGui): "(none)" limpa; uma acao fora da lista aparece
     // com o nome que ja estava gravado.
     void actionRow(const char* text, char* buf, std::size_t cap, int player, int kind) {
@@ -979,6 +1027,8 @@ class InspectorPanel {
                 append(items, paint, Elm::BuildButtonBackground(b, buttonStyle_, Metrics::kZControl, paint));
                 break;
             }
+            case Kind::Cell:   // celula da grade do voxel: a cor ja foi para o canvas; so recebe clique
+                break;
         }
     }
 
@@ -1159,6 +1209,7 @@ class InspectorPanel {
                 case Kind::Header:
                 case Kind::Swatch:
                 case Kind::Button:
+                case Kind::Cell:
                     if (buttonClick(c, phase, p)) any = true;
                     break;
                 case Kind::Slider: {
@@ -1380,6 +1431,8 @@ class InspectorPanel {
     unsigned lastObject_ = 0;
     char newTag_[48] = "";        // campo "New tag" (buffer do componente; sobrevive entre quadros)
     std::string tagMsg_;          // aviso da secao Tags (limite de tags)
+    int voxelBrush_ = 1;          // pincel do voxel (0 = apagar); guardado entre quadros, como o static do ImGui
+    int voxelLayer_ = 0;          // camada (y) mostrada na grade
 
     sui::Canvas canvas_;
     sui::Canvas overlay_;

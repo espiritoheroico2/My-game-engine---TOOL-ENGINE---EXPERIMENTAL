@@ -566,6 +566,9 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   // Ferramentas prontas do objeto e se ele tem fisica (algumas ferramentas precisam).
   c.tools = w.get<ed_::ToolsComp>(e);
   c.hasPhysics = w.has<ed_::PhysicsComp>(e);
+  // Voxel: os blocos do objeto e quantos estao preenchidos.
+  c.voxel = w.get<ed_::VoxelChunk>(e);
+  if (c.voxel) c.voxelSolid = editor::solidCount(*c.voxel);
   // Fisica: o componente, a gravidade da cena e, no Play, a velocidade e o estado do corpo.
   c.physics = w.get<ed_::PhysicsComp>(e);
   for (int k = 0; k < 3; ++k) c.worldGravity[k] = static_cast<float>(ed.sceneInfo.physics.gravity[k]);
@@ -634,6 +637,20 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     return out;
   };
   h.openToolsHelp = [] { editor::openHelp("jslib"); };
+  h.voxelPaint = [&ed](int x, int layer, int z, int brush) {   // mesmo setBlock do ImGui (revisao sobe la)
+    if (auto* vc = ed.scene.world().get<ed_::VoxelChunk>(ed.selected)) editor::setBlock(*vc, x, layer, z, static_cast<unsigned char>(brush));
+  };
+  h.voxelFill = [&ed] {   // mesmo calculo do ImGui: o terreno acompanha a posicao do objeto
+    auto& w = ed.scene.world();
+    auto* vc = w.get<ed_::VoxelChunk>(ed.selected);
+    if (!vc) return;
+    const auto* tr = w.get<ed_::Transform>(ed.selected);
+    const float span = vc->cell * ed_::kChunkSize;
+    editor::fillTerrain(*vc, tr ? static_cast<int>(std::lround(tr->pos[0] / span)) : 0, tr ? static_cast<int>(std::lround(tr->pos[2] / span)) : 0);
+  };
+  h.voxelClear = [&ed] {
+    if (auto* vc = ed.scene.world().get<ed_::VoxelChunk>(ed.selected)) editor::clearChunk(*vc);
+  };
   h.removeTool = [&ed](std::size_t i) {   // desloca os itens seguintes, como o ImGui fazia
     auto* tl = ed.scene.world().get<ed_::ToolsComp>(ed.selected);
     if (!tl || static_cast<int>(i) >= tl->count) return;
@@ -755,7 +772,11 @@ void drawInspector(Editor& ed) {
 #else
   editor::toolsUi(ed);
 #endif
+#ifdef TOOL_WITH_SPRITEUI
+  if (!gInspectorSpriteOn) editor::voxelUi(ed);   // com o painel SpriteUI, o voxel fica na sua secao
+#else
   editor::voxelUi(ed);
+#endif
   editor::uiCanvasUi(ed);
   editor::particleUi(ed);
   editor::addResourceUi(ed);

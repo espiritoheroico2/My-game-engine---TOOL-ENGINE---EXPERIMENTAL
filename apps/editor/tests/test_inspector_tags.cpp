@@ -115,6 +115,18 @@ int main() {
   Check(hOneTool > hNoTools, "uma ferramenta acrescenta bloco na secao Tools");
   Check(hTwoTools > hOneTool, "cada ferramenta nova deixa a secao mais alta");
 
+  // 8. Secao Voxel. A grade 16x16 da camada acrescenta uma linha por celula da altura; o chunk vazio ja tem a grade.
+  editor::VoxelChunk chunk{};
+  IP::Context withVoxel = base;
+  withVoxel.voxel = &chunk;
+  IP::InspectorPanel voxelPanel(atlas, renderer);
+  const float hVoxel = voxelPanel.prepare(withVoxel, hooks, 300.f);
+  Check(hVoxel > hEmpty, "a secao Voxel (com a grade da camada) ocupa altura");
+  voxelPanel.setAllSections(false);
+  const float hVoxelClosed = voxelPanel.prepare(withVoxel, hooks, 300.f);
+  Check(hVoxelClosed < hVoxel, "secao Voxel fechada ocupa menos altura");
+  voxelPanel.setAllSections(true);
+
   (void)removed;   // o clique no botao Remove e testado a mao (coordenadas dependem do layout)
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;
