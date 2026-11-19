@@ -5,6 +5,7 @@
 #include "project_settings.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace {
@@ -27,6 +28,7 @@ struct Result {
   std::vector<Action> actions;
   std::size_t batches = 0;
   std::size_t instances = 0;
+  std::vector<ToolEngine::SpriteUi::Rendering::DrawBatch> batchList;
 };
 
 // Um quadro com o ponteiro em (x, y). pressed/released sao so de um quadro (como o SDL entrega).
@@ -42,6 +44,7 @@ Result Run(View& view, float x, float y, bool down, bool pressed, bool released,
   const auto packet = view.Frame(kW, kH, in, r.actions);
   r.batches = packet.batches.size();
   r.instances = packet.instances.size();
+  r.batchList = packet.batches;
   return r;
 }
 
@@ -87,6 +90,12 @@ int main() {
   // 1. Desenho: o primeiro quadro gera batches e instancias.
   const Result first = Run(view, -100.f, -100.f, false, false, false, ++id);
   Check(first.batches > 0 && first.instances > 0, "desenha moldura e conteudo no primeiro quadro");
+  if (const char* dump = std::getenv("EDITOR_INFO_BATCHES")) {   // EDITOR_INFO_BATCHES=1: lista os lotes
+    (void)dump;
+    for (const auto& b : first.batchList) {
+      std::printf("  lote: %u instancias, textura %u, clip %u\n", b.instanceCount, b.textureSlice, b.clipIndex);
+    }
+  }
   std::printf("info: draw calls (batches) = %zu, instancias = %zu\n", first.batches, first.instances);
 
   const SU::Rect frame = view.frameRect();

@@ -258,7 +258,7 @@ class View {
     SU::ElementVisual panelVisual;
     panelVisual.tintPremultipliedLinear = colors_.panel;
     panelVisual.interactable = false;
-    panelVisual.clipOverflow = true;
+    panelVisual.clipOverflow = false;   // conteudo cabe no painel: sem clip evita um lote por campo
     panelVisual.zOrder = -1.f;   // fundo do painel atras dos campos e do botao (zOrder 0)
     bridge_.SetVisual(panelHandle_, panelVisual);
   }
@@ -321,7 +321,7 @@ class View {
     for (std::size_t i = 0; i < kFieldCount; ++i) {
       SU::ElementVisual v;
       v.tintPremultipliedLinear = model_.hasFocus(static_cast<Field>(i)) ? colors_.fieldFocus : colors_.field;
-      v.clipOverflow = true;
+      v.clipOverflow = false;   // campo e folha: o clip extra so separa lotes de desenho
       v.zOrder = 0.f;
       bridge_.SetVisual(fields_[i], v);
     }
@@ -429,8 +429,16 @@ class View {
       const Shaped& s = fieldText_[i];
       const float textY = r.position.y + (r.size.y - s.layout.lineHeight) * 0.5f;
       const SU::Vec2 origin{r.position.x + Theme::kFieldInset - scroll_[i], textY};
-      clips.push_back({r.position.x, r.position.y, r.position.x + r.size.x, r.position.y + r.size.y});
-      clipNow = static_cast<std::uint32_t>(clips.size() - 1);
+      // Clip so quando o texto passa da caixa. Cada clip diferente quebra o lote de desenho, e a maioria dos
+      // campos cabe: sem clip, o texto de todos os campos vira um so lote.
+      const float visibleWidth = std::max(0.f, r.size.x - 2.f * Theme::kFieldInset);
+      const bool overflow = s.layout.size.x > visibleWidth;
+      if (overflow) {
+        clips.push_back({r.position.x, r.position.y, r.position.x + r.size.x, r.position.y + r.size.y});
+        clipNow = static_cast<std::uint32_t>(clips.size() - 1);
+      } else {
+        clipNow = SR::NoClipIndex;
+      }
       const auto& state = model_.field(field);
       if (model_.hasFocus(field) && state.HasSelection()) {
         const auto [begin, end] = state.SelectionRange();
