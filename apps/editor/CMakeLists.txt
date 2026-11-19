@@ -52,6 +52,11 @@ if(TOOL_WITH_SPRITEUI)
   endif()
   add_test(NAME Editor.EditorInfoView COMMAND editor_info_view_tests)
 
+  # Paleta da SpriteUI: padrao, fallback e contraste do texto (sem janela, sem SpriteUI).
+  add_executable(sui_palette_tests tests/test_sui_palette.cpp)
+  target_include_directories(sui_palette_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME Editor.SuiPalette COMMAND sui_palette_tests)
+
   # Captura headless da janela Editor info (SpriteUI). Nao e um teste do ctest: gera PPM para conferir visualmente.
   add_executable(editor_info_capture tools/editor_info_capture.cpp)
   target_include_directories(editor_info_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -9,6 +9,7 @@
 
 #include "spriteui_host.hpp"
 
+#include "sui_palette.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
@@ -36,13 +37,20 @@ inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
 }
 
-// Cores do tema escuro (mesmos valores do Profiler SpriteUI). Novas cores entram junto com a janela que as usa.
+// Converte uma cor da paleta (sui_palette.hpp) para o espaco da SpriteUI.
+inline SU::Vec4 PaletteColor(const palette::Rgb& c) { return Srgb(c.r, c.g, c.b, c.a); }
+
+// Cores dos paineis SpriteUI. Vem da paleta em uso (Configuracoes > Appearance). Os paineis criados depois
+// de uma troca de paleta usam as novas cores.
 struct Theme {
-  SU::Vec4 panel = Srgb(0.055f, 0.075f, 0.11f, 0.97f);
-  SU::Vec4 text = Srgb(0.91f, 0.918f, 0.933f);
-  SU::Vec4 textDim = Srgb(0.56f, 0.565f, 0.60f);
-  SU::Vec4 divider = Srgb(0.20f, 0.24f, 0.30f);
-  SU::Vec4 error = Srgb(1.f, 0.45f, 0.4f);
+  SU::Vec4 panel = PaletteColor(palette::active().panel);
+  SU::Vec4 surface = PaletteColor(palette::active().surface);
+  SU::Vec4 text = PaletteColor(palette::active().text);
+  SU::Vec4 textDim = PaletteColor(palette::active().textDim);
+  SU::Vec4 accent = PaletteColor(palette::active().accent);
+  SU::Vec4 scroll = PaletteColor(palette::active().scroll);
+  SU::Vec4 divider = PaletteColor(palette::active().border);
+  SU::Vec4 error = PaletteColor(palette::active().error);
 };
 
 // Retangulo local da janela (origem no canto superior esquerdo da janela).
