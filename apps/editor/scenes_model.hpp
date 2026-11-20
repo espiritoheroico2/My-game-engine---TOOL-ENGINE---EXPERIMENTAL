@@ -1,13 +1,15 @@
 #pragma once
 
-// Janela Scenes: regras sem janela. Lista das cenas (em ordem de nome, a atual marcada), quais acoes valem para a
-// cena selecionada, validacao do nome de uma cena nova ou renomeada, e a lista de assets da cena (so modelo ou
-// som; sem repetir). A janela SpriteUI (scenes_panel.hpp) so chama estas funcoes. Testado como Editor.ScenesModel.
+// Janela Scenes: regras e estado, sem janela. Lista das cenas (em ordem de nome, a atual marcada), quais acoes valem
+// para a cena selecionada, validacao do nome de uma cena nova ou renomeada, e a lista de assets da cena (so modelo ou
+// som; sem repetir). A janela SpriteUI (scenes_spriteui.hpp) so desenha e reporta cliques; o host faz o trabalho.
+// Testado como Editor.ScenesModel.
 
 #include "project.hpp"
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,7 +18,7 @@ namespace editor::scenes_model {
 
 struct Row {
   std::string name;
-  bool current = false;   // cena aberta agora (aparece com *)
+  bool current = false;   // cena aberta agora (aparece com "(open)")
 };
 
 // Lista das cenas: em ordem de nome; a cena atual vem marcada.
@@ -72,6 +74,43 @@ inline bool RemoveAt(std::vector<std::string>& assets, std::size_t index) {
   if (index >= assets.size()) return false;
   assets.erase(assets.begin() + static_cast<std::ptrdiff_t>(index));
   return true;
+}
+
+// Estado da janela: listas, cena selecionada, e o campo de nome (criar ou renomear).
+enum class NameMode : std::uint8_t { None, New, Rename };
+
+struct Model {
+  std::vector<std::string> scenes;
+  std::string current;
+  std::string selected;
+  std::vector<std::string> assets;
+  NameMode mode = NameMode::None;
+  std::string name;
+  bool nameFocus = false;
+  std::string status;   // ultimo problema mostrado (vazio quando nao ha)
+};
+
+// Abre o campo de nome. Renomear preenche com o nome atual da selecao; criar comeca vazio.
+inline void BeginName(Model& m, NameMode mode) {
+  m.mode = mode;
+  m.name = mode == NameMode::Rename ? m.selected : std::string{};
+  m.nameFocus = true;
+  m.status.clear();
+}
+
+// Fecha o campo de nome (depois de criar, renomear ou cancelar).
+inline void FinishName(Model& m) {
+  m.mode = NameMode::None;
+  m.name.clear();
+  m.nameFocus = false;
+}
+
+// Apaga o ultimo caractere UTF-8 (inteiro, nao so um byte).
+inline void PopUtf8(std::string& s) {
+  if (s.empty()) return;
+  std::size_t i = s.size() - 1;
+  while (i > 0 && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80) --i;
+  s.erase(i);
 }
 
 }  // namespace editor::scenes_model

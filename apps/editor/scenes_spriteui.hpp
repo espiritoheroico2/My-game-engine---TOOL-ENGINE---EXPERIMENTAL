@@ -1,0 +1,619 @@
+#pragma once
+
+// Janela "Scenes" feita com SpriteUI (sem Dear ImGui). Estado e regras: scenes_model.hpp.
+// Esta view so desenha e reporta cliques e digitacao. Quem salva, abre, apaga, cria, renomeia e atribui assets e o
+// host (Action). Ainda NAO esta ligada ao menu: drawScenes (assets_panel.hpp) segue a usada ate o teste visual.
+#include "i18n.hpp"
+#include "scenes_model.hpp"
+#include "spriteui_host.hpp"
+
+#include "SpriteUi/Input/InputRouter.hpp"
+#include "SpriteUi/Layout/LayoutBridge.hpp"
+#include "SpriteUi/Layout/LayoutTree.hpp"
+#include "SpriteUi/Rendering/DrawList.hpp"
+#include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
+#include "SpriteUi/Text/TextLayout.hpp"
+#include "SpriteUi/Text/TruetypeAtlas.hpp"
+#include "SpriteUi/Widgets/DockInteraction.hpp"
+#include "SpriteUi/Widgets/WindowFrame.hpp"
+#include "SpriteUi/Widgets/WindowFramePaint.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace editor::scenesui {
+
+namespace SU = ToolEngine::SpriteUi;
+namespace SR = ToolEngine::SpriteUi::Rendering;
+namespace ST = ToolEngine::SpriteUi::Text;
+namespace SW = ToolEngine::SpriteUi::Widgets;
+namespace SM = editor::scenes_model;
+using editor::scenes_model::Model;
+using editor::scenes_model::NameMode;
+
+// Medidas. A altura do painel e fixa: o layout nao mede o conteudo.
+struct Theme {
+  static constexpr float kPanelWidth = 680.f;
+  static constexpr float kPadding = 24.f;
+  static constexpr float kGap = 6.f;
+  static constexpr float kLabelHeight = 18.f;
+  static constexpr float kFieldHeight = 30.f;
+  static constexpr float kButtonHeight = 34.f;
+  static constexpr float kButtonWidth = 150.f;
+  static constexpr float kRowHeight = 26.f;
+  static constexpr std::size_t kMaxRows = 6;      // cenas visiveis (o resto rola depois)
+  static constexpr std::size_t kMaxAssets = 4;    // assets visiveis
+  static constexpr float kRemoveWidth = 28.f;
+  static constexpr float kAssetNameWidth = 596.f;
+  static constexpr float kFontSize = 15.f;
+  static constexpr float kLabelSize = 13.f;
+  static constexpr float kTitleSize = 20.f;
+  static constexpr float kFieldInset = 8.f;
+  static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth
+  // Filhos do painel: rotulo, 3 linhas de botoes (topo, acoes, confirmar), campo de nome, lista de cenas,
+  // rotulo de assets, assets e status. 17 filhos, 16 espacos.
+  static constexpr std::size_t kChildren = 1 + 3 + 1 + kMaxRows + 1 + kMaxAssets + 1;
+  static constexpr float kPanelHeight =
+      2.f * kPadding + 3.f * kLabelHeight + 3.f * kButtonHeight + kFieldHeight +
+      static_cast<float>(kMaxRows + kMaxAssets) * kRowHeight + static_cast<float>(kChildren - 1) * kGap;
+};
+
+inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
+  return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
+}
+
+// Cores: mesmas do editor info (tema escuro).
+struct Colors {
+  SU::Vec4 field = Srgb(0.165f, 0.165f, 0.176f);
+  SU::Vec4 fieldFocus = Srgb(0.196f, 0.196f, 0.216f);
+  SU::Vec4 rowSelected = Srgb(0.200f, 0.330f, 0.520f);
+  SU::Vec4 button = Srgb(0.200f, 0.345f, 0.588f);
+  SU::Vec4 buttonHover = Srgb(0.263f, 0.420f, 0.690f);
+  SU::Vec4 buttonDanger = Srgb(0.520f, 0.220f, 0.220f);
+  SU::Vec4 disabled = Srgb(0.150f, 0.150f, 0.160f);
+  SU::Vec4 text = Srgb(0.910f, 0.918f, 0.933f);
+  SU::Vec4 textDim = Srgb(0.560f, 0.565f, 0.600f);
+  SU::Vec4 selection = Srgb(0.245f, 0.420f, 0.690f, 0.75f);
+  SU::Vec4 caret = Srgb(0.930f, 0.930f, 0.950f);
+  SU::Vec4 warning = Srgb(1.000f, 0.800f, 0.300f);
+};
+
+// Entrada do quadro (ponteiro e foco da janela), ja lida do SDL pelo host.
+struct FrameInput {
+  float pointerX = 0.f, pointerY = 0.f;
+  bool pointerDown = false;
+  bool pointerPressed = false;
+  bool pointerReleased = false;
+  bool windowFocused = true;
+  std::uint64_t frameId = 0;
+};
+
+// Texto ja medido, com o layout para caret.
+struct Shaped {
+  std::string utf8;
+  std::vector<ST::GlyphInstance> glyphs;
+  ST::TextLayoutResult layout;
+};
+
+class View {
+ public:
+  enum class Action { None, Save, Reload, Open, Delete, Confirm, Assign, RemoveAsset, Close };
+
+  View(Model& model, const ST::TruetypeAtlas& atlas) : model_{model}, atlas_{atlas} { buildTree(); }
+
+  // Calcula um quadro e devolve o pacote para desenhar. `actions` recebe o que foi clicado neste quadro.
+  SR::FramePacket Frame(float windowWidth, float windowHeight, const FrameInput& in, std::vector<Action>& actions) {
+    actions.clear();
+    removed_ = kNone;
+    if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
+
+    const float panelWidth = std::min(Theme::kPanelWidth, windowWidth - 32.f);
+    const float frameHeight = Theme::kPanelHeight + metrics_.headerHeight + 2.f * metrics_.borderWidth;
+    if (!placed_) {   // primeira vez: centralizada
+      windowPos_ = {std::floor((windowWidth - panelWidth) * 0.5f),
+                    std::max(0.f, std::floor((windowHeight - frameHeight) * 0.5f))};
+      placed_ = true;
+    }
+    windowPos_.x = std::clamp(windowPos_.x, 0.f, std::max(0.f, windowWidth - panelWidth));
+    windowPos_.y = std::clamp(windowPos_.y, 0.f, std::max(0.f, windowHeight - frameHeight));
+    frame_ = SU::Rect{windowPos_, {panelWidth, frameHeight}};
+
+    handleFrameInput(in, actions);
+    frame_ = SU::Rect{windowPos_, {panelWidth, frameHeight}};
+
+    const SU::Rect content = SW::WindowFrameContent(frame_, metrics_);
+    setPanelWidth(content.size.x);
+    tree_.Layout({content.position, {content.size.x, Theme::kPanelHeight}});
+
+    rows_ = SM::Rows(model_.scenes, model_.current);
+    applyVisuals();
+    auto scene = bridge_.Extract(tree_);
+    SU::Input::UIInputSnapshot input;
+    input.pointerPositionLogical = {in.pointerX, in.pointerY};
+    input.pointerDeltaLogical = {in.pointerX - lastX_, in.pointerY - lastY_};
+    input.primaryDown = in.pointerDown;
+    input.primaryPressed = in.pointerPressed;
+    input.primaryReleased = in.pointerReleased;
+    input.windowFocused = in.windowFocused;
+    input.frameId = in.frameId;
+    lastX_ = in.pointerX;
+    lastY_ = in.pointerY;
+
+    const auto events = router_.Process(input, scene.hitTargets);
+    for (const auto& event : events) {
+      if (event.type == SU::Input::UIEventType::Click) handleClick(event, actions);
+    }
+    hovered_ = router_.GetState().hoveredEntity;
+
+    for (auto& item : scene.renderItems) {
+      if (const auto* visual = bridge_.GetVisual(item.handle)) {
+        item.tintPremultipliedLinear = visual->tintPremultipliedLinear;
+        item.zOrder = visual->zOrder;
+      }
+    }
+
+    if (!scene.clipHierarchy.valid) return {};
+    std::vector<SR::UIRenderItem> extra;
+    std::vector<SR::ClipRectGPU> clips = scene.clipHierarchy.effectiveRects;
+    addDecorations(extra);
+    scene.renderItems.insert(scene.renderItems.end(), extra.begin(), extra.end());
+    return extractor_.Build(in.frameId, scene.renderItems, nullptr, clips);
+  }
+
+  // Digitacao: so entra quando o campo de nome esta focado (criar ou renomear).
+  void TypeText(const std::string& utf8) {
+    if (!model_.nameFocus || model_.mode == NameMode::None) return;
+    model_.name += utf8;
+  }
+  void Backspace() {
+    if (!model_.nameFocus || model_.mode == NameMode::None) return;
+    SM::PopUtf8(model_.name);
+  }
+
+  // Estado para testes e para o host.
+  [[nodiscard]] std::size_t removedIndex() const { return removed_; }
+  [[nodiscard]] SU::Rect frameRect() const { return frame_; }
+  [[nodiscard]] SU::Vec2 windowPos() const { return windowPos_; }
+  [[nodiscard]] bool dragging() const { return dragging_; }
+  [[nodiscard]] const SW::WindowFrameMetrics& frameMetrics() const { return metrics_; }
+  [[nodiscard]] SU::UIHandle rowHandle(std::size_t i) const { return rows_h_[i]; }
+  [[nodiscard]] SU::UIHandle assetRemoveHandle(std::size_t i) const { return assetRemove_[i]; }
+  [[nodiscard]] SU::UIHandle saveHandle() const { return save_; }
+  [[nodiscard]] SU::UIHandle newHandle() const { return new_; }
+  [[nodiscard]] SU::UIHandle reloadHandle() const { return reload_; }
+  [[nodiscard]] SU::UIHandle openHandle() const { return open_; }
+  [[nodiscard]] SU::UIHandle renameHandle() const { return rename_; }
+  [[nodiscard]] SU::UIHandle deleteHandle() const { return delete_; }
+  [[nodiscard]] SU::UIHandle assignHandle() const { return assign_; }
+  [[nodiscard]] SU::UIHandle nameHandle() const { return nameField_; }
+  [[nodiscard]] SU::UIHandle confirmHandle() const { return confirm_; }
+  [[nodiscard]] SU::Rect rectOf(SU::UIHandle handle) const { return nodeRect(handle); }
+
+ private:
+  static constexpr std::size_t kNone = static_cast<std::size_t>(-1);
+
+  static bool inside(SU::Rect r, SU::Vec2 p) {
+    return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y &&
+           p.y < r.position.y + r.size.y;
+  }
+
+  // Moldura: X fecha (Action::Close); pressionar o grip inicia o arraste da janela. So o grip arrasta.
+  void handleFrameInput(const FrameInput& in, std::vector<Action>& actions) {
+    const SU::Vec2 p{in.pointerX, in.pointerY};
+    if (dragging_) {
+      if (in.pointerDown) {
+        windowPos_ = {p.x - grab_.x, p.y - grab_.y};
+      } else {
+        dragging_ = false;
+      }
+      return;
+    }
+    if (!in.pointerPressed) return;
+    if (SW::WindowFramePartAt(frame_, metrics_, false, p) == SW::WindowFramePart::Close) {
+      actions.push_back(Action::Close);
+      return;
+    }
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    if (inside(SW::WindowGripRect(bar, Theme::kGripWidth), p)) {
+      dragging_ = true;
+      grab_ = {p.x - windowPos_.x, p.y - windowPos_.y};
+    }
+  }
+
+  // ---------- Arvore de layout ----------
+  void buildTree() {
+    metrics_.headerHeight = 30.f;
+    metrics_.cornerRadius = 6.f;
+    frameColors_.body = Srgb(0.110f, 0.118f, 0.137f);
+    frameColors_.border = Srgb(0.235f, 0.251f, 0.294f);
+    frameColors_.borderDragging = Srgb(0.420f, 0.600f, 0.980f);
+    frameColors_.headerActive = Srgb(0.165f, 0.184f, 0.231f);
+    frameColors_.headerInactive = Srgb(0.125f, 0.137f, 0.169f);
+    frameColors_.headerDragging = Srgb(0.200f, 0.230f, 0.302f);
+    frameColors_.glyph = Srgb(0.900f, 0.920f, 0.960f);
+    panelColor_ = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
+
+    SU::FlexItem panel;
+    panel.width = {SU::SizeMode::Fixed, Theme::kPanelWidth};
+    panel.height = {SU::SizeMode::Fixed, Theme::kPanelHeight};
+    panel.direction = SU::LayoutDirection::Column;
+    panel.alignItems = SU::AlignItems::Stretch;
+    panel.padding = {Theme::kPadding, Theme::kPadding, Theme::kPadding, Theme::kPadding};
+    panel.gap = Theme::kGap;
+    panelHandle_ = tree_.Create({}, panel);
+
+    label_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
+    const auto topRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    save_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
+    new_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
+    reload_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
+    for (std::size_t i = 0; i < Theme::kMaxRows; ++i) rows_h_[i] = tree_.Create(panelHandle_, labelStyle(Theme::kRowHeight));
+
+    const auto actionRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    open_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
+    rename_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
+    delete_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
+    assign_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
+
+    nameField_ = tree_.Create(panelHandle_, fieldStyle());
+    const auto confirmRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    confirm_ = tree_.Create(confirmRow, buttonStyle(2.f * Theme::kButtonWidth));
+
+    assetsLabel_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
+    for (std::size_t i = 0; i < Theme::kMaxAssets; ++i) {
+      assetRow_[i] = tree_.Create(panelHandle_, rowStyle(Theme::kRowHeight));
+      assetName_[i] = tree_.Create(assetRow_[i], assetNameStyle());
+      assetRemove_[i] = tree_.Create(assetRow_[i], assetRemoveStyle());
+    }
+    status_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
+
+    SU::ElementVisual panelVisual;
+    panelVisual.tintPremultipliedLinear = panelColor_;
+    panelVisual.interactable = false;
+    panelVisual.clipOverflow = false;
+    panelVisual.zOrder = -1.f;   // fundo do painel atras dos elementos (zOrder 0)
+    bridge_.SetVisual(panelHandle_, panelVisual);
+  }
+
+  // Filhos de altura fixa nao encolhem (shrink = 0): sem isso o flex os reduz a zero dentro da coluna.
+  static SU::FlexItem labelStyle(float height) {
+    SU::FlexItem s;
+    s.width = {SU::SizeMode::Percent, 1.f};
+    s.height = {SU::SizeMode::Fixed, height};
+    s.shrink = 0.f;
+    return s;
+  }
+  static SU::FlexItem fieldStyle() { return labelStyle(Theme::kFieldHeight); }
+  static SU::FlexItem buttonStyle(float width) {
+    SU::FlexItem s;
+    s.width = {SU::SizeMode::Fixed, width};
+    s.height = {SU::SizeMode::Fixed, Theme::kButtonHeight};
+    s.shrink = 0.f;
+    return s;
+  }
+  static SU::FlexItem assetNameStyle() {
+    SU::FlexItem s;
+    s.width = {SU::SizeMode::Fixed, Theme::kAssetNameWidth};
+    s.height = {SU::SizeMode::Fixed, Theme::kRowHeight};
+    s.shrink = 0.f;
+    return s;
+  }
+  static SU::FlexItem assetRemoveStyle() {
+    SU::FlexItem s;
+    s.width = {SU::SizeMode::Fixed, Theme::kRemoveWidth};
+    s.height = {SU::SizeMode::Fixed, Theme::kRowHeight};
+    s.shrink = 0.f;
+    return s;
+  }
+  static SU::FlexItem rowStyle(float height) {
+    SU::FlexItem s;
+    s.width = {SU::SizeMode::Percent, 1.f};
+    s.height = {SU::SizeMode::Fixed, height};
+    s.shrink = 0.f;
+    s.direction = SU::LayoutDirection::Row;
+    s.alignItems = SU::AlignItems::Stretch;
+    return s;
+  }
+
+  void setPanelWidth(float width) {
+    auto* el = tree_.Get(panelHandle_);
+    if (!el) return;
+    SU::FlexItem style = el->node.style;
+    style.width.value = width;
+    tree_.SetStyle(panelHandle_, style);
+  }
+
+  // ---------- Texto ----------
+  Shaped shape(const std::string& utf8, float size) const {
+    Shaped s;
+    s.utf8 = utf8;
+    s.glyphs = ST::ShapeTruetype(utf8, atlas_);
+    ST::TextLayoutConfig cfg;
+    cfg.fontSize = size;
+    cfg.alignment = ST::TextAlignment::Left;
+    cfg.wrap = ST::TextWrap::None;
+    s.layout = ST::LayoutText(utf8, s.glyphs, atlas_.metrics, cfg);
+    return s;
+  }
+
+  // ---------- Visuais, clique e foco ----------
+  // Botao: cor normal, de hover ou apagada; so clica quando habilitado (interactable).
+  void paintButton(SU::UIHandle h, bool enabled, SU::Vec4 base) {
+    SU::ElementVisual v;
+    v.interactable = enabled;
+    v.clipOverflow = false;
+    v.zOrder = 0.f;
+    v.tintPremultipliedLinear = !enabled ? colors_.disabled : (hovered_ == h ? colors_.buttonHover : base);
+    bridge_.SetVisual(h, v);
+    enabled_.push_back({h, enabled});
+  }
+
+  bool isEnabled(SU::UIHandle h) const {
+    for (const auto& [handle, on] : enabled_) {
+      if (handle == h) return on;
+    }
+    return false;
+  }
+
+  void applyVisuals() {
+    enabled_.clear();
+    const SM::Actions acts = SM::ActionsFor(model_.selected, model_.current);
+    for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
+      const bool has = i < rows_.size();
+      SU::ElementVisual v;
+      v.interactable = has;
+      v.clipOverflow = false;
+      v.zOrder = 0.f;
+      v.tintPremultipliedLinear = has && rows_[i].name == model_.selected ? colors_.rowSelected : colors_.field;
+      bridge_.SetVisual(rows_h_[i], v);
+    }
+    paintButton(save_, true, colors_.button);
+    paintButton(new_, true, colors_.button);
+    paintButton(reload_, true, colors_.button);
+    paintButton(open_, acts.open, colors_.button);
+    paintButton(rename_, acts.rename, colors_.button);
+    paintButton(delete_, acts.remove, colors_.buttonDanger);
+    paintButton(assign_, true, colors_.button);
+    paintButton(confirm_, model_.mode != NameMode::None, colors_.button);
+
+    SU::ElementVisual field;
+    field.tintPremultipliedLinear = model_.nameFocus ? colors_.fieldFocus : colors_.field;
+    field.clipOverflow = false;
+    field.zOrder = 0.f;
+    bridge_.SetVisual(nameField_, field);
+
+    for (std::size_t i = 0; i < Theme::kMaxAssets; ++i) {
+      SU::ElementVisual name;   // nome do asset: so texto, nao clica
+      name.interactable = false;
+      name.clipOverflow = false;
+      name.zOrder = 0.f;
+      name.tintPremultipliedLinear = panelColor_;
+      bridge_.SetVisual(assetName_[i], name);
+      paintButton(assetRemove_[i], i < model_.assets.size(), colors_.buttonDanger);
+    }
+  }
+
+  void handleClick(const SU::Input::UIEvent& event, std::vector<Action>& actions) {
+    if (event.target == nameField_) {   // so foca quando ha criar ou renomear em curso
+      model_.nameFocus = model_.mode != NameMode::None;
+      return;
+    }
+    model_.nameFocus = false;   // qualquer outro clique tira o foco do campo
+
+    for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
+      if (event.target != rows_h_[i]) continue;
+      if (i < rows_.size()) model_.selected = rows_[i].name;
+      return;
+    }
+    if (event.target == save_) {
+      actions.push_back(Action::Save);
+      return;
+    }
+    if (event.target == reload_) {
+      actions.push_back(Action::Reload);
+      return;
+    }
+    if (event.target == assign_) {
+      actions.push_back(Action::Assign);
+      return;
+    }
+    if (event.target == new_) {
+      SM::BeginName(model_, NameMode::New);
+      return;
+    }
+
+    const SM::Actions acts = SM::ActionsFor(model_.selected, model_.current);
+    if (event.target == open_ && acts.open) {
+      actions.push_back(Action::Open);
+      return;
+    }
+    if (event.target == rename_ && acts.rename) {
+      SM::BeginName(model_, NameMode::Rename);
+      return;
+    }
+    if (event.target == delete_ && acts.remove) {
+      actions.push_back(Action::Delete);
+      return;
+    }
+    if (event.target == confirm_) {
+      confirm(actions);
+      return;
+    }
+
+    for (std::size_t i = 0; i < Theme::kMaxAssets; ++i) {
+      if (event.target != assetRemove_[i]) continue;
+      if (i < model_.assets.size()) {
+        removed_ = i;
+        actions.push_back(Action::RemoveAsset);
+      }
+      return;
+    }
+  }
+
+  // Confirmar criar ou renomear: vale so se o nome passa nas regras. Renomear ignora o proprio nome da selecao.
+  void confirm(std::vector<Action>& actions) {
+    if (model_.mode == NameMode::None) return;
+    std::vector<std::string> taken;
+    for (const std::string& s : model_.scenes) {
+      if (model_.mode == NameMode::Rename && s == model_.selected) continue;
+      taken.push_back(s);
+    }
+    const std::string problem = SM::NameProblem(model_.name, taken);
+    if (!problem.empty()) {
+      model_.status = problem;
+      return;
+    }
+    model_.status.clear();
+    actions.push_back(Action::Confirm);
+  }
+
+  SU::Rect nodeRect(SU::UIHandle handle) const {
+    const auto* el = tree_.Get(handle);
+    return el ? el->node.rect : SU::Rect{};
+  }
+
+  // Desenho que a SpriteUI nao cria sozinha: texto, selecao, caret, rotulos e botoes. Usa o no como dono.
+  void addDecorations(std::vector<SR::UIRenderItem>& out) {
+    std::uint64_t paint = 1000;
+    const std::uint32_t clipNow = SR::NoClipIndex;
+    auto solid = [&](SU::UIHandle owner, SU::Rect r, SU::Vec4 color, float z) {
+      SR::UIRenderItem item;
+      item.handle = owner;
+      item.layout.resolvedPosition = r.position;
+      item.layout.resolvedSize = r.size;
+      item.tintPremultipliedLinear = color;
+      item.textureSlice = SR::WhiteTextureSlice;
+      item.clipIndex = clipNow;
+      item.zOrder = z;
+      item.paintOrder = paint++;
+      out.push_back(item);
+    };
+    auto text = [&](SU::UIHandle owner, const Shaped& shaped, SU::Vec2 origin, SU::Vec4 color, float z) {
+      if (shaped.utf8.empty()) return;
+      SU::UILayoutRect box;
+      box.resolvedPosition = origin;
+      box.resolvedSize = {shaped.layout.size.x, shaped.layout.size.y};
+      auto items = ST::GenerateTextRenderItems(shaped.layout, box, color, atlasSlice_, clipNow, z, paint, owner, 0u);
+      paint += items.size() + 1;
+      out.insert(out.end(), items.begin(), items.end());
+    };
+    // Texto centralizado no botao; apagado quando o botao esta desabilitado.
+    auto button = [&](SU::UIHandle h, const std::string& label) {
+      const Shaped s = shape(label, Theme::kFontSize);
+      const SU::Rect r = nodeRect(h);
+      text(h, s, {r.position.x + (r.size.x - s.layout.size.x) * 0.5f, r.position.y + (r.size.y - s.layout.lineHeight) * 0.5f},
+           isEnabled(h) ? colors_.text : colors_.textDim, 0.9f);
+    };
+    // Texto alinhado a esquerda, centrado na altura da linha.
+    auto line = [&](SU::UIHandle h, const std::string& label, SU::Vec4 color, float size = Theme::kLabelSize) {
+      const Shaped s = shape(label, size);
+      const SU::Rect r = nodeRect(h);
+      text(h, s, {r.position.x + Theme::kFieldInset, r.position.y + (r.size.y - s.layout.lineHeight) * 0.5f}, color, 0.9f);
+    };
+
+    // Moldura da SpriteUI (corpo, aba e X), com o visual do editor. Por tras dos elementos (zOrder -2).
+    SW::WindowFrameState state;
+    state.active = true;
+    state.dragging = dragging_;
+    state.docked = false;
+    auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_, metrics_, state, frameColors_, -2.f, paint);
+    paint += frameItems.size() + 1;
+    out.insert(out.end(), frameItems.begin(), frameItems.end());
+
+    // Titulo e grip: a moldura nao desenha texto nem icone; o chamador escreve no retangulo do titulo.
+    const SU::Rect titleRect = SW::WindowFrameTitleRect(frame_, metrics_, false);
+    const Shaped title = shape(T("Scenes"), Theme::kTitleSize);
+    text(panelHandle_, title,
+         {titleRect.position.x + Theme::kGripWidth, titleRect.position.y + (titleRect.size.y - title.layout.lineHeight) * 0.5f},
+         colors_.text, 0.95f);
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
+    const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
+    for (int c = 0; c < 2; ++c) {
+      for (int r = 0; r < 3; ++r) {
+        solid(panelHandle_, {{cx - 3.f + 4.f * static_cast<float>(c), cy - 4.f + 4.f * static_cast<float>(r)}, {2.f, 2.f}},
+              colors_.textDim, 0.95f);
+      }
+    }
+
+    // Cena atual.
+    line(label_, T("Current scene: ") + (model_.current.empty() ? T("(none)") : model_.current), colors_.textDim);
+
+    // Botoes de cima, de acoes e de confirmar.
+    button(save_, T("Save scene"));
+    button(new_, T("New scene..."));
+    button(reload_, T("Reload list"));
+    button(open_, T("Open"));
+    button(rename_, T("Rename..."));
+    button(delete_, T("Delete"));
+    button(assign_, T("Assign asset"));
+    button(confirm_, model_.mode == NameMode::New      ? T("Create scene")
+                     : model_.mode == NameMode::Rename ? T("Rename scene")
+                                                       : T("Confirm"));
+
+    // Lista de cenas: nome e "(open)" na cena atual.
+    for (std::size_t i = 0; i < rows_.size(); ++i) {
+      line(rows_h_[i], rows_[i].current ? rows_[i].name + T(" (open)") : rows_[i].name, colors_.text, Theme::kLabelSize + 1.f);
+    }
+
+    // Campo de nome: placeholder quando vazio, caret quando focado.
+    const SU::Rect fr = nodeRect(nameField_);
+    const bool placeholder = model_.name.empty();
+    const std::string shown = placeholder ? (model_.mode == NameMode::None ? T("Click New scene... or Rename...") : T("Scene name"))
+                                          : model_.name;
+    const Shaped fs = shape(shown, Theme::kFontSize);
+    const SU::Vec2 origin{fr.position.x + Theme::kFieldInset, fr.position.y + (fr.size.y - fs.layout.lineHeight) * 0.5f};
+    if (model_.nameFocus) {
+      const std::uint32_t offset = placeholder ? 0u : static_cast<std::uint32_t>(model_.name.size());
+      const SU::Rect caret = ST::GetCaretRect(fs.layout, offset);
+      solid(nameField_, {{origin.x + caret.position.x, origin.y}, {1.5f, fs.layout.lineHeight}}, colors_.caret, 0.6f);
+    }
+    text(nameField_, fs, origin, placeholder ? colors_.textDim : colors_.text, 0.9f);
+
+    // Rotulo de assets, nome de cada asset e o "x" para tirar.
+    line(assetsLabel_, T("Assets in this scene") + (model_.assets.empty() ? T(" (none)") : std::string{}), colors_.textDim);
+    for (std::size_t i = 0; i < model_.assets.size(); ++i) {
+      line(assetName_[i], model_.assets[i], colors_.text);
+      button(assetRemove_[i], "x");
+    }
+
+    // Problema ou status (amarelo: pedido de correcao).
+    if (!model_.status.empty()) line(status_, model_.status, colors_.warning);
+  }
+
+  Model& model_;
+  const ST::TruetypeAtlas& atlas_;
+  Colors colors_;
+  SU::Vec4 panelColor_{};
+  static constexpr std::uint32_t atlasSlice_ = 1u;   // textureSlice do atlas de glifos
+
+  SU::LayoutTree tree_;
+  SU::LayoutSceneBridge bridge_;
+  SU::Input::UIEventRouter router_;
+  SR::RenderExtractor extractor_;
+
+  SU::UIHandle panelHandle_{}, label_{}, save_{}, new_{}, reload_{}, open_{}, rename_{}, delete_{}, assign_{};
+  SU::UIHandle nameField_{}, confirm_{}, assetsLabel_{}, status_{};
+  SU::UIHandle rows_h_[Theme::kMaxRows]{};
+  SU::UIHandle assetRow_[Theme::kMaxAssets]{}, assetName_[Theme::kMaxAssets]{}, assetRemove_[Theme::kMaxAssets]{};
+  SU::UIHandle hovered_{};
+  std::vector<SM::Row> rows_;
+  std::vector<std::pair<SU::UIHandle, bool>> enabled_;
+  std::size_t removed_ = kNone;
+  float lastX_ = 0.f, lastY_ = 0.f;
+
+  // Moldura: geometria e cores (SpriteUI). Definidas em buildTree.
+  SW::WindowFrameMetrics metrics_{};
+  SW::WindowFrameColors frameColors_{};
+  SU::Rect frame_{};
+  SU::Vec2 windowPos_{};
+  SU::Vec2 grab_{};
+  bool placed_ = false;
+  bool dragging_ = false;
+};
+
+}  // namespace editor::scenesui

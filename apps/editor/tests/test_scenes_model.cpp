@@ -1,6 +1,6 @@
 // Modelo da janela Scenes (scenes_model.hpp): ordem e marca da cena atual, acoes validas por selecao, nome de cena
-// (valido, repetido, com barra), e a lista de assets da cena (so modelo ou som, sem repetir). Sem janela. Roda como
-// Editor.ScenesModel.
+// (valido, repetido, com barra), lista de assets da cena (so modelo ou som, sem repetir) e o campo de nome.
+// Sem janela. Roda como Editor.ScenesModel.
 #include "scenes_model.hpp"
 
 #include <cstdio>
@@ -48,6 +48,19 @@ int main() {
   Check(!SM::Assign(assets, "Assets/Models/a.obj", true) && assets.size() == 1, "mesmo asset nao entra duas vezes");
   Check(!SM::RemoveAt(assets, 5) && assets.size() == 1, "remover indice fora da lista nao muda nada");
   Check(SM::RemoveAt(assets, 0) && assets.empty(), "remover pelo indice");
+
+  // 5. Campo de nome: criar comeca vazio; renomear preenche com a selecao; apagar tira um caractere UTF-8 inteiro.
+  SM::Model m;
+  m.selected = "Alpha";
+  SM::BeginName(m, SM::NameMode::Rename);
+  Check(m.mode == SM::NameMode::Rename && m.name == "Alpha" && m.nameFocus, "renomear preenche com a selecao e foca");
+  SM::FinishName(m);
+  Check(m.mode == SM::NameMode::None && m.name.empty() && !m.nameFocus, "fechar o campo limpa o nome");
+  SM::BeginName(m, SM::NameMode::New);
+  Check(m.name.empty(), "criar comeca com o campo vazio");
+  m.name = "a\xC3\xA7";   // "ac" com cedilha (2 bytes)
+  SM::PopUtf8(m.name);
+  Check(m.name == "a", "apagar tira o caractere UTF-8 inteiro");
 
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;

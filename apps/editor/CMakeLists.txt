@@ -96,6 +96,16 @@ if(TOOL_WITH_SPRITEUI)
   endif()
   add_test(NAME Editor.ScenesModel COMMAND editor_scenes_model_tests)
 
+  # Janela Scenes em SpriteUI (scenes_spriteui.hpp): lista, botoes, campo de nome, assets, X e grip. Sem janela.
+  add_executable(editor_scenes_view_tests tests/test_scenes_view.cpp)
+  target_include_directories(editor_scenes_view_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(editor_scenes_view_tests PRIVATE EDITOR_FONT_PATH="${CMAKE_SOURCE_DIR}/assets/fonts/Xmind-Regular.ttf")
+  target_link_libraries(editor_scenes_view_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_scenes_view_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.ScenesView COMMAND editor_scenes_view_tests)
+
   # Bloco "engine" do project.json: modelo puro, limites e ida-e-volta JSON.
   add_executable(editor_project_engine_settings_tests tests/test_project_engine_settings.cpp)
   target_include_directories(editor_project_engine_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
