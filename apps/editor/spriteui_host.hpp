@@ -11,6 +11,7 @@
 #include "SpriteUi/Text/BitmapRasterPolicy.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
+#include "text_atlas_set.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -53,18 +54,13 @@ class SpriteUiSdlRenderer {
   bool uploadAtlas(SDL_Renderer* renderer, const ST::TruetypeAtlas& atlas) {
     if (atlas_) SDL_DestroyTexture(atlas_);   // so o de glifos: o atlas de icones (uploadIcons) fica
     atlas_ = nullptr;
-    if (!renderer || !atlas.IsValid()) return false;
-    std::vector<std::uint8_t> rgba(static_cast<std::size_t>(atlas.width) * atlas.height * 4u, 255u);
-    for (std::size_t i = 0; i < static_cast<std::size_t>(atlas.width) * atlas.height; ++i) {
-      rgba[i * 4 + 3] = atlas.pixels[i];
-    }
-    atlas_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
-                               static_cast<int>(atlas.width), static_cast<int>(atlas.height));
-    if (!atlas_) return false;
-    SDL_SetTextureBlendMode(atlas_, SDL_BLENDMODE_BLEND);
-    SDL_SetTextureScaleMode(atlas_, SDL_SCALEMODE_LINEAR);
-    return SDL_UpdateTexture(atlas_, nullptr, rgba.data(), static_cast<int>(atlas.width * 4u));
+    if (!renderer) return false;
+    atlas_ = createGlyphTexture(renderer, atlas);
+    return atlas_ != nullptr;
   }
+
+  // Conjunto de atlas por tamanho: as texturas sobem sob demanda, uma por slice de texto.
+  void setTextSet(const TextAtlasSet* set) { textSet_ = set; }
 
   // Sobe o atlas de icones (RGBA, ja com alfa) como segunda textura, usada pelo textureSlice kIconSlice.
   bool uploadIcons(SDL_Renderer* renderer, int width, int height, const std::uint8_t* rgba) {
@@ -106,7 +102,7 @@ class SpriteUiSdlRenderer {
         indices_.insert(indices_.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
       }
       if (vertices_.empty()) continue;
-      SDL_Texture* texture = textureFor(batch.textureSlice);
+      SDL_Texture* texture = textureFor(renderer, batch.textureSlice);
       if (!SDL_RenderGeometry(renderer, texture, vertices_.data(), static_cast<int>(vertices_.size()),
                               indices_.data(), static_cast<int>(indices_.size()))) {
         SDL_SetRenderClipRect(renderer, nullptr);
@@ -120,15 +116,45 @@ class SpriteUiSdlRenderer {
   void destroy() {
     if (atlas_) SDL_DestroyTexture(atlas_);
     if (icons_) SDL_DestroyTexture(icons_);
+    for (SDL_Texture*& t : sizeTex_) {
+      if (t) SDL_DestroyTexture(t);
+      t = nullptr;
+    }
     atlas_ = nullptr;
     icons_ = nullptr;
   }
 
  private:
-  SDL_Texture* textureFor(std::uint32_t slice) const {
+  static SDL_Texture* createGlyphTexture(SDL_Renderer* renderer, const ST::TruetypeAtlas& atlas) {
+    if (!atlas.IsValid()) return nullptr;
+    std::vector<std::uint8_t> rgba(static_cast<std::size_t>(atlas.width) * atlas.height * 4u, 255u);
+    for (std::size_t i = 0; i < static_cast<std::size_t>(atlas.width) * atlas.height; ++i) {
+      rgba[i * 4 + 3] = atlas.pixels[i];
+    }
+    SDL_Texture* tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
+                                         static_cast<int>(atlas.width), static_cast<int>(atlas.height));
+    if (!tex) return nullptr;
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+    if (!SDL_UpdateTexture(tex, nullptr, rgba.data(), static_cast<int>(atlas.width * 4u))) {
+      SDL_DestroyTexture(tex);
+      return nullptr;
+    }
+    return tex;
+  }
+
+  // Textura do slice. Slices de texto por tamanho sobem na primeira vez; os demais seguem a tabela fixa.
+  SDL_Texture* textureFor(SDL_Renderer* renderer, std::uint32_t slice) {
     if (slice == SR::WhiteTextureSlice) return nullptr;
     if (slice == kIconSlice) return icons_;
     if (slice >= kViewSliceBase && slice - kViewSliceBase < kViewSlots) return views_[slice - kViewSliceBase];
+    if (slice >= TextAtlasSet::kFirstSlice && slice < TextAtlasSet::kFirstSlice + TextAtlasSet::kSlots) {
+      SDL_Texture*& tex = sizeTex_[slice - TextAtlasSet::kFirstSlice];
+      if (!tex && textSet_) {
+        if (const ST::TruetypeAtlas* a = textSet_->atlasForSlice(slice)) tex = createGlyphTexture(renderer, *a);
+      }
+      return tex;
+    }
     return atlas_;
   }
 
@@ -214,6 +240,8 @@ class SpriteUiSdlRenderer {
   SDL_Texture* atlas_ = nullptr;
   SDL_Texture* icons_ = nullptr;
   SDL_Texture* views_[kViewSlots] = {};
+  const TextAtlasSet* textSet_ = nullptr;          // conjunto de atlas por tamanho (opcional)
+  SDL_Texture* sizeTex_[TextAtlasSet::kSlots] = {};   // uma textura por tamanho, criada sob demanda
   std::vector<SDL_Vertex> vertices_;
   std::vector<int> indices_;
 };

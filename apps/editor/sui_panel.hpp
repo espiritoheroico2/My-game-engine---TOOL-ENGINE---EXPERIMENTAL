@@ -8,6 +8,7 @@
 // Medida e corte de texto acontecem so ao montar o conteudo. Por quadro, o canvas so desloca e recorta o que guardou.
 
 #include "spriteui_host.hpp"
+#include "text_atlas_set.hpp"
 
 #include "sui_palette.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
@@ -31,7 +32,8 @@ namespace ST = ToolEngine::SpriteUi::Text;
 
 inline constexpr float kPanelPadding = 14.f;
 
-inline constexpr std::uint32_t kAtlasSlice = 1u;   // textureSlice dos glifos (0 = pixel branco)
+// Slice do atlas padrao (glifos em 16 px). Os textos novos usam o slice do proprio tamanho (TextAtlasSet).
+inline constexpr std::uint32_t kAtlasSlice = 1u;
 
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
@@ -62,7 +64,7 @@ struct Box {
 // Texto e retangulos ja medidos, em coordenadas locais do canvas.
 class Canvas {
  public:
-  explicit Canvas(const ST::TruetypeAtlas& atlas) : atlas_{atlas} {}
+  explicit Canvas(const TextAtlasSet& text) : text_{text} {}
 
   void clear() {
     prims_.clear();
@@ -70,11 +72,12 @@ class Canvas {
   }
 
   [[nodiscard]] ST::TextLayoutResult layout(const std::string& utf8, float fontSize) const {
+    const ST::TruetypeAtlas& atlas = text_.atlasFor(fontSize);
     ST::TextLayoutConfig cfg;
     cfg.fontSize = fontSize;
     cfg.alignment = ST::TextAlignment::Left;
     cfg.wrap = ST::TextWrap::None;
-    return ST::LayoutText(utf8, ST::ShapeTruetype(utf8, atlas_), atlas_.metrics, cfg);
+    return ST::LayoutText(utf8, ST::ShapeTruetype(utf8, atlas), atlas.metrics, cfg);
   }
 
   [[nodiscard]] float lineHeight(float fontSize) const { return layout("Ag", fontSize).lineHeight; }
@@ -84,20 +87,21 @@ class Canvas {
     if (text.empty() || maxWidth <= 0.f) return 0.f;
     ST::TextLayoutResult lay = layout(fit(text, fontSize, maxWidth), fontSize);
     const float w = lay.size.x;
-    pushText(alignRight ? x - w : x, y, std::move(lay), color);
+    pushText(alignRight ? x - w : x, y, std::move(lay), color, text_.sliceFor(fontSize));
     return w;
   }
 
   // Paragrafo quebrado por palavras dentro de `width`. Retorna a altura ocupada.
   float addParagraph(float x, float y, const std::string& text, float fontSize, SU::Vec4 color, float width) {
+    const ST::TruetypeAtlas& atlas = text_.atlasFor(fontSize);
     ST::TextLayoutConfig cfg;
     cfg.fontSize = fontSize;
     cfg.maxWidth = width;
     cfg.alignment = ST::TextAlignment::Left;
     cfg.wrap = ST::TextWrap::Word;
-    ST::TextLayoutResult lay = ST::LayoutText(text, ST::ShapeTruetype(text, atlas_), atlas_.metrics, cfg);
+    ST::TextLayoutResult lay = ST::LayoutText(text, ST::ShapeTruetype(text, atlas), atlas.metrics, cfg);
     const float height = lay.size.y;
-    pushText(x, y, std::move(lay), color);
+    pushText(x, y, std::move(lay), color, text_.sliceFor(fontSize));
     return height;
   }
 
@@ -130,7 +134,7 @@ class Canvas {
       SU::UILayoutRect box;
       box.resolvedPosition = {originX + p.x, sy};
       box.resolvedSize = {p.w, p.h};
-      auto items = ST::GenerateTextRenderItems(texts_[p.text], box, p.color, kAtlasSlice, clip, p.z, paint, owner, 0u);
+      auto items = ST::GenerateTextRenderItems(texts_[p.text], box, p.color, p.slice, clip, p.z, paint, owner, 0u);
       paint += items.size() + 1;
       out.insert(out.end(), items.begin(), items.end());
     }
@@ -158,9 +162,10 @@ class Canvas {
     SU::Vec4 color{};
     float z = 0.f;
     std::uint32_t text = 0;   // Text: indice em texts_
+    std::uint32_t slice = 1;  // Text: slice de textura do tamanho (TextAtlasSet)
   };
 
-  void pushText(float x, float y, ST::TextLayoutResult lay, SU::Vec4 color) {
+  void pushText(float x, float y, ST::TextLayoutResult lay, SU::Vec4 color, std::uint32_t slice) {
     Prim p;
     p.kind = Prim::Kind::Text;
     p.x = x;
@@ -170,6 +175,7 @@ class Canvas {
     p.color = color;
     p.z = textZ_;
     p.text = static_cast<std::uint32_t>(texts_.size());
+    p.slice = slice;
     texts_.push_back(std::move(lay));
     prims_.push_back(p);
   }
@@ -188,7 +194,7 @@ class Canvas {
     return "...";
   }
 
-  const ST::TruetypeAtlas& atlas_;
+  const TextAtlasSet& text_;
   float textZ_ = 0.9f;
   std::vector<Prim> prims_;
   std::vector<ST::TextLayoutResult> texts_;

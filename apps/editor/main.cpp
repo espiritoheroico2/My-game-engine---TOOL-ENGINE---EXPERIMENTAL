@@ -2874,26 +2874,29 @@ static int runEditorMain(int argc, char** argv) {
   editor::SpriteUiDiagnostics spriteUiDiagnostics;
   // Fonte e renderizador unicos das janelas SpriteUI. Sem a fonte, as janelas ficam na versao ImGui.
   ToolEngine::SpriteUi::Text::TruetypeAtlas uiAtlas;
+  editor::sui::TextAtlasSet uiText;   // atlas de glifos por tamanho (texto nitido em qualquer tamanho)
   editor::sui::SpriteUiSdlRenderer uiRenderer;
   // O modo --player tambem carrega a fonte: a janela do jogo desenha o texto da UI com ela (mesma fonte do editor).
   // Em --frames as janelas SpriteUI nao aparecem, salvo com --screenshot (print com as janelas reais).
   const bool fontReady = (!headless || !screenshotPath.empty()) &&
       editor::sui::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", uiAtlas, SDL_GetWindowDisplayScale(window)) &&
+      uiText.load("assets/fonts/Xmind-Regular.ttf", SDL_GetWindowDisplayScale(window)) &&
       uiRenderer.uploadAtlas(renderer, uiAtlas);
+  uiRenderer.setTextSet(&uiText);
   const bool uiReady = fontReady && !playerMode;
   // Janelas do editor em SpriteUI. Sem a fonte, elas nao aparecem (nao ha caminho ImGui de reserva).
   std::unique_ptr<editor::profiler_panel::ProfilerPanel> profPanel;
   if (uiReady) profPanel = std::make_unique<editor::profiler_panel::ProfilerPanel>(uiAtlas, uiRenderer);
   std::unique_ptr<editor::statusbar::StatusBarPanel> statusPanel;
-  if (uiReady) statusPanel = std::make_unique<editor::statusbar::StatusBarPanel>(uiAtlas, uiRenderer);
+  if (uiReady) statusPanel = std::make_unique<editor::statusbar::StatusBarPanel>(uiText, uiRenderer);
   const bool statusSpriteOn = statusPanel != nullptr;
   std::unique_ptr<editor::mainmenu::MainMenuPanel> menuPanel;
-  if (uiReady) menuPanel = std::make_unique<editor::mainmenu::MainMenuPanel>(uiAtlas, uiRenderer);
+  if (uiReady) menuPanel = std::make_unique<editor::mainmenu::MainMenuPanel>(uiText, uiRenderer);
   const bool menuSpriteOn = menuPanel != nullptr;
   std::unique_ptr<editor::help::HelpPanel> helpPanel;
-  if (uiReady) helpPanel = std::make_unique<editor::help::HelpPanel>(uiAtlas, uiRenderer);
+  if (uiReady) helpPanel = std::make_unique<editor::help::HelpPanel>(uiText, uiRenderer);
   std::unique_ptr<editor::testmap::TestMapPanel> testMapPanel;
-  if (uiReady) testMapPanel = std::make_unique<editor::testmap::TestMapPanel>(uiAtlas, uiRenderer);
+  if (uiReady) testMapPanel = std::make_unique<editor::testmap::TestMapPanel>(uiText, uiRenderer);
   bool testMapGenerate = false;   // o botao "Generate map" so marca; o mapa e gerado depois do quadro
   std::unique_ptr<editor::console_panel::ConsolePanel> consolePanel;
   if (uiReady) consolePanel = std::make_unique<editor::console_panel::ConsolePanel>(uiAtlas, uiRenderer);
@@ -2902,22 +2905,22 @@ static int runEditorMain(int argc, char** argv) {
   bool cursorWarningLogged = false;
   if (uiReady && !spriteTextCursor) tool::logWarn(std::string("Could not create text cursor: ") + SDL_GetError());
   std::unique_ptr<editor::hierarchy_panel::HierarchyPanel> hierPanel;
-  if (uiReady) hierPanel = std::make_unique<editor::hierarchy_panel::HierarchyPanel>(uiAtlas, uiRenderer);
+  if (uiReady) hierPanel = std::make_unique<editor::hierarchy_panel::HierarchyPanel>(uiText, uiRenderer);
   gHierarchySpriteOn = hierPanel != nullptr;
   std::unique_ptr<editor::settings_panel::SettingsPanel> settingsPanel;
-  if (uiReady) settingsPanel = std::make_unique<editor::settings_panel::SettingsPanel>(uiAtlas, uiRenderer);
+  if (uiReady) settingsPanel = std::make_unique<editor::settings_panel::SettingsPanel>(uiText, uiRenderer);
   gSettingsSpriteOn = settingsPanel != nullptr;
   std::unique_ptr<editor::inspector_panel::InspectorPanel> inspPanel;
-  if (uiReady) inspPanel = std::make_unique<editor::inspector_panel::InspectorPanel>(uiAtlas, uiRenderer);
+  if (uiReady) inspPanel = std::make_unique<editor::inspector_panel::InspectorPanel>(uiText, uiRenderer);
   gInspectorPanel = inspPanel.get();
   std::unique_ptr<editor::scenesui::Panel> scenesPanel;
-  if (uiReady) scenesPanel = std::make_unique<editor::scenesui::Panel>(uiAtlas, uiRenderer);
+  if (uiReady) scenesPanel = std::make_unique<editor::scenesui::Panel>(uiText, uiRenderer);
   gScenesPanel = scenesPanel.get();
 #ifdef TOOL_WITH_SPRITEUI
   std::unique_ptr<editor::scene_view_panel::ScenePanel> scenePanel;
   std::unique_ptr<editor::game_view_panel::GamePanel> gamePanel;
-  if (uiReady) scenePanel = std::make_unique<editor::scene_view_panel::ScenePanel>(uiAtlas, uiRenderer);
-  if (fontReady) gamePanel = std::make_unique<editor::game_view_panel::GamePanel>(uiAtlas, uiRenderer);
+  if (uiReady) scenePanel = std::make_unique<editor::scene_view_panel::ScenePanel>(uiText, uiRenderer);
+  if (fontReady) gamePanel = std::make_unique<editor::game_view_panel::GamePanel>(uiText, uiRenderer);
   gScenePanel = scenePanel.get();
   gGamePanel = gamePanel.get();
 #endif

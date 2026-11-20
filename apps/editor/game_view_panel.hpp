@@ -87,7 +87,7 @@ struct Requests {
 
 class GamePanel {
 public:
-  GamePanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : painter_{atlas}, sdl_{sdl} {}
+  GamePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {}
   GamePanel(const GamePanel&) = delete;
   GamePanel& operator=(const GamePanel&) = delete;
 

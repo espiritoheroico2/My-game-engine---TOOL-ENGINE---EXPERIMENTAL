@@ -71,8 +71,8 @@ bool Contains(const std::vector<Action>& a, Action what) {
 }  // namespace
 
 int main() {
-  ToolEngine::SpriteUi::Text::TruetypeAtlas atlas;
-  if (!editor::sui::LoadTextAtlas(EDITOR_FONT_PATH, atlas, 1.f)) {
+  editor::sui::TextAtlasSet text;
+  if (!text.load(EDITOR_FONT_PATH, 1.f)) {
     std::printf("FALHOU: fonte nao carregou: %s\n", EDITOR_FONT_PATH);
     return 1;
   }
@@ -81,7 +81,7 @@ int main() {
   m.scenes = {"Main", "Alpha", "Zeta"};   // na lista: Alpha, Main (atual), Zeta
   m.current = "Main";
   m.assets = {"Assets/Models/a.obj"};
-  View view(m, atlas);
+  View view(m, text);
   std::uint64_t id = 0;
 
   // 1. Um quadro desenha a janela (batches) e coloca cada elemento no lugar.

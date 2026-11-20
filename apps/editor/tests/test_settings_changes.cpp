@@ -50,6 +50,7 @@ struct RecordingTarget {
   void setChunkCacheMax(int i) { chunkCacheMax = i; ++calls; }
   void setInterfaceScale(float s) { interfaceScale = s; ++calls; }
   void setIdleRendering(bool on) { idleRendering = on; ++calls; }
+  void setPalette(int) { ++calls; }
 };
 
 void TestApiChangeCallsApplyWithRequestedValue() {

@@ -110,8 +110,8 @@ inline constexpr std::uint32_t kStripClip = 2u;
 
 class SettingsPanel {
  public:
-    SettingsPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl)
-        : strip_{atlas}, canvas_{atlas}, overlay_{atlas}, sdl_{sdl} {
+    SettingsPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
+        : strip_{text}, canvas_{text}, overlay_{text}, sdl_{sdl} {
         overlay_.setTextZ(Metrics::kPopupTextZ);
     }
     SettingsPanel(const SettingsPanel&) = delete;

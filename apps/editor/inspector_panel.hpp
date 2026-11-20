@@ -170,7 +170,7 @@ struct Metrics {
 
 class InspectorPanel {
   public:
-    InspectorPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : canvas_{atlas}, overlay_{atlas}, sdl_{sdl} {
+    InspectorPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : canvas_{text}, overlay_{text}, sdl_{sdl} {
         overlay_.setTextZ(Metrics::kZPopupText);
     }
     InspectorPanel(const InspectorPanel&) = delete;

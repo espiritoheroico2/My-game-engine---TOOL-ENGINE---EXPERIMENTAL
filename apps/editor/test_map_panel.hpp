@@ -49,7 +49,7 @@ struct Colors {
 
 class TestMapPanel {
  public:
-  TestMapPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : sdl_{sdl}, canvas_{atlas} {}
+  TestMapPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : sdl_{sdl}, canvas_{text} {}
   TestMapPanel(const TestMapPanel&) = delete;
   TestMapPanel& operator=(const TestMapPanel&) = delete;
 

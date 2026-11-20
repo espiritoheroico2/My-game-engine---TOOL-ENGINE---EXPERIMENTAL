@@ -135,7 +135,7 @@ inline sui::Box imageArea(sui::Box rect) { return {rect.x, rect.y + kToolbarH, r
 
 class ScenePanel {
 public:
-  ScenePanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : painter_{atlas}, sdl_{sdl} {}
+  ScenePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {}
   ScenePanel(const ScenePanel&) = delete;
   ScenePanel& operator=(const ScenePanel&) = delete;
 

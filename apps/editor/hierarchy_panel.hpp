@@ -130,8 +130,8 @@ inline constexpr const char* kLockPath = "assets/icons/lock.png";
 
 class HierarchyPanel {
  public:
-    HierarchyPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl)
-        : toolbar_{atlas}, list_{atlas}, overlay_{atlas}, chrome_{atlas}, sdl_{sdl} {
+    HierarchyPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
+        : toolbar_{text}, list_{text}, overlay_{text}, chrome_{text}, sdl_{sdl} {
         // Moldura: mesmo visual do Console e do Profiler.
         frameColors_.body = sui::Srgb(0.055f, 0.075f, 0.110f);
         frameColors_.border = sui::Srgb(0.160f, 0.220f, 0.330f);

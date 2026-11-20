@@ -72,8 +72,8 @@ struct Colors {
 
 class HelpPanel {
  public:
-  HelpPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl)
-      : atlas_{atlas}, sdl_{sdl}, chrome_{atlas}, list_{atlas}, body_{atlas}, hint_{atlas} {}
+  HelpPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
+      : text_{text}, sdl_{sdl}, chrome_{text}, list_{text}, body_{text}, hint_{text} {}
   HelpPanel(const HelpPanel&) = delete;
   HelpPanel& operator=(const HelpPanel&) = delete;
 
@@ -439,7 +439,7 @@ class HelpPanel {
     }
   }
 
-  const ST::TruetypeAtlas& atlas_;
+  const sui::TextAtlasSet& text_;
   sui::SpriteUiSdlRenderer& sdl_;
   sui::Canvas chrome_;
   sui::Canvas list_;

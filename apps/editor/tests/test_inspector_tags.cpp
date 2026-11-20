@@ -21,8 +21,8 @@ void Check(bool ok, const char* what) {
 int main() {
   namespace IP = editor::inspector_panel;
 
-  ToolEngine::SpriteUi::Text::TruetypeAtlas atlas;
-  if (!editor::sui::LoadTextAtlas(EDITOR_FONT_PATH, atlas, 1.f)) {
+  editor::sui::TextAtlasSet text;
+  if (!text.load(EDITOR_FONT_PATH, 1.f)) {
     std::printf("FALHOU: fonte nao carregou: %s\n", EDITOR_FONT_PATH);
     return 1;
   }
@@ -39,14 +39,14 @@ int main() {
   hooks.removeTagIndex = [&removed](std::size_t i) { removed = static_cast<int>(i); };
 
   // 1. Sem tags na cena: so o campo "New tag", o botao e a lista vazia.
-  IP::InspectorPanel noTags(atlas, renderer);
+  IP::InspectorPanel noTags(text, renderer);
   const float hEmpty = noTags.prepare(base, hooks, 300.f);
 
   // 2. Com tags: uma tag atribuida (com Remove) e outra existente na lista. A altura cresce.
   IP::Context withTags = base;
   withTags.tagNames = {"Player", "Enemy", "Boss"};
   withTags.tagOn = {true, false, false};
-  IP::InspectorPanel tagged(atlas, renderer);
+  IP::InspectorPanel tagged(text, renderer);
   const float hTagged = tagged.prepare(withTags, hooks, 300.f);
 
   Check(hEmpty > 0.f && hTagged > 0.f, "prepare devolve altura positiva");
@@ -66,19 +66,19 @@ int main() {
 
   // 5. Secao ToolObject Script. Sem script: so o Help e o Add Script. Com script: o arquivo, Edit script e a
   //    checagem Script enabled, por isso o bloco e mais alto. Durante o Play entra o status e o Reload.
-  IP::InspectorPanel noScript(atlas, renderer);
+  IP::InspectorPanel noScript(text, renderer);
   const float hNoScript = noScript.prepare(base, hooks, 300.f);
   editor::ScriptComp script{};
   IP::Context withScript = base;
   withScript.script = &script;
   withScript.scriptPath = "scripts/player.js";
-  IP::InspectorPanel scripted(atlas, renderer);
+  IP::InspectorPanel scripted(text, renderer);
   const float hScripted = scripted.prepare(withScript, hooks, 300.f);
   Check(hScripted > hNoScript, "com script a secao ocupa mais altura que sem script");
   IP::Context playing = withScript;
   playing.playing = true;
   playing.scriptStatus = "running";
-  IP::InspectorPanel onPlay(atlas, renderer);
+  IP::InspectorPanel onPlay(text, renderer);
   const float hPlaying = onPlay.prepare(playing, hooks, 300.f);
   Check(hPlaying > hScripted, "durante o Play a secao mostra status e Reload (mais altura)");
 
@@ -87,14 +87,14 @@ int main() {
   phys.body = 0;   // estatico
   IP::Context staticBody = base;
   staticBody.physics = &phys;
-  IP::InspectorPanel staticPanel(atlas, renderer);
+  IP::InspectorPanel staticPanel(text, renderer);
   const float hStatic = staticPanel.prepare(staticBody, hooks, 300.f);
   phys.body = 1;   // dinamico
-  IP::InspectorPanel dynamicPanel(atlas, renderer);
+  IP::InspectorPanel dynamicPanel(text, renderer);
   const float hDynamic = dynamicPanel.prepare(staticBody, hooks, 300.f);
   Check(hDynamic > hStatic, "fisica dinamica ocupa mais altura que estatica");
   phys.overrideGravity = true;
-  IP::InspectorPanel ownGravity(atlas, renderer);
+  IP::InspectorPanel ownGravity(text, renderer);
   const float hOwnGravity = ownGravity.prepare(staticBody, hooks, 300.f);
   Check(hOwnGravity > hDynamic, "gravidade propria (Vector physics) mostra o campo e os atalhos");
 
@@ -102,15 +102,15 @@ int main() {
   editor::ToolsComp tools{};
   IP::Context noTools = base;
   noTools.tools = &tools;
-  IP::InspectorPanel emptyTools(atlas, renderer);
+  IP::InspectorPanel emptyTools(text, renderer);
   const float hNoTools = emptyTools.prepare(noTools, hooks, 300.f);
   tools.count = 1;
   tools.items[0].kind = 4;   // On Collision (com a aviso de Physics)
-  IP::InspectorPanel oneTool(atlas, renderer);
+  IP::InspectorPanel oneTool(text, renderer);
   const float hOneTool = oneTool.prepare(noTools, hooks, 300.f);
   tools.count = 2;
   tools.items[1].kind = 3;   // Spin
-  IP::InspectorPanel twoTools(atlas, renderer);
+  IP::InspectorPanel twoTools(text, renderer);
   const float hTwoTools = twoTools.prepare(noTools, hooks, 300.f);
   Check(hOneTool > hNoTools, "uma ferramenta acrescenta bloco na secao Tools");
   Check(hTwoTools > hOneTool, "cada ferramenta nova deixa a secao mais alta");
@@ -119,7 +119,7 @@ int main() {
   editor::VoxelChunk chunk{};
   IP::Context withVoxel = base;
   withVoxel.voxel = &chunk;
-  IP::InspectorPanel voxelPanel(atlas, renderer);
+  IP::InspectorPanel voxelPanel(text, renderer);
   const float hVoxel = voxelPanel.prepare(withVoxel, hooks, 300.f);
   Check(hVoxel > hEmpty, "a secao Voxel (com a grade da camada) ocupa altura");
   voxelPanel.setAllSections(false);
@@ -131,10 +131,10 @@ int main() {
   editor::UiCanvas ui{};
   IP::Context withUi = base;
   withUi.ui = &ui;
-  IP::InspectorPanel uiEmpty(atlas, renderer);
+  IP::InspectorPanel uiEmpty(text, renderer);
   const float hUiEmpty = uiEmpty.prepare(withUi, hooks, 300.f);
   ui.count = 1;
-  IP::InspectorPanel uiOne(atlas, renderer);
+  IP::InspectorPanel uiOne(text, renderer);
   const float hUiOne = uiOne.prepare(withUi, hooks, 300.f);
   Check(hUiOne > hUiEmpty, "cada elemento da Game UI acrescenta bloco na secao");
 
@@ -142,14 +142,14 @@ int main() {
   editor::ParticleComp particles{};
   IP::Context withParticles = base;
   withParticles.particles = &particles;
-  IP::InspectorPanel particlePanel(atlas, renderer);
+  IP::InspectorPanel particlePanel(text, renderer);
   const float hParticles = particlePanel.prepare(withParticles, hooks, 300.f);
   Check(hParticles > hEmpty, "a secao Particles ocupa altura");
   particles.route = true;
   particles.routeCount = 3;
-  IP::InspectorPanel routePanel(atlas, renderer);
+  IP::InspectorPanel routePanel(text, renderer);
   const float hRouteClosed = routePanel.prepare(withParticles, hooks, 300.f);
-  IP::InspectorPanel routeOpen(atlas, renderer);
+  IP::InspectorPanel routeOpen(text, renderer);
   routeOpen.setAllSections(true);   // abre a trajetoria (fechada por padrao, como no ImGui)
   const float hRouteOpen = routeOpen.prepare(withParticles, hooks, 300.f);
   Check(hRouteOpen > hRouteClosed, "a trajetoria com pontos ocupa altura quando aberta");
@@ -157,7 +157,7 @@ int main() {
   // 11. Secao Resources (Add / Remove Resource). Com objeto, a secao existe; sem objeto, so o aviso.
   IP::Context noObject;
   noObject.hasObject = false;
-  IP::InspectorPanel nothing(atlas, renderer);
+  IP::InspectorPanel nothing(text, renderer);
   const float hNoObject = nothing.prepare(noObject, hooks, 300.f);
   Check(hEmpty > hNoObject, "com objeto, a secao Resources aparece (mais altura que o aviso sem objeto)");
 

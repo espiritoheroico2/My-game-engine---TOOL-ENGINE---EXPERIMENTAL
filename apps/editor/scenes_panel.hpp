@@ -18,8 +18,8 @@ class Panel {
  public:
   using View = editor::scenesui::View;
 
-  Panel(const ToolEngine::SpriteUi::Text::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl)
-      : view_{model_, atlas}, sdl_{sdl} {}
+  Panel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
+      : view_{model_, text}, sdl_{sdl} {}
 
   // Estado que o host preenche (cenas, assets, candidato a Assign) e le depois (selecao, modo do campo).
   [[nodiscard]] scenes_model::Model& model() { return model_; }

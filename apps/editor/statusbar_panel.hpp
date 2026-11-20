@@ -18,7 +18,7 @@ namespace ST = ToolEngine::SpriteUi::Text;
 
 class StatusBarPanel {
  public:
-  StatusBarPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : canvas_{atlas}, sdl_{sdl} {}
+  StatusBarPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : canvas_{text}, sdl_{sdl} {}
 
   // Desenha a faixa de `barHeight` px no pe de uma janela `windowW` x `windowH`. Retorna false so em falha do SDL.
   bool draw(SDL_Renderer* renderer, const Info& info, Translate tr, double nowSec, float windowW, float windowH, float barHeight) {

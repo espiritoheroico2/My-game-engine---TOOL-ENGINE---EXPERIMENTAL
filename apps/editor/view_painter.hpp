@@ -61,7 +61,7 @@ struct PaintList {
 
 class ShapePainter {
 public:
-  explicit ShapePainter(const ST::TruetypeAtlas& atlas) : text_{atlas} {}
+  explicit ShapePainter(const sui::TextAtlasSet& text) : text_{text} {}
 
   // Largura de um texto na fonte `size` (pixels), para alinhar botoes e legendas antes de desenhar.
   [[nodiscard]] float measure(const std::string& s, float size) const { return text_.layout(s, size).size.x; }

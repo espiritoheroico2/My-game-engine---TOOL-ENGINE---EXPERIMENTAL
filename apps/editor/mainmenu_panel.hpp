@@ -24,8 +24,8 @@ namespace ST = ToolEngine::SpriteUi::Text;
 
 class MainMenuPanel {
 public:
-    MainMenuPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& renderer)
-        : canvas_{atlas}, renderer_{renderer} {
+    MainMenuPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& renderer)
+        : canvas_{text}, renderer_{renderer} {
         bar_.popupWidth = 260.0f;
         bar_.rowHeight = 24.0f;
         bar_.separatorHeight = 8.0f;
