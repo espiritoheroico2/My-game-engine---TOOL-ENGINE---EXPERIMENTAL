@@ -126,7 +126,7 @@ Em `apps/editor/main.cpp` há 47 `ImGui::Begin`. As janelas a migrar, na ordem:
 | Inspector | ImGui (host) + SpriteUI. **Todas as seções de componente já são SpriteUI** (Transform, Mesh, Light, Global Light, Camera, Audio, Physics, Tools, Voxel, Game UI, Particles, Resources, Script, Tags; `Editor.InspectorTags`). Recursos: Add e Remove viraram duas listas. Em Tools, cada ferramenta é um bloco fixo. Na grade do voxel, cada célula é um botão. **Ainda em ImGui:** a moldura da janela (host), o rodapé (Add Component, Collapse All, Open All) e a barra de rolagem. Renomear tag com duplo clique ainda não existe. | `inspector_panel.hpp` |
 | Scene | ImGui | Já tem `scene_view_panel.hpp` |
 | Game | ImGui | Já tem `game_view_panel.hpp` |
-| Assets / Projeto | ImGui | |
+| Assets / Projeto | Em migração. Etapa 1 (modelo) feita: `assets_model.hpp`, teste `Editor.AssetsModel`. Falta a view SpriteUI (lista, ícones, filtro, migalhas, diálogos, editor de texto), a ligação ao host e o print. ImGui `drawAssets` ainda ativo | `assets_model.hpp` |
 | Scenes | **Concluída.** SpriteUI com moldura nova, aprovada visualmente (2026-11-19). ImGui removido (`drawScenes` e os campos de diálogo). Testes `Editor.ScenesModel` e `Editor.ScenesView`. Draw calls: 59 por quadro no editor inteiro | `scenes_model.hpp`, `scenes_spriteui.hpp`, `scenes_panel.hpp` |
 | Export game | ImGui (`export_ui.hpp`) | |
 | Input map | ImGui | |
