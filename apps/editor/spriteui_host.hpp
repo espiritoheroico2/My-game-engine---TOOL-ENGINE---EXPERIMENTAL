@@ -225,7 +225,11 @@ inline bool LoadTextAtlas(const std::string& fontPath, ST::TruetypeAtlas& out, f
   if (!file) return false;
   std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   ST::TruetypeAtlasConfig cfg;
-  cfg.rasterPixelSize = static_cast<float>(ST::ChooseBitmapRasterPixelSize(16.f, displayScale));
+  // Rasteriza com o dobro da resolucao (sobreamostragem 2): o texto de 13 a 20 px e reduzido de uma fonte
+  // mais nitida, sem o serrilhado de reduzir pouco mais de 1,25x (medido no Hierarchy).
+  ST::BitmapRasterPolicy policy;
+  policy.oversampling = 2.0f;
+  cfg.rasterPixelSize = static_cast<float>(ST::ChooseBitmapRasterPixelSize(16.f, displayScale, policy));
   cfg.atlasWidth = cfg.rasterPixelSize >= 64.f ? 2048u : 1024u;
   cfg.atlasHeight = cfg.atlasWidth;
   // Gama de cobertura 0,5: o SDL mistura em sRGB; sem isso o texto claro sobre fundo escuro sai fino (medido).

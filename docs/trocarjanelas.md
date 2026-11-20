@@ -113,6 +113,14 @@ Comando: `ctest -R EditorInfo`. Resultado da janela piloto: 9 checks passam (202
 - **Alternância CPU/GPU da UI (ainda não feito):** o modo software é usado com `--frames N`. Falta opção
   na tela de configurações.
 
+### 4.5b Qualidade da fonte da SpriteUI (2026-11-19)
+- **Causa:** o atlas de glifos era rasterizado com 20 px (16 px × 1,25) e reduzido para 13 a 15 px com amostragem
+  linear. A redução de 1,5× ou mais serrilha e deixa o traço irregular (medido no texto do Hierarchy).
+- **Feito:** `LoadTextAtlas` (`spriteui_host.hpp`) usa sobreamostragem 2,0 (rasteriza a 32 px). Medido: texto
+  mais uniforme e suave. Sobreamostragem 3,0 testada e descartada: letras finas e irregulares.
+- **Limite:** os quads ainda têm tamanho fracionário ao reduzir do atlas. O próximo passo, se ainda faltar,
+  é um atlas por tamanho de texto (13, 15, 20 px), sem reduzir.
+
 ### 4.6 Janelas que ainda são ImGui (inventário)
 Em `apps/editor/main.cpp` há 47 `ImGui::Begin`. As janelas a migrar, na ordem:
 
