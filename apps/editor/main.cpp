@@ -3012,6 +3012,7 @@ static int runEditorMain(int argc, char** argv) {
         ed.showProfiler = false;
       }
       if (profPanel->consumeClose()) ed.showProfiler = false;   // X da moldura
+      if (profPanel->consumeHelp()) editor::openHelp("profiler");   // ? da moldura
     }
     if (helpPanel) {   // por cima do Profiler; o "?" e F1 abrem o topico em helpState().pending
       editor::HelpState& help = editor::helpState();
@@ -3046,6 +3047,7 @@ static int runEditorMain(int argc, char** argv) {
         gHierarchySpriteOn = false;
       }
       if (hierPanel && hierPanel->consumeClose()) ed.showHierarchy = false;   // X da moldura
+      if (hierPanel && hierPanel->consumeHelp()) editor::openHelp("hierarchy");   // ? da moldura
       applyHierarchyRequests(ed, requests);
     }
     if (inspPanel) {   // Inspector: componentes do objeto, no bloco reservado pelo ImGui (drawInspectorBlock)
@@ -3087,6 +3089,7 @@ static int runEditorMain(int argc, char** argv) {
         ed.showConsole = false;
       }
       if (requests.close) ed.showConsole = false;   // X da moldura SpriteUI
+      if (!requests.help.empty()) editor::openHelp(requests.help);   // ? da moldura SpriteUI
       applyConsoleRequests(ed, requests);
     }
     if (statusPanel) {   // por ultimo: a barra fica por cima do Profiler e da Ajuda (mesmo renderer, depois do RenderDrawData)

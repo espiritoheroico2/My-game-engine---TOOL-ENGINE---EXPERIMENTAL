@@ -16,6 +16,7 @@
 // Eventos que caem no painel nao chegam ao ImGui (handleEvent devolve true). Teclado so e consumido com um campo
 // focado; o campo liga o texto do SDL (SDL_StartTextInput) e desliga ao perder o foco.
 #include "window_frame.hpp"
+#include "window_help_icon.hpp"
 #include "console_model.hpp"
 #include "i18n.hpp"
 #include "spriteui_host.hpp"
@@ -114,6 +115,7 @@ struct Source {
 // O que o painel pede ao Editor. Preenchido em draw(); o chamador aplica.
 struct Requests {
   bool close = false;          // X da moldura (o Editor fecha a janela)
+  std::string help;            // "?" da moldura: topico da Help a abrir (vazio = nada)
   bool clear = false;          // limpar o log
   bool checkScripts = false;   // verificar os scripts da cena
   std::string command;         // comando da linha de comando (vazio = nada)
@@ -204,6 +206,10 @@ class ConsolePanel {
       closeRequested_ = false;
       resetInteraction();
     }
+    if (helpRequested_) {
+      out.help = "console";
+      helpRequested_ = false;
+    }
     if (pending_.target != Target::None) {
       applyClick(pending_, src.entries, out);
       pending_ = Hit{};
@@ -257,6 +263,7 @@ class ConsolePanel {
   bool frameDown(float x, float y) {
     const wf::Event ev = frame_.pointerDown({x, y});
     if (ev == wf::Event::Close) closeRequested_ = true;
+    if (ev == wf::Event::Help) helpRequested_ = true;
     return ev != wf::Event::None;
   }
 
@@ -681,8 +688,16 @@ class ConsolePanel {
     const std::uint32_t frameClip = addClip(frame.position.x, frame.position.y, frame.size.x, frame.size.y);
     const SU::Rect title = frame_.titleRect();
     const SU::Rect grip = frame_.gripRect();
-    addText(title.position.x + wf::Metrics::kGripWidth, title.position.y + title.size.y * 0.5f, T("Console"),
-            Theme::kFont + 1.f, colors_.text, title.size.x - wf::Metrics::kGripWidth, 0.95f, frameClip);
+    // "?" (circulo com o simbolo) logo depois do grip; o nome vem depois dele, em negrito (duas passadas, 0,7 px).
+    const SU::Rect help = frame_.helpRect();
+    auto helpItems = window_help_icon::BuildCircleItems(panel_, help, SU::Vec4{0.250f, 0.400f, 0.700f, 1.f}, -1.9f, paint_);
+    items_.insert(items_.end(), helpItems.begin(), helpItems.end());
+    addText(help.position.x + help.size.x * 0.5f, help.position.y + help.size.y * 0.5f, "?", Theme::kFont, colors_.text, help.size.x, 0.96f,
+            frameClip, HAlign::Center);
+    const float titleX = frame_.titleTextX();
+    const float titleW = title.position.x + title.size.x - titleX;
+    addText(titleX, title.position.y + title.size.y * 0.5f, T("Console"), Theme::kFont + 1.f, colors_.text, titleW, 0.95f, frameClip);
+    addText(titleX + 0.7f, title.position.y + title.size.y * 0.5f, T("Console"), Theme::kFont + 1.f, colors_.text, titleW, 0.95f, frameClip);
     // Grip: 2 colunas x 3 pontos, no centro do icone.
     const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
     for (int c = 0; c < 2; ++c) {
@@ -840,6 +855,7 @@ class ConsolePanel {
   wf::Frame frame_;
   SW::WindowFrameColors frameColors_{};
   bool closeRequested_ = false;
+  bool helpRequested_ = false;   // "?" clicado: o proximo draw pede a Help
 };
 
 }  // namespace editor::console_panel

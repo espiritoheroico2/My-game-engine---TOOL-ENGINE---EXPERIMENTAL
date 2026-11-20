@@ -27,6 +27,7 @@
 #include "image_io.hpp"
 #include "sui_panel.hpp"
 #include "window_frame.hpp"
+#include "window_help_icon.hpp"
 
 #include "SpriteUi/Rendering/Sprite.hpp"
 #include "SpriteUi/Widgets/DragDrop.hpp"
@@ -149,6 +150,12 @@ class HierarchyPanel {
         closeRequested_ = false;
         return v;
     }
+    // "?" da moldura: o host abre a Help na secao da Hierarchy.
+    bool consumeHelp() {
+        const bool v = helpRequested_;
+        helpRequested_ = false;
+        return v;
+    }
 
     // true quando o evento e da janela (o editor nao o passa ao ImGui).
     bool handleEvent(const SDL_Event& e) {
@@ -157,6 +164,7 @@ class HierarchyPanel {
         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) {
             const wf::Event ev = frame_.pointerDown({e.button.x, e.button.y});
             if (ev == wf::Event::Close) closeRequested_ = true;
+            if (ev == wf::Event::Help) helpRequested_ = true;
             if (ev != wf::Event::None) return true;
         }
         if (e.type == SDL_EVENT_MOUSE_BUTTON_UP) frame_.pointerUp();
@@ -688,12 +696,21 @@ class HierarchyPanel {
         paint += frameItems.size() + 1;
         out.insert(out.end(), frameItems.begin(), frameItems.end());
 
+        // "?" (circulo) logo depois do grip; o nome em negrito (duas passadas, 0,7 px).
         const SU::Rect title = frame_.titleRect();
+        const SU::Rect help = frame_.helpRect();
+        auto helpItems = window_help_icon::BuildCircleItems(owner, help, SU::Vec4{0.250f, 0.400f, 0.700f, 1.f}, -1.9f, paint);
+        out.insert(out.end(), helpItems.begin(), helpItems.end());
         const float size = Metrics::kFont + 1.f;
+        const float titleX = frame_.titleTextX();
+        const float titleW = title.position.x + title.size.x - titleX;
+        const float ty = title.position.y + (title.size.y - chrome_.lineHeight(size)) * 0.5f;
         chrome_.clear();
-        chrome_.addText(title.position.x + wf::Metrics::kGripWidth,
-                        title.position.y + (title.size.y - chrome_.lineHeight(size)) * 0.5f, std::string(T("Hierarchy")), size,
-                        theme_.text, title.size.x - wf::Metrics::kGripWidth);
+        chrome_.addText(help.position.x + help.size.x * 0.5f - 4.f,
+                        help.position.y + (help.size.y - chrome_.lineHeight(Metrics::kFont)) * 0.5f, std::string("?"), Metrics::kFont,
+                        theme_.text, help.size.x);
+        chrome_.addText(titleX, ty, std::string(T("Hierarchy")), size, theme_.text, titleW);
+        chrome_.addText(titleX + 0.7f, ty, std::string(T("Hierarchy")), size, theme_.text, titleW);
         chrome_.appendItems(out, 0.f, 0.f, 0.f, -1e9f, 1e9f, owner, 2u, paint);
 
         // Grip: 2 colunas x 3 pontos, no centro do icone.
@@ -845,6 +862,7 @@ class HierarchyPanel {
     wf::Frame frame_;
     SW::WindowFrameColors frameColors_{};
     bool closeRequested_ = false;
+    bool helpRequested_ = false;
 
     sui::Box rect_;
     bool visible_ = false;

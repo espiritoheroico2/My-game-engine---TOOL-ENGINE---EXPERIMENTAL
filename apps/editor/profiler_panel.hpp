@@ -31,6 +31,7 @@
 #include "SpriteUi/Widgets/WindowFrame.hpp"
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
 #include "window_frame.hpp"
+#include "window_help_icon.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -200,6 +201,12 @@ class ProfilerPanel {
     closeRequested_ = false;
     return v;
   }
+  // "?" da moldura: o host abre a Help na secao do Profiler.
+  bool consumeHelp() {
+    const bool v = helpRequested_;
+    helpRequested_ = false;
+    return v;
+  }
   bool consumeExportRequest() {
     const bool v = exportRequested_;
     exportRequested_ = false;
@@ -269,6 +276,7 @@ class ProfilerPanel {
   bool frameDown(float x, float y) {
     const wf::Event ev = frame_.pointerDown({x, y});
     if (ev == wf::Event::Close) closeRequested_ = true;
+    if (ev == wf::Event::Help) helpRequested_ = true;
     return ev != wf::Event::None;
   }
 
@@ -300,9 +308,18 @@ class ProfilerPanel {
     paint += frameItems.size() + 1;
     out.insert(out.end(), frameItems.begin(), frameItems.end());
 
+    // "?" (circulo) logo depois do grip; o nome em negrito (duas passadas, 0,7 px), como o Console.
     const SU::Rect title = frame_.titleRect();
-    textItem(out, paint, title.position.x + wf::Metrics::kGripWidth, title.position.y + title.size.y * 0.5f, T("Profiler"),
-             Theme::kHeadingFont + 1.f, colors_.text, title.size.x - wf::Metrics::kGripWidth);
+    const SU::Rect help = frame_.helpRect();
+    auto helpItems = window_help_icon::BuildCircleItems(panel_, help, SU::Vec4{0.250f, 0.400f, 0.700f, 1.f}, -1.9f, paint);
+    out.insert(out.end(), helpItems.begin(), helpItems.end());
+    const float qW = layoutOf("?", Theme::kFont).size.x;
+    textItem(out, paint, help.position.x + (help.size.x - qW) * 0.5f, help.position.y + help.size.y * 0.5f, "?", Theme::kFont,
+             colors_.text, help.size.x);
+    const float titleX = frame_.titleTextX();
+    const float titleW = title.position.x + title.size.x - titleX;
+    textItem(out, paint, titleX, title.position.y + title.size.y * 0.5f, T("Profiler"), Theme::kHeadingFont + 1.f, colors_.text, titleW);
+    textItem(out, paint, titleX + 0.7f, title.position.y + title.size.y * 0.5f, T("Profiler"), Theme::kHeadingFont + 1.f, colors_.text, titleW);
 
     // Grip: 2 colunas x 3 pontos, no centro do icone.
     const SU::Rect grip = frame_.gripRect();
@@ -638,6 +655,7 @@ class ProfilerPanel {
   SW::WindowFrameColors frameColors_{};
   SU::Rect exportBox_{};
   bool closeRequested_ = false;
+  bool helpRequested_ = false;
   bool exportRequested_ = false;
   bool exportPressed_ = false;
   double exportStart_ = 0.0;

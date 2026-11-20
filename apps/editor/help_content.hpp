@@ -433,6 +433,70 @@ Settings > Graphics: API (CPU / Vulkan / OpenGL / D3D12), render scale / fixed r
 R"H(Profiler: FPS, tempo de quadro, 1% low, tempos por zona (eventos, update, paineis, cena, jogo, pos-fx, UI, present), memoria e contadores de desenho, e o passo de fisica (corpos, acordados, pares, contatos).
 Settings > Graphics: API (CPU / Vulkan / OpenGL / D3D12), escala de render / resolucao fixa, limite de FPS, info da GPU, qualidade de sombras. Se um backend de GPU der erro por varios quadros o editor volta para CPU sozinho.)H"},
 
+  {"console", "Windows", "Console: messages, filter and command line", "Console: mensagens, filtro e linha de comando",
+R"H(The Console lists the editor and game messages. Info, Warnings and Errors filter the levels. The filter box finds text in the messages and object names.
+Clear empties the list. Copy copies the visible lines. Auto-scroll keeps the last message in view.
+Check scripts verifies the scripts of the scene. Click a line with [object name] to select that object.
+The command line at the bottom runs editor commands (for example "test ECS: 10000" creates test objects).)H",
+R"H(O Console lista as mensagens do editor e do jogo. Info, Warnings e Errors filtram os niveis. A caixa de filtro acha texto nas mensagens e nos nomes dos objetos.
+Clear esvazia a lista. Copy copia as linhas visiveis. Auto-scroll mantem a ultima mensagem a vista.
+Check scripts verifica os scripts da cena. Clique numa linha com [nome do objeto] para selecionar esse objeto.
+A linha de comando embaixo executa comandos do editor (por exemplo "test ECS: 10000" cria objetos de teste).)H"},
+
+  {"hierarchy", "Windows", "Hierarchy: list of objects", "Hierarchy: lista de objetos",
+R"H(The Hierarchy lists every object of the scene. Click to select; the selection is shared with the Inspector and the Scene view.
+Double-click an object: the Scene view focuses on it.
++ Create adds an object, Duplicate copies the selected one and Delete removes it.
+The eye hides or shows the object in the view. The lock prevents editing it in the Scene view and in the Inspector (scripts still change it).)H",
+R"H(A Hierarchy lista todos os objetos da cena. Clique para selecionar; a selecao e compartilhada com o Inspector e com a janela Scene.
+Clique duplo num objeto: a janela Scene foca nele.
++ Create cria um objeto, Duplicate copia o selecionado e Delete o apaga.
+O olho esconde ou mostra o objeto na tela. O cadeado impede editar o objeto na janela Scene e no Inspector (os scripts continuam podendo mudar).)H"},
+
+  {"game", "Windows", "Game view: what the player sees", "Janela Game: o que o jogador ve",
+R"H(The Game view shows the scene as the player sees it, from the Principal camera(s). With more than one Principal camera, the screen is split (set in the Camera section of the Inspector).
+Play starts the game in this view. Editor changes made while playing are not saved.
+Game UI (the UI of the camera layer) appears over this view.)H",
+R"H(A janela Game mostra a cena como o jogador ve, pela(s) camera(s) Principal(is). Com mais de uma camera Principal, a tela e dividida (ajuste na secao Camera do Inspector).
+Play inicia o jogo nesta janela. Mudancas feitas no editor durante o Play nao sao salvas.
+A Game UI (a UI da camada da camera) aparece sobre esta janela.)H"},
+
+  {"assets", "Windows", "Assets: project files", "Assets: arquivos do projeto",
+R"H(Assets is the project folder: models, images, sounds and scripts. Import copies a file into the project.
+Select an asset to see it; the Inspector uses assets through the lists (Model file, Texture, Sound file).
+Scripts go in Assets/Scripts. Edit external opens a file in your code editor (Settings > Project).)H",
+R"H(Assets e a pasta do projeto: modelos, imagens, sons e scripts. Importar copia um arquivo para o projeto.
+Selecione um asset para ve-lo; o Inspector usa os assets pelas listas (Model file, Texture, Sound file).
+Os scripts ficam em Assets/Scripts. Edit external abre o arquivo no seu editor de codigo (Settings > Project).)H"},
+
+  {"scenes", "Windows", "Scenes: list and switching", "Cenas: lista e troca",
+R"H(Scenes lists the scenes of the project. The current one is marked with *, which means it has changes not saved yet.
+Save scene writes the current scene. New scene creates an empty one. Switching scenes saves the current one first.)H",
+R"H(Cenas lista as cenas do projeto. A atual e marcada com *, que indica mudancas ainda nao salvas.
+Save scene grava a cena atual. New scene cria uma vazia. Trocar de cena salva a atual antes.)H"},
+
+  {"export", "Windows", "Export game: build for players", "Exportar jogo: gerar para o jogador",
+R"H(Export game packs the project into a build that runs without the editor. Choose the scene to start from and the output folder, then Export.
+The export shows its progress in this window. Errors are listed in the Console.)H",
+R"H(Exportar jogo empacota o projeto numa versao que roda sem o editor. Escolha a cena inicial e a pasta de saida e clique em Exportar.
+O progresso aparece nesta janela. Os erros aparecem no Console.)H"},
+
+  {"script", "Windows", "Script editor: write the code of an object", "Editor de script: escrever o codigo de um objeto",
+R"H(The Script window edits the ToolObject Script of the selected object (JavaScript, QuickJS).
+Autocomplete and snippets help while typing. The checks report errors before you Play.
+Scripts run while the game is playing; Reload scripts restarts them.)H",
+R"H(A janela Script edita o ToolObject Script do objeto selecionado (JavaScript, QuickJS).
+Autocompletar e snippets ajudam ao digitar. As verificacoes mostram erros antes do Play.
+Os scripts rodam durante o Play; Reload scripts os reinicia.)H"},
+
+  {"settings", "Windows", "Settings: appearance, graphics, physics and more", "Settings: aparencia, graficos, fisica e mais",
+R"H(Settings has the editor options. Appearance: the palette of the windows (Dark blue, Graphite, Light, Night), chosen here and saved with the editor.
+Settings > Graphics: API (CPU / Vulkan / OpenGL / D3D12) and quality. Settings > Physics: world gravity and the simulation of the scene.
+Sections fold: click a section title to open or close it.)H",
+R"H(Settings tem as opcoes do editor. Appearance: a paleta das janelas (Dark blue, Graphite, Light, Night), escolhida aqui e salva com o editor.
+Settings > Graphics: API (CPU / Vulkan / OpenGL / D3D12) e qualidade. Settings > Physics: gravidade do mundo e a simulacao da cena.
+As secoes recolhem: clique no titulo de uma secao para abrir ou fechar.)H"},
+
   {"shortcuts", "Windows", "Keyboard shortcuts", "Atalhos de teclado",
 R"H(- Ctrl+S save scene   - Ctrl+Z undo   - Ctrl+Y / Ctrl+Shift+Z redo   - Delete remove selected (Hierarchy)
 - W / E / R move / rotate / scale gizmo   - Alt free navigation (Esc leaves)   - Ctrl while dragging = snap

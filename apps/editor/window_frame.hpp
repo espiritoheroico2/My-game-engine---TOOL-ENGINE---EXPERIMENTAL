@@ -4,8 +4,9 @@
 // So regras e geometria, sem SDL nem desenho. O painel (console_panel.hpp) desenha a moldura e repassa os
 // cliques para ca. Testado sem janela em tests/test_window_frame.cpp (Editor.ConsoleFrame).
 //
-// Padrao de moldura (docs/trocarjanelas.md, secao 1.1): grip a esquerda do titulo (so ele arrasta), X a direita.
-// O icone "?" ainda nao existe aqui (pendente, ver docs/trocarjanelas.md, secao 4.3).
+// Padrao de moldura (docs/trocarjanelas.md, secao 1.1), da esquerda para a direita no cabecalho: grip (so ele
+// arrasta), icone "?" (abre a Help na secao da janela), titulo, minimizar e X. O minimizar recolhe a janela ao
+// cabecalho; a altura volta quando clicar de novo.
 #include "SpriteUi/Widgets/DockInteraction.hpp"
 #include "SpriteUi/Widgets/WindowFrame.hpp"
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
@@ -24,9 +25,11 @@ struct Metrics {
   static constexpr float kMargin = 16.f;    // folga minima da borda da janela ao cabecalho
   static constexpr float kGripWidth = 14.f;
   static constexpr float kBottomGap = 40.f;  // primeira posicao: a janela fica acima da barra de status
+  static constexpr float kHelpSize = 18.f;   // diametro do circulo do "?"
+  static constexpr float kHelpGap = 4.f;     // espaco entre o grip e o circulo, e entre o circulo e o titulo
 };
 
-enum class Event : unsigned char { None, Close, DragStart };
+enum class Event : unsigned char { None, Close, DragStart, Help, Minimize };
 
 class Frame {
  public:
@@ -36,14 +39,16 @@ class Frame {
   void place(float windowW, float windowH, float width = Metrics::kWidth, float height = Metrics::kHeight, float firstX = -1.f) {
     const float w = std::min(width, std::max(1.f, windowW - 2.f * Metrics::kMargin));
     const float h = std::min(height, std::max(1.f, windowH - 2.f * Metrics::kMargin));
+    const float shown = minimized_ ? std::min(metrics_.headerHeight, h) : h;   // minimizada: so o cabecalho
+    fullHeight_ = h;
     if (!placed_) {
       const float x = firstX >= 0.f ? firstX : (windowW - w) * 0.5f;
       pos_ = {std::floor(x), std::max(0.f, std::floor(windowH - h - Metrics::kBottomGap))};
       placed_ = true;
     }
     pos_.x = std::clamp(pos_.x, 0.f, std::max(0.f, windowW - w));
-    pos_.y = std::clamp(pos_.y, 0.f, std::max(0.f, windowH - h));
-    frame_ = SU::Rect{pos_, {w, h}};
+    pos_.y = std::clamp(pos_.y, 0.f, std::max(0.f, windowH - shown));
+    frame_ = SU::Rect{pos_, {w, shown}};
   }
 
   [[nodiscard]] SU::Rect rect() const { return frame_; }
@@ -51,6 +56,18 @@ class Frame {
   [[nodiscard]] SU::Rect header() const { return SW::WindowFrameHeader(frame_, metrics_, false); }
   [[nodiscard]] SU::Rect titleRect() const { return SW::WindowFrameTitleRect(frame_, metrics_, false); }
   [[nodiscard]] SU::Rect gripRect() const { return SW::WindowGripRect(header(), Metrics::kGripWidth); }
+
+  // Circulo do "?": logo depois do grip, centralizado na altura do cabecalho.
+  [[nodiscard]] SU::Rect helpRect() const {
+    const SU::Rect grip = gripRect();
+    const SU::Rect head = header();
+    const float x = grip.position.x + grip.size.x + Metrics::kHelpGap;
+    const float y = head.position.y + (head.size.y - Metrics::kHelpSize) * 0.5f;
+    return SU::Rect{{x, y}, {Metrics::kHelpSize, Metrics::kHelpSize}};
+  }
+  // Onde comeca o texto do titulo: depois do circulo do "?".
+  [[nodiscard]] float titleTextX() const { return helpRect().position.x + helpRect().size.x + Metrics::kHelpGap; }
+  [[nodiscard]] bool minimized() const { return minimized_; }
   [[nodiscard]] const SW::WindowFrameMetrics& metrics() const { return metrics_; }
   [[nodiscard]] bool dragging() const { return dragging_; }
   [[nodiscard]] bool placed() const { return placed_; }
@@ -59,7 +76,13 @@ class Frame {
   // Ponteiro pressionado. X fecha; so o grip inicia o arraste. Qualquer outro ponto nao faz nada.
   Event pointerDown(SU::Vec2 p) {
     if (!placed_) return Event::None;
-    if (SW::WindowFramePartAt(frame_, metrics_, false, p) == SW::WindowFramePart::Close) return Event::Close;
+    const SW::WindowFramePart part = SW::WindowFramePartAt(frame_, metrics_, false, p);
+    if (part == SW::WindowFramePart::Close) return Event::Close;
+    if (part == SW::WindowFramePart::Minimize) {
+      toggleMinimized();
+      return Event::Minimize;
+    }
+    if (inside(helpRect(), p)) return Event::Help;
     if (inside(gripRect(), p)) {
       dragging_ = true;
       grab_ = {p.x - pos_.x, p.y - pos_.y};
@@ -78,6 +101,13 @@ class Frame {
   // Estado de interacao que o painel precisa resetar quando a janela some.
   void reset() { dragging_ = false; }
 
+  // Minimizar (botao da moldura): recolhe ao cabecalho e volta a altura cheia no segundo clique. Usa a altura da
+  // ultima place(), entao chame place() no proximo quadro para aplicar.
+  void toggleMinimized() {
+    minimized_ = !minimized_;
+    frame_.size.y = minimized_ ? std::min(metrics_.headerHeight, frame_.size.y) : fullHeight_;
+  }
+
  private:
   static bool inside(SU::Rect r, SU::Vec2 p) {
     return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y && p.y < r.position.y + r.size.y;
@@ -94,6 +124,8 @@ class Frame {
   SU::Vec2 grab_{};
   bool placed_ = false;
   bool dragging_ = false;
+  bool minimized_ = false;
+  float fullHeight_ = Metrics::kHeight;   // altura cheia, guardada para voltar do minimizado
 };
 
 }  // namespace editor::window_frame

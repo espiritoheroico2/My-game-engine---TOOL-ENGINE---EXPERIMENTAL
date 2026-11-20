@@ -109,6 +109,38 @@ int main() {
     Check(f.pointerDown({10.f, 10.f}) == wf::Event::None, "sem janela posicionada: clique nao faz nada");
   }
 
+  // 8. Icone "?": circulo logo depois do grip, dentro do cabecalho. Clique nele pede a Help (nao arrasta).
+  {
+    wf::Frame f;
+    f.place(1280.f, 800.f);
+    const auto help = f.helpRect();
+    const auto grip = f.gripRect();
+    Check(help.position.x >= grip.position.x + grip.size.x, "? fica depois do grip");
+    Check(help.position.y >= f.header().position.y && help.position.y + help.size.y <= f.header().position.y + f.header().size.y,
+          "? cabe na altura do cabecalho");
+    Check(f.titleTextX() >= help.position.x + help.size.x, "titulo comeca depois do ?");
+    Check(f.pointerDown(Center(help)) == wf::Event::Help, "clique no ? pede a Help");
+    Check(!f.dragging(), "clique no ? nao arrasta");
+  }
+
+  // 9. Minimizar: o botao da moldura recolhe a janela ao cabecalho; de novo volta a altura cheia.
+  {
+    wf::Frame f;
+    f.place(1280.f, 800.f);
+    const float full = f.rect().size.y;
+    const auto minimize = wf::Event::Minimize;
+    const auto btn = ToolEngine::SpriteUi::Widgets::WindowFrameButtonRect(f.rect(), f.metrics(), false,
+                                                                         ToolEngine::SpriteUi::Widgets::WindowFrameButton::Minimize);
+    Check(f.pointerDown(Center(btn)) == minimize, "clique no minimizar devolve Minimize");
+    Check(f.minimized(), "depois do clique a janela esta minimizada");
+    f.place(1280.f, 800.f);
+    Check(f.rect().size.y == f.metrics().headerHeight, "minimizada: so o cabecalho aparece");
+    f.pointerDown(Center(ToolEngine::SpriteUi::Widgets::WindowFrameButtonRect(f.rect(), f.metrics(), false,
+                                                                             ToolEngine::SpriteUi::Widgets::WindowFrameButton::Minimize)));
+    f.place(1280.f, 800.f);
+    Check(!f.minimized() && f.rect().size.y == full, "segundo clique: volta a altura cheia");
+  }
+
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;
 }

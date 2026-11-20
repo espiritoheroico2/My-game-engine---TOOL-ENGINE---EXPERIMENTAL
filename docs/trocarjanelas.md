@@ -29,9 +29,9 @@ convivem; o menu escolhe qual abrir.
 Toda janela SpriteUI tem, nesta ordem, da esquerda para a direita, no cabeçalho:
 1. **Grip** (ícone de arrastar, 14 px). Só o grip inicia o arraste e o docking.
 2. **Ícone de ajuda "?"** (círculo, à direita do nome). Ao clicar, abre a janela Help na seção desta janela.
-   *Status: pendente (ver seção 4).*
-3. **Título** em negrito e um pouco maior que o corpo (highlight). *Status: título atual é normal; negrito pendente.*
-4. **Minimizar** e **X** (fecham a janela; X dispara `Action::Close`).
+   *Status: feito nas janelas SpriteUI (Console, Profiler, Hierarchy). Abre a Help na seção da janela.*
+3. **Título** em negrito e um pouco maior que o corpo (highlight). *Status: negrito por duas passadas (0,7 px), como o Profiler; fonte em negrito própria ainda pendente.*
+4. **Minimizar** (recolhe ao cabeçalho; segundo clique volta) e **X** (fecha a janela).
 
 A moldura vem de `SpriteUi::Widgets::WindowFrame` (`BuildWindowFrameItems`, `WindowFrameHeader`,
 `WindowFrameTitleRect`, `WindowFrameButtonRect`, `WindowFramePartAt`). O título e o grip são desenhados
@@ -91,11 +91,11 @@ Comando: `ctest -R EditorInfo`. Resultado da janela piloto: 9 checks passam (202
 ### 4.3 Ícone de ajuda "?" e janela Help
 - Círculo com "?" ao lado do nome da janela. Clique envia `Action::Help` com o id da janela.
 - A janela Help (`help_panel.hpp`) deve abrir na seção da janela clicada.
-- Falta desenhar o círculo: usar um item com `cornerRadius` igual à metade do lado.
+- **Feito:** círculo com `PanelStyle::cornerRadius` = metade do lado (`window_help_icon.hpp`). Geometria em `window_frame.hpp` (`helpRect`). Clique gera `Event::Help`.
 
 ### 4.4 Título em negrito e maior
 - Hoje o título usa o mesmo tamanho do corpo com a fonte regular (`Xmind-Regular.ttf`).
-- Falta uma fonte em negrito (ou um traço de contorno) e um tamanho maior (20 px sugeridos).
+- **Feito (parcial):** negrito por duas passadas. Falta fonte Xmind-Bold própria (`third_party/SpriteUi/Fonts/Xmind/static/Xmind-Bold.ttf`) e tamanho maior (20 px sugeridos).
 
 ### 4.5 Renderização CPU/GPU e draw calls
 - **Medido (2026-11-19):**
