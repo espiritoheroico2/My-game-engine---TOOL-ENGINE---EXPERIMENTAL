@@ -38,6 +38,7 @@
 #include "console_panel.hpp"
 #include "hierarchy_panel.hpp"
 #include "inspector_panel.hpp"
+#include "scenes_panel.hpp"
 #include "settings_changes.hpp"
 #include "settings_panel.hpp"
 #include "sui_palette.hpp"
@@ -516,6 +517,90 @@ void drawHierarchy(Editor& ed) {
 // Componentes do objeto (nome, Transform, Mesh Renderer, Light, Global Light, Camera, Audio Source) em SpriteUI
 // (inspector_panel.hpp). Logo abaixo, no mesmo ImGui, seguem as secoes que ainda sao ImGui (fisica, voxel, UI,
 // particulas, recursos, script, tags) e o rodape. O bloco SpriteUI reserva a sua altura com um Dummy do ImGui.
+// --- janela Scenes (SpriteUI) -------------------------------------------------------------------------------
+// Copia o estado do Editor para o modelo da janela antes de cada quadro (lista, cena atual, assets, candidato).
+void syncScenesPanel(Editor& ed, editor::scenesui::Panel& panel) {
+  namespace SM = editor::scenes_model;
+  SM::Model& m = panel.model();
+  if (ed.sceneList.empty()) ed.refreshScenes();
+  m.scenes = ed.sceneList;
+  m.current = ed.sceneInfo.name;
+  m.assets = ed.sceneInfo.assets;
+  if (std::find(m.scenes.begin(), m.scenes.end(), m.selected) == m.scenes.end()) m.selected = m.current;
+  m.assetMissing.clear();
+  for (const std::string& a : m.assets) {
+    std::error_code ec;
+    m.assetMissing.push_back(!std::filesystem::exists(ed.project.resolve(a), ec));
+  }
+  m.assignCandidate.clear();
+  const std::string& sel = ed_::ui().selected;   // asset escolhido na janela Assets
+  if (!sel.empty()) {
+    const ed_::AssetKind k = ed_::kindOf(sel, false);
+    if (k == ed_::AssetKind::Model || k == ed_::AssetKind::Audio) m.assignCandidate = sel;
+  }
+}
+
+// Confirmar criar ou renomear, com as mesmas regras da janela ImGui antiga (drawScenes).
+void confirmScene(Editor& ed, editor::scenes_model::Model& m) {
+  namespace SM = editor::scenes_model;
+  if (m.mode == SM::NameMode::New) {
+    if (ed.newScene(m.name)) SM::FinishName(m);
+    else m.status = ed.statusLine;
+    return;
+  }
+  if (m.mode == SM::NameMode::Rename) {
+    std::error_code ec;
+    const bool cur = m.selected == ed.sceneInfo.name;
+    if (cur) ed.saveScene();
+    std::filesystem::rename(ed.project.scenePath(m.selected), ed.project.scenePath(m.name), ec);
+    if (ec) {
+      m.status = ec.message();
+      return;
+    }
+    if (cur) ed.sceneInfo.name = m.name;
+    ed.refreshScenes();
+    m.selected = m.name;
+    SM::FinishName(m);
+  }
+}
+
+// Aplica as acoes que a janela Scenes reportou neste quadro ao Editor.
+void applyScenesActions(Editor& ed, editor::scenesui::Panel& panel, const std::vector<editor::scenesui::View::Action>& acts) {
+  using A = editor::scenesui::View::Action;
+  namespace SM = editor::scenes_model;
+  SM::Model& m = panel.model();
+  for (A a : acts) {
+    switch (a) {
+      case A::Save: ed.saveScene(); break;
+      case A::Reload: ed.refreshScenes(); break;
+      case A::Open: ed.openScene(m.selected); break;
+      case A::Delete: {
+        std::error_code ec;
+        std::filesystem::remove(ed.project.scenePath(m.selected), ec);
+        ed.refreshScenes();
+        SM::FinishName(m);
+        break;
+      }
+      case A::Confirm: confirmScene(ed, m); break;
+      case A::Assign: ed.assignAsset(m.assignCandidate); break;
+      case A::RemoveAsset: {
+        const std::size_t i = panel.view().removedIndex();
+        if (i < ed.sceneInfo.assets.size()) ed.sceneInfo.assets.erase(ed.sceneInfo.assets.begin() + static_cast<std::ptrdiff_t>(i));
+        break;
+      }
+      case A::Help: editor::openHelp("scenes"); break;
+      case A::Close:
+        ed.showScenes = false;
+        SM::FinishName(m);
+        break;
+      default: break;
+    }
+  }
+}
+
+editor::scenesui::Panel* gScenesPanel = nullptr;   // o painel existe (dono: main); usado pelo atalho "Nova cena"
+bool gScenesSpriteOn = false;                       // a janela Scenes e SpriteUI (o ImGui antigo nao desenha)
+
 #ifdef TOOL_WITH_SPRITEUI
 editor::inspector_panel::InspectorPanel* gInspectorPanel = nullptr;   // o painel existe (dono: main)
 bool gInspectorSpriteOn = false;     // o painel SpriteUI existe
@@ -2369,7 +2454,11 @@ void applyMenuRequest(Editor& ed, bool& quit, const editor::mainmenu::Request& r
   using C = editor::mainmenu::Command;
   if (toggleFromMenu(ed, req.command)) return;
   switch (req.command) {
-    case C::NewScene: ed.showScenes = true; editor::ui().openNewScene = true; break;
+    case C::NewScene:
+      ed.showScenes = true;
+      if (gScenesPanel) gScenesPanel->beginNew();
+      else editor::ui().openNewScene = true;
+      break;
     case C::SaveScene: ed.saveScene(); break;
     case C::ImportAsset: SDL_ShowOpenFileDialog([](void*, const char* const* files, int) { if (files) for (; *files; ++files) editor::queueImport(*files); }, nullptr, nullptr, nullptr, 0, nullptr, true); break;
     case C::NewNarrative: ed.narrative.newGraph(); break;
@@ -2823,6 +2912,10 @@ static int runEditorMain(int argc, char** argv) {
   std::unique_ptr<editor::inspector_panel::InspectorPanel> inspPanel;
   if (uiReady) inspPanel = std::make_unique<editor::inspector_panel::InspectorPanel>(uiAtlas, uiRenderer);
   gInspectorPanel = inspPanel.get();
+  std::unique_ptr<editor::scenesui::Panel> scenesPanel;
+  if (uiReady) scenesPanel = std::make_unique<editor::scenesui::Panel>(uiAtlas, uiRenderer);
+  gScenesPanel = scenesPanel.get();
+  gScenesSpriteOn = scenesPanel != nullptr;
 #ifdef TOOL_WITH_SPRITEUI
   std::unique_ptr<editor::scene_view_panel::ScenePanel> scenePanel;
   std::unique_ptr<editor::game_view_panel::GamePanel> gamePanel;
@@ -2859,6 +2952,11 @@ static int runEditorMain(int argc, char** argv) {
     if (settingsPanel && ed.showSettings && gSettingsFrame)
       gPanelRouter.add(pr::kSettingsHandle, {gSettingsRect.x, gSettingsRect.y, gSettingsRect.w, gSettingsRect.h},
                        ToolEngine::SpriteUi::UILayer::Docked);
+    if (scenesPanel && ed.showScenes) {   // Scenes: a janela SpriteUI cobre o ponteiro por cima do ImGui
+      const auto sr = scenesPanel->rect();
+      gPanelRouter.add(pr::kScenesHandle, {sr.position.x, sr.position.y, sr.size.x, sr.size.y},
+                       ToolEngine::SpriteUi::UILayer::Docked);
+    }
 #endif
     SDL_Event e;
     // Ocioso: espera ate 16 ms pelo proximo evento (em vez de girar o quadro sem parar). O evento volta para a fila.
@@ -2895,10 +2993,11 @@ static int runEditorMain(int argc, char** argv) {
       const bool settingsMayReceive = !pointerEvt || gPanelRouter.mayReceive(editor::panel_router::kSettingsHandle, ptrX, ptrY);
       const bool setHandled = settingsPanel && settingsMayReceive && settingsPanel->handleEvent(e);
       const bool inspHandled = inspPanel && inspPanel->handleEvent(e);
+      const bool scnHandled = scenesPanel && scenesPanel->handleEvent(e, ed.showScenes);
       forwardViewEvent(e);   // paineis Scene e Jogo: veem o evento, sem consumir
       // ImGui so recebe o ponteiro se nenhum painel SpriteUI registrado cobre o ponto: senao as janelas ImGui de tras reagiriam.
       const bool ownedBySui = pointerEvt && gPanelRouter.coveredBySui(ptrX, ptrY);
-      if (!spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
+      if (!spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !scnHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
 #else
       ImGui_ImplSDL3_ProcessEvent(&e);
 #endif
@@ -2978,7 +3077,7 @@ static int runEditorMain(int argc, char** argv) {
       if (ed.showPaintMesh) drawFeatureStub(ed, T("Paint Mesh"), T("Paint colors and textures directly on the 3D model. In development."), &ed.showPaintMesh);
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showAssets) editor::drawAssets(ed);
-      if (ed.showScenes) editor::drawScenes(ed);
+      if (ed.showScenes && !gScenesSpriteOn) editor::drawScenes(ed);   // legado: so sem a janela SpriteUI
       if (ed.showSettings) drawSettings(ed);
       if (ed.showNarrative) ed.narrative.draw(&ed.showNarrative);
       if (ed.showInputMap) editor::drawInputMap(ed, &ed.showInputMap);
@@ -3057,6 +3156,20 @@ static int runEditorMain(int argc, char** argv) {
         inspPanel.reset();
         gInspectorPanel = nullptr;
         gInspectorSpriteOn = false;
+      }
+    }
+    if (scenesPanel && ed.showScenes) {   // Scenes: janela SpriteUI flutuante; o ImGui antigo fica so como legado
+      syncScenesPanel(ed, *scenesPanel);
+      std::vector<editor::scenesui::View::Action> scenesActs;
+      int winW = 0, winH = 0;
+      SDL_GetWindowSize(window, &winW, &winH);
+      if (!scenesPanel->draw(renderer, static_cast<float>(winW), static_cast<float>(winH), scenesActs)) {
+        tool::logError(std::string("Scenes SpriteUI render failed: ") + SDL_GetError());
+        scenesPanel.reset();
+        gScenesPanel = nullptr;
+        gScenesSpriteOn = false;
+      } else {
+        applyScenesActions(ed, *scenesPanel, scenesActs);
       }
     }
     if (settingsPanel) {   // Configuracoes: faixa de abas e aba Graficos por cima da janela ImGui

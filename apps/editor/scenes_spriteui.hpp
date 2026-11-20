@@ -2,10 +2,12 @@
 
 // Janela "Scenes" feita com SpriteUI (sem Dear ImGui). Estado e regras: scenes_model.hpp.
 // Esta view so desenha e reporta cliques e digitacao. Quem salva, abre, apaga, cria, renomeia e atribui assets e o
-// host (Action). Ainda NAO esta ligada ao menu: drawScenes (assets_panel.hpp) segue a usada ate o teste visual.
+// host (scenes_panel.hpp e main.cpp, via Action). Moldura: grip, "?" (abre a Help na secao Scenes), titulo em negrito,
+// minimizar e X.
 #include "i18n.hpp"
 #include "scenes_model.hpp"
 #include "spriteui_host.hpp"
+#include "window_help_icon.hpp"
 
 #include "SpriteUi/Input/InputRouter.hpp"
 #include "SpriteUi/Layout/LayoutBridge.hpp"
@@ -23,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace editor::scenesui {
@@ -54,6 +57,8 @@ struct Theme {
   static constexpr float kTitleSize = 20.f;
   static constexpr float kFieldInset = 8.f;
   static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth
+  static constexpr float kHelpSize = 18.f;    // diametro do "?"
+  static constexpr float kHelpGap = 4.f;      // entre grip, "?" e titulo
   // Filhos do painel: rotulo, 3 linhas de botoes (topo, acoes, confirmar), campo de nome, lista de cenas,
   // rotulo de assets, assets e status. 17 filhos, 16 espacos.
   static constexpr std::size_t kChildren = 1 + 3 + 1 + kMaxRows + 1 + kMaxAssets + 1;
@@ -74,10 +79,10 @@ struct Colors {
   SU::Vec4 button = Srgb(0.200f, 0.345f, 0.588f);
   SU::Vec4 buttonHover = Srgb(0.263f, 0.420f, 0.690f);
   SU::Vec4 buttonDanger = Srgb(0.520f, 0.220f, 0.220f);
+  SU::Vec4 help = Srgb(0.250f, 0.400f, 0.700f);
   SU::Vec4 disabled = Srgb(0.150f, 0.150f, 0.160f);
   SU::Vec4 text = Srgb(0.910f, 0.918f, 0.933f);
   SU::Vec4 textDim = Srgb(0.560f, 0.565f, 0.600f);
-  SU::Vec4 selection = Srgb(0.245f, 0.420f, 0.690f, 0.75f);
   SU::Vec4 caret = Srgb(0.930f, 0.930f, 0.950f);
   SU::Vec4 warning = Srgb(1.000f, 0.800f, 0.300f);
 };
@@ -101,7 +106,7 @@ struct Shaped {
 
 class View {
  public:
-  enum class Action { None, Save, Reload, Open, Delete, Confirm, Assign, RemoveAsset, Close };
+  enum class Action { None, Save, Reload, Open, Delete, Confirm, Assign, RemoveAsset, Help, Close };
 
   View(Model& model, const ST::TruetypeAtlas& atlas) : model_{model}, atlas_{atlas} { buildTree(); }
 
@@ -112,10 +117,10 @@ class View {
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
 
     const float panelWidth = std::min(Theme::kPanelWidth, windowWidth - 32.f);
-    const float frameHeight = Theme::kPanelHeight + metrics_.headerHeight + 2.f * metrics_.borderWidth;
+    const float frameHeight = frameHeightNow();
     if (!placed_) {   // primeira vez: centralizada
       windowPos_ = {std::floor((windowWidth - panelWidth) * 0.5f),
-                    std::max(0.f, std::floor((windowHeight - frameHeight) * 0.5f))};
+                    std::max(0.f, std::floor((windowHeight - Theme::kPanelHeight - metrics_.headerHeight) * 0.5f))};
       placed_ = true;
     }
     windowPos_.x = std::clamp(windowPos_.x, 0.f, std::max(0.f, windowWidth - panelWidth));
@@ -123,7 +128,15 @@ class View {
     frame_ = SU::Rect{windowPos_, {panelWidth, frameHeight}};
 
     handleFrameInput(in, actions);
-    frame_ = SU::Rect{windowPos_, {panelWidth, frameHeight}};
+    frame_ = SU::Rect{windowPos_, {panelWidth, frameHeightNow()}};
+
+    // Minimizada: so a moldura (cabecalho). O conteudo nao aparece nem recebe cliques.
+    if (minimized_) {
+      std::vector<SR::UIRenderItem> items;
+      std::uint64_t paint = 1000;
+      addFrame(items, paint);
+      return extractor_.Build(in.frameId, items, nullptr, {});
+    }
 
     const SU::Rect content = SW::WindowFrameContent(frame_, metrics_);
     setPanelWidth(content.size.x);
@@ -159,7 +172,9 @@ class View {
     if (!scene.clipHierarchy.valid) return {};
     std::vector<SR::UIRenderItem> extra;
     std::vector<SR::ClipRectGPU> clips = scene.clipHierarchy.effectiveRects;
-    addDecorations(extra);
+    std::uint64_t paint = 1000;
+    addFrame(extra, paint);
+    addContent(extra, paint);
     scene.renderItems.insert(scene.renderItems.end(), extra.begin(), extra.end());
     return extractor_.Build(in.frameId, scene.renderItems, nullptr, clips);
   }
@@ -179,6 +194,7 @@ class View {
   [[nodiscard]] SU::Rect frameRect() const { return frame_; }
   [[nodiscard]] SU::Vec2 windowPos() const { return windowPos_; }
   [[nodiscard]] bool dragging() const { return dragging_; }
+  [[nodiscard]] bool minimized() const { return minimized_; }
   [[nodiscard]] const SW::WindowFrameMetrics& frameMetrics() const { return metrics_; }
   [[nodiscard]] SU::UIHandle rowHandle(std::size_t i) const { return rows_h_[i]; }
   [[nodiscard]] SU::UIHandle assetRemoveHandle(std::size_t i) const { return assetRemove_[i]; }
@@ -191,6 +207,8 @@ class View {
   [[nodiscard]] SU::UIHandle assignHandle() const { return assign_; }
   [[nodiscard]] SU::UIHandle nameHandle() const { return nameField_; }
   [[nodiscard]] SU::UIHandle confirmHandle() const { return confirm_; }
+  [[nodiscard]] SU::UIHandle cancelHandle() const { return cancel_; }
+  [[nodiscard]] SU::Rect helpRect() const { return helpRectNow(); }
   [[nodiscard]] SU::Rect rectOf(SU::UIHandle handle) const { return nodeRect(handle); }
 
  private:
@@ -201,7 +219,20 @@ class View {
            p.y < r.position.y + r.size.y;
   }
 
-  // Moldura: X fecha (Action::Close); pressionar o grip inicia o arraste da janela. So o grip arrasta.
+  float frameHeightNow() const {
+    return minimized_ ? metrics_.headerHeight + 2.f * metrics_.borderWidth
+                      : Theme::kPanelHeight + metrics_.headerHeight + 2.f * metrics_.borderWidth;
+  }
+
+  // "?" logo depois do grip; o titulo comeca depois dele.
+  SU::Rect helpRectNow() const {
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
+    return SU::Rect{{grip.position.x + grip.size.x + Theme::kHelpGap, bar.position.y + (bar.size.y - Theme::kHelpSize) * 0.5f},
+                    {Theme::kHelpSize, Theme::kHelpSize}};
+  }
+
+  // Moldura: X fecha; minimizar recolhe ao cabecalho; "?" pede a Help; so o grip arrasta a janela.
   void handleFrameInput(const FrameInput& in, std::vector<Action>& actions) {
     const SU::Vec2 p{in.pointerX, in.pointerY};
     if (dragging_) {
@@ -213,8 +244,17 @@ class View {
       return;
     }
     if (!in.pointerPressed) return;
-    if (SW::WindowFramePartAt(frame_, metrics_, false, p) == SW::WindowFramePart::Close) {
+    const SW::WindowFramePart part = SW::WindowFramePartAt(frame_, metrics_, false, p);
+    if (part == SW::WindowFramePart::Close) {
       actions.push_back(Action::Close);
+      return;
+    }
+    if (part == SW::WindowFramePart::Minimize) {
+      minimized_ = !minimized_;
+      return;
+    }
+    if (inside(helpRectNow(), p)) {
+      actions.push_back(Action::Help);
       return;
     }
     const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
@@ -259,9 +299,10 @@ class View {
     delete_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
     assign_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
 
-    nameField_ = tree_.Create(panelHandle_, fieldStyle());
+    nameField_ = tree_.Create(panelHandle_, labelStyle(Theme::kFieldHeight));
     const auto confirmRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
-    confirm_ = tree_.Create(confirmRow, buttonStyle(2.f * Theme::kButtonWidth));
+    confirm_ = tree_.Create(confirmRow, buttonStyle(Theme::kButtonWidth));
+    cancel_ = tree_.Create(confirmRow, buttonStyle(Theme::kButtonWidth));
 
     assetsLabel_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
     for (std::size_t i = 0; i < Theme::kMaxAssets; ++i) {
@@ -287,7 +328,6 @@ class View {
     s.shrink = 0.f;
     return s;
   }
-  static SU::FlexItem fieldStyle() { return labelStyle(Theme::kFieldHeight); }
   static SU::FlexItem buttonStyle(float width) {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Fixed, width};
@@ -362,6 +402,7 @@ class View {
   void applyVisuals() {
     enabled_.clear();
     const SM::Actions acts = SM::ActionsFor(model_.selected, model_.current);
+    const bool confirming = model_.mode != NameMode::None;
     for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
       const bool has = i < rows_.size();
       SU::ElementVisual v;
@@ -372,13 +413,14 @@ class View {
       bridge_.SetVisual(rows_h_[i], v);
     }
     paintButton(save_, true, colors_.button);
-    paintButton(new_, true, colors_.button);
+    paintButton(new_, !confirming, colors_.button);
     paintButton(reload_, true, colors_.button);
-    paintButton(open_, acts.open, colors_.button);
-    paintButton(rename_, acts.rename, colors_.button);
-    paintButton(delete_, acts.remove, colors_.buttonDanger);
-    paintButton(assign_, true, colors_.button);
-    paintButton(confirm_, model_.mode != NameMode::None, colors_.button);
+    paintButton(open_, acts.open && !confirming, colors_.button);
+    paintButton(rename_, acts.rename && !confirming, colors_.button);
+    paintButton(delete_, acts.remove && !confirming, colors_.buttonDanger);
+    paintButton(assign_, !confirming, colors_.button);
+    paintButton(confirm_, confirming, model_.mode == NameMode::Delete ? colors_.buttonDanger : colors_.button);
+    paintButton(cancel_, confirming, colors_.button);
 
     SU::ElementVisual field;
     field.tintPremultipliedLinear = model_.nameFocus ? colors_.fieldFocus : colors_.field;
@@ -399,7 +441,7 @@ class View {
 
   void handleClick(const SU::Input::UIEvent& event, std::vector<Action>& actions) {
     if (event.target == nameField_) {   // so foca quando ha criar ou renomear em curso
-      model_.nameFocus = model_.mode != NameMode::None;
+      model_.nameFocus = model_.mode == NameMode::New || model_.mode == NameMode::Rename;
       return;
     }
     model_.nameFocus = false;   // qualquer outro clique tira o foco do campo
@@ -418,14 +460,27 @@ class View {
       return;
     }
     if (event.target == assign_) {
-      actions.push_back(Action::Assign);
+      if (model_.assignCandidate.empty()) {
+        model_.status = "Select a model or sound in Assets to assign it here.";
+      } else {
+        actions.push_back(Action::Assign);
+      }
       return;
     }
     if (event.target == new_) {
       SM::BeginName(model_, NameMode::New);
       return;
     }
+    if (event.target == cancel_) {
+      SM::FinishName(model_);
+      return;
+    }
+    if (event.target == confirm_) {
+      confirm(actions);
+      return;
+    }
 
+    if (model_.mode != NameMode::None) return;   // com uma confirmacao em curso, so Confirmar e Cancelar agem
     const SM::Actions acts = SM::ActionsFor(model_.selected, model_.current);
     if (event.target == open_ && acts.open) {
       actions.push_back(Action::Open);
@@ -435,12 +490,8 @@ class View {
       SM::BeginName(model_, NameMode::Rename);
       return;
     }
-    if (event.target == delete_ && acts.remove) {
-      actions.push_back(Action::Delete);
-      return;
-    }
-    if (event.target == confirm_) {
-      confirm(actions);
+    if (event.target == delete_ && acts.remove) {   // apagar pede confirmacao antes
+      SM::BeginDelete(model_);
       return;
     }
 
@@ -454,9 +505,14 @@ class View {
     }
   }
 
-  // Confirmar criar ou renomear: vale so se o nome passa nas regras. Renomear ignora o proprio nome da selecao.
+  // Confirmar: apagar vai direto ao host; criar ou renomear so se o nome passa nas regras (renomear ignora o
+  // proprio nome da selecao).
   void confirm(std::vector<Action>& actions) {
     if (model_.mode == NameMode::None) return;
+    if (model_.mode == NameMode::Delete) {
+      actions.push_back(Action::Delete);
+      return;
+    }
     std::vector<std::string> taken;
     for (const std::string& s : model_.scenes) {
       if (model_.mode == NameMode::Rename && s == model_.selected) continue;
@@ -476,10 +532,8 @@ class View {
     return el ? el->node.rect : SU::Rect{};
   }
 
-  // Desenho que a SpriteUI nao cria sozinha: texto, selecao, caret, rotulos e botoes. Usa o no como dono.
-  void addDecorations(std::vector<SR::UIRenderItem>& out) {
-    std::uint64_t paint = 1000;
-    const std::uint32_t clipNow = SR::NoClipIndex;
+  // Moldura da SpriteUI (corpo, aba, minimizar e X), grip, "?" e titulo. Por tras dos elementos (zOrder -2).
+  void addFrame(std::vector<SR::UIRenderItem>& out, std::uint64_t& paint) {
     auto solid = [&](SU::UIHandle owner, SU::Rect r, SU::Vec4 color, float z) {
       SR::UIRenderItem item;
       item.handle = owner;
@@ -487,7 +541,7 @@ class View {
       item.layout.resolvedSize = r.size;
       item.tintPremultipliedLinear = color;
       item.textureSlice = SR::WhiteTextureSlice;
-      item.clipIndex = clipNow;
+      item.clipIndex = SR::NoClipIndex;
       item.zOrder = z;
       item.paintOrder = paint++;
       out.push_back(item);
@@ -497,7 +551,66 @@ class View {
       SU::UILayoutRect box;
       box.resolvedPosition = origin;
       box.resolvedSize = {shaped.layout.size.x, shaped.layout.size.y};
-      auto items = ST::GenerateTextRenderItems(shaped.layout, box, color, atlasSlice_, clipNow, z, paint, owner, 0u);
+      auto items = ST::GenerateTextRenderItems(shaped.layout, box, color, atlasSlice_, SR::NoClipIndex, z, paint, owner, 0u);
+      paint += items.size() + 1;
+      out.insert(out.end(), items.begin(), items.end());
+    };
+
+    SW::WindowFrameState state;
+    state.active = true;
+    state.dragging = dragging_;
+    state.docked = false;
+    auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_, metrics_, state, frameColors_, -2.f, paint);
+    paint += frameItems.size() + 1;
+    out.insert(out.end(), frameItems.begin(), frameItems.end());
+
+    // Grip (pontos).
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
+    const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
+    for (int c = 0; c < 2; ++c) {
+      for (int r = 0; r < 3; ++r) {
+        solid(panelHandle_, {{cx - 3.f + 4.f * static_cast<float>(c), cy - 4.f + 4.f * static_cast<float>(r)}, {2.f, 2.f}},
+              colors_.textDim, 0.95f);
+      }
+    }
+
+    // "?": circulo com a interrogacao, depois do grip.
+    const SU::Rect help = helpRectNow();
+    const auto circle = editor::window_help_icon::BuildCircleItems(panelHandle_, help, colors_.help, -1.9f, paint);
+    out.insert(out.end(), circle.begin(), circle.end());
+    const Shaped q = shape("?", Theme::kLabelSize);
+    text(panelHandle_, q, {help.position.x + (help.size.x - q.layout.size.x) * 0.5f,
+                           help.position.y + (help.size.y - q.layout.lineHeight) * 0.5f}, colors_.text, 0.95f);
+
+    // Titulo em negrito (duas passadas de 0,7 px, como o Profiler). Comeca depois do "?".
+    const Shaped title = shape(T("Scenes"), Theme::kTitleSize);
+    const float tx = help.position.x + help.size.x + Theme::kHelpGap;
+    const float ty = bar.position.y + (bar.size.y - title.layout.lineHeight) * 0.5f;
+    text(panelHandle_, title, {tx, ty}, colors_.text, 0.95f);
+    text(panelHandle_, title, {tx + 0.7f, ty}, colors_.text, 0.95f);
+  }
+
+  // Conteudo: textos, botoes, campo de nome e assets. Usa o no de cada elemento como dono.
+  void addContent(std::vector<SR::UIRenderItem>& out, std::uint64_t& paint) {
+    auto solid = [&](SU::UIHandle owner, SU::Rect r, SU::Vec4 color, float z) {
+      SR::UIRenderItem item;
+      item.handle = owner;
+      item.layout.resolvedPosition = r.position;
+      item.layout.resolvedSize = r.size;
+      item.tintPremultipliedLinear = color;
+      item.textureSlice = SR::WhiteTextureSlice;
+      item.clipIndex = SR::NoClipIndex;
+      item.zOrder = z;
+      item.paintOrder = paint++;
+      out.push_back(item);
+    };
+    auto text = [&](SU::UIHandle owner, const Shaped& shaped, SU::Vec2 origin, SU::Vec4 color, float z) {
+      if (shaped.utf8.empty()) return;
+      SU::UILayoutRect box;
+      box.resolvedPosition = origin;
+      box.resolvedSize = {shaped.layout.size.x, shaped.layout.size.y};
+      auto items = ST::GenerateTextRenderItems(shaped.layout, box, color, atlasSlice_, SR::NoClipIndex, z, paint, owner, 0u);
       paint += items.size() + 1;
       out.insert(out.end(), items.begin(), items.end());
     };
@@ -515,35 +628,8 @@ class View {
       text(h, s, {r.position.x + Theme::kFieldInset, r.position.y + (r.size.y - s.layout.lineHeight) * 0.5f}, color, 0.9f);
     };
 
-    // Moldura da SpriteUI (corpo, aba e X), com o visual do editor. Por tras dos elementos (zOrder -2).
-    SW::WindowFrameState state;
-    state.active = true;
-    state.dragging = dragging_;
-    state.docked = false;
-    auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_, metrics_, state, frameColors_, -2.f, paint);
-    paint += frameItems.size() + 1;
-    out.insert(out.end(), frameItems.begin(), frameItems.end());
-
-    // Titulo e grip: a moldura nao desenha texto nem icone; o chamador escreve no retangulo do titulo.
-    const SU::Rect titleRect = SW::WindowFrameTitleRect(frame_, metrics_, false);
-    const Shaped title = shape(T("Scenes"), Theme::kTitleSize);
-    text(panelHandle_, title,
-         {titleRect.position.x + Theme::kGripWidth, titleRect.position.y + (titleRect.size.y - title.layout.lineHeight) * 0.5f},
-         colors_.text, 0.95f);
-    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
-    const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
-    const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
-    for (int c = 0; c < 2; ++c) {
-      for (int r = 0; r < 3; ++r) {
-        solid(panelHandle_, {{cx - 3.f + 4.f * static_cast<float>(c), cy - 4.f + 4.f * static_cast<float>(r)}, {2.f, 2.f}},
-              colors_.textDim, 0.95f);
-      }
-    }
-
-    // Cena atual.
     line(label_, T("Current scene: ") + (model_.current.empty() ? T("(none)") : model_.current), colors_.textDim);
 
-    // Botoes de cima, de acoes e de confirmar.
     button(save_, T("Save scene"));
     button(new_, T("New scene..."));
     button(reload_, T("Reload list"));
@@ -553,35 +639,51 @@ class View {
     button(assign_, T("Assign asset"));
     button(confirm_, model_.mode == NameMode::New      ? T("Create scene")
                      : model_.mode == NameMode::Rename ? T("Rename scene")
+                     : model_.mode == NameMode::Delete ? T("Delete scene")
                                                        : T("Confirm"));
+    button(cancel_, T("Cancel"));
 
-    // Lista de cenas: nome e "(open)" na cena atual.
+    // Lista de cenas: nome e "(open)" na cena atual; a selecionada fica destacada.
     for (std::size_t i = 0; i < rows_.size(); ++i) {
       line(rows_h_[i], rows_[i].current ? rows_[i].name + T(" (open)") : rows_[i].name, colors_.text, Theme::kLabelSize + 1.f);
     }
 
-    // Campo de nome: placeholder quando vazio, caret quando focado.
+    // Campo de nome: placeholder quando vazio, caret quando focado. Em apagar, mostra a pergunta (sem edicao).
     const SU::Rect fr = nodeRect(nameField_);
-    const bool placeholder = model_.name.empty();
-    const std::string shown = placeholder ? (model_.mode == NameMode::None ? T("Click New scene... or Rename...") : T("Scene name"))
-                                          : model_.name;
-    const Shaped fs = shape(shown, Theme::kFontSize);
-    const SU::Vec2 origin{fr.position.x + Theme::kFieldInset, fr.position.y + (fr.size.y - fs.layout.lineHeight) * 0.5f};
-    if (model_.nameFocus) {
-      const std::uint32_t offset = placeholder ? 0u : static_cast<std::uint32_t>(model_.name.size());
-      const SU::Rect caret = ST::GetCaretRect(fs.layout, offset);
-      solid(nameField_, {{origin.x + caret.position.x, origin.y}, {1.5f, fs.layout.lineHeight}}, colors_.caret, 0.6f);
+    if (model_.mode == NameMode::Delete) {
+      const Shaped q = shape(T("Delete '") + model_.selected + T("'? This cannot be undone."), Theme::kFontSize);
+      text(nameField_, q, {fr.position.x + Theme::kFieldInset, fr.position.y + (fr.size.y - q.layout.lineHeight) * 0.5f},
+           colors_.warning, 0.9f);
+    } else {
+      const bool placeholder = model_.name.empty();
+      const std::string shown = placeholder ? (model_.mode == NameMode::None ? T("Click New scene... or Rename...") : T("Scene name"))
+                                            : model_.name;
+      const Shaped fs = shape(shown, Theme::kFontSize);
+      const SU::Vec2 origin{fr.position.x + Theme::kFieldInset, fr.position.y + (fr.size.y - fs.layout.lineHeight) * 0.5f};
+      if (model_.nameFocus) {
+        const std::uint32_t offset = placeholder ? 0u : static_cast<std::uint32_t>(model_.name.size());
+        const SU::Rect caret = ST::GetCaretRect(fs.layout, offset);
+        solid(nameField_, {{origin.x + caret.position.x, origin.y}, {1.5f, fs.layout.lineHeight}}, colors_.caret, 0.6f);
+      }
+      text(nameField_, fs, origin, placeholder ? colors_.textDim : colors_.text, 0.9f);
     }
-    text(nameField_, fs, origin, placeholder ? colors_.textDim : colors_.text, 0.9f);
 
-    // Rotulo de assets, nome de cada asset e o "x" para tirar.
+    // Assets: nome, "(missing)" se o arquivo nao existe, e o "x" para tirar.
     line(assetsLabel_, T("Assets in this scene") + (model_.assets.empty() ? T(" (none)") : std::string{}), colors_.textDim);
     for (std::size_t i = 0; i < model_.assets.size(); ++i) {
-      line(assetName_[i], model_.assets[i], colors_.text);
+      const SU::Rect r = nodeRect(assetName_[i]);
+      const Shaped name = shape(model_.assets[i], Theme::kLabelSize);
+      text(assetName_[i], name, {r.position.x + Theme::kFieldInset, r.position.y + (r.size.y - name.layout.lineHeight) * 0.5f},
+           colors_.text, 0.9f);
+      if (i < model_.assetMissing.size() && model_.assetMissing[i]) {
+        const Shaped miss = shape(T("(missing)"), Theme::kLabelSize);
+        text(assetName_[i], miss,
+             {r.position.x + Theme::kFieldInset + name.layout.size.x + 10.f, r.position.y + (r.size.y - miss.layout.lineHeight) * 0.5f},
+             colors_.warning, 0.9f);
+      }
       button(assetRemove_[i], "x");
     }
 
-    // Problema ou status (amarelo: pedido de correcao).
     if (!model_.status.empty()) line(status_, model_.status, colors_.warning);
   }
 
@@ -597,7 +699,7 @@ class View {
   SR::RenderExtractor extractor_;
 
   SU::UIHandle panelHandle_{}, label_{}, save_{}, new_{}, reload_{}, open_{}, rename_{}, delete_{}, assign_{};
-  SU::UIHandle nameField_{}, confirm_{}, assetsLabel_{}, status_{};
+  SU::UIHandle nameField_{}, confirm_{}, cancel_{}, assetsLabel_{}, status_{};
   SU::UIHandle rows_h_[Theme::kMaxRows]{};
   SU::UIHandle assetRow_[Theme::kMaxAssets]{}, assetName_[Theme::kMaxAssets]{}, assetRemove_[Theme::kMaxAssets]{};
   SU::UIHandle hovered_{};
@@ -614,6 +716,7 @@ class View {
   SU::Vec2 grab_{};
   bool placed_ = false;
   bool dragging_ = false;
+  bool minimized_ = false;
 };
 
 }  // namespace editor::scenesui

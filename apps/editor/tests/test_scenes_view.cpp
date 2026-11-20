@@ -99,7 +99,15 @@ int main() {
   ClickOn(view, view.rowHandle(0), id);
   Check(m.selected == "Alpha", "clicar na lista seleciona a cena (ordem de nome)");
   Check(Contains(ClickOn(view, view.openHandle(), id), Action::Open), "Open em outra cena dispara Open");
-  Check(Contains(ClickOn(view, view.deleteHandle(), id), Action::Delete), "Delete em outra cena dispara Delete");
+  // Apagar pede confirmacao: o primeiro clique so abre a pergunta; Cancelar desfaz; Apagar confirma.
+  Check(!Contains(ClickOn(view, view.deleteHandle(), id), Action::Delete) && m.mode == SM::NameMode::Delete,
+        "Delete pede confirmacao antes de apagar");
+  Check(!Contains(ClickOn(view, view.openHandle(), id), Action::Open), "com confirmacao em curso, Open nao age");
+  Check(!Contains(ClickOn(view, view.cancelHandle(), id), Action::Delete) && m.mode == SM::NameMode::None,
+        "Cancelar desfaz o pedido de apagar");
+  ClickOn(view, view.deleteHandle(), id);
+  Check(Contains(ClickOn(view, view.confirmHandle(), id), Action::Delete), "Apagar confirmado dispara Delete");
+  SM::FinishName(m);
   ClickOn(view, view.renameHandle(), id);
   Check(m.mode == SM::NameMode::Rename && m.name == "Alpha", "Rename preenche o campo com o nome da selecao");
   SM::FinishName(m);
@@ -129,11 +137,25 @@ int main() {
   Check(!m.nameFocus, "clicar no campo sem criar ou renomear nao foca");
 
   // 6. Assets: Assign dispara Assign; o x do asset 0 dispara RemoveAsset com indice 0.
-  Check(Contains(ClickOn(view, view.assignHandle(), id), Action::Assign), "Assign asset dispara Assign");
+  Check(!Contains(ClickOn(view, view.assignHandle(), id), Action::Assign) && !m.status.empty(),
+        "Assign sem asset selecionado na janela Assets avisa e nao age");
+  m.assignCandidate = "Assets/Models/b.obj";
+  Check(Contains(ClickOn(view, view.assignHandle(), id), Action::Assign), "Assign com asset selecionado dispara Assign");
+  m.assignCandidate.clear();
   const auto remove = ClickOn(view, view.assetRemoveHandle(0), id);
   Check(Contains(remove, Action::RemoveAsset) && view.removedIndex() == 0, "x do asset dispara RemoveAsset (indice 0)");
 
-  // 7. X fecha (Close) e o grip arrasta a janela; o mesmo arraste no conteudo nao arrasta.
+  // 7. "?" pede a Help da janela Scenes; minimizar recolhe ao cabecalho e volta ao clicar de novo.
+  const SU::Rect help = view.helpRect();
+  Check(Contains(Click(view, help.position.x + 0.5f * help.size.x, help.position.y + 0.5f * help.size.y, id), Action::Help),
+        "o ? dispara Help");
+  const SU::Rect minBtn = SW::WindowFrameButtonRect(view.frameRect(), view.frameMetrics(), false, SW::WindowFrameButton::Minimize);
+  Click(view, minBtn.position.x + 0.5f * minBtn.size.x, minBtn.position.y + 0.5f * minBtn.size.y, id);
+  Check(view.minimized() && view.frameRect().size.y < 60.f, "minimizar recolhe a janela ao cabecalho");
+  Click(view, minBtn.position.x + 0.5f * minBtn.size.x, minBtn.position.y + 0.5f * minBtn.size.y, id);
+  Check(!view.minimized() && view.frameRect().size.y > 400.f, "minimizar de novo restaura a janela");
+
+  // 8. X fecha (Close) e o grip arrasta a janela; o mesmo arraste no conteudo nao arrasta.
   const SU::Rect frame = view.frameRect();
   const SU::Rect bar = SW::WindowFrameHeader(frame, view.frameMetrics(), false);
   const SU::Vec2 closePoint{frame.position.x + frame.size.x - 12.f, bar.position.y + bar.size.y * 0.5f};
@@ -147,7 +169,7 @@ int main() {
   Run(view, start.x + 40.f, start.y + 20.f, false, false, true, ++id);
   Check(view.windowPos().x != before.x || view.windowPos().y != before.y, "o grip arrasta a janela");
 
-  // 8. Clique fora de qualquer elemento (canto da janela, sem botao) nao gera acao.
+  // 9. Clique fora de qualquer elemento (canto da janela, sem botao) nao gera acao.
   const auto outside = Click(view, 2.f, 2.f, id);
   Check(outside.empty(), "clique fora nao gera acao");
 

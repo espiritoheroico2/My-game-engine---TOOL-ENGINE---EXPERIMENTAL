@@ -62,6 +62,14 @@ int main() {
   SM::PopUtf8(m.name);
   Check(m.name == "a", "apagar tira o caractere UTF-8 inteiro");
 
+  // 6. Apagar pede confirmacao (modo Delete, sem campo editavel); fechar limpa o modo.
+  SM::Model d;
+  d.selected = "Alpha";
+  SM::BeginDelete(d);
+  Check(d.mode == SM::NameMode::Delete && !d.nameFocus, "apagar pede confirmacao sem campo editavel");
+  SM::FinishName(d);
+  Check(d.mode == SM::NameMode::None, "cancelar a confirmacao volta ao normal");
+
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;
 }

@@ -127,7 +127,7 @@ Em `apps/editor/main.cpp` há 47 `ImGui::Begin`. As janelas a migrar, na ordem:
 | Scene | ImGui | Já tem `scene_view_panel.hpp` |
 | Game | ImGui | Já tem `game_view_panel.hpp` |
 | Assets / Projeto | ImGui | |
-| Scenes | SpriteUI: modelo e view com testes (`Editor.ScenesModel`, `Editor.ScenesView`). Host ainda não ligado ao menu; print e teste visual pendentes | `scenes_model.hpp`, `scenes_spriteui.hpp` |
+| Scenes | SpriteUI com moldura nova (grip, "?", título em negrito, minimizar, X), ligada ao menu em `main.cpp` (`gScenesSpriteOn`; o ImGui `drawScenes` só roda sem o painel). Testes `Editor.ScenesModel` e `Editor.ScenesView`. Print headless ok (2026-11-19). Draw calls: 59 `SDL_RenderGeometry` por quadro no editor inteiro (não isolado da Scenes). **Etapa 6 (sua aprovação) pendente**; `drawScenes` fica como legado até lá | `scenes_model.hpp`, `scenes_spriteui.hpp`, `scenes_panel.hpp` |
 | Export game | ImGui (`export_ui.hpp`) | |
 | Input map | ImGui | |
 | Script | ImGui | |

@@ -19,6 +19,7 @@ namespace SU = ToolEngine::SpriteUi;
 // Identificadores fixos dos paineis que participam do roteamento.
 inline constexpr SU::UIHandle kMenuBarHandle{0xE0000001u, 1u};
 inline constexpr SU::UIHandle kSettingsHandle{0xE0000002u, 1u};
+inline constexpr SU::UIHandle kScenesHandle{0xE0000003u, 1u};
 
 struct Area {
   float x = 0.f, y = 0.f, w = 0.f, h = 0.f;

@@ -77,13 +77,15 @@ inline bool RemoveAt(std::vector<std::string>& assets, std::size_t index) {
 }
 
 // Estado da janela: listas, cena selecionada, e o campo de nome (criar ou renomear).
-enum class NameMode : std::uint8_t { None, New, Rename };
+enum class NameMode : std::uint8_t { None, New, Rename, Delete };
 
 struct Model {
   std::vector<std::string> scenes;
   std::string current;
   std::string selected;
   std::vector<std::string> assets;
+  std::vector<bool> assetMissing;   // um por asset: o arquivo nao existe no projeto (o host preenche)
+  std::string assignCandidate;      // asset selecionado na janela Assets, se for modelo ou som (o host preenche)
   NameMode mode = NameMode::None;
   std::string name;
   bool nameFocus = false;
@@ -98,7 +100,15 @@ inline void BeginName(Model& m, NameMode mode) {
   m.status.clear();
 }
 
-// Fecha o campo de nome (depois de criar, renomear ou cancelar).
+// Pede confirmacao para apagar a cena selecionada (sem campo de texto: so Apagar ou Cancelar).
+inline void BeginDelete(Model& m) {
+  m.mode = NameMode::Delete;
+  m.name.clear();
+  m.nameFocus = false;
+  m.status.clear();
+}
+
+// Fecha o campo de nome ou a confirmacao de apagar (depois de criar, renomear, apagar ou cancelar).
 inline void FinishName(Model& m) {
   m.mode = NameMode::None;
   m.name.clear();
