@@ -166,4 +166,118 @@ inline int Columns(float availWidth, float tile, float pad) {
   return std::max(1, static_cast<int>(availWidth / (tile + pad)));
 }
 
+// ---------- Estado da janela SpriteUI ----------
+// O host (assets_sprite_panel.hpp) preenche items e le selected/folder; a view (assets_spriteui.hpp) so muda o que
+// o usuario pede (pasta, filtro, selecao, modo de nome, texto) e reporta acoes.
+struct State {
+  enum class Mode : std::uint8_t { None, NewFolder, NewFile, Rename, Delete };
+  std::string folder = std::string(kRoot);   // pasta atual, relativa ao projeto
+  std::vector<Item> items;                    // conteudo da pasta atual (o host ordena com Sort)
+  std::string filter;
+  bool iconView = true;
+  int scroll = 0;                             // primeira linha visivel (lista ou grade de icones; no texto, a linha)
+  std::string selected;                       // rel do item selecionado
+  Mode mode = Mode::None;                     // confirmacao em curso (criar, renomear, apagar)
+  std::string name;                           // campo de nome (criar e renomear)
+  bool nameFocus = false;
+  bool filterFocus = false;
+  std::string status;
+  bool textOpen = false;                      // editor de texto no lugar da lista
+  std::string textPath;                       // rel do arquivo em edicao
+  std::string text;                           // conteudo em edicao (digitacao so no fim)
+};
+
+inline constexpr int kListRows = 14;   // linhas visiveis na lista (1 item por linha)
+inline constexpr int kIconRows = 4;    // linhas visiveis na grade de icones
+inline constexpr int kIconCols = 6;    // icones por linha
+
+inline int Cols(bool icon) { return icon ? kIconCols : 1; }
+inline int VisibleRows(bool icon) { return icon ? kIconRows : kListRows; }
+
+// Indices (em State::items) dos itens que passam no filtro, na ordem da lista.
+inline std::vector<std::size_t> Visible(const State& s) {
+  std::vector<std::size_t> out;
+  for (std::size_t i = 0; i < s.items.size(); ++i) {
+    if (Matches(s.items[i].name, s.filter)) out.push_back(i);
+  }
+  return out;
+}
+
+// Quantas linhas podem sair da rolagem: total de linhas menos as visiveis.
+inline int MaxScroll(std::size_t count, bool icon) {
+  const std::size_t cols = static_cast<std::size_t>(Cols(icon));
+  const int rows = static_cast<int>((count + cols - 1) / cols);
+  return std::max(0, rows - VisibleRows(icon));
+}
+
+inline bool NeedsName(State::Mode m) {
+  return m == State::Mode::NewFolder || m == State::Mode::NewFile || m == State::Mode::Rename;
+}
+
+// Comeca uma confirmacao. Criar e renomear abrem o campo de nome; apagar so pede confirmacao.
+inline void Begin(State& s, State::Mode m, std::string name = {}) {
+  s.mode = m;
+  s.name = std::move(name);
+  s.nameFocus = NeedsName(m);
+  s.filterFocus = false;
+  s.status.clear();
+}
+
+inline void Finish(State& s) {
+  s.mode = State::Mode::None;
+  s.name.clear();
+  s.nameFocus = false;
+  s.status.clear();
+}
+
+// Nome de arquivo depois de "/" (o que o campo de renomear mostra).
+inline std::string BaseName(std::string_view rel) {
+  const std::size_t slash = rel.rfind('/');
+  return std::string(slash == std::string_view::npos ? rel : rel.substr(slash + 1));
+}
+
+// Motivo para recusar o nome (vazio = aceito). Renomear ignora o proprio item.
+inline std::string NameProblemFor(const State& s, const std::string& name) {
+  if (!NameValid(name)) return "Invalid name (no / \\ : * ? \" < > |).";
+  for (const Item& it : s.items) {
+    if (s.mode == State::Mode::Rename && it.rel == s.selected) continue;
+    if (it.name == name) return "A file with that name already exists.";
+  }
+  return "";
+}
+
+// Digitacao: campo de filtro, campo de nome ou o texto aberto (no fim). O filtro volta a lista ao topo.
+inline void Type(State& s, const std::string& utf8) {
+  if (s.textOpen) {
+    s.text += utf8;
+  } else if (s.filterFocus) {
+    s.filter += utf8;
+    s.scroll = 0;
+  } else if (s.nameFocus && NeedsName(s.mode)) {
+    s.name += utf8;
+  }
+}
+
+inline void PopUtf8Back(std::string& s) {
+  if (s.empty()) return;
+  while (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xC0) == 0x80) s.pop_back();
+  if (!s.empty()) s.pop_back();
+}
+
+inline void Backspace(State& s) {
+  if (s.textOpen) {
+    PopUtf8Back(s.text);
+  } else if (s.filterFocus) {
+    PopUtf8Back(s.filter);
+    s.scroll = 0;
+  } else if (s.nameFocus && NeedsName(s.mode)) {
+    PopUtf8Back(s.name);
+  }
+}
+
+// Linhas do texto aberto (separadas por \n; uma linha vazia no fim conta).
+inline int TextLines(const std::string& text) {
+  return 1 + static_cast<int>(std::count(text.begin(), text.end(), '\n'));
+}
+
 }  // namespace editor::assets_model

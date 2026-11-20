@@ -39,6 +39,7 @@
 #include "hierarchy_panel.hpp"
 #include "inspector_panel.hpp"
 #include "scenes_panel.hpp"
+#include "assets_sprite_panel.hpp"
 #include "settings_changes.hpp"
 #include "settings_panel.hpp"
 #include "sui_palette.hpp"
@@ -592,6 +593,225 @@ void applyScenesActions(Editor& ed, editor::scenesui::Panel& panel, const std::v
       case A::Close:
         ed.showScenes = false;
         SM::FinishName(m);
+        break;
+      default: break;
+    }
+  }
+}
+
+// --- janela Assets (SpriteUI) -------------------------------------------------------------------------------------
+// Lista a pasta atual (so quando muda a pasta, a revisao dos assets ou a cada 2 s) e passa a selecao e a pasta para
+// as outras partes do editor: a janela Scenes oferece Assign para o item selecionado; as importacoes usam a pasta.
+void syncAssetsPanel(Editor& ed, editor::assetsui::Panel& panel) {
+  namespace AM = editor::assets_model;
+  AM::State& s = panel.model();
+  static std::string listedFolder;
+  static unsigned listedRev = ~0u;
+  static double listedAt = -1e9;
+  static std::filesystem::path kitRoot;
+  ed.project.ensure();
+  // Arquivos de apoio do VS Code: uma vez por raiz de projeto (mesmo passo do ImGui).
+  if (kitRoot != ed.project.root) {
+    kitRoot = ed.project.root;
+    ed_::ensureScriptKit(kitRoot);
+    ed_::writeVsCodeSnippets(kitRoot);
+  }
+  std::error_code ec;
+  if (!std::filesystem::exists(ed.project.root / s.folder, ec)) s.folder = std::string(AM::kRoot);
+  const double now = static_cast<double>(SDL_GetTicks()) / 1000.0;
+  const bool stale = listedFolder != s.folder || listedRev != ed_::assetsRevision() || now - listedAt >= 2.0;
+  if (stale) {
+    listedFolder = s.folder;
+    listedRev = ed_::assetsRevision();
+    listedAt = now;
+    s.items.clear();
+    for (const auto& de : std::filesystem::directory_iterator(ed.project.root / s.folder,
+                                                              std::filesystem::directory_options::skip_permission_denied, ec)) {
+      AM::Item it;
+      const std::filesystem::path path = de.path();
+      std::error_code de_ec;
+      it.dir = de.is_directory(de_ec);
+      it.name = path.filename().string();
+      it.rel = ed.project.relative(path);
+      it.kind = ed_::kindOf(path, it.dir);
+      if (!it.dir) {
+        std::error_code se;
+        it.size = std::filesystem::file_size(path, se);
+        if (se) it.size = 0;
+      }
+      s.items.push_back(std::move(it));
+    }
+    AM::Sort(s.items);
+  }
+  ed_::ui().folder = s.folder;        // importacoes (processImports) usam a pasta desta janela
+  ed_::ui().selected = s.selected;    // a janela Scenes oferece Assign para o item selecionado
+}
+
+// Item da pasta atual pelo caminho relativo (nullptr se nao existe).
+const editor::assets_model::Item* assetItemOf(const editor::assets_model::State& s, const std::string& rel) {
+  for (const auto& it : s.items) {
+    if (it.rel == rel) return &it;
+  }
+  return nullptr;
+}
+
+// Abre um texto no lugar da lista (so ate o limite de bytes do modelo).
+void openAssetText(Editor& ed, editor::assets_model::State& s, const editor::assets_model::Item& it) {
+  namespace AM = editor::assets_model;
+  if (!AM::TextEditable(it.size)) {
+    s.status = "File too large to edit here (60 KB limit)";
+    return;
+  }
+  std::string text;
+  if (!ed_::readTextFile(ed.project.resolve(it.rel), text, 60000)) {
+    s.status = "Could not read the file.";
+    return;
+  }
+  AM::Finish(s);
+  s.textOpen = true;
+  s.textPath = it.rel;
+  s.text = std::move(text);
+  s.status.clear();
+  s.scroll = 0;
+}
+
+// Duplo clique (e botao Open): o que o tipo do item oferece.
+void openAssetItem(Editor& ed, editor::assets_model::State& s, const editor::assets_model::Item& it) {
+  namespace AM = editor::assets_model;
+  switch (AM::DoubleClickAction(it.kind)) {
+    case AM::Open::EnterFolder:
+      s.folder = it.rel;
+      s.selected.clear();
+      s.scroll = 0;
+      break;
+    case AM::Open::Instantiate: ed_::instantiateAsset(ed, it.rel); break;
+    case AM::Open::OpenScene: ed.openScene(AM::SceneNameFrom(it.name)); break;
+    case AM::Open::EditText: openAssetText(ed, s, it); break;
+    default: break;
+  }
+}
+
+// Criar pasta, criar arquivo ou renomear, com o nome que ja passou nas regras da janela.
+void confirmAsset(Editor& ed, editor::assets_model::State& s) {
+  namespace AM = editor::assets_model;
+  const std::filesystem::path base = ed.project.root / s.folder;
+  std::error_code ec;
+  if (s.mode == AM::State::Mode::NewFolder) {
+    std::filesystem::create_directories(base / s.name, ec);
+    if (ec) {
+      s.status = ec.message();
+      return;
+    }
+    ed_::touchAssets();
+    s.selected = ed.project.relative(base / s.name);
+    AM::Finish(s);
+  } else if (s.mode == AM::State::Mode::NewFile) {
+    if (std::filesystem::exists(base / s.name, ec)) {
+      s.status = "A file with that name already exists.";
+      return;
+    }
+    if (!ed_::writeTextFile(base / s.name, "")) {
+      s.status = "Failed to create the file.";
+      return;
+    }
+    ed_::touchAssets();
+    s.selected = ed.project.relative(base / s.name);
+    AM::Finish(s);
+  } else if (s.mode == AM::State::Mode::Rename) {
+    const std::string old = s.selected;
+    const std::string err = ed_::renameAsset(ed, old, s.name);
+    if (!err.empty()) {
+      s.status = err;
+      return;
+    }
+    const std::string nr = ed.project.relative(ed.project.resolve(old).parent_path() / s.name);
+    s.folder = AM::FollowRename(s.folder, old, nr);
+    s.selected = nr;
+    AM::Finish(s);
+  }
+}
+
+// Apagar o item selecionado. Se a pasta atual estava dentro dele, a janela volta para Assets.
+void deleteSelectedAsset(Editor& ed, editor::assets_model::State& s) {
+  namespace AM = editor::assets_model;
+  const std::string rel = s.selected;
+  const std::string err = ed_::deleteAsset(ed, rel);
+  if (!err.empty()) {
+    s.status = err;
+    AM::Finish(s);
+    return;
+  }
+  s.selected = AM::AfterDelete(s.selected, rel);
+  s.folder = AM::AfterDelete(s.folder, rel);
+  if (s.folder.empty()) s.folder = std::string(AM::kRoot);
+  AM::Finish(s);
+}
+
+// Aplica as acoes que a janela Assets reportou neste quadro ao Editor e ao disco.
+void applyAssetsActions(Editor& ed, editor::assetsui::Panel& panel, const std::vector<editor::assetsui::View::Action>& acts) {
+  using A = editor::assetsui::View::Action;
+  namespace AM = editor::assets_model;
+  AM::State& s = panel.model();
+  auto& view = panel.view();
+  for (A a : acts) {
+    switch (a) {
+      case A::Up:
+        if (AM::CanGoUp(s.folder)) {
+          s.folder = AM::Parent(s.folder);
+          s.selected.clear();
+          s.scroll = 0;
+        }
+        break;
+      case A::Crumb:
+        s.folder = view.pickedCrumb();
+        s.selected.clear();
+        s.scroll = 0;
+        break;
+      case A::Import:
+        SDL_ShowOpenFileDialog([](void*, const char* const* files, int) { if (files) for (; *files; ++files) ed_::queueImport(*files); },
+                               nullptr, nullptr, nullptr, 0, nullptr, true);
+        break;
+      case A::Open:
+        if (const AM::Item* it = assetItemOf(s, s.selected)) openAssetItem(ed, s, *it);
+        break;
+      case A::Activate: {
+        const std::size_t i = view.activatedItem();
+        if (i < s.items.size()) openAssetItem(ed, s, s.items[i]);
+        break;
+      }
+      case A::Instantiate:
+        if (const AM::Item* it = assetItemOf(s, s.selected)) {
+          if (it->kind == ed_::AssetKind::Model || it->kind == ed_::AssetKind::Audio) ed_::instantiateAsset(ed, it->rel);
+        }
+        break;
+      case A::Assign:
+        if (const AM::Item* it = assetItemOf(s, s.selected)) {
+          if (it->kind == ed_::AssetKind::Model || it->kind == ed_::AssetKind::Audio) {
+            ed.assignAsset(it->rel);
+            s.status = "Assigned to scene: " + it->rel;
+          }
+        }
+        break;
+      case A::Confirm: confirmAsset(ed, s); break;
+      case A::Delete: deleteSelectedAsset(ed, s); break;
+      case A::SaveText: {
+        const bool ok = ed_::writeTextFile(ed.project.resolve(s.textPath), s.text);
+        s.status = ok ? "Saved." : "Failed to save.";
+        ed_::touchAssets();
+        ed.lib.clear();
+        break;
+      }
+      case A::CloseText:
+        s.textOpen = false;
+        s.text.clear();
+        s.textPath.clear();
+        s.status.clear();
+        break;
+      case A::Help: editor::openHelp("assets"); break;
+      case A::Close:
+        ed.showAssets = false;
+        s.textOpen = false;
+        AM::Finish(s);
         break;
       default: break;
     }
@@ -2913,6 +3133,8 @@ static int runEditorMain(int argc, char** argv) {
   std::unique_ptr<editor::scenesui::Panel> scenesPanel;
   if (uiReady) scenesPanel = std::make_unique<editor::scenesui::Panel>(uiText, uiRenderer);
   gScenesPanel = scenesPanel.get();
+  std::unique_ptr<editor::assetsui::Panel> assetsPanel;   // Assets em SpriteUI (sem a fonte, a versao ImGui)
+  if (uiReady) assetsPanel = std::make_unique<editor::assetsui::Panel>(uiText, uiRenderer);
 #ifdef TOOL_WITH_SPRITEUI
   std::unique_ptr<editor::scene_view_panel::ScenePanel> scenePanel;
   std::unique_ptr<editor::game_view_panel::GamePanel> gamePanel;
@@ -2949,6 +3171,11 @@ static int runEditorMain(int argc, char** argv) {
     if (settingsPanel && ed.showSettings && gSettingsFrame)
       gPanelRouter.add(pr::kSettingsHandle, {gSettingsRect.x, gSettingsRect.y, gSettingsRect.w, gSettingsRect.h},
                        ToolEngine::SpriteUi::UILayer::Docked);
+    if (assetsPanel && ed.showAssets) {   // Assets: idem; cobre o ponteiro por cima do ImGui
+      const auto ar = assetsPanel->rect();
+      gPanelRouter.add(pr::kAssetsHandle, {ar.position.x, ar.position.y, ar.size.x, ar.size.y},
+                       ToolEngine::SpriteUi::UILayer::Docked);
+    }
     if (scenesPanel && ed.showScenes) {   // Scenes: a janela SpriteUI cobre o ponteiro por cima do ImGui
       const auto sr = scenesPanel->rect();
       gPanelRouter.add(pr::kScenesHandle, {sr.position.x, sr.position.y, sr.size.x, sr.size.y},
@@ -2991,10 +3218,11 @@ static int runEditorMain(int argc, char** argv) {
       const bool setHandled = settingsPanel && settingsMayReceive && settingsPanel->handleEvent(e);
       const bool inspHandled = inspPanel && inspPanel->handleEvent(e);
       const bool scnHandled = scenesPanel && scenesPanel->handleEvent(e, ed.showScenes);
+      const bool asstHandled = assetsPanel && assetsPanel->handleEvent(e, ed.showAssets);
       forwardViewEvent(e);   // paineis Scene e Jogo: veem o evento, sem consumir
       // ImGui so recebe o ponteiro se nenhum painel SpriteUI registrado cobre o ponto: senao as janelas ImGui de tras reagiriam.
       const bool ownedBySui = pointerEvt && gPanelRouter.coveredBySui(ptrX, ptrY);
-      if (!spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !scnHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
+      if (!spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !scnHandled && !asstHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
 #else
       ImGui_ImplSDL3_ProcessEvent(&e);
 #endif
@@ -3073,7 +3301,7 @@ static int runEditorMain(int argc, char** argv) {
       if (ed.showEditMesh) drawFeatureStub(ed, T("Edit Mesh"), T("Edit the 3D model of an object: move vertices, faces and edges. In development."), &ed.showEditMesh);
       if (ed.showPaintMesh) drawFeatureStub(ed, T("Paint Mesh"), T("Paint colors and textures directly on the 3D model. In development."), &ed.showPaintMesh);
       if (focusTabs) ImGui::SetNextWindowFocus();
-      if (ed.showAssets) editor::drawAssets(ed);
+      if (ed.showAssets && !assetsPanel) editor::drawAssets(ed);
       if (ed.showSettings) drawSettings(ed);
       if (ed.showNarrative) ed.narrative.draw(&ed.showNarrative);
       if (ed.showInputMap) editor::drawInputMap(ed, &ed.showInputMap);
@@ -3152,6 +3380,19 @@ static int runEditorMain(int argc, char** argv) {
         inspPanel.reset();
         gInspectorPanel = nullptr;
         gInspectorSpriteOn = false;
+      }
+    }
+    if (assetsPanel && ed.showAssets) {   // Assets: janela SpriteUI flutuante (lista, grade, acoes e texto)
+      syncAssetsPanel(ed, *assetsPanel);
+      std::vector<editor::assetsui::View::Action> assetsActs;
+      int winW = 0, winH = 0;
+      SDL_GetWindowSize(window, &winW, &winH);
+      if (!assetsPanel->draw(renderer, static_cast<float>(winW), static_cast<float>(winH), assetsActs)) {
+        tool::logError(std::string("Assets SpriteUI render failed: ") + SDL_GetError());
+        assetsPanel.reset();
+        ed.showAssets = false;
+      } else {
+        applyAssetsActions(ed, *assetsPanel, assetsActs);
       }
     }
     if (scenesPanel && ed.showScenes) {   // Scenes: janela SpriteUI flutuante; o ImGui antigo fica so como legado
