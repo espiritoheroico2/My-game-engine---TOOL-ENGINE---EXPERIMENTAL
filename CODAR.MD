@@ -146,3 +146,12 @@ Para cada etapa, eu faço: modelo e teste automático primeiro, depois a janela 
 - As pendências T11, T12 e T13 agora estão no `docs/ROADMAP.md` (Fases A, C e D) e no `docs/CHECKLIST.md`.
 - Não verifiquei se `HOW_TO_BUILD.txt` e `COMO_COMPILAR.txt` (citados em `docs/BUILD.md`) existem no repositório.
 - `docs/CHANGELOG.md` e o relatório de 2026-11-18 divergem na contagem de arquivos GLSL (23 e 26). Conferir antes de citar.
+
+---
+
+## 9. Partículas 2D/3D, gizmos e debug (para você ajudar em paralelo)
+
+O plano, a arquitetura proposta e os prompts prontos para cada peça estão em
+`docs/PARTICULAS_E_DEBUG_PROMPTS.md`. Resumo: partículas 2D espaciais na SpriteUI, partículas 3D com Light Prism,
+núcleo de simulação compartilhado, e classes `DebugDraw`, `Gizmos` e `Canvas2D` (estilo GameMaker/Turtle) para
+remover o ImGui dos gizmos e da grade. As decisões em aberto estão na seção 5 desse documento.
