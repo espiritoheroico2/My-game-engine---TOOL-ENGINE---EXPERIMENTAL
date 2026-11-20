@@ -87,6 +87,8 @@ class SpriteUiSdlRenderer {
       indices_.clear();
       for (std::uint32_t i = 0; i < batch.instanceCount; ++i) {
         const auto& inst = packet.instances[batch.firstInstance + i];
+        // Alfa zero e invisivel por definicao. Sem este pulo, o SDL desenhava preto nas barras "passivas".
+        if (inst.tint[3] <= 0.f) continue;
         const SDL_FColor color = sdlColor(inst);
         const bool textured = batch.textureSlice != SR::WhiteTextureSlice;
         if (isRounded(inst)) {

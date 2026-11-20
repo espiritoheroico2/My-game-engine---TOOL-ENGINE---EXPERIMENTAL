@@ -50,6 +50,7 @@ struct Theme {
   static constexpr float kStatusHeight = 20.f;
   static constexpr float kButtonWidth = 140.f;     // botoes da barra de acoes (5 cabem em 728 px)
   static constexpr float kToolWidth = 118.f;
+  static constexpr float kViewIconWidth = 30.f;    // botoes quadrados de lista e icones (so desenho)
   static constexpr float kUpWidth = 40.f;
   static constexpr float kCrumbWidth = 150.f;
   static constexpr std::size_t kMaxCrumbs = 4;     // migalhas visiveis (as ultimas do caminho)
@@ -372,8 +373,8 @@ class View {
     import_ = tree_.Create(toolRow, buttonStyle(Theme::kToolWidth));
     newFolder_ = tree_.Create(toolRow, buttonStyle(Theme::kToolWidth));
     newFile_ = tree_.Create(toolRow, buttonStyle(Theme::kToolWidth));
-    list_ = tree_.Create(toolRow, buttonStyle(Theme::kToolWidth));
-    icons_ = tree_.Create(toolRow, buttonStyle(Theme::kToolWidth));
+    list_ = tree_.Create(toolRow, buttonStyle(Theme::kViewIconWidth));
+    icons_ = tree_.Create(toolRow, buttonStyle(Theme::kViewIconWidth));
 
     filter_ = tree_.Create(panelHandle_, fieldStyle(Theme::kFieldHeight));
 
@@ -859,8 +860,29 @@ class View {
     button(import_, T("Import..."));
     button(newFolder_, T("New folder"));
     button(newFile_, T("New text file"));
-    button(list_, T("List"));
-    button(icons_, T("Icons"));
+    // Icones de modo de exibicao: quadrado com 3 linhas (lista) e quadrado com uma pasta (icones).
+    {
+      const SU::Vec4 ink = colors_.text;
+      const SU::Rect lr = nodeRect(list_);
+      const SU::Rect ir = nodeRect(icons_);
+      auto frameOf = [](const SU::Rect& r) { return SU::Rect{{r.position.x + 6.f, r.position.y + 6.f}, {18.f, 18.f}}; };
+      const SU::Rect lf = frameOf(lr);
+      const float t = 1.5f;
+      solid(list_, {lf.position, {lf.size.x, t}}, ink, 0.6f);
+      solid(list_, {{lf.position.x, lf.position.y + lf.size.y - t}, {lf.size.x, t}}, ink, 0.6f);
+      solid(list_, {lf.position, {t, lf.size.y}}, ink, 0.6f);
+      solid(list_, {{lf.position.x + lf.size.x - t, lf.position.y}, {t, lf.size.y}}, ink, 0.6f);
+      for (int i = 0; i < 3; ++i) {
+        solid(list_, {{lf.position.x + 4.5f, lf.position.y + 4.5f + 4.5f * static_cast<float>(i)}, {lf.size.x - 9.f, t}}, ink, 0.6f);
+      }
+      const SU::Rect gf = frameOf(ir);
+      solid(icons_, {gf.position, {gf.size.x, t}}, ink, 0.6f);
+      solid(icons_, {{gf.position.x, gf.position.y + gf.size.y - t}, {gf.size.x, t}}, ink, 0.6f);
+      solid(icons_, {gf.position, {t, gf.size.y}}, ink, 0.6f);
+      solid(icons_, {{gf.position.x + gf.size.x - t, gf.position.y}, {t, gf.size.y}}, ink, 0.6f);
+      solid(icons_, {{gf.position.x + 3.f, gf.position.y + 4.f}, {7.f, 3.f}}, ink, 0.6f);   // aba da pasta
+      solid(icons_, {{gf.position.x + 3.f, gf.position.y + 6.f}, {12.f, 8.f}}, ink, 0.6f);  // corpo da pasta
+    }
 
     // Filtro: placeholder quando vazio.
     {
