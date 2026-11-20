@@ -87,6 +87,15 @@ if(TOOL_WITH_SPRITEUI)
   target_link_libraries(editor_help_model_tests PRIVATE SpriteUi::SpriteUI)
   add_test(NAME Editor.HelpModel COMMAND editor_help_model_tests)
 
+  # Modelo da janela Scenes (scenes_model.hpp): ordem das cenas, acoes por selecao, nome e assets da cena.
+  add_executable(editor_scenes_model_tests tests/test_scenes_model.cpp)
+  target_include_directories(editor_scenes_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_scenes_model_tests PRIVATE SpriteUi::SpriteUI tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TARGET tool::audio_miniaudio)
+    target_link_libraries(editor_scenes_model_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.ScenesModel COMMAND editor_scenes_model_tests)
+
   # Bloco "engine" do project.json: modelo puro, limites e ida-e-volta JSON.
   add_executable(editor_project_engine_settings_tests tests/test_project_engine_settings.cpp)
   target_include_directories(editor_project_engine_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
