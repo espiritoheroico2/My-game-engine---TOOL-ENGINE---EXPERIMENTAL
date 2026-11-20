@@ -127,7 +127,7 @@ Em `apps/editor/main.cpp` há 47 `ImGui::Begin`. As janelas a migrar, na ordem:
 | Scene | ImGui | Já tem `scene_view_panel.hpp` |
 | Game | ImGui | Já tem `game_view_panel.hpp` |
 | Assets / Projeto | ImGui | |
-| Scenes | ImGui | |
+| Scenes | SpriteUI: modelo e view com testes (`Editor.ScenesModel`, `Editor.ScenesView`). Host ainda não ligado ao menu; print e teste visual pendentes | `scenes_model.hpp`, `scenes_spriteui.hpp` |
 | Export game | ImGui (`export_ui.hpp`) | |
 | Input map | ImGui | |
 | Script | ImGui | |
