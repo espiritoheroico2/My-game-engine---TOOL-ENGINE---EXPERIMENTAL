@@ -3301,7 +3301,6 @@ static int runEditorMain(int argc, char** argv) {
       if (ed.showEditMesh) drawFeatureStub(ed, T("Edit Mesh"), T("Edit the 3D model of an object: move vertices, faces and edges. In development."), &ed.showEditMesh);
       if (ed.showPaintMesh) drawFeatureStub(ed, T("Paint Mesh"), T("Paint colors and textures directly on the 3D model. In development."), &ed.showPaintMesh);
       if (focusTabs) ImGui::SetNextWindowFocus();
-      if (ed.showAssets && !assetsPanel) editor::drawAssets(ed);
       if (ed.showSettings) drawSettings(ed);
       if (ed.showNarrative) ed.narrative.draw(&ed.showNarrative);
       if (ed.showInputMap) editor::drawInputMap(ed, &ed.showInputMap);
