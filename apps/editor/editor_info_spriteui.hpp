@@ -17,6 +17,7 @@
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
+#include "text_atlas_set.hpp"
 #include "SpriteUi/Widgets/DockInteraction.hpp"
 #include "SpriteUi/Widgets/WindowFrame.hpp"
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
@@ -111,13 +112,14 @@ struct Shaped {
   std::string utf8;
   std::vector<ST::GlyphInstance> glyphs;
   ST::TextLayoutResult layout;
+  std::uint32_t slice = 1u;   // textureSlice do atlas deste tamanho
 };
 
 class View {
  public:
   enum class Action { None, Save, Close };
 
-  View(Model& model, const ST::TruetypeAtlas& atlas) : model_{model}, atlas_{atlas} { buildTree(); }
+  View(Model& model, const sui::TextAtlasSet& text) : model_{model}, text_{text} { buildTree(); }
 
   // Calcula um quadro e retorna o pacote para desenhar. `actions` recebe o que foi clicado neste quadro.
   SR::FramePacket Frame(float windowWidth, float windowHeight, const FrameInput& in, std::vector<Action>& actions) {
@@ -307,12 +309,14 @@ class View {
   Shaped shape(const std::string& utf8, float size) const {
     Shaped s;
     s.utf8 = utf8;
-    s.glyphs = ST::ShapeTruetype(utf8, atlas_);
+    const ST::TruetypeAtlas& atlas = text_.atlasFor(size);
+    s.slice = text_.sliceFor(size);
+    s.glyphs = ST::ShapeTruetype(utf8, atlas);
     ST::TextLayoutConfig cfg;
     cfg.fontSize = size;
     cfg.alignment = ST::TextAlignment::Left;
     cfg.wrap = ST::TextWrap::None;
-    s.layout = ST::LayoutText(utf8, s.glyphs, atlas_.metrics, cfg);
+    s.layout = ST::LayoutText(utf8, s.glyphs, atlas.metrics, cfg);
     return s;
   }
 
@@ -388,7 +392,7 @@ class View {
       SU::UILayoutRect box;
       box.resolvedPosition = origin;
       box.resolvedSize = {shaped.layout.size.x, shaped.layout.size.y};
-      auto items = ST::GenerateTextRenderItems(shaped.layout, box, color, atlasSlice_, clipNow, z, paint, owner, 0u);
+      auto items = ST::GenerateTextRenderItems(shaped.layout, box, color, shaped.slice, clipNow, z, paint, owner, 0u);
       paint += items.size() + 1;
       out.insert(out.end(), items.begin(), items.end());
     };
@@ -484,9 +488,8 @@ class View {
   }
 
   Model& model_;
-  const ST::TruetypeAtlas& atlas_;
+  const sui::TextAtlasSet& text_;
   Colors colors_;
-  static constexpr std::uint32_t atlasSlice_ = 1u;   // textureSlice do atlas de glifos
 
   SU::LayoutTree tree_;
   SU::LayoutSceneBridge bridge_;

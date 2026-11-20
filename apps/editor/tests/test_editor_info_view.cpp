@@ -75,8 +75,8 @@ int main() {
   namespace SW = ToolEngine::SpriteUi::Widgets;
   namespace ST = ToolEngine::SpriteUi::Text;
 
-  ST::TruetypeAtlas atlas;
-  if (!editor::sui::LoadTextAtlas(EDITOR_FONT_PATH, atlas, 1.f)) {
+  editor::sui::TextAtlasSet atlas;   // um atlas de glifos por tamanho de texto
+  if (!atlas.load(EDITOR_FONT_PATH, 1.f)) {
     std::printf("FALHOU: fonte nao carregou: %s\n", EDITOR_FONT_PATH);
     return 1;
   }

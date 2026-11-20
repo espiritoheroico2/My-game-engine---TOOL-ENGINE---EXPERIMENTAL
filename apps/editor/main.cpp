@@ -2797,10 +2797,10 @@ static int runEditorMain(int argc, char** argv) {
     bool startDone = false;
 #ifdef TOOL_WITH_SPRITEUI
     if (!useImGuiStart) {
-      ToolEngine::SpriteUi::Text::TruetypeAtlas atlas;
-      if (editor::start::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", atlas, SDL_GetWindowDisplayScale(window))) {
+      editor::sui::TextAtlasSet startText;   // um atlas por tamanho de texto (como o resto da UI)
+      if (startText.load("assets/fonts/Xmind-Regular.ttf", SDL_GetWindowDisplayScale(window))) {
         editor::start::Model model(lastProject, editor::defaultProjectsFolder(lastProject));
-        startDone = editor::start::RunStartScreen(window, renderer, model, atlas,
+        startDone = editor::start::RunStartScreen(window, renderer, model, startText,
                                                   editor::defaultProjectsFolder(lastProject), closed);
         startRoot = model.result();
       } else {
@@ -2873,20 +2873,17 @@ static int runEditorMain(int argc, char** argv) {
 #ifdef TOOL_WITH_SPRITEUI
   editor::SpriteUiDiagnostics spriteUiDiagnostics;
   // Fonte e renderizador unicos das janelas SpriteUI. Sem a fonte, as janelas ficam na versao ImGui.
-  ToolEngine::SpriteUi::Text::TruetypeAtlas uiAtlas;
   editor::sui::TextAtlasSet uiText;   // atlas de glifos por tamanho (texto nitido em qualquer tamanho)
   editor::sui::SpriteUiSdlRenderer uiRenderer;
   // O modo --player tambem carrega a fonte: a janela do jogo desenha o texto da UI com ela (mesma fonte do editor).
   // Em --frames as janelas SpriteUI nao aparecem, salvo com --screenshot (print com as janelas reais).
   const bool fontReady = (!headless || !screenshotPath.empty()) &&
-      editor::sui::LoadTextAtlas("assets/fonts/Xmind-Regular.ttf", uiAtlas, SDL_GetWindowDisplayScale(window)) &&
-      uiText.load("assets/fonts/Xmind-Regular.ttf", SDL_GetWindowDisplayScale(window)) &&
-      uiRenderer.uploadAtlas(renderer, uiAtlas);
+      uiText.load("assets/fonts/Xmind-Regular.ttf", SDL_GetWindowDisplayScale(window));
   uiRenderer.setTextSet(&uiText);
   const bool uiReady = fontReady && !playerMode;
   // Janelas do editor em SpriteUI. Sem a fonte, elas nao aparecem (nao ha caminho ImGui de reserva).
   std::unique_ptr<editor::profiler_panel::ProfilerPanel> profPanel;
-  if (uiReady) profPanel = std::make_unique<editor::profiler_panel::ProfilerPanel>(uiAtlas, uiRenderer);
+  if (uiReady) profPanel = std::make_unique<editor::profiler_panel::ProfilerPanel>(uiText, uiRenderer);
   std::unique_ptr<editor::statusbar::StatusBarPanel> statusPanel;
   if (uiReady) statusPanel = std::make_unique<editor::statusbar::StatusBarPanel>(uiText, uiRenderer);
   const bool statusSpriteOn = statusPanel != nullptr;
@@ -2899,7 +2896,7 @@ static int runEditorMain(int argc, char** argv) {
   if (uiReady) testMapPanel = std::make_unique<editor::testmap::TestMapPanel>(uiText, uiRenderer);
   bool testMapGenerate = false;   // o botao "Generate map" so marca; o mapa e gerado depois do quadro
   std::unique_ptr<editor::console_panel::ConsolePanel> consolePanel;
-  if (uiReady) consolePanel = std::make_unique<editor::console_panel::ConsolePanel>(uiAtlas, uiRenderer);
+  if (uiReady) consolePanel = std::make_unique<editor::console_panel::ConsolePanel>(uiText, uiRenderer);
   SDL_Cursor* spriteTextCursor = uiReady ? SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT) : nullptr;
   bool spriteTextCursorActive = false;
   bool cursorWarningLogged = false;

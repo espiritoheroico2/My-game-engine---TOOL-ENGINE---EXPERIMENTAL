@@ -118,8 +118,20 @@ Comando: `ctest -R EditorInfo`. Resultado da janela piloto: 9 checks passam (202
   linear. A redução de 1,5× ou mais serrilha e deixa o traço irregular (medido no texto do Hierarchy).
 - **Feito:** `LoadTextAtlas` (`spriteui_host.hpp`) usa sobreamostragem 2,0 (rasteriza a 32 px). Medido: texto
   mais uniforme e suave. Sobreamostragem 3,0 testada e descartada: letras finas e irregulares.
-- **Limite:** os quads ainda têm tamanho fracionário ao reduzir do atlas. O próximo passo, se ainda faltar,
-  é um atlas por tamanho de texto (13, 15, 20 px), sem reduzir.
+- **Causa residual:** com o atlas reduzido, os quads de glifo ficavam com meio pixel de diferença, e a linha de
+  base desalinhava letra a letra (letras "desniveladas").
+- **Feito (atlas por tamanho):** `editor::sui::TextAtlasSet` (`apps/editor/text_atlas_set.hpp`) guarda um atlas por
+  tamanho de texto, rasterizado no tamanho exato em pixels, sem reduzir. `atlasFor(size)` monta o atlas sob demanda;
+  `sliceFor(size)` dá o slice da textura. O `SpriteUiSdlRenderer` sobe a textura de cada tamanho na primeira vez
+  que ela é desenhada (`setTextSet`). Quando a caixa cresce, o texto é rasterizado de novo no tamanho novo, em
+  vez de ser ampliado. Resultado medido: contorno nítido e linha de base uniforme (Console, Hierarchy, Scenes,
+  Profiler, Inspector, Settings).
+- **Limites:** tamanhos entre 8 e 64 px (`kMinPx`/`kMaxPx`), com o tamanho em pixels arredondado pela escala da janela.
+  Cada tamanho usado ocupa uma textura RGBA de 512², 1024² ou 2048² (`kSlots` = 57 slots). Memória cresce com o número de
+  tamanhos diferentes na tela, não com o número de janelas.
+- **Próximo passo para qualidade ainda maior:** texto SDF/MSDF (estilo TextMeshPro), que escala sem atlas por tamanho.
+  Exige um caminho de shader no backend GPU: o `SDL_Renderer` não tem shader próprio, e o gerador MSDF da SpriteUI
+  ainda não está implementado.
 
 ### 4.6 Janelas que ainda são ImGui (inventário)
 Em `apps/editor/main.cpp` há 47 `ImGui::Begin`. As janelas a migrar, na ordem:

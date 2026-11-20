@@ -84,16 +84,13 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  ToolEngine::SpriteUi::Text::TruetypeAtlas atlas;
-  if (!editor::sui::LoadTextAtlas(fontPath, atlas, 1.f)) {
+  editor::sui::TextAtlasSet atlas;   // um atlas de glifos por tamanho de texto
+  if (!atlas.load(fontPath, 1.f)) {
     std::fprintf(stderr, "fonte nao carregou: %s\n", fontPath.c_str());
     return 1;
   }
   editor::sui::SpriteUiSdlRenderer sdl;
-  if (!sdl.uploadAtlas(renderer, atlas)) {
-    std::fprintf(stderr, "atlas nao subiu para o renderizador\n");
-    return 1;
-  }
+  sdl.setTextSet(&atlas);
 
   bool ok = true;
 

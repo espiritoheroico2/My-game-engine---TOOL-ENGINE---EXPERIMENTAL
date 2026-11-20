@@ -17,6 +17,7 @@
 // focado; o campo liga o texto do SDL (SDL_StartTextInput) e desliga ao perder o foco.
 #include "window_frame.hpp"
 #include "window_help_icon.hpp"
+#include "text_atlas_set.hpp"
 #include "console_model.hpp"
 #include "i18n.hpp"
 #include "spriteui_host.hpp"
@@ -66,7 +67,6 @@ struct Theme {
   static constexpr float kWheelStep = 48.f;
 };
 
-inline constexpr std::uint32_t kAtlasSlice = 1u;  // textureSlice dos glifos (0 = pixel branco)
 
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
@@ -125,7 +125,7 @@ struct Requests {
 class ConsolePanel {
  public:
   // O atlas e o renderizador SDL sao do editor (mesmos do resto das janelas SpriteUI). O atlas sobe uma vez, na main.
-  ConsolePanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : atlas_{atlas}, sdl_{sdl} {
+  ConsolePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : text_{text}, sdl_{sdl} {
     panel_ = tree_.Create({}, panelStyle());
     // Moldura: mesmas cores do painel (fundo navy) e aba de 30 px.
     frameColors_.body = colors_.panel;
@@ -499,8 +499,9 @@ class ConsolePanel {
     cfg.fontSize = size;
     cfg.alignment = ST::TextAlignment::Left;
     cfg.wrap = ST::TextWrap::None;
-    const auto glyphs = ST::ShapeTruetype(utf8, atlas_);
-    return ST::LayoutText(utf8, glyphs, atlas_.metrics, cfg);
+    const ST::TruetypeAtlas& atlas = text_.atlasFor(size);
+    const auto glyphs = ST::ShapeTruetype(utf8, atlas);
+    return ST::LayoutText(utf8, glyphs, atlas.metrics, cfg);
   }
 
   // Texto quebrado por palavra em maxW (uma linha do log pode ocupar varias).
@@ -510,8 +511,9 @@ class ConsolePanel {
     cfg.maxWidth = maxW;
     cfg.alignment = ST::TextAlignment::Left;
     cfg.wrap = ST::TextWrap::Word;
-    const auto glyphs = ST::ShapeTruetype(utf8, atlas_);
-    return ST::LayoutText(utf8, glyphs, atlas_.metrics, cfg);
+    const ST::TruetypeAtlas& atlas = text_.atlasFor(size);
+    const auto glyphs = ST::ShapeTruetype(utf8, atlas);
+    return ST::LayoutText(utf8, glyphs, atlas.metrics, cfg);
   }
 
   float textWidth(const std::string& s, float size) const { return layoutOf(s, size).size.x; }
@@ -539,15 +541,15 @@ class ConsolePanel {
     float left = x;
     if (align == HAlign::Center) left -= lay.size.x * 0.5f;
     if (align == HAlign::Right) left -= lay.size.x;
-    appendLayout(lay, {left, yMid - lay.lineHeight * 0.5f}, color, z, clip);
+    appendLayout(lay, {left, yMid - lay.lineHeight * 0.5f}, color, z, clip, text_.sliceFor(size));
   }
 
   // Item de texto ja medido, na posicao (topo esquerdo). Os glifos recebem paint order em sequencia.
-  void appendLayout(const ST::TextLayoutResult& lay, SU::Vec2 pos, SU::Vec4 color, float z, std::uint32_t clip) {
+  void appendLayout(const ST::TextLayoutResult& lay, SU::Vec2 pos, SU::Vec4 color, float z, std::uint32_t clip, std::uint32_t slice) {
     SU::UILayoutRect box;
     box.resolvedPosition = pos;
     box.resolvedSize = {lay.size.x, lay.size.y};
-    const auto glyphs = ST::GenerateTextRenderItems(lay, box, color, kAtlasSlice, clip, z, paint_, panel_, 0u);
+    const auto glyphs = ST::GenerateTextRenderItems(lay, box, color, slice, clip, z, paint_, panel_, 0u);
     paint_ += glyphs.size() + 1;
     items_.insert(items_.end(), glyphs.begin(), glyphs.end());
   }
@@ -795,7 +797,7 @@ class ConsolePanel {
     }
     for (const Entry& e : entries_) {
       if (!rowVisible(e)) continue;
-      appendLayout(e.text, {lx + Theme::kListInset, ly + e.y - scroll_}, e.color, 0.3f, clip);
+      appendLayout(e.text, {lx + Theme::kListInset, ly + e.y - scroll_}, e.color, 0.3f, clip, text_.sliceFor(Theme::kFont));
     }
     addScrollThumb(lx, ly, lw, clip);
   }
@@ -813,7 +815,7 @@ class ConsolePanel {
     addSolid(lx + lw - Theme::kScrollW - 2.f, thumbY, Theme::kScrollW, thumbH, colors_.scroll, 0.4f, clip);
   }
 
-  const ST::TruetypeAtlas& atlas_;
+  const sui::TextAtlasSet& text_;
   Colors colors_;
   cm::ConsoleModel model_;
   sui::SpriteUiSdlRenderer& sdl_;

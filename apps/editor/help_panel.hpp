@@ -328,7 +328,7 @@ class HelpPanel {
     const SU::Rect box{{searchBox_.x, searchBox_.y}, {searchBox_.w, searchBox_.h}};
     Edit::TextFieldRenderTarget target;
     target.owner = owner;
-    target.textureSlice = sui::kAtlasSlice;
+    target.textureSlice = text_.sliceFor(kFont);
     target.paintOrder = paint;
     const Edit::TextFieldStyle style = searchStyle();
     const auto fieldItems = model_.Search().Build(box, list_.layout(model_.SearchText(), kFont), style, target, clips);

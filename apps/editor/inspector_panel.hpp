@@ -1284,7 +1284,7 @@ class InspectorPanel {
     void appendField(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint, const SU::Rect& box, std::vector<SR::ClipRectGPU>& clips) {
         Edit::TextFieldRenderTarget target;
         target.owner = sui::handleFor(0);
-        target.textureSlice = sui::kAtlasSlice;
+        target.textureSlice = canvas_.sliceFor(Metrics::kFont);
         target.zOrder = Metrics::kZField;
         target.paintOrder = paint;
         Edit::TextFieldStyle style;
@@ -1371,7 +1371,7 @@ class InspectorPanel {
             std::vector<SR::ClipRectGPU> clips{{visible_.x, visible_.y, visible_.x + visible_.w, visible_.y + visible_.h}};
             Edit::TextFieldRenderTarget target;
             target.owner = sui::handleFor(0);
-            target.textureSlice = sui::kAtlasSlice;
+            target.textureSlice = canvas_.sliceFor(Metrics::kFont);
             target.zOrder = Metrics::kZPopup;
             target.paintOrder = paint;
             Edit::TextFieldStyle style;

@@ -32,6 +32,7 @@
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
 #include "window_frame.hpp"
 #include "window_help_icon.hpp"
+#include "text_atlas_set.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -79,8 +80,6 @@ struct Theme {
   static constexpr float kWheelStep = 48.f;       // px por passo da roda do mouse
 };
 
-inline constexpr std::uint32_t kAtlasSlice = 1u;  // textureSlice dos glifos (0 = pixel branco)
-
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
 }
@@ -111,12 +110,13 @@ struct Prim {
   SU::Vec4 color{};
   float z = 0.f;
   std::uint32_t text = 0;   // Text: indice em texts_
+  std::uint32_t slice = 1u; // Text: textureSlice do atlas do tamanho do texto
 };
 
 class ProfilerPanel {
  public:
   // `sdl` e o renderizador compartilhado das janelas SpriteUI (o atlas ja foi enviado por quem o criou).
-  ProfilerPanel(const ST::TruetypeAtlas& atlas, sui::SpriteUiSdlRenderer& sdl) : atlas_{atlas}, sdl_{sdl} {
+  ProfilerPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : text_{text}, sdl_{sdl} {
     buildTree();
     // Moldura: mesmo visual do Console (corpo navy, aba de 30 px).
     frameColors_.body = colors_.panel;
@@ -292,7 +292,7 @@ class ProfilerPanel {
     SU::UILayoutRect box;
     box.resolvedPosition = {x, yMid - lay.lineHeight * 0.5f};
     box.resolvedSize = {lay.size.x, lay.size.y};
-    auto items = ST::GenerateTextRenderItems(lay, box, color, kAtlasSlice, SR::NoClipIndex, 0.95f, paint, panel_, 0u);
+    auto items = ST::GenerateTextRenderItems(lay, box, color, text_.sliceFor(size), SR::NoClipIndex, 0.95f, paint, panel_, 0u);
     paint += items.size() + 1;
     out.insert(out.end(), items.begin(), items.end());
   }
@@ -397,8 +397,9 @@ class ProfilerPanel {
     cfg.fontSize = size;
     cfg.alignment = ST::TextAlignment::Left;
     cfg.wrap = ST::TextWrap::None;
-    const auto glyphs = ST::ShapeTruetype(utf8, atlas_);
-    return ST::LayoutText(utf8, glyphs, atlas_.metrics, cfg);
+    const ST::TruetypeAtlas& atlas = text_.atlasFor(size);
+    const auto glyphs = ST::ShapeTruetype(utf8, atlas);
+    return ST::LayoutText(utf8, glyphs, atlas.metrics, cfg);
   }
 
   // Corta o texto com "..." para caber em maxW. Estima pela proporcao, entao mede poucas vezes.
@@ -438,6 +439,7 @@ class ProfilerPanel {
     p.color = color;
     p.z = 0.9f;
     p.text = static_cast<std::uint32_t>(texts_.size());
+    p.slice = text_.sliceFor(size);
     texts_.push_back(std::move(lay));
     prims_.push_back(p);
     return w;
@@ -596,7 +598,7 @@ class ProfilerPanel {
         SU::UILayoutRect box;
         box.resolvedPosition = {ox + p.x, sy};
         box.resolvedSize = {p.w, p.h};
-        auto items = ST::GenerateTextRenderItems(texts_[p.text], box, p.color, kAtlasSlice, clip, p.z, paint, list_, 0u);
+        auto items = ST::GenerateTextRenderItems(texts_[p.text], box, p.color, p.slice, clip, p.z, paint, list_, 0u);
         paint += items.size() + 1;
         out.insert(out.end(), items.begin(), items.end());
       }
@@ -628,7 +630,7 @@ class ProfilerPanel {
     return item;
   }
 
-  const ST::TruetypeAtlas& atlas_;
+  const sui::TextAtlasSet& text_;
   Colors colors_;
   pm::ProfilerModel model_;
   sui::SpriteUiSdlRenderer& sdl_;

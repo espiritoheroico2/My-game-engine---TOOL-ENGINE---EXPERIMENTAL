@@ -17,6 +17,7 @@
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
+#include "text_atlas_set.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_dialog.h>
@@ -86,6 +87,7 @@ struct Shaped {
   std::string utf8;
   std::vector<ST::GlyphInstance> glyphs;
   ST::TextLayoutResult layout;
+  std::uint32_t slice = 1u;   // textureSlice do atlas deste tamanho
 };
 
 // Pasta escolhida no dialogo nativo chega de outra thread (mesmo problema de project_dialog.hpp).
@@ -106,7 +108,7 @@ inline void SDLCALL onFolderPicked(void* userdata, const char* const* files, int
 
 class View {
  public:
-  View(Model& model, const ST::TruetypeAtlas& atlas) : model_{model}, atlas_{atlas} {
+  View(Model& model, const sui::TextAtlasSet& text) : model_{model}, text_{text} {
     buildTree();
   }
 
@@ -340,12 +342,14 @@ class View {
   Shaped shape(const std::string& utf8, float size) const {
     Shaped s;
     s.utf8 = utf8;
-    s.glyphs = ST::ShapeTruetype(utf8, atlas_);
+    const ST::TruetypeAtlas& atlas = text_.atlasFor(size);
+    s.slice = text_.sliceFor(size);
+    s.glyphs = ST::ShapeTruetype(utf8, atlas);
     ST::TextLayoutConfig cfg;
     cfg.fontSize = size;
     cfg.alignment = ST::TextAlignment::Left;
     cfg.wrap = ST::TextWrap::None;
-    s.layout = ST::LayoutText(utf8, s.glyphs, atlas_.metrics, cfg);
+    s.layout = ST::LayoutText(utf8, s.glyphs, atlas.metrics, cfg);
     return s;
   }
 
@@ -446,7 +450,7 @@ class View {
       SU::UILayoutRect box;
       box.resolvedPosition = origin;
       box.resolvedSize = {shaped.layout.size.x, shaped.layout.size.y};
-      auto items = ST::GenerateTextRenderItems(shaped.layout, box, color, atlasSlice_, clipNow, z,
+      auto items = ST::GenerateTextRenderItems(shaped.layout, box, color, shaped.slice, clipNow, z,
                                               paint, owner, /*renderFlags=*/0u);
       paint += items.size() + 1;
       out.insert(out.end(), items.begin(), items.end());
@@ -519,9 +523,8 @@ class View {
   }
 
   Model& model_;
-  const ST::TruetypeAtlas& atlas_;
+  const sui::TextAtlasSet& text_;
   Colors colors_;
-  static constexpr std::uint32_t atlasSlice_ = 1u;   // textureSlice do atlas de glifos (0 = pixel branco)
 
   SU::LayoutTree tree_;
   SU::LayoutSceneBridge bridge_;
@@ -539,12 +542,11 @@ class View {
 };
 
 using sui::SpriteUiSdlRenderer;
-using sui::LoadTextAtlas;
 
 // Laco da tela de inicio com SpriteUI. Retorna true quando o projeto foi criado ou aberto (model.done()).
 // closed = true quando a janela foi fechada antes disso (nada foi criado).
 inline bool RunStartScreen(SDL_Window* window, SDL_Renderer* renderer, Model& model,
-                           const ST::TruetypeAtlas& atlas, const std::string& defaultLocation, bool& closed) {
+                           const sui::TextAtlasSet& text, const std::string& defaultLocation, bool& closed) {
   // Texto digitado chega como SDL_EVENT_TEXT_INPUT so com a entrada de texto ligada. O ImGui liga isso sozinho;
   // este laco nao usa o ImGui, entao liga aqui e desliga ao sair para o editor decidir depois.
   struct TextInputScope {
@@ -553,9 +555,9 @@ inline bool RunStartScreen(SDL_Window* window, SDL_Renderer* renderer, Model& mo
     ~TextInputScope() { SDL_StopTextInput(w); }
   } textInput{window};
   SpriteUiSdlRenderer sdl;
-  if (!sdl.uploadAtlas(renderer, atlas)) return false;
+  sdl.setTextSet(&text);   // glifos por tamanho: cada atlas sobe sob demanda
   model.SetDefaultLocation(defaultLocation);
-  View view(model, atlas);
+  View view(model, text);
   // static: o callback do dialogo pode chegar depois que esta funcao retornou (janela fechada com o dialogo aberto).
   static BrowseSlot browse;
   FrameInput in;

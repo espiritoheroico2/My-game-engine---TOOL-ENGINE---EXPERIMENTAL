@@ -33,7 +33,6 @@ namespace ST = ToolEngine::SpriteUi::Text;
 inline constexpr float kPanelPadding = 14.f;
 
 // Slice do atlas padrao (glifos em 16 px). Os textos novos usam o slice do proprio tamanho (TextAtlasSet).
-inline constexpr std::uint32_t kAtlasSlice = 1u;
 
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
@@ -65,6 +64,8 @@ struct Box {
 class Canvas {
  public:
   explicit Canvas(const TextAtlasSet& text) : text_{text} {}
+  // Slice do atlas deste tamanho de texto (o campo de texto da biblioteca precisa dele ao desenhar).
+  std::uint32_t sliceFor(float size) const { return text_.sliceFor(size); }
 
   void clear() {
     prims_.clear();
