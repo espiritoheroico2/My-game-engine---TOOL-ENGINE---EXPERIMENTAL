@@ -2,7 +2,7 @@
 // Elementos: painel de Assets com pastas e arquivos (Selectable, SmallButton), arrastar "ASSET_PATH" para a cena,
 //   dialogos BeginPopupModal (novo arquivo, nova pasta, renomear, apagar, nova cena), InputText com buffers,
 //   previa de som (botao play/stop) e GetTime para cliques.
-// Dados: struct u (buffers renameBuf, newFolderBuf, newFileBuf, newSceneBuf, sceneRenameBuf), preenchidos so ao
+// Dados: struct u (buffers renameBuf, newFolderBuf, newFileBuf), preenchidos so ao
 //   abrir cada menu ou ao apertar F2. Lista de arquivos vem do projeto (project.hpp).
 // Troca SpriteUI: dialogos, lista e arrastar. Manter o payload "ASSET_PATH" com o caminho relativo.
 // ToolEngine Editor - janelas "Assets" (navegador de arquivos do projeto) e "Scenes" (cenas separadas).
@@ -57,9 +57,6 @@ struct AssetsUi {
   // editor de texto
   bool textOpen = false; std::string textPath; std::vector<char> textBuf; std::string textStatus;
   // cenas
-  char newSceneBuf[60] = "Level2"; bool openNewScene = false;
-  std::string sceneRenameTarget; char sceneRenameBuf[60] = ""; bool openSceneRename = false;
-  std::string sceneDeleteTarget; bool openSceneDelete = false;
 };
 inline AssetsUi& ui() { static AssetsUi u; return u; }
 
@@ -402,79 +399,6 @@ inline void drawAssets(Editor& ed) {
     }
     ImGui::End();
   }
-}
-
-// --- janela de cenas ---------------------------------------------------------------------------------------
-inline void drawScenes(Editor& ed) {
-  AssetsUi& u = ui();
-  if (!ImGui::Begin(W("Scenes", "scenes").c_str(), &ed.showScenes)) { ImGui::End(); return; }
-  helpIcon("start");
-  if (ed.sceneList.empty()) ed.refreshScenes();
-  ImGui::Text("%s", F("Current scene: %s", ed.sceneInfo.name.c_str()).c_str());
-  if (ImGui::Button(T("Save scene"))) ed.saveScene();
-  ImGui::SameLine(); if (ImGui::Button(T("New scene..."))) { u.openNewScene = true; }
-  ImGui::SameLine(); if (ImGui::Button(T("Reload list"))) ed.refreshScenes();
-  ImGui::TextDisabled("%s", T("Switching scenes saves the current one first."));
-  ImGui::SeparatorText(T("Scenes in project"));
-  ImGui::BeginChild("scenelist", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 6.5f), ImGuiChildFlags_Borders);
-  for (auto& n : ed.sceneList) {
-    ImGui::PushID(n.c_str());
-    const bool cur = n == ed.sceneInfo.name;
-    if (ImGui::Selectable((n + (cur ? "  *" : "")).c_str(), cur, ImGuiSelectableFlags_AllowDoubleClick) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !cur) { ed.openScene(n); ImGui::PopID(); break; }
-    if (ImGui::BeginPopupContextItem("sctx")) {
-      if (!cur && ImGui::MenuItem(T("Open"))) { ed.openScene(n); ImGui::EndPopup(); ImGui::PopID(); break; }
-      if (ImGui::MenuItem(T("Rename"))) { u.sceneRenameTarget = n; std::snprintf(u.sceneRenameBuf, sizeof u.sceneRenameBuf, "%s", n.c_str()); u.openSceneRename = true; }
-      if (!cur && ImGui::MenuItem(T("Delete"))) { u.sceneDeleteTarget = n; u.openSceneDelete = true; }
-      ImGui::EndPopup();
-    }
-    ImGui::PopID();
-  }
-  ImGui::EndChild();
-
-  ImGui::SeparatorText(T("Assets assigned to this scene"));
-  if (!u.selected.empty() && (kindOf(u.selected, false) == AssetKind::Model || kindOf(u.selected, false) == AssetKind::Audio)) {
-    if (ImGui::Button(F("Assign '%s'", fs::path(u.selected).filename().string().c_str()).c_str())) ed.assignAsset(u.selected);
-  } else ImGui::TextDisabled("%s", T("Select a model or sound in Assets to assign it here."));
-  int remove = -1;
-  for (size_t i = 0; i < ed.sceneInfo.assets.size(); ++i) {
-    ImGui::PushID(static_cast<int>(i));
-    if (ImGui::SmallButton("x")) remove = static_cast<int>(i);
-    ImGui::SameLine(); ImGui::TextUnformatted(ed.sceneInfo.assets[i].c_str());
-    const std::string& a = ed.sceneInfo.assets[i]; std::error_code ec;
-    if (!fs::exists(ed.project.resolve(a), ec)) { ImGui::SameLine(); ImGui::TextColored({1, .5f, .4f, 1}, "%s", T("(missing)")); }
-    ImGui::PopID();
-  }
-  if (remove >= 0) ed.sceneInfo.assets.erase(ed.sceneInfo.assets.begin() + remove);
-  if (ed.sceneInfo.assets.empty()) ImGui::TextDisabled("%s", T("(none)"));
-
-  if (u.openNewScene) { ImGui::OpenPopup("New scene##dlg"); u.openNewScene = false; }
-  if (ImGui::BeginPopupModal("New scene##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    const bool enter = ImGui::InputText("##ns", u.newSceneBuf, sizeof u.newSceneBuf, ImGuiInputTextFlags_EnterReturnsTrue);
-    if (ImGui::Button(T("Create")) || enter) { if (ed.newScene(u.newSceneBuf)) ImGui::CloseCurrentPopup(); }
-    ImGui::SameLine(); if (ImGui::Button(T("Cancel"))) ImGui::CloseCurrentPopup();
-    if (!ed.statusLine.empty()) ImGui::TextDisabled("%s", ed.statusLine.c_str());
-    ImGui::EndPopup();
-  }
-  if (u.openSceneRename) { ImGui::OpenPopup("Rename scene##dlg"); u.openSceneRename = false; }
-  if (ImGui::BeginPopupModal("Rename scene##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    const bool enter = ImGui::InputText("##rs", u.sceneRenameBuf, sizeof u.sceneRenameBuf, ImGuiInputTextFlags_EnterReturnsTrue);
-    if ((ImGui::Button(T("OK")) || enter) && safeName(u.sceneRenameBuf)) {
-      std::error_code ec; const bool cur = u.sceneRenameTarget == ed.sceneInfo.name;
-      if (cur) ed.saveScene();
-      if (!fs::exists(ed.project.scenePath(u.sceneRenameBuf), ec)) { fs::rename(ed.project.scenePath(u.sceneRenameTarget), ed.project.scenePath(u.sceneRenameBuf), ec); if (!ec && cur) ed.sceneInfo.name = u.sceneRenameBuf; }
-      ed.refreshScenes(); ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine(); if (ImGui::Button(T("Cancel"))) ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-  }
-  if (u.openSceneDelete) { ImGui::OpenPopup("Delete scene##dlg"); u.openSceneDelete = false; }
-  if (ImGui::BeginPopupModal("Delete scene##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::Text("%s", F("Delete scene '%s'? This cannot be undone.", u.sceneDeleteTarget.c_str()).c_str());
-    if (ImGui::Button(T("Delete"))) { std::error_code ec; fs::remove(ed.project.scenePath(u.sceneDeleteTarget), ec); ed.refreshScenes(); ImGui::CloseCurrentPopup(); }
-    ImGui::SameLine(); if (ImGui::Button(T("Cancel"))) ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-  }
-  ImGui::End();
 }
 
 } // namespace editor

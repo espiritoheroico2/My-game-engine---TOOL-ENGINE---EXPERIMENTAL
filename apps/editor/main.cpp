@@ -540,7 +540,7 @@ void syncScenesPanel(Editor& ed, editor::scenesui::Panel& panel) {
   }
 }
 
-// Confirmar criar ou renomear, com as mesmas regras da janela ImGui antiga (drawScenes).
+// Confirmar criar ou renomear, com as regras da janela Scenes.
 void confirmScene(Editor& ed, editor::scenes_model::Model& m) {
   namespace SM = editor::scenes_model;
   if (m.mode == SM::NameMode::New) {
@@ -599,7 +599,6 @@ void applyScenesActions(Editor& ed, editor::scenesui::Panel& panel, const std::v
 }
 
 editor::scenesui::Panel* gScenesPanel = nullptr;   // o painel existe (dono: main); usado pelo atalho "Nova cena"
-bool gScenesSpriteOn = false;                       // a janela Scenes e SpriteUI (o ImGui antigo nao desenha)
 
 #ifdef TOOL_WITH_SPRITEUI
 editor::inspector_panel::InspectorPanel* gInspectorPanel = nullptr;   // o painel existe (dono: main)
@@ -2457,7 +2456,6 @@ void applyMenuRequest(Editor& ed, bool& quit, const editor::mainmenu::Request& r
     case C::NewScene:
       ed.showScenes = true;
       if (gScenesPanel) gScenesPanel->beginNew();
-      else editor::ui().openNewScene = true;
       break;
     case C::SaveScene: ed.saveScene(); break;
     case C::ImportAsset: SDL_ShowOpenFileDialog([](void*, const char* const* files, int) { if (files) for (; *files; ++files) editor::queueImport(*files); }, nullptr, nullptr, nullptr, 0, nullptr, true); break;
@@ -2915,7 +2913,6 @@ static int runEditorMain(int argc, char** argv) {
   std::unique_ptr<editor::scenesui::Panel> scenesPanel;
   if (uiReady) scenesPanel = std::make_unique<editor::scenesui::Panel>(uiAtlas, uiRenderer);
   gScenesPanel = scenesPanel.get();
-  gScenesSpriteOn = scenesPanel != nullptr;
 #ifdef TOOL_WITH_SPRITEUI
   std::unique_ptr<editor::scene_view_panel::ScenePanel> scenePanel;
   std::unique_ptr<editor::game_view_panel::GamePanel> gamePanel;
@@ -3077,7 +3074,6 @@ static int runEditorMain(int argc, char** argv) {
       if (ed.showPaintMesh) drawFeatureStub(ed, T("Paint Mesh"), T("Paint colors and textures directly on the 3D model. In development."), &ed.showPaintMesh);
       if (focusTabs) ImGui::SetNextWindowFocus();
       if (ed.showAssets) editor::drawAssets(ed);
-      if (ed.showScenes && !gScenesSpriteOn) editor::drawScenes(ed);   // legado: so sem a janela SpriteUI
       if (ed.showSettings) drawSettings(ed);
       if (ed.showNarrative) ed.narrative.draw(&ed.showNarrative);
       if (ed.showInputMap) editor::drawInputMap(ed, &ed.showInputMap);
@@ -3167,7 +3163,7 @@ static int runEditorMain(int argc, char** argv) {
         tool::logError(std::string("Scenes SpriteUI render failed: ") + SDL_GetError());
         scenesPanel.reset();
         gScenesPanel = nullptr;
-        gScenesSpriteOn = false;
+        ed.showScenes = false;
       } else {
         applyScenesActions(ed, *scenesPanel, scenesActs);
       }
