@@ -82,7 +82,7 @@ struct Editor {
   // janelas
   bool showHierarchy = true, showInspector = true, showConsole = true, showProfiler = true, showScene = true, showGame = true;
   bool showEditMesh = false, showPaintMesh = false;   // janelas de recursos futuros (so aviso de "em desenvolvimento")
-  bool showAssets = true, showScenes = true, showNarrative = true, showSettings = true, showInputMap = false;
+  bool showAssets = true, showScenes = true, showCoding = true, showNarrative = true, showSettings = true, showInputMap = false;
   bool showSpriteUiDiagnostics = false;
   bool showEditorInfo = false, showExport = false;   // File > Editor info / Export game
   bool resetLayout = false;

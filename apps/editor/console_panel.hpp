@@ -30,6 +30,7 @@
 #include "SpriteUi/Widgets/WindowFrame.hpp"
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
 
+#include <optional>
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -62,7 +63,7 @@ struct Theme {
   static constexpr float kRowGap = 3.f;           // espaco entre duas linhas do log
   static constexpr float kScrollLane = 12.f;      // reserva a direita da lista para a barra de rolagem
   static constexpr float kScrollW = 4.f;
-  static constexpr float kFont = 13.f;
+  static constexpr float kFont = 12.f;
   static constexpr float kSmallFont = 11.f;
   static constexpr float kWheelStep = 48.f;
 };
@@ -139,6 +140,16 @@ class ConsolePanel {
   ConsolePanel(const ConsolePanel&) = delete;
   ConsolePanel& operator=(const ConsolePanel&) = delete;
 
+  // Area dada pelo dock (folha, sem a faixa de abas). nullopt: a janela flutua na posicao em que estava.
+  void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }
+  [[nodiscard]] bool docked() const { return frame_.docked(); }
+  [[nodiscard]] SU::Rect frameRect() const { return frame_.rect(); }
+  [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
+  void floatAt(SU::Vec2 at) {
+    dock_.reset();
+    frame_.undock(at);
+  }
+
   // Eventos de ponteiro tambem chegam ao ImGui para a janela hospedeira continuar focavel e dockavel.
   bool handleEvent(const SDL_Event& e, bool visible) {
     if (!visible) return false;
@@ -198,7 +209,7 @@ class ConsolePanel {
     }
     window_ = window;
 
-    frame_.place(static_cast<float>(winW), static_cast<float>(winH));
+    frame_.placeIn(static_cast<float>(winW), static_cast<float>(winH), dock_);
     const SU::Rect content = frame_.content();
     layoutPanel(sui::Box{content.position.x, content.position.y, content.size.x, content.size.y});
     if (closeRequested_) {
@@ -682,7 +693,7 @@ class ConsolePanel {
     SW::WindowFrameState state;
     state.active = true;
     state.dragging = frame_.dragging();
-    state.docked = false;
+    state.docked = frame_.docked();
     auto frameItems = SW::BuildWindowFrameItems(panel_, frame, frame_.metrics(), state, frameColors_, -2.f, paint_);
     paint_ += frameItems.size() + 1;
     items_.insert(items_.end(), frameItems.begin(), frameItems.end());
@@ -855,6 +866,7 @@ class ConsolePanel {
 
   // Moldura flutuante (titulo, grip, X). A geometria e as regras ficam em window_frame.hpp.
   wf::Frame frame_;
+  std::optional<SU::Rect> dock_;
   SW::WindowFrameColors frameColors_{};
   bool closeRequested_ = false;
   bool helpRequested_ = false;   // "?" clicado: o proximo draw pede a Help

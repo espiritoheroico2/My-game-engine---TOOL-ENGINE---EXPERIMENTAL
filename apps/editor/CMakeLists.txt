@@ -73,12 +73,26 @@ if(TOOL_WITH_SPRITEUI)
   target_link_libraries(editor_window_frame_tests PRIVATE SpriteUi::SpriteUI)
   add_test(NAME Editor.WindowFrame COMMAND editor_window_frame_tests)
 
+  # Docking das janelas (dock_layout.hpp): layout padrao, abas, encaixe por arraste e flutuar. Sem janela.
+  add_executable(editor_dock_layout_tests tests/test_dock_layout.cpp)
+  target_include_directories(editor_dock_layout_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_dock_layout_tests PRIVATE SpriteUi::SpriteUI)
+  add_test(NAME Editor.DockLayout COMMAND editor_dock_layout_tests)
+
   # Captura headless da janela Editor info (SpriteUI). Nao e um teste do ctest: gera PPM para conferir visualmente.
   add_executable(editor_info_capture tools/editor_info_capture.cpp)
   target_include_directories(editor_info_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(editor_info_capture PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
   if(TOOL_WITH_MINIAUDIO)
     target_link_libraries(editor_info_capture PRIVATE tool::audio_miniaudio)
+  endif()
+
+  # Captura headless da janela Assets (assets_spriteui.hpp): PPM por cenario, sem janela.
+  add_executable(editor_assets_capture tools/assets_capture.cpp)
+  target_include_directories(editor_assets_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_assets_capture PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_assets_capture PRIVATE tool::audio_miniaudio)
   endif()
 
   # Modelo da janela Help (help_model.hpp): blocos do texto, busca por idioma e edicao da busca.
@@ -114,6 +128,16 @@ if(TOOL_WITH_SPRITEUI)
     target_link_libraries(editor_scenes_view_tests PRIVATE tool::audio_miniaudio)
   endif()
   add_test(NAME Editor.ScenesView COMMAND editor_scenes_view_tests)
+
+  # Janela Assets em SpriteUI (assets_spriteui.hpp): cliques, duplo clique, renomear, apagar, filtro, texto, rolagem.
+  add_executable(editor_assets_view_tests tests/test_assets_view.cpp)
+  target_include_directories(editor_assets_view_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(editor_assets_view_tests PRIVATE EDITOR_FONT_PATH="${CMAKE_SOURCE_DIR}/assets/fonts/Xmind-Regular.ttf")
+  target_link_libraries(editor_assets_view_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_assets_view_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.AssetsView COMMAND editor_assets_view_tests)
 
   # Bloco "engine" do project.json: modelo puro, limites e ida-e-volta JSON.
   add_executable(editor_project_engine_settings_tests tests/test_project_engine_settings.cpp)

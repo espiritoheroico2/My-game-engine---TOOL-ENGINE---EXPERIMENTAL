@@ -6,6 +6,7 @@
 // Esta view so desenha e reporta cliques. Quem grava o projeto e o laço do host (Action::Save), para o modelo continuar
 // testavel sem janela. Ainda NAO esta ligada ao menu: a janela ImGui em export_ui.hpp continua a usada pelo editor
 // ate o teste visual aprovar esta.
+#include "window_palette.hpp"
 #include "editor_info_model.hpp"
 #include "i18n.hpp"
 #include "spriteui_host.hpp"
@@ -50,9 +51,9 @@ struct Theme {
   static constexpr float kButtonHeight = 34.f;
   static constexpr float kButtonWidth = 160.f;
   static constexpr float kLineHeight = 18.f;   // status e lista de faltantes
-  static constexpr float kFontSize = 15.f;
+  static constexpr float kFontSize = 12.f;
   static constexpr float kTitleSize = 20.f;
-  static constexpr float kLabelSize = 13.f;
+  static constexpr float kLabelSize = 12.f;
   static constexpr float kFieldInset = 8.f;
   static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth
   // 9 (rotulo, campo) + linha do botao + status + faltantes = 21 filhos, 20 espacos. O titulo fica na moldura.
@@ -230,13 +231,7 @@ class View {
     // Visual da moldura: cantos arredondados, aba de 30 px, borda azul ao arrastar.
     metrics_.headerHeight = 30.f;
     metrics_.cornerRadius = 6.f;
-    frameColors_.body = Srgb(0.110f, 0.118f, 0.137f);
-    frameColors_.border = Srgb(0.235f, 0.251f, 0.294f);
-    frameColors_.borderDragging = Srgb(0.420f, 0.600f, 0.980f);
-    frameColors_.headerActive = Srgb(0.165f, 0.184f, 0.231f);
-    frameColors_.headerInactive = Srgb(0.125f, 0.137f, 0.169f);
-    frameColors_.headerDragging = Srgb(0.200f, 0.230f, 0.302f);
-    frameColors_.glyph = Srgb(0.900f, 0.920f, 0.960f);
+    frameColors_ = editor::window_palette::Standard();
     colors_.panel = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
 
     SU::FlexItem panel;

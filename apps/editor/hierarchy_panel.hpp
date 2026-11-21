@@ -21,6 +21,7 @@
 // Cor cheia = ligado; cor apagada = desligado. Exemplo: com a Parede oculta, o olho fica apagado; com a Parede
 // travada, o cadeado fica laranja.
 
+#include "window_palette.hpp"
 #include "console_model.hpp"   // LineEdit: o campo de renomear usa o mesmo editor de linha do Console
 #include "hierarchy_model.hpp"
 #include "i18n.hpp"
@@ -34,6 +35,7 @@
 #include "SpriteUi/Widgets/WindowFrame.hpp"
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
 
+#include <optional>
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -95,7 +97,7 @@ struct Metrics {
     static constexpr float kBtnGap = 6.f;
     static constexpr float kMenuW = 200.f;
     static constexpr float kContextMenuW = 190.f;
-    static constexpr float kFont = 13.f;
+    static constexpr float kFont = 12.f;
     static constexpr float kSmallFont = 11.f;
     static constexpr float kWheelRows = 3.f;      // linhas por giro da roda
     static constexpr std::uint64_t kDoubleClickMs = 400;
@@ -133,13 +135,7 @@ class HierarchyPanel {
     HierarchyPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
         : toolbar_{text}, list_{text}, overlay_{text}, chrome_{text}, sdl_{sdl} {
         // Moldura: mesmo visual do Console e do Profiler.
-        frameColors_.body = sui::Srgb(0.055f, 0.075f, 0.110f);
-        frameColors_.border = sui::Srgb(0.160f, 0.220f, 0.330f);
-        frameColors_.borderDragging = sui::Srgb(0.420f, 0.600f, 0.980f);
-        frameColors_.headerActive = sui::Srgb(0.120f, 0.160f, 0.230f);
-        frameColors_.headerInactive = sui::Srgb(0.090f, 0.120f, 0.180f);
-        frameColors_.headerDragging = sui::Srgb(0.160f, 0.210f, 0.300f);
-        frameColors_.glyph = sui::Srgb(0.910f, 0.918f, 0.933f);
+        frameColors_ = editor::window_palette::Standard();
     }
     HierarchyPanel(const HierarchyPanel&) = delete;
     HierarchyPanel& operator=(const HierarchyPanel&) = delete;
@@ -196,6 +192,16 @@ class HierarchyPanel {
         }
     }
 
+    // Area dada pelo dock (folha, sem a faixa de abas). nullopt: a janela flutua na posicao em que estava.
+    void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }
+    [[nodiscard]] bool docked() const { return frame_.docked(); }
+    [[nodiscard]] SU::Rect frameRect() const { return frame_.rect(); }
+    [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
+    void floatAt(SU::Vec2 at) {
+        dock_.reset();
+        frame_.undock(at);
+    }
+
     // Desenha a janela (moldura SpriteUI, barra, lista e menu). Os pedidos saem em `out`.
     bool draw(SDL_Renderer* renderer, SDL_Window* window, bool visible, Source src, Requests& out) {
         visible_ = visible;
@@ -205,7 +211,7 @@ class HierarchyPanel {
         SDL_GetWindowSize(window, &winW, &winH);
         if (winW <= 0 || winH <= 0) return true;
         // Primeira posicao: a esquerda, na parte de baixo, com a altura da lista (cabe ~10 linhas).
-        frame_.place(static_cast<float>(winW), static_cast<float>(winH), kFrameW, kFrameH, 16.f);
+        frame_.placeIn(static_cast<float>(winW), static_cast<float>(winH), dock_, kFrameW, kFrameH, 16.f);
         const SU::Rect content = frame_.content();
         rect_ = sui::Box{content.position.x, content.position.y, content.size.x, content.size.y};
         if (!iconsTried_) {
@@ -691,7 +697,7 @@ class HierarchyPanel {
         SW::WindowFrameState state;
         state.active = true;
         state.dragging = frame_.dragging();
-        state.docked = false;
+        state.docked = frame_.docked();
         auto frameItems = SW::BuildWindowFrameItems(owner, frame_.rect(), frame_.metrics(), state, frameColors_, -2.f, paint);
         paint += frameItems.size() + 1;
         out.insert(out.end(), frameItems.begin(), frameItems.end());
@@ -860,6 +866,7 @@ class HierarchyPanel {
     static constexpr float kFrameW = 288.f;   // tamanho inicial da janela (px)
     static constexpr float kFrameH = 520.f;
     wf::Frame frame_;
+    std::optional<SU::Rect> dock_;
     SW::WindowFrameColors frameColors_{};
     bool closeRequested_ = false;
     bool helpRequested_ = false;

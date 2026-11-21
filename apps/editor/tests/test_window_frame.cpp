@@ -3,6 +3,7 @@
 #include "window_frame.hpp"
 
 #include <cstdio>
+#include <optional>
 
 namespace {
 
@@ -139,6 +140,21 @@ int main() {
                                                                              ToolEngine::SpriteUi::Widgets::WindowFrameButton::Minimize)));
     f.place(1280.f, 800.f);
     Check(!f.minimized() && f.rect().size.y == full, "segundo clique: volta a altura cheia");
+  }
+
+  // Janela acoplada: o retangulo vem do dock e o arraste nao a move; ao sair do dock volta a flutuar.
+  {
+    wf::Frame f;
+    const ToolEngine::SpriteUi::Rect slot{{100.f, 120.f}, {400.f, 300.f}};
+    f.placeIn(1280.f, 800.f, slot);
+    Check(f.docked() && f.rect().position.x == 100.f && f.rect().size.x == 400.f, "acoplada: usa o retangulo do dock");
+    f.pointerDown(Center(f.gripRect()));
+    f.pointerMove({700.f, 500.f});
+    f.pointerUp();
+    f.placeIn(1280.f, 800.f, slot);
+    Check(f.rect().position.x == 100.f && f.rect().position.y == 120.f, "acoplada: arrastar o grip nao muda a posicao");
+    f.placeIn(1280.f, 800.f, std::nullopt);
+    Check(!f.docked() && f.rect().position.x == 100.f, "sem dock: sai do dock na posicao em que estava");
   }
 
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);

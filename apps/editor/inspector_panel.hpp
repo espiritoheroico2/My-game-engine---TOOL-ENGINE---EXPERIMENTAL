@@ -30,6 +30,7 @@
 #include "SpriteUi/Widgets/TextField.hpp"
 
 #include "components.hpp"
+#include "framed_window.hpp"
 #include "i18n.hpp"
 #include "inspector_bridge.hpp"
 #include "inspector_model.hpp"
@@ -145,7 +146,7 @@ struct Metrics {
     static constexpr float kHeadH = 24.f;
     static constexpr float kRowH = 24.f;
     static constexpr float kGap = 4.f;
-    static constexpr float kFont = 13.f;
+    static constexpr float kFont = 12.f;
     static constexpr float kSmallFont = 11.f;
     static constexpr float kLabelMax = 118.f;
     static constexpr float kSwatchW = 56.f;
@@ -170,10 +171,12 @@ struct Metrics {
 
 class InspectorPanel {
   public:
-    InspectorPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : canvas_{text}, overlay_{text}, sdl_{sdl} {
+    InspectorPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : canvas_{text}, overlay_{text}, sdl_{sdl}, chrome_{text, sdl} {
         overlay_.setTextZ(Metrics::kZPopupText);
     }
     InspectorPanel(const InspectorPanel&) = delete;
+    // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e o bloco ImGui posicionado sobre ela.
+    framed::Chrome& chrome() { return chrome_; }
     InspectorPanel& operator=(const InspectorPanel&) = delete;
 
     // Monta os controles do quadro e devolve a altura do bloco (em pixels, sem a janela). Chamar antes de reservar
@@ -277,6 +280,7 @@ class InspectorPanel {
     }
 
     bool handleEvent(const SDL_Event& e) {
+        if (chrome_.handleEvent(e)) return true;
         if (!shown_) return false;
         switch (e.type) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -1685,6 +1689,7 @@ class InspectorPanel {
     sui::Canvas canvas_;
     sui::Canvas overlay_;
     sui::SpriteUiSdlRenderer& sdl_;
+    framed::Chrome chrome_;
     sui::Theme theme_;
     SR::RenderExtractor extractor_;
     SR::FramePacket packet_;

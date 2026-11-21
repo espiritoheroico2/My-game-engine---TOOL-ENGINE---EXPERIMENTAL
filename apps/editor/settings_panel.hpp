@@ -16,6 +16,7 @@
 //   handleEvent: clique, arrasto da barra e roda. Clique num combo aberto fecha os outros. Pedidos vao para pending_.
 
 #include "i18n.hpp"
+#include "framed_window.hpp"
 #include "settings_bridge.hpp"
 #include "settings_changes.hpp"
 #include "settings_model.hpp"
@@ -91,7 +92,7 @@ struct Metrics {
     static constexpr float kHeadingH = 26.f;
     static constexpr float kTextH = 18.f;
     static constexpr float kGap = 4.f;
-    static constexpr float kFont = 13.f;
+    static constexpr float kFont = 12.f;
     static constexpr float kSmallFont = 11.f;
     static constexpr float kStepW = 26.f;     // botoes - e + dos tamanhos personalizados
     static constexpr float kValueW = 56.f;    // espaco do valor ao lado do deslizante
@@ -111,14 +112,17 @@ inline constexpr std::uint32_t kStripClip = 2u;
 class SettingsPanel {
  public:
     SettingsPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
-        : strip_{text}, canvas_{text}, overlay_{text}, sdl_{sdl} {
+        : strip_{text}, canvas_{text}, overlay_{text}, sdl_{sdl}, chrome_{text, sdl} {
         overlay_.setTextZ(Metrics::kPopupTextZ);
     }
     SettingsPanel(const SettingsPanel&) = delete;
+    // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e a janela ImGui posicionada sobre ela.
+    framed::Chrome& chrome() { return chrome_; }
     SettingsPanel& operator=(const SettingsPanel&) = delete;
 
     // true quando o evento foi da janela (faixa de abas ou, na aba Graficos, o conteudo).
     bool handleEvent(const SDL_Event& e) {
+        if (chrome_.handleEvent(e)) return true;
         if (!visible_) return false;
         switch (e.type) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -734,6 +738,7 @@ class SettingsPanel {
     sui::Canvas canvas_;    // textos e formas da aba Graficos (recorte do conteudo)
     sui::Canvas overlay_;   // textos das listas abertas (por cima dos controles)
     sui::SpriteUiSdlRenderer& sdl_;
+    framed::Chrome chrome_;
     sui::Theme theme_;
     std::array<bool, sm::kTabCount> open_ = [] {
         std::array<bool, sm::kTabCount> a{};

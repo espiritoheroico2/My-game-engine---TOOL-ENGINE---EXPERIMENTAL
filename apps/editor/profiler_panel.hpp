@@ -16,6 +16,7 @@
 // Padrao de uso da SpriteUI: start_screen_spriteui.hpp (LayoutTree para os nos com clique; addDecorations para texto e retangulos).
 //
 // A roda sobre o conteudo rola a lista. Eventos de ponteiro seguem para o ImGui para foco e docking funcionarem.
+#include "window_palette.hpp"
 #include "i18n.hpp"
 #include "profiler.hpp"
 #include "profiler_export.hpp"
@@ -34,6 +35,7 @@
 #include "window_help_icon.hpp"
 #include "text_atlas_set.hpp"
 
+#include <optional>
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -68,7 +70,7 @@ struct Theme {
   static constexpr float kScrollLane = 12.f;      // reserva a direita da lista para a barra de rolagem
   static constexpr float kScrollW = 4.f;
   static constexpr float kHeadingFont = 14.f;
-  static constexpr float kFont = 13.f;
+  static constexpr float kFont = 12.f;
   static constexpr float kSmallFont = 11.f;
   static constexpr float kEmphasisFont = 17.f;    // Prioridade: valores principais
   static constexpr float kEmphasisHeading = 19.f; // Prioridade: titulo da secao
@@ -119,13 +121,7 @@ class ProfilerPanel {
   ProfilerPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : text_{text}, sdl_{sdl} {
     buildTree();
     // Moldura: mesmo visual do Console (corpo navy, aba de 30 px).
-    frameColors_.body = colors_.panel;
-    frameColors_.border = Srgb(0.160f, 0.220f, 0.330f);
-    frameColors_.borderDragging = Srgb(0.420f, 0.600f, 0.980f);
-    frameColors_.headerActive = Srgb(0.120f, 0.160f, 0.230f);
-    frameColors_.headerInactive = Srgb(0.090f, 0.120f, 0.180f);
-    frameColors_.headerDragging = Srgb(0.160f, 0.210f, 0.300f);
-    frameColors_.glyph = Srgb(0.910f, 0.918f, 0.933f);
+    frameColors_ = editor::window_palette::Standard();
   }
   ProfilerPanel(const ProfilerPanel&) = delete;
   ProfilerPanel& operator=(const ProfilerPanel&) = delete;
@@ -162,6 +158,16 @@ class ProfilerPanel {
   }
 
   // Moldura (X fecha, grip arrasta), botao Exportar e roda sobre a lista. Devolve true quando consumiu o evento.
+  // Area dada pelo dock (folha, sem a faixa de abas). nullopt: a janela flutua na posicao em que estava.
+  void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }
+  [[nodiscard]] bool docked() const { return frame_.docked(); }
+  [[nodiscard]] SU::Rect frameRect() const { return frame_.rect(); }
+  [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
+  void floatAt(SU::Vec2 at) {
+    dock_.reset();
+    frame_.undock(at);
+  }
+
   bool handleEvent(const SDL_Event& e, bool visible) {
     if (!visible) return false;
     switch (e.type) {
@@ -223,7 +229,7 @@ class ProfilerPanel {
       return true;
     }
     // Primeira posicao: canto inferior esquerdo, com a largura de antes (420 px). O Console nasce no centro.
-    frame_.place(static_cast<float>(winW), static_cast<float>(winH), Theme::kWidth, wf::Metrics::kHeight, 16.f);
+    frame_.placeIn(static_cast<float>(winW), static_cast<float>(winH), dock_, Theme::kWidth, wf::Metrics::kHeight, 16.f);
     const SU::Rect content = frame_.content();
     const SU::Rect area{{content.position.x, content.position.y + Theme::kToolbarH},
                         {content.size.x, std::max(0.f, content.size.y - Theme::kToolbarH)}};
@@ -303,7 +309,7 @@ class ProfilerPanel {
     SW::WindowFrameState state;
     state.active = true;
     state.dragging = frame_.dragging();
-    state.docked = false;
+    state.docked = frame_.docked();
     auto frameItems = SW::BuildWindowFrameItems(panel_, frame_.rect(), frame_.metrics(), state, frameColors_, -2.f, paint);
     paint += frameItems.size() + 1;
     out.insert(out.end(), frameItems.begin(), frameItems.end());
@@ -654,6 +660,7 @@ class ProfilerPanel {
 
   // Moldura e pedidos da janela (X, grip e botao Exportar)
   wf::Frame frame_;
+  std::optional<SU::Rect> dock_;
   SW::WindowFrameColors frameColors_{};
   SU::Rect exportBox_{};
   bool closeRequested_ = false;

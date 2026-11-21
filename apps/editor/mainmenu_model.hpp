@@ -40,12 +40,14 @@ enum class Command : std::uint8_t {
   ToggleGame,
   ToggleAssets,
   ToggleScenes,
+  ToggleCoding,
   ToggleSettings,
   ToggleNarrative,
   ToggleInputMap,
   ToggleSpriteUiDiagnostics,
   ToggleHelp,
   ResetLayout,
+  SaveLayout,
   ToggleLockInterface,
   ToggleDockWithShift,
   ToggleLogKeys,
@@ -75,6 +77,7 @@ struct MenuState {
   bool game = false;
   bool assets = false;
   bool scenes = false;
+  bool coding = false;
   bool settings = false;
   bool narrative = false;
   bool inputMap = false;
@@ -145,19 +148,20 @@ inline const std::vector<MenuDef>& definitions() {
         {"Game", "", Command::ToggleGame, 0},
         {"Assets", "", Command::ToggleAssets, 0},
         {"Scenes", "", Command::ToggleScenes, 0},
+        {"Coding", "", Command::ToggleCoding, 0},
         {"Settings", "", Command::ToggleSettings, 0},
         {"Narrative Controller", "", Command::ToggleNarrative, 0},
         {"Input Map", "", Command::ToggleInputMap, 0},
         {"SpriteUI diagnostics", "", Command::ToggleSpriteUiDiagnostics, 0},
         {"Help", "F1", Command::ToggleHelp, 0},
         {nullptr, nullptr, Command::None, 0},
-        {"Reset layout", "", Command::ResetLayout, 0}}},
+        {"Reset layout", "", Command::ResetLayout, 0}, {"Save layout", "", Command::SaveLayout, 0}}},
       {"Interface",
        {{"Lock interface", "", Command::ToggleLockInterface, 0},
         {"Dock only while holding Shift", "", Command::ToggleDockWithShift, 0},
         {"Log keyboard events (debug)", "", Command::ToggleLogKeys, 0},
         {nullptr, nullptr, Command::None, 0},
-        {"Reset layout", "", Command::ResetLayout, 0}}},
+        {"Reset layout", "", Command::ResetLayout, 0}, {"Save layout", "", Command::SaveLayout, 0}}},
       {"Options",
        {{"Appearance and colors...", "", Command::Settings, 0},
         {"Language...", "", Command::Settings, 1},
@@ -184,6 +188,7 @@ inline std::optional<bool> toggleValue(const MenuState& s, Command c) {
     case Command::ToggleGame: return s.game;
     case Command::ToggleAssets: return s.assets;
     case Command::ToggleScenes: return s.scenes;
+    case Command::ToggleCoding: return s.coding;
     case Command::ToggleSettings: return s.settings;
     case Command::ToggleNarrative: return s.narrative;
     case Command::ToggleInputMap: return s.inputMap;

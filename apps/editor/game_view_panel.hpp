@@ -14,6 +14,7 @@
 //   draw:        desenha o fundo, cada celula (imagem, sobreposicao) e a barra (se nao e o modo --player).
 //   handleEvent: guarda o mouse e os cliques para o proximo draw (sem consumir nada).
 
+#include "window_palette.hpp"
 #include "game_view_model.hpp"
 #include "i18n.hpp"
 #include "scene_view_model.hpp"
@@ -21,6 +22,7 @@
 #include "sui_panel.hpp"
 #include "view_painter.hpp"
 #include "view_shapes.hpp"
+#include "window_frame.hpp"
 
 #include "SpriteUi/Elements/Image.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
@@ -46,8 +48,9 @@ namespace Elm = ToolEngine::SpriteUi::Elements;
 
 inline constexpr float kToolbarH = 30.f;
 inline constexpr float kPad = sui::kPanelPadding;
-inline constexpr float kFont = 13.f;
+inline constexpr float kFont = 12.f;
 inline constexpr float kBtnH = 22.f;
+inline constexpr float kTitleFont = 12.f;   // titulo da janela (negrito por duas passadas)
 inline constexpr std::uint32_t kFirstCellSlot = 1;   // slot 0 e da Scene (SpriteUiSdlRenderer::setView)
 inline constexpr view::Color kPanelFill = view::Rgba(14, 19, 28, 250);
 inline constexpr view::Color kButtonFill = view::Rgba(33, 41, 54);
@@ -83,22 +86,37 @@ struct Values {
 struct Requests {
   bool playToggle = false, pauseToggle = false, stepOnce = false;
   std::vector<std::string> uiActions;   // cliques nos botoes da UI do jogo (so durante o Play)
+  bool close = false, help = false;     // X e "?" da moldura (o host fecha ou abre a Help)
 };
 
 class GamePanel {
 public:
-  GamePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {}
+  GamePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {
+    // Mesmas cores da moldura do Console e da Scene (window_frame.hpp).
+    frameColors_ = editor::window_palette::Standard();
+  }
   GamePanel(const GamePanel&) = delete;
   GamePanel& operator=(const GamePanel&) = delete;
 
-  // Guarda o evento para o proximo draw. Sempre false: o evento segue para o ImGui.
+  // Eventos do SDL. A moldura (X, "?", minimizar, grip) e tratada aqui; o resto vai para a fila do jogo.
+  // Devolve true quando o evento foi da moldura: o host nao repassa esse clique ao ImGui.
   bool handleEvent(const SDL_Event& e) {
     switch (e.type) {
-      case SDL_EVENT_MOUSE_MOTION: queue_.push_back({In::Kind::Move, 0, e.motion.x, e.motion.y}); break;
+      case SDL_EVENT_MOUSE_MOTION:
+        if (frame_.dragging()) {
+          frame_.pointerMove({e.motion.x, e.motion.y});
+          return true;
+        }
+        queue_.push_back({In::Kind::Move, 0, e.motion.x, e.motion.y});
+        break;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        if (e.button.button == SDL_BUTTON_LEFT) queue_.push_back({In::Kind::Down, 0, e.button.x, e.button.y});
+        if (e.button.button == SDL_BUTTON_LEFT) {
+          if (frameDown(e.button.x, e.button.y)) return true;
+          queue_.push_back({In::Kind::Down, 0, e.button.x, e.button.y});
+        }
         break;
       case SDL_EVENT_MOUSE_BUTTON_UP:
+        frame_.pointerUp();
         if (e.button.button == SDL_BUTTON_LEFT) queue_.push_back({In::Kind::Up, 0, e.button.x, e.button.y});
         break;
       default: break;
@@ -106,22 +124,63 @@ public:
     return false;
   }
 
-  // Desenha a janela na area `rect` (coordenadas da janela). Os cliques de UI saem em `out`.
-  bool draw(SDL_Renderer* renderer, sui::Box rect, const Values& v, Requests& out) {
-    rect_ = rect;
+  // Area dada pelo dock (folha, sem a faixa de abas). nullopt: a janela flutua na posicao em que estava.
+  void setDock(std::optional<ToolEngine::SpriteUi::Rect> dock) { dock_ = dock; }
+  [[nodiscard]] bool docked() const { return frame_.docked(); }
+  [[nodiscard]] ToolEngine::SpriteUi::Rect frameRect() const { return frame_.rect(); }
+  [[nodiscard]] ToolEngine::SpriteUi::Rect gripRect() const { return frame_.gripRect(); }
+  [[nodiscard]] window_frame::Frame& frame() { return frame_; }
+  [[nodiscard]] const window_frame::Frame& frame() const { return frame_; }
+  // Sai do dock na posicao `at` (flutuante). A janela segue o ponteiro depois disso.
+  void floatAt(ToolEngine::SpriteUi::Vec2 at) {
+    dock_.reset();
+    frame_.undock(at);
+  }
+
+  // Monta a moldura na janela (winW x winH) e devolve o corpo (abaixo do cabecalho, com a barra). Minimizada,
+  // o corpo some (area vazia). O modo --player nao usa isto: o chamador passa a janela inteira com setBody.
+  sui::Box prepare(float winW, float winH) {
+    frame_.placeIn(winW, winH, dock_, std::max(320.f, winW * 0.6f), std::max(240.f, winH * 0.6f));
+    const ToolEngine::SpriteUi::Rect c = frame_.content();
+    rect_ = frame_.minimized() ? sui::Box{} : sui::Box{c.position.x, c.position.y, c.size.x, c.size.y};
+    return rect_;
+  }
+  void setBody(sui::Box body) { rect_ = body; }
+
+  // Desenha a moldura (fora do --player) e o corpo na area `rect_`. Os cliques de UI saem em `out`.
+  bool draw(SDL_Renderer* renderer, const Values& v, Requests& out) {
+    out.close = closeRequested_;
+    out.help = helpRequested_;
+    closeRequested_ = helpRequested_ = false;
     visible_ = v.shown;
     if (!visible_) {
       queue_.clear();
       pressed_.reset();
+      frame_.reset();
       return true;
     }
     for (const In& ev : queue_) process(ev, v, out);
     queue_.clear();
 
+    const sui::Box rect = rect_;
+    const bool framed = !v.player && frame_.placed();
     const sui::Box bar{rect.x, rect.y, rect.w, v.player ? 0.f : kToolbarH};
-    const std::vector<SR::ClipRectGPU> clips = clipsFor(rect, v);
+    std::vector<SR::ClipRectGPU> clips = clipsFor(rect, v);
+    if (framed) {   // o clip 0 cobre a moldura inteira: o cabecalho tambem aparece
+      const ToolEngine::SpriteUi::Rect f = frame_.rect();
+      clips[0] = {f.position.x, f.position.y, f.position.x + f.size.x, f.position.y + f.size.y};
+    }
     view::PaintList list;
     list.owner = sui::handleFor(0);
+    if (framed) {
+      ToolEngine::SpriteUi::Widgets::WindowFrameState st;
+      st.active = true;
+      st.dragging = frame_.dragging();
+      st.docked = frame_.docked();
+      auto frameItems = ToolEngine::SpriteUi::Widgets::BuildWindowFrameItems(list.owner, frame_.rect(), frame_.metrics(), st, frameColors_, -2.f, list.paint);
+      list.paint += frameItems.size() + 1;
+      list.items.insert(list.items.end(), frameItems.begin(), frameItems.end());
+    }
     list.items.push_back(sui::Canvas::solidItem(rect.x, rect.y, rect.w, rect.h, view::premultiplied(kPanelFill), 0.f, list.owner, 0u, list.paint++));
     for (std::size_t i = 0; i < v.cells.size(); ++i) {
       const Cell& c = v.cells[i];
@@ -135,6 +194,7 @@ public:
     if (v.cells.empty() && !v.message.empty()) {
       chrome.text({rect.x + rect.w * 0.5f, rect.y + rect.h * 0.5f - 8.f}, v.message, kFont, kTextDim, true, rect.w - 24.f);
     }
+    if (framed) buildHeader(chrome);
     painter_.append(chrome, 0u, list);
     return view::drawPaintList(renderer, sdl_, extractor_, packet_, frameId_, clips, list);
   }
@@ -237,6 +297,35 @@ private:
     Btn id;
   };
 
+  // Clique na moldura: X e "?" viram pedidos do proximo draw; o grip inicia o arraste. True: foi da moldura.
+  bool frameDown(float x, float y) {
+    const window_frame::Event ev = frame_.pointerDown({x, y});
+    if (ev == window_frame::Event::Close) closeRequested_ = true;
+    if (ev == window_frame::Event::Help) helpRequested_ = true;
+    return ev != window_frame::Event::None;
+  }
+
+  // Titulo em negrito (duas passadas), circulo do "?" e grip (2 colunas x 3 pontos).
+  void buildHeader(view::ShapeList& out) {
+    const ToolEngine::SpriteUi::Rect head = frame_.header();
+    const ToolEngine::SpriteUi::Rect grip = frame_.gripRect();
+    const ToolEngine::SpriteUi::Rect help = frame_.helpRect();
+    const editor::scene_view_model::Pixel hc{help.position.x + help.size.x * 0.5f, help.position.y + help.size.y * 0.5f};
+    out.circleFilled(hc, help.size.x * 0.5f, view::Rgba(64, 102, 178));
+    out.text({hc.x, hc.y - kFont * 0.62f}, "?", kFont, kText, true);
+    const float tx = frame_.titleTextX();
+    const float ty = head.position.y + (head.size.y - kTitleFont) * 0.5f;
+    out.text({tx, ty}, editor::T("Game"), kTitleFont, kText);
+    out.text({tx + 0.7f, ty}, editor::T("Game"), kTitleFont, kText);
+    const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
+    for (int c = 0; c < 2; ++c) {
+      for (int r = 0; r < 3; ++r) {
+        const editor::scene_view_model::Pixel a{cx - 3.f + 4.f * static_cast<float>(c), cy - 4.f + 4.f * static_cast<float>(r)};
+        out.rectFilled(a, {a.x + 2.f, a.y + 2.f}, kTextDim);
+      }
+    }
+  }
+
   void buildToolbar(const Values& v, const sui::Box& bar, view::ShapeList& out) {
     buttons_.clear();
     float x = bar.x + kPad;
@@ -259,6 +348,11 @@ private:
 
   sui::Box rect_{};
   bool visible_ = false;
+  window_frame::Frame frame_;
+  ToolEngine::SpriteUi::Widgets::WindowFrameColors frameColors_{};
+  std::optional<ToolEngine::SpriteUi::Rect> dock_;
+  bool closeRequested_ = false;
+  bool helpRequested_ = false;
   std::vector<In> queue_;
   vm::Pixel mouse_{};
   std::optional<std::pair<std::size_t, std::size_t>> pressed_;

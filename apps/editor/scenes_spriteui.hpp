@@ -4,6 +4,7 @@
 // Esta view so desenha e reporta cliques e digitacao. Quem salva, abre, apaga, cria, renomeia e atribui assets e o
 // host (scenes_panel.hpp e main.cpp, via Action). Moldura: grip, "?" (abre a Help na secao Scenes), titulo em negrito,
 // minimizar e X.
+#include "window_palette.hpp"
 #include "i18n.hpp"
 #include "scenes_model.hpp"
 #include "spriteui_host.hpp"
@@ -21,9 +22,11 @@
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,13 +50,14 @@ struct Theme {
   static constexpr float kFieldHeight = 30.f;
   static constexpr float kButtonHeight = 34.f;
   static constexpr float kButtonWidth = 150.f;
+  static constexpr float kButtonMaxWidth = 220.f;   // teto ao esticar um botao sozinho na linha
   static constexpr float kRowHeight = 26.f;
   static constexpr std::size_t kMaxRows = 6;      // cenas visiveis (o resto rola depois)
   static constexpr std::size_t kMaxAssets = 4;    // assets visiveis
   static constexpr float kRemoveWidth = 28.f;
   static constexpr float kAssetNameWidth = 596.f;
-  static constexpr float kFontSize = 15.f;
-  static constexpr float kLabelSize = 13.f;
+  static constexpr float kFontSize = 12.f;
+  static constexpr float kLabelSize = 12.f;
   static constexpr float kTitleSize = 20.f;
   static constexpr float kFieldInset = 8.f;
   static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth
@@ -117,19 +121,30 @@ class View {
     removed_ = kNone;
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
 
-    const float panelWidth = std::min(Theme::kPanelWidth, windowWidth - 32.f);
+    const float panelWidth = dock_ ? dock_->size.x : std::min(Theme::kPanelWidth, windowWidth - 32.f);
     const float frameHeight = frameHeightNow();
+    if (dock_) {   // acoplada: a area vem do dock; o arraste nao a move
+      windowPos_ = dock_->position;
+      dragging_ = false;
+      placed_ = true;
+    } else if (docked_) {   // saiu do dock: continua no lugar em que estava
+      windowPos_ = frame_.position;
+      placed_ = true;
+    }
+    docked_ = dock_.has_value();
     if (!placed_) {   // primeira vez: centralizada
       windowPos_ = {std::floor((windowWidth - panelWidth) * 0.5f),
                     std::max(0.f, std::floor((windowHeight - Theme::kPanelHeight - metrics_.headerHeight) * 0.5f))};
       placed_ = true;
     }
-    windowPos_.x = std::clamp(windowPos_.x, 0.f, std::max(0.f, windowWidth - panelWidth));
-    windowPos_.y = std::clamp(windowPos_.y, 0.f, std::max(0.f, windowHeight - frameHeight));
-    frame_ = SU::Rect{windowPos_, {panelWidth, frameHeight}};
+    if (!docked_) {
+      windowPos_.x = std::clamp(windowPos_.x, 0.f, std::max(0.f, windowWidth - panelWidth));
+      windowPos_.y = std::clamp(windowPos_.y, 0.f, std::max(0.f, windowHeight - frameHeight));
+    }
+    frame_ = SU::Rect{windowPos_, {panelWidth, docked_ ? dock_->size.y : frameHeight}};
 
     handleFrameInput(in, actions);
-    frame_ = SU::Rect{windowPos_, {panelWidth, frameHeightNow()}};
+    frame_ = SU::Rect{windowPos_, {panelWidth, docked_ ? (minimized_ ? metrics_.headerHeight : dock_->size.y) : frameHeightNow()}};
 
     // Minimizada: so a moldura (cabecalho). O conteudo nao aparece nem recebe cliques.
     if (minimized_) {
@@ -140,8 +155,11 @@ class View {
     }
 
     const SU::Rect content = SW::WindowFrameContent(frame_, metrics_);
-    setPanelWidth(content.size.x);
-    tree_.Layout({content.position, {content.size.x, Theme::kPanelHeight}});
+    content_ = content;
+    scroll_ = std::clamp(scroll_, 0.f, std::max(0.f, naturalH_ - content.size.y));
+    setPanelSize(content.size.x);   // altura natural: as linhas de botoes quebram conforme a largura; o excesso rola
+    tree_.Layout({{content.position.x, content.position.y - scroll_}, content.size});
+    naturalH_ = rectOf(panelHandle_).size.y;
 
     rows_ = SM::Rows(model_.scenes, model_.current);
     applyVisuals();
@@ -173,6 +191,13 @@ class View {
     if (!scene.clipHierarchy.valid) return {};
     std::vector<SR::UIRenderItem> extra;
     std::vector<SR::ClipRectGPU> clips = scene.clipHierarchy.effectiveRects;
+    // Recorte pela moldura: conteudo mais largo que a janela (acoplada em folha estreita) nao vaza para fora dela.
+    const SU::Rect framed = content_;
+    clips.push_back({framed.position.x, framed.position.y, framed.position.x + framed.size.x, framed.position.y + framed.size.y});
+    const auto frameClip = static_cast<std::uint32_t>(clips.size() - 1);
+    for (auto& item : scene.renderItems) {
+      if (item.clipIndex == SR::NoClipIndex) item.clipIndex = frameClip;
+    }
     std::uint64_t paint = 1000;
     addFrame(extra, paint);
     addContent(extra, paint);
@@ -194,6 +219,17 @@ class View {
   [[nodiscard]] std::size_t removedIndex() const { return removed_; }
   [[nodiscard]] SU::Rect frameRect() const { return frame_; }
   [[nodiscard]] SU::Vec2 windowPos() const { return windowPos_; }
+  // Area dada pelo dock (folha, sem a faixa de abas). nullopt: a janela flutua.
+  void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }
+  [[nodiscard]] bool docked() const { return docked_; }
+  [[nodiscard]] SU::Rect gripRect() const { return SW::WindowGripRect(SW::WindowFrameHeader(frame_, metrics_, docked_), Theme::kGripWidth); }
+  // Sai do dock na posicao `at`: a janela segue o ponteiro (o arraste da moldura volta a valer).
+  void floatAt(SU::Vec2 at) {
+    dock_.reset();
+    windowPos_ = at;
+    placed_ = true;
+    docked_ = false;
+  }
   [[nodiscard]] bool dragging() const { return dragging_; }
   [[nodiscard]] bool minimized() const { return minimized_; }
   [[nodiscard]] const SW::WindowFrameMetrics& frameMetrics() const { return metrics_; }
@@ -215,6 +251,11 @@ class View {
  private:
   static constexpr std::size_t kNone = static_cast<std::size_t>(-1);
 
+  // Roda do mouse: rola o painel quando o conteudo passa da janela.
+ public:
+  void scrollBy(float dy) { scroll_ = std::clamp(scroll_ + dy, 0.f, std::max(0.f, naturalH_ - content_.size.y)); }
+
+ private:
   static bool inside(SU::Rect r, SU::Vec2 p) {
     return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y &&
            p.y < r.position.y + r.size.y;
@@ -227,7 +268,7 @@ class View {
 
   // "?" logo depois do grip; o titulo comeca depois dele.
   SU::Rect helpRectNow() const {
-    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, docked_);
     const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
     return SU::Rect{{grip.position.x + grip.size.x + Theme::kHelpGap, bar.position.y + (bar.size.y - Theme::kHelpSize) * 0.5f},
                     {Theme::kHelpSize, Theme::kHelpSize}};
@@ -258,8 +299,8 @@ class View {
       actions.push_back(Action::Help);
       return;
     }
-    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
-    if (inside(SW::WindowGripRect(bar, Theme::kGripWidth), p)) {
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, docked_);
+    if (!docked_ && inside(SW::WindowGripRect(bar, Theme::kGripWidth), p)) {
       dragging_ = true;
       grab_ = {p.x - windowPos_.x, p.y - windowPos_.y};
     }
@@ -269,13 +310,7 @@ class View {
   void buildTree() {
     metrics_.headerHeight = 30.f;
     metrics_.cornerRadius = 6.f;
-    frameColors_.body = Srgb(0.110f, 0.118f, 0.137f);
-    frameColors_.border = Srgb(0.235f, 0.251f, 0.294f);
-    frameColors_.borderDragging = Srgb(0.420f, 0.600f, 0.980f);
-    frameColors_.headerActive = Srgb(0.165f, 0.184f, 0.231f);
-    frameColors_.headerInactive = Srgb(0.125f, 0.137f, 0.169f);
-    frameColors_.headerDragging = Srgb(0.200f, 0.230f, 0.302f);
-    frameColors_.glyph = Srgb(0.900f, 0.920f, 0.960f);
+    frameColors_ = editor::window_palette::Standard();
     panelColor_ = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
 
     SU::FlexItem panel;
@@ -288,20 +323,20 @@ class View {
     panelHandle_ = tree_.Create({}, panel);
 
     label_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
-    const auto topRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    const auto topRow = tree_.Create(panelHandle_, wrapRowStyle());
     save_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
     new_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
     reload_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
     for (std::size_t i = 0; i < Theme::kMaxRows; ++i) rows_h_[i] = tree_.Create(panelHandle_, labelStyle(Theme::kRowHeight));
 
-    const auto actionRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    const auto actionRow = tree_.Create(panelHandle_, wrapRowStyle());
     open_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
     rename_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
     delete_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
     assign_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
 
     nameField_ = tree_.Create(panelHandle_, labelStyle(Theme::kFieldHeight));
-    const auto confirmRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    const auto confirmRow = tree_.Create(panelHandle_, wrapRowStyle());
     confirm_ = tree_.Create(confirmRow, buttonStyle(Theme::kButtonWidth));
     cancel_ = tree_.Create(confirmRow, buttonStyle(Theme::kButtonWidth));
 
@@ -333,12 +368,15 @@ class View {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Fixed, width};
     s.height = {SU::SizeMode::Fixed, Theme::kButtonHeight};
+    s.grow = 1.f;                                   // enche a linha quando sobra espaco (uma linha, um botao)
+    s.maxSize = {Theme::kButtonMaxWidth, std::numeric_limits<float>::infinity()};
     s.shrink = 0.f;
     return s;
   }
   static SU::FlexItem assetNameStyle() {
     SU::FlexItem s;
-    s.width = {SU::SizeMode::Fixed, Theme::kAssetNameWidth};
+    s.width = {SU::SizeMode::Fixed, 0.f};           // ocupa o espaco que sobra ao lado do botao de remover
+    s.grow = 1.f;
     s.height = {SU::SizeMode::Fixed, Theme::kRowHeight};
     s.shrink = 0.f;
     return s;
@@ -360,11 +398,25 @@ class View {
     return s;
   }
 
-  void setPanelWidth(float width) {
+  // Linha de botoes que quebra linha quando a janela estreita (cada botao vai para a linha de baixo).
+  static SU::FlexItem wrapRowStyle() {
+    SU::FlexItem s;
+    s.width = {SU::SizeMode::Percent, 1.f};
+    s.height = {SU::SizeMode::Auto, 0.f};
+    s.shrink = 0.f;
+    s.direction = SU::LayoutDirection::Row;
+    s.alignItems = SU::AlignItems::Start;
+    s.wrap = SU::FlexWrap::Wrap;
+    s.gap = Theme::kGap;
+    return s;
+  }
+
+  void setPanelSize(float width) {
     auto* el = tree_.Get(panelHandle_);
     if (!el) return;
     SU::FlexItem style = el->node.style;
     style.width.value = width;
+    style.height = {SU::SizeMode::Auto, 0.f};
     tree_.SetStyle(panelHandle_, style);
   }
 
@@ -562,13 +614,13 @@ class View {
     SW::WindowFrameState state;
     state.active = true;
     state.dragging = dragging_;
-    state.docked = false;
+    state.docked = docked_;
     auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_, metrics_, state, frameColors_, -2.f, paint);
     paint += frameItems.size() + 1;
     out.insert(out.end(), frameItems.begin(), frameItems.end());
 
     // Grip (pontos).
-    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, docked_);
     const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
     const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
     for (int c = 0; c < 2; ++c) {
@@ -701,6 +753,9 @@ class View {
   SR::RenderExtractor extractor_;
 
   SU::UIHandle panelHandle_{}, label_{}, save_{}, new_{}, reload_{}, open_{}, rename_{}, delete_{}, assign_{};
+  SU::Rect content_{};        // area visivel do conteudo (abaixo do cabecalho)
+  float scroll_ = 0.f;        // deslocamento vertical do painel (roda do mouse)
+  float naturalH_ = 0.f;      // altura natural do painel no ultimo quadro
   SU::UIHandle nameField_{}, confirm_{}, cancel_{}, assetsLabel_{}, status_{};
   SU::UIHandle rows_h_[Theme::kMaxRows]{};
   SU::UIHandle assetRow_[Theme::kMaxAssets]{}, assetName_[Theme::kMaxAssets]{}, assetRemove_[Theme::kMaxAssets]{};
@@ -715,6 +770,8 @@ class View {
   SW::WindowFrameColors frameColors_{};
   SU::Rect frame_{};
   SU::Vec2 windowPos_{};
+  std::optional<SU::Rect> dock_;
+  bool docked_ = false;
   SU::Vec2 grab_{};
   bool placed_ = false;
   bool dragging_ = false;

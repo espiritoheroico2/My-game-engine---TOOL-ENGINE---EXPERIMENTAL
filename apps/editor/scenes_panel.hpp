@@ -56,6 +56,10 @@ class Panel {
         x_ = e.motion.x;
         y_ = e.motion.y;
         return owned_;
+      case SDL_EVENT_MOUSE_WHEEL:
+        if (!inside(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
+        view_.scrollBy(-e.wheel.y * 40.f);
+        return true;
       case SDL_EVENT_TEXT_INPUT:
         if (!model_.nameFocus || !e.text.text) return false;
         texts_.emplace_back(e.text.text);
