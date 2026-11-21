@@ -47,9 +47,9 @@ namespace Elm = ToolEngine::SpriteUi::Elements;
 
 inline constexpr float kToolbarH = 30.f;
 inline constexpr float kPad = sui::kPanelPadding;
-inline constexpr float kFont = 13.f;
+inline constexpr float kFont = 12.f;
 inline constexpr float kBtnH = 22.f;
-inline constexpr float kTitleFont = 14.f;   // titulo da janela (negrito por duas passadas)
+inline constexpr float kTitleFont = 12.f;   // titulo da janela (negrito por duas passadas)
 inline constexpr std::uint32_t kFirstCellSlot = 1;   // slot 0 e da Scene (SpriteUiSdlRenderer::setView)
 inline constexpr view::Color kPanelFill = view::Rgba(14, 19, 28, 250);
 inline constexpr view::Color kButtonFill = view::Rgba(33, 41, 54);

@@ -96,7 +96,7 @@ struct Metrics {
     static constexpr float kBtnGap = 6.f;
     static constexpr float kMenuW = 200.f;
     static constexpr float kContextMenuW = 190.f;
-    static constexpr float kFont = 13.f;
+    static constexpr float kFont = 12.f;
     static constexpr float kSmallFont = 11.f;
     static constexpr float kWheelRows = 3.f;      // linhas por giro da roda
     static constexpr std::uint64_t kDoubleClickMs = 400;

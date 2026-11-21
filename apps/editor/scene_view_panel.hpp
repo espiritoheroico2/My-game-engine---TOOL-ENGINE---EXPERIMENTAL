@@ -57,8 +57,8 @@ namespace Elm = ToolEngine::SpriteUi::Elements;
 
 inline constexpr float kToolbarH = 30.f;
 inline constexpr float kPad = sui::kPanelPadding;
-inline constexpr float kFont = 13.f;
-inline constexpr float kTitleFont = 14.f;   // titulo da janela (negrito por duas passadas)
+inline constexpr float kFont = 12.f;
+inline constexpr float kTitleFont = 12.f;   // titulo da janela (negrito por duas passadas)
 inline constexpr float kBtnH = 22.f;
 inline constexpr float kFloatH = 28.f;
 inline constexpr float kFloatMargin = 10.f;

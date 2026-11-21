@@ -44,7 +44,7 @@ inline view::Pixel px(SU::Vec2 v) { return view::Pixel{v.x, v.y}; }
 enum class Kind : std::uint32_t { Hierarchy, Scene, Game, Scenes, Assets, Console, Profiler, Inspector, Settings };
 inline SU::UIHandle idOf(Kind k) { return SU::UIHandle{0xE0000010u + static_cast<std::uint32_t>(k), 1u}; }
 
-inline constexpr float kStripFont = 13.f;
+inline constexpr float kStripFont = 12.f;
 inline constexpr float kStripPad = 8.f;
 
 // O que o host precisa de cada janela. As funcoes sao preenchidas pelo main.cpp com os paineis ja criados.

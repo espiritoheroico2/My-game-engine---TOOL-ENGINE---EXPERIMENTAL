@@ -122,7 +122,7 @@ private:
         Command command = Command::None;
     };
 
-    static constexpr float kFontSize = 13.0f;
+    static constexpr float kFontSize = 12.0f;
     static constexpr float kHeaderPadding = 10.0f;
     static constexpr float kRowPadding = 12.0f;
     static constexpr float kButtonPadding = 10.0f;

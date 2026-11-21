@@ -146,7 +146,7 @@ struct Metrics {
     static constexpr float kHeadH = 24.f;
     static constexpr float kRowH = 24.f;
     static constexpr float kGap = 4.f;
-    static constexpr float kFont = 13.f;
+    static constexpr float kFont = 12.f;
     static constexpr float kSmallFont = 11.f;
     static constexpr float kLabelMax = 118.f;
     static constexpr float kSwatchW = 56.f;

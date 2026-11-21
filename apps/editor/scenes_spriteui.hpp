@@ -21,6 +21,7 @@
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -48,13 +49,14 @@ struct Theme {
   static constexpr float kFieldHeight = 30.f;
   static constexpr float kButtonHeight = 34.f;
   static constexpr float kButtonWidth = 150.f;
+  static constexpr float kButtonMaxWidth = 220.f;   // teto ao esticar um botao sozinho na linha
   static constexpr float kRowHeight = 26.f;
   static constexpr std::size_t kMaxRows = 6;      // cenas visiveis (o resto rola depois)
   static constexpr std::size_t kMaxAssets = 4;    // assets visiveis
   static constexpr float kRemoveWidth = 28.f;
   static constexpr float kAssetNameWidth = 596.f;
-  static constexpr float kFontSize = 15.f;
-  static constexpr float kLabelSize = 13.f;
+  static constexpr float kFontSize = 12.f;
+  static constexpr float kLabelSize = 12.f;
   static constexpr float kTitleSize = 20.f;
   static constexpr float kFieldInset = 8.f;
   static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth
@@ -152,8 +154,11 @@ class View {
     }
 
     const SU::Rect content = SW::WindowFrameContent(frame_, metrics_);
-    setPanelWidth(content.size.x);
-    tree_.Layout({content.position, {content.size.x, Theme::kPanelHeight}});
+    content_ = content;
+    scroll_ = std::clamp(scroll_, 0.f, std::max(0.f, naturalH_ - content.size.y));
+    setPanelSize(content.size.x);   // altura natural: as linhas de botoes quebram conforme a largura; o excesso rola
+    tree_.Layout({{content.position.x, content.position.y - scroll_}, content.size});
+    naturalH_ = rectOf(panelHandle_).size.y;
 
     rows_ = SM::Rows(model_.scenes, model_.current);
     applyVisuals();
@@ -186,7 +191,7 @@ class View {
     std::vector<SR::UIRenderItem> extra;
     std::vector<SR::ClipRectGPU> clips = scene.clipHierarchy.effectiveRects;
     // Recorte pela moldura: conteudo mais largo que a janela (acoplada em folha estreita) nao vaza para fora dela.
-    const SU::Rect framed = frame_;
+    const SU::Rect framed = content_;
     clips.push_back({framed.position.x, framed.position.y, framed.position.x + framed.size.x, framed.position.y + framed.size.y});
     const auto frameClip = static_cast<std::uint32_t>(clips.size() - 1);
     for (auto& item : scene.renderItems) {
@@ -245,6 +250,11 @@ class View {
  private:
   static constexpr std::size_t kNone = static_cast<std::size_t>(-1);
 
+  // Roda do mouse: rola o painel quando o conteudo passa da janela.
+ public:
+  void scrollBy(float dy) { scroll_ = std::clamp(scroll_ + dy, 0.f, std::max(0.f, naturalH_ - content_.size.y)); }
+
+ private:
   static bool inside(SU::Rect r, SU::Vec2 p) {
     return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y &&
            p.y < r.position.y + r.size.y;
@@ -318,20 +328,20 @@ class View {
     panelHandle_ = tree_.Create({}, panel);
 
     label_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
-    const auto topRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    const auto topRow = tree_.Create(panelHandle_, wrapRowStyle());
     save_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
     new_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
     reload_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
     for (std::size_t i = 0; i < Theme::kMaxRows; ++i) rows_h_[i] = tree_.Create(panelHandle_, labelStyle(Theme::kRowHeight));
 
-    const auto actionRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    const auto actionRow = tree_.Create(panelHandle_, wrapRowStyle());
     open_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
     rename_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
     delete_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
     assign_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
 
     nameField_ = tree_.Create(panelHandle_, labelStyle(Theme::kFieldHeight));
-    const auto confirmRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    const auto confirmRow = tree_.Create(panelHandle_, wrapRowStyle());
     confirm_ = tree_.Create(confirmRow, buttonStyle(Theme::kButtonWidth));
     cancel_ = tree_.Create(confirmRow, buttonStyle(Theme::kButtonWidth));
 
@@ -363,12 +373,15 @@ class View {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Fixed, width};
     s.height = {SU::SizeMode::Fixed, Theme::kButtonHeight};
+    s.grow = 1.f;                                   // enche a linha quando sobra espaco (uma linha, um botao)
+    s.maxSize = {Theme::kButtonMaxWidth, std::numeric_limits<float>::infinity()};
     s.shrink = 0.f;
     return s;
   }
   static SU::FlexItem assetNameStyle() {
     SU::FlexItem s;
-    s.width = {SU::SizeMode::Fixed, Theme::kAssetNameWidth};
+    s.width = {SU::SizeMode::Fixed, 0.f};           // ocupa o espaco que sobra ao lado do botao de remover
+    s.grow = 1.f;
     s.height = {SU::SizeMode::Fixed, Theme::kRowHeight};
     s.shrink = 0.f;
     return s;
@@ -390,11 +403,25 @@ class View {
     return s;
   }
 
-  void setPanelWidth(float width) {
+  // Linha de botoes que quebra linha quando a janela estreita (cada botao vai para a linha de baixo).
+  static SU::FlexItem wrapRowStyle() {
+    SU::FlexItem s;
+    s.width = {SU::SizeMode::Percent, 1.f};
+    s.height = {SU::SizeMode::Auto, 0.f};
+    s.shrink = 0.f;
+    s.direction = SU::LayoutDirection::Row;
+    s.alignItems = SU::AlignItems::Start;
+    s.wrap = SU::FlexWrap::Wrap;
+    s.gap = Theme::kGap;
+    return s;
+  }
+
+  void setPanelSize(float width) {
     auto* el = tree_.Get(panelHandle_);
     if (!el) return;
     SU::FlexItem style = el->node.style;
     style.width.value = width;
+    style.height = {SU::SizeMode::Auto, 0.f};
     tree_.SetStyle(panelHandle_, style);
   }
 
@@ -731,6 +758,9 @@ class View {
   SR::RenderExtractor extractor_;
 
   SU::UIHandle panelHandle_{}, label_{}, save_{}, new_{}, reload_{}, open_{}, rename_{}, delete_{}, assign_{};
+  SU::Rect content_{};        // area visivel do conteudo (abaixo do cabecalho)
+  float scroll_ = 0.f;        // deslocamento vertical do painel (roda do mouse)
+  float naturalH_ = 0.f;      // altura natural do painel no ultimo quadro
   SU::UIHandle nameField_{}, confirm_{}, cancel_{}, assetsLabel_{}, status_{};
   SU::UIHandle rows_h_[Theme::kMaxRows]{};
   SU::UIHandle assetRow_[Theme::kMaxAssets]{}, assetName_[Theme::kMaxAssets]{}, assetRemove_[Theme::kMaxAssets]{};

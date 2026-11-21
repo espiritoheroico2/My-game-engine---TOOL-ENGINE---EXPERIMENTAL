@@ -50,9 +50,9 @@ struct Theme {
   static constexpr float kButtonHeight = 34.f;
   static constexpr float kButtonWidth = 160.f;
   static constexpr float kLineHeight = 18.f;   // status e lista de faltantes
-  static constexpr float kFontSize = 15.f;
+  static constexpr float kFontSize = 12.f;
   static constexpr float kTitleSize = 20.f;
-  static constexpr float kLabelSize = 13.f;
+  static constexpr float kLabelSize = 12.f;
   static constexpr float kFieldInset = 8.f;
   static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth
   // 9 (rotulo, campo) + linha do botao + status + faltantes = 21 filhos, 20 espacos. O titulo fica na moldura.

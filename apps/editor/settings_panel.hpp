@@ -92,7 +92,7 @@ struct Metrics {
     static constexpr float kHeadingH = 26.f;
     static constexpr float kTextH = 18.f;
     static constexpr float kGap = 4.f;
-    static constexpr float kFont = 13.f;
+    static constexpr float kFont = 12.f;
     static constexpr float kSmallFont = 11.f;
     static constexpr float kStepW = 26.f;     // botoes - e + dos tamanhos personalizados
     static constexpr float kValueW = 56.f;    // espaco do valor ao lado do deslizante

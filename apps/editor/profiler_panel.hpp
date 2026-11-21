@@ -69,7 +69,7 @@ struct Theme {
   static constexpr float kScrollLane = 12.f;      // reserva a direita da lista para a barra de rolagem
   static constexpr float kScrollW = 4.f;
   static constexpr float kHeadingFont = 14.f;
-  static constexpr float kFont = 13.f;
+  static constexpr float kFont = 12.f;
   static constexpr float kSmallFont = 11.f;
   static constexpr float kEmphasisFont = 17.f;    // Prioridade: valores principais
   static constexpr float kEmphasisHeading = 19.f; // Prioridade: titulo da secao

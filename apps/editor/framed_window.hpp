@@ -24,8 +24,8 @@ namespace SU = ToolEngine::SpriteUi;
 namespace Wd = ToolEngine::SpriteUi::Widgets;
 namespace SR = ToolEngine::SpriteUi::Rendering;
 
-inline constexpr float kFont = 13.f;
-inline constexpr float kTitleFont = 14.f;
+inline constexpr float kFont = 12.f;
+inline constexpr float kTitleFont = 12.f;
 
 class Chrome {
  public:

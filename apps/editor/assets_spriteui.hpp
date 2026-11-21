@@ -61,8 +61,8 @@ struct Theme {
   static constexpr float kIconSize = 56.f;
   static constexpr float kTextLineHeight = 20.f;
   static constexpr int kTextLines = static_cast<int>(kGridHeight / kTextLineHeight);
-  static constexpr float kFontSize = 15.f;
-  static constexpr float kLabelSize = 13.f;
+  static constexpr float kFontSize = 12.f;
+  static constexpr float kLabelSize = 12.f;
   static constexpr float kTitleSize = 20.f;
   static constexpr float kFieldInset = 8.f;
   static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth

@@ -63,7 +63,7 @@ struct Theme {
   static constexpr float kRowGap = 3.f;           // espaco entre duas linhas do log
   static constexpr float kScrollLane = 12.f;      // reserva a direita da lista para a barra de rolagem
   static constexpr float kScrollW = 4.f;
-  static constexpr float kFont = 13.f;
+  static constexpr float kFont = 12.f;
   static constexpr float kSmallFont = 11.f;
   static constexpr float kWheelStep = 48.f;
 };

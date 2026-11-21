@@ -67,7 +67,7 @@ class StatusBarPanel {
     return theme_.text;
   }
 
-  static constexpr float kFontSize = 13.f;
+  static constexpr float kFontSize = 12.f;
   static constexpr float kPad = 10.f;
   static constexpr float kSeparatorGap = 12.f;
   static constexpr float kSeparatorInset = 4.f;
