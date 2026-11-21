@@ -25,6 +25,7 @@
 #include "sui_panel.hpp"
 #include "view_painter.hpp"
 #include "view_shapes.hpp"
+#include "window_frame.hpp"
 
 #include "SpriteUi/Elements/Image.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
@@ -57,6 +58,7 @@ namespace Elm = ToolEngine::SpriteUi::Elements;
 inline constexpr float kToolbarH = 30.f;
 inline constexpr float kPad = sui::kPanelPadding;
 inline constexpr float kFont = 13.f;
+inline constexpr float kTitleFont = 14.f;   // titulo da janela (negrito por duas passadas)
 inline constexpr float kBtnH = 22.f;
 inline constexpr float kFloatH = 28.f;
 inline constexpr float kFloatMargin = 10.f;
@@ -128,6 +130,7 @@ struct Requests {
   std::optional<std::uint64_t> select;
   std::optional<std::array<float, 3>> pos, rot, scale;   // arrasto do gizmo: Transform novo do quadro
   std::optional<std::pair<CtxAct, std::uint64_t>> ctx;   // item escolhido no menu de contexto
+  bool close = false, help = false;                       // X e "?" da moldura (o host fecha ou abre a Help)
 };
 
 // Retangulo da imagem (sem a barra) em coordenadas da janela.
@@ -135,16 +138,36 @@ inline sui::Box imageArea(sui::Box rect) { return {rect.x, rect.y + kToolbarH, r
 
 class ScenePanel {
 public:
-  ScenePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {}
+  ScenePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {
+    // Mesmas cores da moldura do Console (window_frame.hpp, janelas SpriteUI).
+    frameColors_.body = sui::Srgb(14.f / 255.f, 19.f / 255.f, 28.f / 255.f, 0.98f);
+    frameColors_.border = sui::Srgb(0.160f, 0.220f, 0.330f);
+    frameColors_.borderDragging = sui::Srgb(0.420f, 0.600f, 0.980f);
+    frameColors_.headerActive = sui::Srgb(0.120f, 0.160f, 0.230f);
+    frameColors_.headerInactive = sui::Srgb(0.090f, 0.120f, 0.180f);
+  }
   ScenePanel(const ScenePanel&) = delete;
   ScenePanel& operator=(const ScenePanel&) = delete;
 
-  // Guarda o evento para o proximo draw. Sempre false: o evento segue para o ImGui.
+  // Eventos do SDL. A moldura (X, "?", minimizar, grip) e tratada aqui; o resto vai para a fila da cena.
+  // Devolve true quando o evento foi da moldura: o host nao repassa esse clique ao ImGui.
   bool handleEvent(const SDL_Event& e) {
     switch (e.type) {
-      case SDL_EVENT_MOUSE_MOTION: queue_.push_back({In::Kind::Move, 0, e.motion.x, e.motion.y}); break;
-      case SDL_EVENT_MOUSE_BUTTON_DOWN: queue_.push_back({In::Kind::Down, e.button.button, e.button.x, e.button.y}); break;
-      case SDL_EVENT_MOUSE_BUTTON_UP: queue_.push_back({In::Kind::Up, e.button.button, e.button.x, e.button.y}); break;
+      case SDL_EVENT_MOUSE_MOTION:
+        if (frame_.dragging()) {
+          frame_.pointerMove({e.motion.x, e.motion.y});
+          return true;
+        }
+        queue_.push_back({In::Kind::Move, 0, e.motion.x, e.motion.y});
+        break;
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (e.button.button == SDL_BUTTON_LEFT && frameDown(e.button.x, e.button.y)) return true;
+        queue_.push_back({In::Kind::Down, e.button.button, e.button.x, e.button.y});
+        break;
+      case SDL_EVENT_MOUSE_BUTTON_UP:
+        frame_.pointerUp();
+        queue_.push_back({In::Kind::Up, e.button.button, e.button.x, e.button.y});
+        break;
       case SDL_EVENT_KEY_DOWN:
         if (!e.key.repeat && e.key.key == SDLK_ESCAPE) queue_.push_back({In::Kind::Escape, 0, 0.f, 0.f});
         break;
@@ -153,23 +176,39 @@ public:
     return false;
   }
 
-  // Desenha a janela na area `rect` (coordenadas da janela). Os pedidos saem em `out`.
-  bool draw(SDL_Renderer* renderer, sui::Box rect, const Values& v, Requests& out) {
-    rect_ = rect;
+  // Monta a moldura na janela inteira (winW x winH) e devolve o corpo (abaixo do cabecalho): a area da cena.
+  // Chame antes de montar os Values, porque a imagem depende desta area. Minimizada, o corpo some (area vazia).
+  sui::Box prepare(float winW, float winH) {
+    frame_.place(winW, winH, std::max(320.f, winW * 0.6f), std::max(240.f, winH * 0.6f));
+    const SU::Rect c = frame_.content();
+    rect_ = frame_.minimized() ? sui::Box{} : sui::Box{c.position.x, c.position.y, c.size.x, c.size.y};
+    return rect_;
+  }
+
+  // Desenha a moldura e o corpo. Os pedidos saem em `out`; X e "?" sao pedidos de janela (close, help).
+  bool draw(SDL_Renderer* renderer, const Values& v, Requests& out) {
     visible_ = v.shown;
+    out.close = closeRequested_;
+    out.help = helpRequested_;
+    closeRequested_ = helpRequested_ = false;
     if (!visible_) {
       queue_.clear();
       ctx_.Close();
       dragging_ = false;
+      frame_.reset();
       return true;
     }
-    const sui::Box img = imageArea(rect);
-    for (const In& ev : queue_) process(ev, v, img, out);
+    if (!frame_.placed()) return true;   // prepare() ainda nao rodou neste quadro
+    const bool minimized = frame_.minimized();
+    const sui::Box img = imageArea(rect_);
+    if (!minimized) {
+      for (const In& ev : queue_) process(ev, v, img, out);
+    }
     queue_.clear();
     if (dragging_) updateDrag(v, out);
 
     view::ShapeList overlay;
-    if (img.w >= 1.f && img.h >= 1.f) {
+    if (!minimized && img.w >= 1.f && img.h >= 1.f) {
       const vm::Projection proj = vm::Projection::make(v.cam, areaOf(img));
       overlay.append(v.below);
       overlay.append(v.grid);
@@ -177,20 +216,34 @@ public:
       if (v.showGizmos && !v.playing && v.sel.present) addGizmo(v, proj, overlay);
     }
     view::ShapeList chrome;
-    buildToolbar(v, chrome);
-    buildFloatingBar(v, img, chrome);
-    buildPopup(img, chrome);
+    if (!minimized) {
+      buildToolbar(v, chrome);
+      buildFloatingBar(v, img, chrome);
+      buildPopup(img, chrome);
+    }
     if (dragging_) chrome.text({mouse_.x + 14.f, mouse_.y + 12.f}, readout_, kFont, kHighlight);
+    buildHeader(chrome);
 
-    const std::vector<SR::ClipRectGPU> clips{{rect.x, rect.y, rect.x + rect.w, rect.y + rect.h},
-                                             {img.x, img.y, img.x + img.w, img.y + img.h}};
+    // Moldura por tras (zOrder -2), depois o corpo, a imagem, as sobreposicoes e a barra.
+    const SU::Rect frame = frame_.rect();
     view::PaintList list;
     list.owner = sui::handleFor(0);
-    list.items.push_back(sui::Canvas::solidItem(rect.x, rect.y, rect.w, rect.h, view::premultiplied(kPanelFill), 0.f, list.owner, 0u, list.paint++));
-    appendImage(v, img, list);
-    painter_.append(overlay, 1u, list);
+    Wd::WindowFrameState st;
+    st.active = true;
+    st.dragging = frame_.dragging();
+    st.docked = false;
+    auto frameItems = Wd::BuildWindowFrameItems(list.owner, frame, frame_.metrics(), st, frameColors_, -2.f, list.paint);
+    list.paint += frameItems.size() + 1;
+    list.items.insert(list.items.end(), frameItems.begin(), frameItems.end());
+    if (!minimized) {
+      list.items.push_back(sui::Canvas::solidItem(rect_.x, rect_.y, rect_.w, rect_.h, view::premultiplied(kPanelFill), 0.f, list.owner, 0u, list.paint++));
+      appendImage(v, img, list);
+      painter_.append(overlay, 1u, list);
+    }
     painter_.append(chrome, 0u, list);
 
+    const std::vector<SR::ClipRectGPU> clips{{frame.position.x, frame.position.y, frame.position.x + frame.size.x, frame.position.y + frame.size.y},
+                                             {img.x, img.y, img.x + img.w, img.y + img.h}};
     sdl_.setView(kSceneSlot, v.texture);
     return view::drawPaintList(renderer, sdl_, extractor_, packet_, frameId_, clips, list);
   }
@@ -255,6 +308,36 @@ private:
         break;
     }
     mouse_ = p;
+  }
+
+  // Clique na moldura: X e "?" viram pedidos do proximo draw; o grip inicia o arraste. True: o clique foi da moldura.
+  bool frameDown(float x, float y) {
+    const window_frame::Event ev = frame_.pointerDown({x, y});
+    if (ev == window_frame::Event::Close) closeRequested_ = true;
+    if (ev == window_frame::Event::Help) helpRequested_ = true;
+    return ev != window_frame::Event::None;
+  }
+
+  // Titulo em negrito (duas passadas), circulo do "?" e grip (2 colunas x 3 pontos). Os botoes minimizar e X sao
+  // desenhados pela moldura (BuildWindowFrameItems).
+  void buildHeader(view::ShapeList& out) {
+    const SU::Rect head = frame_.header();
+    const SU::Rect grip = frame_.gripRect();
+    const SU::Rect help = frame_.helpRect();
+    const vm::Pixel hc{help.position.x + help.size.x * 0.5f, help.position.y + help.size.y * 0.5f};
+    out.circleFilled(hc, help.size.x * 0.5f, view::Rgba(64, 102, 178));
+    out.text({hc.x, hc.y - kFont * 0.62f}, "?", kFont, kText, true);   // texto e ancorado no topo: sobe para centralizar
+    const float tx = frame_.titleTextX();
+    const float ty = head.position.y + (head.size.y - kTitleFont) * 0.5f;
+    out.text({tx, ty}, editor::T("Scene"), kTitleFont, kText);
+    out.text({tx + 0.7f, ty}, editor::T("Scene"), kTitleFont, kText);
+    const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
+    for (int c = 0; c < 2; ++c) {
+      for (int r = 0; r < 3; ++r) {
+        const vm::Pixel a{cx - 3.f + 4.f * static_cast<float>(c), cy - 4.f + 4.f * static_cast<float>(r)};
+        out.rectFilled(a, {a.x + 2.f, a.y + 2.f}, kTextDim);
+      }
+    }
   }
 
   void onLeftDown(vm::Pixel p, const Values& v, const sui::Box& img, Requests& out) {
@@ -640,6 +723,10 @@ private:
 
   view::ShapePainter painter_;
   sui::SpriteUiSdlRenderer& sdl_;
+  window_frame::Frame frame_;
+  Wd::WindowFrameColors frameColors_{};
+  bool closeRequested_ = false;
+  bool helpRequested_ = false;
   SR::RenderExtractor extractor_;
   SR::FramePacket packet_;
   std::uint64_t frameId_ = 0;

@@ -1807,6 +1807,8 @@ void applySceneContext(Editor& ed, scene_panel::CtxAct act, tool::Entity e) {
 // Pedidos da Scene: aplicados no Editor com as mesmas regras de antes (botoes, flags, arrasto, menu de contexto).
 void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
   auto& w = ed.scene.world();
+  if (r.close) ed.showScene = false;
+  if (r.help) editor::openHelp("scene");
   if (r.playToggle) { if (ed.playing) ed.stopPlay(); else ed.startPlay(); }
   if (r.pauseToggle) ed.paused = !ed.paused;
   if (r.stepOnce) ed.stepOnce = true;
@@ -1907,28 +1909,18 @@ SDL_Texture* updateSceneTexture(Editor& ed, SDL_Renderer* sdl, const tool::Camer
 }
 
 void drawSceneSui(Editor& ed, SDL_Renderer* sdl) {
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-  const bool open = ImGui::Begin(W("Scene", "view").c_str(), &ed.showScene);
-  ImGui::PopStyleVar();
-  if (!open) { ImGui::End(); return; }
-  editor::helpIcon("scene");
-  const ImVec2 origin = ImGui::GetCursorScreenPos(), avail = ImGui::GetContentRegionAvail();
+  // A janela (moldura, titulo, X, "?") e do painel SpriteUI: aqui so pegamos a area da cena e montamos os Values.
+  int winW = 0, winH = 0;
+  SDL_GetWindowSize(SDL_GetRenderWindow(sdl), &winW, &winH);
+  if (winW <= 0 || winH <= 0) return;
   gSceneFrame = true;
-  gSceneRect = {origin.x, origin.y, avail.x, avail.y};
+  gSceneRect = gScenePanel->prepare(static_cast<float>(winW), static_cast<float>(winH));
   const editor::sui::Box img = scene_panel::imageArea(gSceneRect);
   const tool::Camera cam = ed.sceneCamera();
   sceneKeysAndNavigation(ed, gScenePanel->hovered());
   int tw = 0, th = 0;
   SDL_Texture* tex = updateSceneTexture(ed, sdl, cam, std::clamp(static_cast<int>(img.w), 64, 1920), std::clamp(static_cast<int>(img.h), 64, 1080), tw, th);
-  // soltar um modelo/som do painel Assets cria o objeto na cena: a area da imagem e um alvo invisivel do ImGui
-  ImGui::SetCursorScreenPos(ImVec2(img.x, img.y));
-  ImGui::InvisibleButton("##scenedrop", ImVec2(std::max(1.f, img.w), std::max(1.f, img.h)));   // ImGui exige tamanho > 0
-  if (ImGui::BeginDragDropTarget()) {
-    if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_PATH")) ed_::instantiateAsset(ed, static_cast<const char*>(p->Data));
-    ImGui::EndDragDropTarget();
-  }
   buildSceneValues(ed, cam, img, tex, tw, th);
-  ImGui::End();
 }
 
 // Textura de uma camera do jogo: renderiza (ou reusa) e sobe para o SDL_Texture da celula.
@@ -2028,22 +2020,23 @@ void drawGameWindow(Editor& ed, SDL_Renderer* sdl, bool player) {
 void drawViewPanels(Editor& ed, SDL_Renderer* sdl) {
   const scene_panel::Values noScene;
   const game_panel::Values noGame;
-  if (gScenePanel) {
-    scene_panel::Requests req;
-    if (!gScenePanel->draw(sdl, gSceneRect, gSceneFrame ? gSceneValues : noScene, req)) tool::logError(std::string("Scene SpriteUI render failed: ") + SDL_GetError());
-    applySceneRequests(ed, req);
-  }
-  if (gGamePanel) {
+  if (gGamePanel) {   // Jogo primeiro: a janela Scene desenha por cima dela (como as janelas ImGui)
     game_panel::Requests req;
     if (!gGamePanel->draw(sdl, gGameRect, gGameFrame ? gGameValues : noGame, req)) tool::logError(std::string("Game SpriteUI render failed: ") + SDL_GetError());
     applyGameRequests(ed, req);
   }
+  if (gScenePanel) {
+    scene_panel::Requests req;
+    if (!gScenePanel->draw(sdl, gSceneFrame ? gSceneValues : noScene, req)) tool::logError(std::string("Scene SpriteUI render failed: ") + SDL_GetError());
+    applySceneRequests(ed, req);
+  }
 }
 
 // Eventos: os paineis veem tudo, sem consumir (o ImGui continua recebendo o mouse e o teclado).
-void forwardViewEvent(const SDL_Event& e) {
-  if (gScenePanel) gScenePanel->handleEvent(e);
+bool forwardViewEvent(const SDL_Event& e) {
+  const bool sceneFrame = gScenePanel && gScenePanel->handleEvent(e);
   if (gGamePanel) gGamePanel->handleEvent(e);
+  return sceneFrame;
 }
 #else
 void beginViewsFrame() {}
@@ -3219,10 +3212,10 @@ static int runEditorMain(int argc, char** argv) {
       const bool inspHandled = inspPanel && inspPanel->handleEvent(e);
       const bool scnHandled = scenesPanel && scenesPanel->handleEvent(e, ed.showScenes);
       const bool asstHandled = assetsPanel && assetsPanel->handleEvent(e, ed.showAssets);
-      forwardViewEvent(e);   // paineis Scene e Jogo: veem o evento, sem consumir
+      const bool sceneFrameHandled = forwardViewEvent(e);   // Scene e Jogo veem o evento; a moldura da Scene consome o clique
       // ImGui so recebe o ponteiro se nenhum painel SpriteUI registrado cobre o ponto: senao as janelas ImGui de tras reagiriam.
       const bool ownedBySui = pointerEvt && gPanelRouter.coveredBySui(ptrX, ptrY);
-      if (!spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !scnHandled && !asstHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
+      if (!spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !scnHandled && !asstHandled && !sceneFrameHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
 #else
       ImGui_ImplSDL3_ProcessEvent(&e);
 #endif
