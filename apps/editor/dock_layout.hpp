@@ -6,7 +6,7 @@
 //
 // Regras:
 //  - Uma janela esta no dock (folha ou aba) ou fora dele (flutuante). Nunca nos dois.
-//  - Folha com mais de uma janela mostra so a aba ativa; o conteudo fica abaixo da faixa de abas (kTabStripHeight).
+//  - Folha com mais de uma janela mostra so a aba ativa; as abas ficam na propria barra da moldura (sem faixa nova).
 //  - Solta na borda de uma folha divide a folha; solta no centro junta como aba; solta fora vira flutuante.
 //  - Remover a ultima janela de um lado colapsa o pai (sem folhas vazias).
 #include "SpriteUi/Core/Handle.hpp"
@@ -32,7 +32,6 @@ namespace editor::dock_layout {
 namespace SU = ToolEngine::SpriteUi;
 namespace SW = ToolEngine::SpriteUi::Widgets;
 
-inline constexpr float kTabStripHeight = 24.f;   // faixa de abas no topo de uma folha com mais de uma janela
 inline constexpr float kSideRatio = 0.22f;       // lateral padrao (Hierarquia, Assets)
 inline constexpr float kBottomRatio = 0.28f;     // faixa inferior padrao (Console, Profiler)
 
@@ -54,23 +53,18 @@ class Model {
   // Janela no dock (folha ou aba). False se ela esta flutuando.
   [[nodiscard]] bool contains(SU::UIHandle w) const { return find(root_, w) != nullptr; }
 
-  // Retangulo da folha onde a janela esta (inclui a faixa de abas quando ha mais de uma janela na folha).
+  // Retangulo da folha onde a janela esta.
   [[nodiscard]] std::optional<SU::Rect> leafRect(SU::UIHandle w) const {
     const SW::UIDockNode* leaf = find(root_, w);
     if (!leaf) return std::nullopt;
     return leaf->bounds;
   }
 
-  // Retangulo do conteudo da janela: a folha, menos a faixa de abas quando a folha tem abas.
+  // Retangulo do conteudo da janela: a folha inteira (as abas ficam na barra da moldura).
   [[nodiscard]] std::optional<SU::Rect> contentRect(SU::UIHandle w) const {
     const SW::UIDockNode* leaf = find(root_, w);
     if (!leaf) return std::nullopt;
-    SU::Rect r = leaf->bounds;
-    if (leaf->tabs.TabCount() > 1) {
-      r.position.y += kTabStripHeight;
-      r.size.y = std::max(0.f, r.size.y - kTabStripHeight);
-    }
-    return r;
+    return leaf->bounds;
   }
 
   // Janela visivel no dock: esta no dock e e o conteudo visivel da folha (a aba ativa, ou a unica janela).

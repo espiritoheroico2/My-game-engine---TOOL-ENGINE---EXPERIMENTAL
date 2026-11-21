@@ -4,6 +4,7 @@
 // Esta view so desenha e reporta cliques e digitacao. Quem salva, abre, apaga, cria, renomeia e atribui assets e o
 // host (scenes_panel.hpp e main.cpp, via Action). Moldura: grip, "?" (abre a Help na secao Scenes), titulo em negrito,
 // minimizar e X.
+#include "window_palette.hpp"
 #include "i18n.hpp"
 #include "scenes_model.hpp"
 #include "spriteui_host.hpp"
@@ -221,7 +222,7 @@ class View {
   // Area dada pelo dock (folha, sem a faixa de abas). nullopt: a janela flutua.
   void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }
   [[nodiscard]] bool docked() const { return docked_; }
-  [[nodiscard]] SU::Rect gripRect() const { return SW::WindowGripRect(SW::WindowFrameHeader(frame_, metrics_, false), Theme::kGripWidth); }
+  [[nodiscard]] SU::Rect gripRect() const { return SW::WindowGripRect(SW::WindowFrameHeader(frame_, metrics_, docked_), Theme::kGripWidth); }
   // Sai do dock na posicao `at`: a janela segue o ponteiro (o arraste da moldura volta a valer).
   void floatAt(SU::Vec2 at) {
     dock_.reset();
@@ -267,7 +268,7 @@ class View {
 
   // "?" logo depois do grip; o titulo comeca depois dele.
   SU::Rect helpRectNow() const {
-    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, docked_);
     const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
     return SU::Rect{{grip.position.x + grip.size.x + Theme::kHelpGap, bar.position.y + (bar.size.y - Theme::kHelpSize) * 0.5f},
                     {Theme::kHelpSize, Theme::kHelpSize}};
@@ -298,7 +299,7 @@ class View {
       actions.push_back(Action::Help);
       return;
     }
-    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, docked_);
     if (!docked_ && inside(SW::WindowGripRect(bar, Theme::kGripWidth), p)) {
       dragging_ = true;
       grab_ = {p.x - windowPos_.x, p.y - windowPos_.y};
@@ -309,13 +310,7 @@ class View {
   void buildTree() {
     metrics_.headerHeight = 30.f;
     metrics_.cornerRadius = 6.f;
-    frameColors_.body = Srgb(0.110f, 0.118f, 0.137f);
-    frameColors_.border = Srgb(0.235f, 0.251f, 0.294f);
-    frameColors_.borderDragging = Srgb(0.420f, 0.600f, 0.980f);
-    frameColors_.headerActive = Srgb(0.165f, 0.184f, 0.231f);
-    frameColors_.headerInactive = Srgb(0.125f, 0.137f, 0.169f);
-    frameColors_.headerDragging = Srgb(0.200f, 0.230f, 0.302f);
-    frameColors_.glyph = Srgb(0.900f, 0.920f, 0.960f);
+    frameColors_ = editor::window_palette::Standard();
     panelColor_ = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
 
     SU::FlexItem panel;
@@ -619,13 +614,13 @@ class View {
     SW::WindowFrameState state;
     state.active = true;
     state.dragging = dragging_;
-    state.docked = false;
+    state.docked = docked_;
     auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_, metrics_, state, frameColors_, -2.f, paint);
     paint += frameItems.size() + 1;
     out.insert(out.end(), frameItems.begin(), frameItems.end());
 
     // Grip (pontos).
-    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
+    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, docked_);
     const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
     const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
     for (int c = 0; c < 2; ++c) {

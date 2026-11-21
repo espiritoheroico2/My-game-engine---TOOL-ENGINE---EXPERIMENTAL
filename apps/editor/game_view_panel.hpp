@@ -14,6 +14,7 @@
 //   draw:        desenha o fundo, cada celula (imagem, sobreposicao) e a barra (se nao e o modo --player).
 //   handleEvent: guarda o mouse e os cliques para o proximo draw (sem consumir nada).
 
+#include "window_palette.hpp"
 #include "game_view_model.hpp"
 #include "i18n.hpp"
 #include "scene_view_model.hpp"
@@ -92,11 +93,7 @@ class GamePanel {
 public:
   GamePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {
     // Mesmas cores da moldura do Console e da Scene (window_frame.hpp).
-    frameColors_.body = sui::Srgb(14.f / 255.f, 19.f / 255.f, 28.f / 255.f, 0.98f);
-    frameColors_.border = sui::Srgb(0.160f, 0.220f, 0.330f);
-    frameColors_.borderDragging = sui::Srgb(0.420f, 0.600f, 0.980f);
-    frameColors_.headerActive = sui::Srgb(0.120f, 0.160f, 0.230f);
-    frameColors_.headerInactive = sui::Srgb(0.090f, 0.120f, 0.180f);
+    frameColors_ = editor::window_palette::Standard();
   }
   GamePanel(const GamePanel&) = delete;
   GamePanel& operator=(const GamePanel&) = delete;
@@ -179,7 +176,7 @@ public:
       ToolEngine::SpriteUi::Widgets::WindowFrameState st;
       st.active = true;
       st.dragging = frame_.dragging();
-      st.docked = false;
+      st.docked = frame_.docked();
       auto frameItems = ToolEngine::SpriteUi::Widgets::BuildWindowFrameItems(list.owner, frame_.rect(), frame_.metrics(), st, frameColors_, -2.f, list.paint);
       list.paint += frameItems.size() + 1;
       list.items.insert(list.items.end(), frameItems.begin(), frameItems.end());

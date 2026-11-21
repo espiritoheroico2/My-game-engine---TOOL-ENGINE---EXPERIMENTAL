@@ -18,6 +18,7 @@
 //   handleEvent: guarda o evento na fila (mouse, Esc para fechar o menu).
 //   draw:        trata a fila (botoes, gizmo, menu), monta as formas e desenha: imagem, sobreposicoes, barras e menu.
 
+#include "window_palette.hpp"
 #include "i18n.hpp"
 #include "scene_transform_menu.hpp"
 #include "scene_view_model.hpp"
@@ -140,11 +141,7 @@ class ScenePanel {
 public:
   ScenePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {
     // Mesmas cores da moldura do Console (window_frame.hpp, janelas SpriteUI).
-    frameColors_.body = sui::Srgb(14.f / 255.f, 19.f / 255.f, 28.f / 255.f, 0.98f);
-    frameColors_.border = sui::Srgb(0.160f, 0.220f, 0.330f);
-    frameColors_.borderDragging = sui::Srgb(0.420f, 0.600f, 0.980f);
-    frameColors_.headerActive = sui::Srgb(0.120f, 0.160f, 0.230f);
-    frameColors_.headerInactive = sui::Srgb(0.090f, 0.120f, 0.180f);
+    frameColors_ = editor::window_palette::Standard();
   }
   ScenePanel(const ScenePanel&) = delete;
   ScenePanel& operator=(const ScenePanel&) = delete;
@@ -240,7 +237,7 @@ public:
     Wd::WindowFrameState st;
     st.active = true;
     st.dragging = frame_.dragging();
-    st.docked = false;
+    st.docked = frame_.docked();
     auto frameItems = Wd::BuildWindowFrameItems(list.owner, frame, frame_.metrics(), st, frameColors_, -2.f, list.paint);
     list.paint += frameItems.size() + 1;
     list.items.insert(list.items.end(), frameItems.begin(), frameItems.end());

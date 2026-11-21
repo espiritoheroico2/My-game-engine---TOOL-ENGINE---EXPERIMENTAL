@@ -79,7 +79,7 @@ class Frame {
 
   [[nodiscard]] SU::Rect rect() const { return frame_; }
   [[nodiscard]] SU::Rect content() const { return SW::WindowFrameContent(frame_, metrics_); }
-  [[nodiscard]] SU::Rect header() const { return SW::WindowFrameHeader(frame_, metrics_, false); }
+  [[nodiscard]] SU::Rect header() const { return SW::WindowFrameHeader(frame_, metrics_, docked_); }
   [[nodiscard]] SU::Rect titleRect() const { return SW::WindowFrameTitleRect(frame_, metrics_, false); }
   [[nodiscard]] SU::Rect gripRect() const { return SW::WindowGripRect(header(), Metrics::kGripWidth); }
 

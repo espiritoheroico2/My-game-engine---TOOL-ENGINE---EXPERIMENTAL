@@ -5,6 +5,7 @@
 // a area do corpo, desenha o corpo por conta propria e chama draw() para a moldura. O acoplamento ao dock
 // (setDock/floatAt/frameRect/gripRect) e o do host (dock_host.hpp).
 
+#include "window_palette.hpp"
 #include "spriteui_host.hpp"
 #include "view_painter.hpp"
 #include "view_shapes.hpp"
@@ -30,15 +31,18 @@ inline constexpr float kTitleFont = 12.f;
 class Chrome {
  public:
   Chrome(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {
-    // Mesmas cores da moldura da Scene (scene_view_panel.hpp).
-    colors_.body = sui::Srgb(14.f / 255.f, 19.f / 255.f, 28.f / 255.f, 0.98f);
-    colors_.border = sui::Srgb(0.160f, 0.220f, 0.330f);
-    colors_.borderDragging = sui::Srgb(0.420f, 0.600f, 0.980f);
-    colors_.headerActive = sui::Srgb(0.120f, 0.160f, 0.230f);
-    colors_.headerInactive = sui::Srgb(0.090f, 0.120f, 0.180f);
+    colors_ = editor::window_palette::Standard();
   }
   Chrome(const Chrome&) = delete;
   Chrome& operator=(const Chrome&) = delete;
+
+  // Corpo ImGui: a moldura nao pinta corpo nem borda (a borda, que e a caixa inteira, apareceria por baixo do ImGui).
+  // O ImGui desenha o proprio fundo e o contorno dentro da area do corpo.
+  void setBodyFill(bool on) {
+    const auto clear = sui::Srgb(0.f, 0.f, 0.f, 0.f);
+    colors_.body = on ? editor::window_palette::Standard().body : clear;
+    colors_.border = on ? editor::window_palette::Standard().border : clear;
+  }
 
   // Acoplamento: o host manda a area da folha (ou nullopt, flutuante) e le a moldura para o grip.
   void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }

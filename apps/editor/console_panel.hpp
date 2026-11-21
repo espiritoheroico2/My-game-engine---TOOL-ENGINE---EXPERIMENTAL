@@ -693,7 +693,7 @@ class ConsolePanel {
     SW::WindowFrameState state;
     state.active = true;
     state.dragging = frame_.dragging();
-    state.docked = false;
+    state.docked = frame_.docked();
     auto frameItems = SW::BuildWindowFrameItems(panel_, frame, frame_.metrics(), state, frameColors_, -2.f, paint_);
     paint_ += frameItems.size() + 1;
     items_.insert(items_.end(), frameItems.begin(), frameItems.end());

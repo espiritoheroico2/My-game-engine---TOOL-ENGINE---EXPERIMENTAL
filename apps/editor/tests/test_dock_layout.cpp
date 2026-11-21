@@ -64,10 +64,10 @@ int main() {
   Check(m.apply(profiler, tab), "Profiler entra como aba da Scene");
   m.setArea(area);
   Check(m.tabsOf(scene).size() == 2, "a folha da Scene agora tem duas abas");
-  Check(Near(m.contentRect(scene)->position.y, m.leafRect(scene)->position.y + dl::kTabStripHeight),
-        "com abas, o conteudo comeca abaixo da faixa");
-  Check(Near(m.contentRect(scene)->size.y, m.leafRect(scene)->size.y - dl::kTabStripHeight),
-        "com abas, o conteudo perde a altura da faixa");
+  Check(Near(m.contentRect(scene)->position.y, m.leafRect(scene)->position.y),
+        "com abas, o conteudo comeca no topo da folha (abas ficam na barra da moldura)");
+  Check(Near(m.contentRect(scene)->size.y, m.leafRect(scene)->size.y),
+        "com abas, o conteudo tem a altura da folha");
   Check(m.select(profiler) && m.tabsOf(profiler).size() == 2, "selecionar uma aba mantem o grupo");
   (void)sceneBefore;
 

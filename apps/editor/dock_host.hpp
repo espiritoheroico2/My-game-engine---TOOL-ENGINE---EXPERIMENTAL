@@ -41,17 +41,23 @@ namespace view = editor::view;
 inline view::Pixel px(SU::Vec2 v) { return view::Pixel{v.x, v.y}; }
 
 // Janelas SpriteUI acopláveis. Os ids sao estaveis: o modelo de dock os guarda.
-enum class Kind : std::uint32_t { Hierarchy, Scene, Game, Scenes, Assets, Console, Profiler, Inspector, Settings };
+enum class Kind : std::uint32_t { Hierarchy, Scene, Game, Scenes, Assets, Console, Profiler, Inspector, Settings, Coding };
 inline SU::UIHandle idOf(Kind k) { return SU::UIHandle{0xE0000010u + static_cast<std::uint32_t>(k), 1u}; }
 
 inline constexpr float kStripFont = 12.f;
 inline constexpr float kStripPad = 8.f;
+// Abas na barra da moldura (mesma altura do cabecalho): depois do grip e do "?" ate antes de minimizar e X.
+inline constexpr float kHeaderH = 30.f;
+inline constexpr float kHelpReserve = 30.f;   // grip + "?" (quando nao ha grip medido)
+inline constexpr float kCloseReserve = 28.f;  // X da folha agrupada, a direita da barra
+inline constexpr float kTabMaxWidth = 120.f;
 
 // O que o host precisa de cada janela. As funcoes sao preenchidas pelo main.cpp com os paineis ja criados.
 struct Window {
   SU::UIHandle id{};
   std::function<std::string()> title;                         // nome na faixa de abas (traduzido ao desenhar)
   std::function<bool()> open;                                 // a flag do Editor (ed.showX)
+  std::function<void()> close;                                // fecha a janela (flag do Editor = false)
   std::function<std::optional<SU::Rect>()> frame;             // moldura no ultimo quadro (nullopt: nao desenhada)
   std::function<SU::Rect()> grip;                             // grip no ultimo quadro
   std::function<void(std::optional<SU::Rect>)> setDock;       // area da folha, ou nullopt (flutuante)
@@ -111,23 +117,49 @@ class Host {
     }
   }
 
-  // Overlay do dock: faixas de abas, guia de encaixe durante o arraste e contorno da janela arrastada.
+  // Abas da folha dentro da barra da moldura da janela ativa: faixa entre o "?" e os botoes da direita.
+  // Nao cria barra nova. Nullopt se a folha tem uma so janela.
+  struct TabCells {
+    float x0, x1, tabW;
+  };
+  [[nodiscard]] std::optional<TabCells> tabCells(const SW::DockLeafRect& leaf) const {
+    const std::size_t n = model_.tabsOf(leaf.leaf).size();
+    if (n < 2) return std::nullopt;
+    const float right = leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve;
+    float left = leaf.bounds.position.x + kHelpReserve;
+    for (const Window& w : windows_) {
+      if (!(w.id == leaf.leaf)) continue;
+      const SU::Rect g = w.grip();
+      if (g.size.x > 0.f) left = g.position.x + g.size.x + kHelpReserve;
+    }
+    const float tabW = std::min(kTabMaxWidth, std::max(0.f, right - left) / static_cast<float>(n));
+    return TabCells{left, left + tabW * static_cast<float>(n), tabW};
+  }
+
+  // Overlay do dock: abas na barra da moldura, guia de encaixe durante o arraste e contorno da janela arrastada.
   // Desenhado depois de todas as janelas. False so em falha do SDL.
   bool overlay(SDL_Renderer* renderer) {
     view::ShapeList shapes;
     for (const SW::DockLeafRect& leaf : model_.leaves()) {
+      const std::optional<TabCells> c = tabCells(leaf);
+      if (!c) continue;
       const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
-      if (tabs.size() < 2) continue;
-      const float tabW = leaf.bounds.size.x / static_cast<float>(tabs.size());
+      const float y = leaf.bounds.position.y;
+      // Limpa o nome da janela ativa na barra e pinta as abas no lugar dele.
+      shapes.rectFilled({c->x0 - 4.f, y}, {leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve, y + kHeaderH},
+                        view::Rgba(31, 41, 59));
       for (std::size_t i = 0; i < tabs.size(); ++i) {
-        const float x = leaf.bounds.position.x + tabW * static_cast<float>(i);
-        const float y = leaf.bounds.position.y;
+        const float x = c->x0 + c->tabW * static_cast<float>(i);
         const bool on = tabs[i] == leaf.leaf;
-        shapes.rectFilled({x, y}, {x + tabW, y + dock_layout::kTabStripHeight},
-                          on ? view::Rgba(51, 92, 133) : view::Rgba(33, 41, 54));
-        shapes.text({x + tabW * 0.5f, y + (dock_layout::kTabStripHeight - kStripFont) * 0.5f}, titleOf(tabs[i]),
-                    kStripFont, view::Rgba(233, 234, 238), true, std::max(0.f, tabW - kStripPad));
+        shapes.rectFilled({x, y}, {x + c->tabW - 1.f, y + kHeaderH},
+                          on ? view::Rgba(52, 68, 96) : view::Rgba(24, 31, 46));
+        if (on) shapes.rectFilled({x, y + kHeaderH - 2.f}, {x + c->tabW - 1.f, y + kHeaderH}, view::Rgba(74, 130, 200));
+        shapes.text({x + c->tabW * 0.5f, y + (kHeaderH - kStripFont) * 0.5f}, titleOf(tabs[i]), kStripFont,
+                    view::Rgba(233, 234, 238), true, std::max(0.f, c->tabW - kStripPad));
       }
+      // X da folha agrupada: fecha a janela ativa.
+      shapes.text({leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve * 0.5f - 4.f, y + (kHeaderH - kStripFont) * 0.5f},
+                  "X", kStripFont, view::Rgba(233, 234, 238), true, kCloseReserve);
     }
     if (drag_.IsDragging()) {
       for (const SW::DockLeafRect& leaf : model_.leaves()) {
@@ -216,13 +248,22 @@ class Host {
   bool pressed(SU::Vec2 p) {
     pointer_ = p;
     for (const SW::DockLeafRect& leaf : model_.leaves()) {
-      const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
-      if (tabs.size() < 2) continue;
-      const SU::Rect strip{leaf.bounds.position, {leaf.bounds.size.x, dock_layout::kTabStripHeight}};
+      if (!tabCells(leaf)) continue;
+      const SU::Rect closeBox{{leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve, leaf.bounds.position.y},
+                              {kCloseReserve, kHeaderH}};
+      if (!inside(closeBox, p)) continue;
+      for (Window& w : windows_) {
+        if (w.id == leaf.leaf && w.close) { w.close(); return true; }
+      }
+    }
+    for (const SW::DockLeafRect& leaf : model_.leaves()) {
+      const std::optional<TabCells> c = tabCells(leaf);
+      if (!c) continue;
+      const SU::Rect strip{{c->x0, leaf.bounds.position.y}, {c->x1 - c->x0, kHeaderH}};
       if (!inside(strip, p)) continue;
-      const float tabW = strip.size.x / static_cast<float>(tabs.size());
+      const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
       const auto index = static_cast<std::size_t>(
-          std::clamp((p.x - strip.position.x) / tabW, 0.f, static_cast<float>(tabs.size() - 1)));
+          std::clamp((p.x - c->x0) / c->tabW, 0.f, static_cast<float>(tabs.size() - 1)));
       model_.select(tabs[index]);
       return true;
     }
@@ -284,6 +325,7 @@ class Host {
     }
     if (has(Kind::Console)) model_.split(idOf(Kind::Scene), SW::DockSlot::Bottom, dock_layout::kBottomRatio, idOf(Kind::Console));
     tabInto(Kind::Scene, Kind::Game, has);
+    tabInto(Kind::Scene, Kind::Coding, has);
     tabInto(Kind::Console, Kind::Profiler, has);
     tabInto(Kind::Console, Kind::Assets, has);
     // A ultima aba adicionada fica ativa; o padrao abre Scene e Console (a primeira de cada grupo).

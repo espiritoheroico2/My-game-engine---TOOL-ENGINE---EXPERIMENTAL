@@ -38,6 +38,7 @@
 #include "console_panel.hpp"
 #include "hierarchy_panel.hpp"
 #include "inspector_panel.hpp"
+#include "coding_panel.hpp"
 #include "scenes_panel.hpp"
 #include "assets_sprite_panel.hpp"
 #include "settings_changes.hpp"
@@ -1118,7 +1119,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
 bool gDockSaveRequested = false;   // Janela > Salvar layout: o host salva no proximo quadro
 constexpr const char* kDockLayoutFile = "editor_dock_layout.txt";
 #ifdef TOOL_WITH_SPRITEUI
-editor::sui::Box gInspectorBody{}, gSettingsBody{};   // corpo (abaixo do cabecalho) da moldura SpriteUI neste quadro
+editor::sui::Box gInspectorBody{}, gSettingsBody{}, gCodingBody{};   // corpo (abaixo do cabecalho) da moldura SpriteUI neste quadro
 // Corpo de uma janela de moldura SpriteUI neste quadro. Escondida (ou sem painel): a moldura some e o corpo e vazio.
 editor::sui::Box framedBody(editor::framed::Chrome* chrome, bool shown, int winW, int winH, float w, float h) {
   if (!chrome) return {};
@@ -1135,6 +1136,12 @@ constexpr ImGuiWindowFlags kFramedBodyFlags = ImGuiWindowFlags_NoTitleBar | ImGu
 void placeFramedBody(editor::sui::Box b) {
   ImGui::SetNextWindowPos({b.x, b.y}, ImGuiCond_Always);
   ImGui::SetNextWindowSize({b.w, b.h}, ImGuiCond_Always);
+}
+// Janela Coding: o corpo e desenhado sobre a area da moldura SpriteUI (lista e editor, na camada do primeiro plano).
+void drawCoding(Editor& ed, editor::coding::Panel& panel) {
+  if (gCodingBody.h <= 0.f) return;   // minimizada ou escondida
+  panel.setRoot(ed.project.root);
+  panel.drawBody(ImVec2(gCodingBody.x, gCodingBody.y), ImVec2(gCodingBody.w, gCodingBody.h));
 }
 #endif
 void drawInspectorBlock(Editor& ed) {
@@ -1713,11 +1720,12 @@ bool dockShown(editor::dock_host::Kind k, bool open) { return gDock ? gDock->vis
 // Registra uma janela no host. `get` devolve o objeto com frameRect/gripRect/setDock/floatAt, ou nullptr.
 template <class GetFn>
 void addDockWindow(editor::dock_host::Host& host, editor::dock_host::Kind k, std::function<std::string()> title,
-                   std::function<bool()> open, GetFn get) {
+                   std::function<bool&()> flag, GetFn get) {
   editor::dock_host::Window w;
   w.id = editor::dock_host::idOf(k);
   w.title = std::move(title);
-  w.open = std::move(open);
+  w.open = [flag] { return flag(); };
+  w.close = [flag] { flag() = false; };
   w.frame = [get]() -> std::optional<ToolEngine::SpriteUi::Rect> {
     auto* p = get();
     if (!p) return std::nullopt;
@@ -2675,6 +2683,7 @@ editor::mainmenu::MenuState menuStateOf(Editor& ed) {
   s.game = ed.showGame;
   s.assets = ed.showAssets;
   s.scenes = ed.showScenes;
+  s.coding = ed.showCoding;
   s.settings = ed.showSettings;
   s.narrative = ed.showNarrative;
   s.inputMap = ed.showInputMap;
@@ -2709,6 +2718,7 @@ bool toggleFromMenu(Editor& ed, editor::mainmenu::Command c) {
     case C::ToggleGame: flag = &ed.showGame; break;
     case C::ToggleAssets: flag = &ed.showAssets; break;
     case C::ToggleScenes: flag = &ed.showScenes; break;
+    case C::ToggleCoding: flag = &ed.showCoding; break;
     case C::ToggleSettings: flag = &ed.showSettings; break;
     case C::ToggleNarrative: flag = &ed.showNarrative; break;
     case C::ToggleInputMap: flag = &ed.showInputMap; break;
@@ -3185,6 +3195,8 @@ static int runEditorMain(int argc, char** argv) {
   gSettingsSpriteOn = settingsPanel != nullptr;
   std::unique_ptr<editor::inspector_panel::InspectorPanel> inspPanel;
   if (uiReady) inspPanel = std::make_unique<editor::inspector_panel::InspectorPanel>(uiText, uiRenderer);
+  std::unique_ptr<editor::coding::Panel> codingPanel;
+  if (uiReady) codingPanel = std::make_unique<editor::coding::Panel>(uiText, uiRenderer);
   gInspectorPanel = inspPanel.get();
   std::unique_ptr<editor::scenesui::Panel> scenesPanel;
   if (uiReady) scenesPanel = std::make_unique<editor::scenesui::Panel>(uiText, uiRenderer);
@@ -3203,15 +3215,16 @@ static int runEditorMain(int argc, char** argv) {
     using editor::dock_host::Kind;
     dockOwner = std::make_unique<editor::dock_host::Host>(uiText, uiRenderer);
     gDock = dockOwner.get();
-    addDockWindow(*dockOwner, Kind::Hierarchy, [] { return std::string(T("Hierarchy")); }, [&ed] { return ed.showHierarchy; }, [&] { return hierPanel.get(); });
-    addDockWindow(*dockOwner, Kind::Scene, [] { return std::string(T("Scene")); }, [&ed] { return ed.showScene; }, [&] { return scenePanel.get(); });
-    addDockWindow(*dockOwner, Kind::Game, [] { return std::string(T("Game")); }, [&ed] { return ed.showGame; }, [&] { return gamePanel.get(); });
-    addDockWindow(*dockOwner, Kind::Scenes, [] { return std::string(T("Scenes")); }, [&ed] { return ed.showScenes; }, [&] { return scenesPanel ? &scenesPanel->view() : nullptr; });
-    addDockWindow(*dockOwner, Kind::Assets, [] { return std::string(T("Assets")); }, [&ed] { return ed.showAssets; }, [&] { return assetsPanel ? &assetsPanel->view() : nullptr; });
-    addDockWindow(*dockOwner, Kind::Console, [] { return std::string(T("Console")); }, [&ed] { return ed.showConsole; }, [&] { return consolePanel.get(); });
-    addDockWindow(*dockOwner, Kind::Profiler, [] { return std::string(T("Profiler")); }, [&ed] { return ed.showProfiler; }, [&] { return profPanel.get(); });
-    addDockWindow(*dockOwner, Kind::Inspector, [] { return std::string(T("Inspector")); }, [&ed] { return ed.showInspector; }, [&] { return inspPanel ? &inspPanel->chrome() : nullptr; });
-    addDockWindow(*dockOwner, Kind::Settings, [] { return std::string(T("Settings")); }, [&ed] { return ed.showSettings; }, [&] { return settingsPanel ? &settingsPanel->chrome() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Hierarchy, [] { return std::string(T("Hierarchy")); }, [&ed]() -> bool& { return ed.showHierarchy; }, [&] { return hierPanel.get(); });
+    addDockWindow(*dockOwner, Kind::Scene, [] { return std::string(T("Scene")); }, [&ed]() -> bool& { return ed.showScene; }, [&] { return scenePanel.get(); });
+    addDockWindow(*dockOwner, Kind::Game, [] { return std::string(T("Game")); }, [&ed]() -> bool& { return ed.showGame; }, [&] { return gamePanel.get(); });
+    addDockWindow(*dockOwner, Kind::Scenes, [] { return std::string(T("Scenes")); }, [&ed]() -> bool& { return ed.showScenes; }, [&] { return scenesPanel ? &scenesPanel->view() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Assets, [] { return std::string(T("Assets")); }, [&ed]() -> bool& { return ed.showAssets; }, [&] { return assetsPanel ? &assetsPanel->view() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Console, [] { return std::string(T("Console")); }, [&ed]() -> bool& { return ed.showConsole; }, [&] { return consolePanel.get(); });
+    addDockWindow(*dockOwner, Kind::Profiler, [] { return std::string(T("Profiler")); }, [&ed]() -> bool& { return ed.showProfiler; }, [&] { return profPanel.get(); });
+    addDockWindow(*dockOwner, Kind::Inspector, [] { return std::string(T("Inspector")); }, [&ed]() -> bool& { return ed.showInspector; }, [&] { return inspPanel ? &inspPanel->chrome() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Settings, [] { return std::string(T("Settings")); }, [&ed]() -> bool& { return ed.showSettings; }, [&] { return settingsPanel ? &settingsPanel->chrome() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Coding, [] { return std::string(T("Coding")); }, [&ed]() -> bool& { return ed.showCoding; }, [&] { return codingPanel ? &codingPanel->chrome() : nullptr; });
     dockOwner->load(kDockLayoutFile);   // organizacao salva na sessao anterior (se houver e for valida)
   }
 #endif
@@ -3291,12 +3304,13 @@ static int runEditorMain(int argc, char** argv) {
       const bool settingsMayReceive = !pointerEvt || gPanelRouter.mayReceive(editor::panel_router::kSettingsHandle, ptrX, ptrY);
       const bool setHandled = !dockHandled && settingsPanel && dockShown(editor::dock_host::Kind::Settings, ed.showSettings) && settingsMayReceive && settingsPanel->handleEvent(e);
       const bool inspHandled = !dockHandled && inspPanel && dockShown(editor::dock_host::Kind::Inspector, ed.showInspector) && inspPanel->handleEvent(e);
+      const bool codHandled = !dockHandled && codingPanel && dockShown(editor::dock_host::Kind::Coding, ed.showCoding) && codingPanel->chrome().handleEvent(e);
       const bool scnHandled = !dockHandled && scenesPanel && scenesPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Scenes, ed.showScenes));
       const bool asstHandled = !dockHandled && assetsPanel && assetsPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Assets, ed.showAssets));
       const bool sceneFrameHandled = !dockHandled && forwardViewEvent(e, dockShown(editor::dock_host::Kind::Scene, ed.showScene), dockShown(editor::dock_host::Kind::Game, ed.showGame));   // Scene e Jogo veem o evento; a moldura da Scene consome o clique
       // ImGui so recebe o ponteiro se nenhum painel SpriteUI registrado cobre o ponto: senao as janelas ImGui de tras reagiriam.
       const bool ownedBySui = pointerEvt && gPanelRouter.coveredBySui(ptrX, ptrY);
-      if (!dockHandled && !spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !scnHandled && !asstHandled && !sceneFrameHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
+      if (!dockHandled && !spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !codHandled && !scnHandled && !asstHandled && !sceneFrameHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
 #else
       ImGui_ImplSDL3_ProcessEvent(&e);
 #endif
@@ -3369,6 +3383,7 @@ static int runEditorMain(int argc, char** argv) {
         gDock->beginFrame({{0.f, menuH}, {static_cast<float>(dockW), static_cast<float>(dockH) - menuH - statusH}}, dockW, dockH);
         gInspectorBody = framedBody(inspPanel ? &inspPanel->chrome() : nullptr, dockShown(editor::dock_host::Kind::Inspector, ed.showInspector), dockW, dockH, 340.f, 520.f);
         gSettingsBody = framedBody(settingsPanel ? &settingsPanel->chrome() : nullptr, dockShown(editor::dock_host::Kind::Settings, ed.showSettings), dockW, dockH, 460.f, 480.f);
+        gCodingBody = framedBody(codingPanel ? &codingPanel->chrome() : nullptr, dockShown(editor::dock_host::Kind::Coding, ed.showCoding), dockW, dockH, 640.f, 420.f);
       }
 #endif
       if (!focusWin.empty() && frame == 24) ImGui::SetWindowFocus(("###" + focusWin).c_str());
@@ -3415,6 +3430,7 @@ static int runEditorMain(int argc, char** argv) {
       const float inner = ed.prof.cur[static_cast<int>(editor::Zone::SceneRender)] + ed.prof.cur[static_cast<int>(editor::Zone::GameRender)] + ed.prof.cur[static_cast<int>(editor::Zone::PostFx)] + ed.prof.cur[static_cast<int>(editor::Zone::Sky)];
       ed.prof.add(editor::Zone::Hierarchy, std::max(0.f, total - inner));
     }
+    if (codingPanel && dockShown(editor::dock_host::Kind::Coding, ed.showCoding)) drawCoding(ed, *codingPanel);   // por ultimo entre as janelas ImGui: cobre as de tras
     zone.restart(editor::Zone::Ui);
     ImGui::Render();
     if (!headless && !playerMode && (ed.themeDirty || ed.langDirty || ed.settingsDirty) && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) { saveSettings(ed); ed.themeDirty = ed.langDirty = ed.settingsDirty = false; }
@@ -3483,6 +3499,11 @@ static int runEditorMain(int argc, char** argv) {
         gInspectorPanel = nullptr;
         gInspectorSpriteOn = false;
       }
+    }
+    if (codingPanel) {   // moldura da janela Coding (SpriteUI): titulo, X, "?" e grip
+      if (!codingPanel->chrome().draw(renderer, T("Coding"))) tool::logError(std::string("Coding frame render failed: ") + SDL_GetError());
+      if (codingPanel->chrome().consumeClose()) ed.showCoding = false;
+      codingPanel->chrome().consumeHelp();
     }
     if (assetsPanel && dockShown(editor::dock_host::Kind::Assets, ed.showAssets)) {   // Assets: janela SpriteUI flutuante (lista, grade, acoes e texto)
       syncAssetsPanel(ed, *assetsPanel);

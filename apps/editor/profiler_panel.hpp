@@ -16,6 +16,7 @@
 // Padrao de uso da SpriteUI: start_screen_spriteui.hpp (LayoutTree para os nos com clique; addDecorations para texto e retangulos).
 //
 // A roda sobre o conteudo rola a lista. Eventos de ponteiro seguem para o ImGui para foco e docking funcionarem.
+#include "window_palette.hpp"
 #include "i18n.hpp"
 #include "profiler.hpp"
 #include "profiler_export.hpp"
@@ -120,13 +121,7 @@ class ProfilerPanel {
   ProfilerPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : text_{text}, sdl_{sdl} {
     buildTree();
     // Moldura: mesmo visual do Console (corpo navy, aba de 30 px).
-    frameColors_.body = colors_.panel;
-    frameColors_.border = Srgb(0.160f, 0.220f, 0.330f);
-    frameColors_.borderDragging = Srgb(0.420f, 0.600f, 0.980f);
-    frameColors_.headerActive = Srgb(0.120f, 0.160f, 0.230f);
-    frameColors_.headerInactive = Srgb(0.090f, 0.120f, 0.180f);
-    frameColors_.headerDragging = Srgb(0.160f, 0.210f, 0.300f);
-    frameColors_.glyph = Srgb(0.910f, 0.918f, 0.933f);
+    frameColors_ = editor::window_palette::Standard();
   }
   ProfilerPanel(const ProfilerPanel&) = delete;
   ProfilerPanel& operator=(const ProfilerPanel&) = delete;
@@ -314,7 +309,7 @@ class ProfilerPanel {
     SW::WindowFrameState state;
     state.active = true;
     state.dragging = frame_.dragging();
-    state.docked = false;
+    state.docked = frame_.docked();
     auto frameItems = SW::BuildWindowFrameItems(panel_, frame_.rect(), frame_.metrics(), state, frameColors_, -2.f, paint);
     paint += frameItems.size() + 1;
     out.insert(out.end(), frameItems.begin(), frameItems.end());
