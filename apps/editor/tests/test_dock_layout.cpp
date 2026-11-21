@@ -126,6 +126,45 @@ int main() {
   const auto leafList = m.leaves();
   Check(leafList.size() >= 3, "as folhas visiveis cobrem as janelas do dock");
 
+  // 8. Layout salvo: texto ida e volta, abas preservadas, e texto invalido nao muda o dock.
+  {
+    dl::Model src;
+    src.place(scene);
+    src.setArea(area);
+    src.split(scene, SW::DockSlot::Left, dl::kSideRatio, hier);
+    src.split(scene, SW::DockSlot::Bottom, dl::kBottomRatio, console);
+    SW::DockDropResult tabDrop;
+    tabDrop.action = SW::DockAction::Tab;
+    tabDrop.targetLeaf = console;
+    src.apply(profiler, tabDrop);
+    src.select(profiler);
+    src.setArea(area);
+    const std::string text = src.serialize();
+    Check(!text.empty() && text != "E", "layout com janelas gera texto");
+
+    auto known = [&](SU::UIHandle h) { return h == hier || h == scene || h == console || h == assets || h == profiler; };
+    dl::Model back;
+    back.setArea(area);
+    Check(back.deserialize(text, known), "texto salvo e lido de volta");
+    back.setArea(area);
+    Check(back.serialize() == text, "ler e salvar de novo da o mesmo texto");
+    Check(back.tabsOf(profiler).size() == 2 && back.active(profiler), "a aba ativa salva continua ativa");
+    Check(back.leafRect(hier)->size.x == src.leafRect(hier)->size.x, "tamanhos das folhas sao preservados");
+
+    dl::Model bad;
+    bad.setArea(area);
+    bad.place(scene);
+    bad.setArea(area);
+    const std::string before = bad.serialize();
+    Check(!bad.deserialize("L 1 0 9:9", known), "janela desconhecida recusa o layout");
+    Check(!bad.deserialize("S H 0.5 L 1 0 2:1 L 1 0 2:1", known), "janela repetida recusa o layout");
+    Check(!bad.deserialize("S X 0.5 L 1 0 2:1 L 1 0 3:1", known), "direcao invalida recusa o layout");
+    Check(!bad.deserialize("L 2 5 2:1 3:1", known), "aba ativa fora da lista recusa o layout");
+    Check(!bad.deserialize("L 1 0 2:1 lixo", known), "texto sobrando recusa o layout");
+    Check(bad.serialize() == before, "layout recusado deixa o dock como estava");
+    Check(bad.deserialize("E", known) && bad.empty(), "dock vazio e lido como vazio");
+  }
+
   std::printf("Editor.DockLayout: %d checks, %d failed\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
 }

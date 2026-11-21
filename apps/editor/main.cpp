@@ -1115,6 +1115,28 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
 }
 
 // Bloco SpriteUI: prepara os controles, reserva a altura no ImGui e guarda a parte visivel dentro da janela.
+bool gDockSaveRequested = false;   // Janela > Salvar layout: o host salva no proximo quadro
+constexpr const char* kDockLayoutFile = "editor_dock_layout.txt";
+#ifdef TOOL_WITH_SPRITEUI
+editor::sui::Box gInspectorBody{}, gSettingsBody{};   // corpo (abaixo do cabecalho) da moldura SpriteUI neste quadro
+// Corpo de uma janela de moldura SpriteUI neste quadro. Escondida (ou sem painel): a moldura some e o corpo e vazio.
+editor::sui::Box framedBody(editor::framed::Chrome* chrome, bool shown, int winW, int winH, float w, float h) {
+  if (!chrome) return {};
+  if (!shown) {
+    chrome->hide();
+    return {};
+  }
+  return chrome->prepare(static_cast<float>(winW), static_cast<float>(winH), w, h);
+}
+// A janela ImGui do corpo fica exatamente sobre a area da moldura, sem barra de titulo nem arraste.
+constexpr ImGuiWindowFlags kFramedBodyFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
+                                              ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings;
+void placeFramedBody(editor::sui::Box b) {
+  ImGui::SetNextWindowPos({b.x, b.y}, ImGuiCond_Always);
+  ImGui::SetNextWindowSize({b.w, b.h}, ImGuiCond_Always);
+}
+#endif
 void drawInspectorBlock(Editor& ed) {
   const float avail = ImGui::GetContentRegionAvail().x;
   const float h = gInspectorPanel->prepare(inspectorContext(ed), inspectorHooks(ed), avail);
@@ -1122,7 +1144,7 @@ void drawInspectorBlock(Editor& ed) {
   ImGui::Dummy({avail, h});
   const ImVec2 wpos = ImGui::GetWindowPos();
   const ImVec2 wsize = ImGui::GetWindowSize();
-  const float top = std::max(origin.y, wpos.y + ImGui::GetFrameHeight());   // abaixo da barra de titulo
+  const float top = std::max(origin.y, wpos.y);   // a janela ImGui do corpo nao tem barra de titulo
   const float bottom = std::min(origin.y + h, wpos.y + wsize.y);
   gInspectorOrigin = {origin.x, origin.y, avail, h};
   gInspectorVisible = {origin.x, top, avail, bottom - top};
@@ -1177,9 +1199,14 @@ void drawConsoleFrame(Editor& ed) {
 void drawInspector(Editor& ed) {
 #ifdef TOOL_WITH_SPRITEUI
   gInspectorFrame = false;
+  const bool framed = gInspectorSpriteOn;   // moldura SpriteUI (titulo, X, "?", grip): a janela ImGui so rola o corpo
+  if (framed && gInspectorBody.h <= 0.f) return;   // minimizado ou escondido
+  if (framed) placeFramedBody(gInspectorBody);
+#else
+  const bool framed = false;
 #endif
-  if (!ImGui::Begin(W("Inspector", "insp").c_str(), &ed.showInspector)) { ImGui::End(); return; }
-  editor::helpIcon("objects");
+  if (!ImGui::Begin(W("Inspector", "insp").c_str(), framed ? nullptr : &ed.showInspector, framed ? kFramedBodyFlags : ImGuiWindowFlags_None)) { ImGui::End(); return; }
+  if (!framed) editor::helpIcon("objects");
   tool::World& w = ed.scene.world();
 #ifdef TOOL_WITH_SPRITEUI
   gInspectorFrame = true;
@@ -2582,11 +2609,16 @@ void drawSettingsTabBody(Editor& ed, int i) {
 void drawSettings(Editor& ed) {
 #ifdef TOOL_WITH_SPRITEUI
   gSettingsFrame = false;
+  const bool framed = gSettingsSpriteOn;   // moldura SpriteUI: a janela ImGui so cobre o corpo
+  if (framed && gSettingsBody.h <= 0.f) return;   // minimizado ou escondido
+  if (framed) placeFramedBody(gSettingsBody);
+#else
+  const bool framed = false;
 #endif
-  ImGui::SetNextWindowSize({460, 480}, ImGuiCond_FirstUseEver);
+  if (!framed) ImGui::SetNextWindowSize({460, 480}, ImGuiCond_FirstUseEver);
   if (ed.focusSettings > 0 && --ed.focusSettings == 0) ImGui::SetNextWindowFocus();
-  if (!ImGui::Begin(W("Settings", "settings").c_str(), &ed.showSettings)) { ImGui::End(); return; }
-  editor::helpIcon("profiler");
+  if (!ImGui::Begin(W("Settings", "settings").c_str(), framed ? nullptr : &ed.showSettings, framed ? kFramedBodyFlags : ImGuiWindowFlags_None)) { ImGui::End(); return; }
+  if (!framed) editor::helpIcon("profiler");
 #ifdef TOOL_WITH_SPRITEUI
   if (gSettingsSpriteOn) {   // faixa de abas e aba Graficos em SpriteUI; as outras abas seguem aqui, abaixo da faixa
     const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -2711,6 +2743,7 @@ void applyMenuRequest(Editor& ed, bool& quit, const editor::mainmenu::Request& r
     case C::Undo: ed.undo(); break;
     case C::Redo: ed.redo(); break;
     case C::ResetLayout: ed.resetLayout = true; break;
+    case C::SaveLayout: gDockSaveRequested = true; break;
     case C::Play: ed.startPlay(); break;
     case C::Stop: ed.stopPlay(); break;
     case C::Pause: ed.paused = !ed.paused; break;
@@ -3177,6 +3210,9 @@ static int runEditorMain(int argc, char** argv) {
     addDockWindow(*dockOwner, Kind::Assets, [] { return std::string(T("Assets")); }, [&ed] { return ed.showAssets; }, [&] { return assetsPanel ? &assetsPanel->view() : nullptr; });
     addDockWindow(*dockOwner, Kind::Console, [] { return std::string(T("Console")); }, [&ed] { return ed.showConsole; }, [&] { return consolePanel.get(); });
     addDockWindow(*dockOwner, Kind::Profiler, [] { return std::string(T("Profiler")); }, [&ed] { return ed.showProfiler; }, [&] { return profPanel.get(); });
+    addDockWindow(*dockOwner, Kind::Inspector, [] { return std::string(T("Inspector")); }, [&ed] { return ed.showInspector; }, [&] { return inspPanel ? &inspPanel->chrome() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Settings, [] { return std::string(T("Settings")); }, [&ed] { return ed.showSettings; }, [&] { return settingsPanel ? &settingsPanel->chrome() : nullptr; });
+    dockOwner->load(kDockLayoutFile);   // organizacao salva na sessao anterior (se houver e for valida)
   }
 #endif
   gInspectorSpriteOn = inspPanel != nullptr;
@@ -3253,8 +3289,8 @@ static int runEditorMain(int argc, char** argv) {
       const float ptrX = pointerEvt ? pointerX(e) : 0.f;
       const float ptrY = pointerEvt ? pointerY(e) : 0.f;
       const bool settingsMayReceive = !pointerEvt || gPanelRouter.mayReceive(editor::panel_router::kSettingsHandle, ptrX, ptrY);
-      const bool setHandled = settingsPanel && settingsMayReceive && settingsPanel->handleEvent(e);
-      const bool inspHandled = inspPanel && inspPanel->handleEvent(e);
+      const bool setHandled = !dockHandled && settingsPanel && dockShown(editor::dock_host::Kind::Settings, ed.showSettings) && settingsMayReceive && settingsPanel->handleEvent(e);
+      const bool inspHandled = !dockHandled && inspPanel && dockShown(editor::dock_host::Kind::Inspector, ed.showInspector) && inspPanel->handleEvent(e);
       const bool scnHandled = !dockHandled && scenesPanel && scenesPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Scenes, ed.showScenes));
       const bool asstHandled = !dockHandled && assetsPanel && assetsPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Assets, ed.showAssets));
       const bool sceneFrameHandled = !dockHandled && forwardViewEvent(e, dockShown(editor::dock_host::Kind::Scene, ed.showScene), dockShown(editor::dock_host::Kind::Game, ed.showGame));   // Scene e Jogo veem o evento; a moldura da Scene consome o clique
@@ -3320,13 +3356,19 @@ static int runEditorMain(int argc, char** argv) {
       if (menuSpriteOn) reserveMenuBarStrip();
       if (statusSpriteOn) reserveStatusBarStrip();
 #ifdef TOOL_WITH_SPRITEUI
-      if (gDock) {   // area do dock: entre a barra de menu e a de status; a coluna do Inspector fica de fora
+      if (gDock) {   // area do dock: entre a barra de menu e a de status
         int dockW = 0, dockH = 0;
         SDL_GetWindowSize(window, &dockW, &dockH);
         const float menuH = menuSpriteOn ? ImGui::GetFrameHeight() : 0.f;
         const float statusH = statusSpriteOn ? ImGui::GetFrameHeight() : 0.f;
-        const float reserve = ed.showInspector ? static_cast<float>(dockW) * 0.26f : 0.f;
-        gDock->beginFrame({{0.f, menuH}, {static_cast<float>(dockW) - reserve, static_cast<float>(dockH) - menuH - statusH}}, dockW, dockH);
+        if (ed.resetLayout) gDock->resetDefault();   // Janela > Restaurar layout (o ImGui zera o proprio logo depois)
+        if (gDockSaveRequested) {
+          gDockSaveRequested = false;
+          tool::logInfo(gDock->save(kDockLayoutFile) ? std::string("Layout das janelas salvo") : std::string("Nao foi possivel salvar o layout"));
+        }
+        gDock->beginFrame({{0.f, menuH}, {static_cast<float>(dockW), static_cast<float>(dockH) - menuH - statusH}}, dockW, dockH);
+        gInspectorBody = framedBody(inspPanel ? &inspPanel->chrome() : nullptr, dockShown(editor::dock_host::Kind::Inspector, ed.showInspector), dockW, dockH, 340.f, 520.f);
+        gSettingsBody = framedBody(settingsPanel ? &settingsPanel->chrome() : nullptr, dockShown(editor::dock_host::Kind::Settings, ed.showSettings), dockW, dockH, 460.f, 480.f);
       }
 #endif
       if (!focusWin.empty() && frame == 24) ImGui::SetWindowFocus(("###" + focusWin).c_str());
@@ -3341,7 +3383,11 @@ static int runEditorMain(int argc, char** argv) {
       keepFloatingWindowsOnScreen(ImGui::GetMainViewport());
       const bool focusTabs = layoutFocus > 0 && --layoutFocus == 0; // seleciona as abas ativas do layout padrao (Inspector, Scene, Assets)
       if (focusTabs) ImGui::SetNextWindowFocus();
+#ifdef TOOL_WITH_SPRITEUI
+      if (dockShown(editor::dock_host::Kind::Inspector, ed.showInspector)) drawInspector(ed);
+#else
       if (ed.showInspector) drawInspector(ed);
+#endif
       ed_::scriptWindowUi(ed); // janela de edicao de script (fora do Inspector)
       if (focusTabs) ImGui::SetNextWindowFocus();
 #ifdef TOOL_WITH_SPRITEUI
@@ -3354,7 +3400,11 @@ static int runEditorMain(int argc, char** argv) {
       if (ed.showEditMesh) drawFeatureStub(ed, T("Edit Mesh"), T("Edit the 3D model of an object: move vertices, faces and edges. In development."), &ed.showEditMesh);
       if (ed.showPaintMesh) drawFeatureStub(ed, T("Paint Mesh"), T("Paint colors and textures directly on the 3D model. In development."), &ed.showPaintMesh);
       if (focusTabs) ImGui::SetNextWindowFocus();
+#ifdef TOOL_WITH_SPRITEUI
+      if (dockShown(editor::dock_host::Kind::Settings, ed.showSettings)) drawSettings(ed);
+#else
       if (ed.showSettings) drawSettings(ed);
+#endif
       if (ed.showNarrative) ed.narrative.draw(&ed.showNarrative);
       if (ed.showInputMap) editor::drawInputMap(ed, &ed.showInputMap);
       if (ed.showEditorInfo) editor::drawEditorInfo(ed, &ed.showEditorInfo);
@@ -3461,6 +3511,16 @@ static int runEditorMain(int argc, char** argv) {
         applyScenesActions(ed, *scenesPanel, scenesActs);
       }
     }
+    if (inspPanel) {   // moldura do Inspector (SpriteUI): titulo, X, "?" e grip
+      if (!inspPanel->chrome().draw(renderer, T("Inspector"))) tool::logError(std::string("Inspector frame render failed: ") + SDL_GetError());
+      if (inspPanel->chrome().consumeClose()) ed.showInspector = false;
+      if (inspPanel->chrome().consumeHelp()) editor::openHelp("objects");
+    }
+    if (settingsPanel) {   // moldura do Settings (SpriteUI)
+      if (!settingsPanel->chrome().draw(renderer, T("Settings"))) tool::logError(std::string("Settings frame render failed: ") + SDL_GetError());
+      if (settingsPanel->chrome().consumeClose()) ed.showSettings = false;
+      if (settingsPanel->chrome().consumeHelp()) editor::openHelp("profiler");
+    }
     if (settingsPanel) {   // Configuracoes: faixa de abas e aba Graficos por cima da janela ImGui
       const bool shown = ed.showSettings && gSettingsFrame;
       editor::settings_changes::Requests requests;
@@ -3531,6 +3591,9 @@ static int runEditorMain(int argc, char** argv) {
       spriteTextCursorActive = false;
     }
 #endif
+#ifdef TOOL_WITH_SPRITEUI
+    if (gDock && !playerMode) gDock->overlay(renderer);   // faixas de abas e guias do arraste: por cima de tudo
+#endif
     if (!screenshotPath.empty() && maxFrames > 0 && frame + 1 >= maxFrames) {
       if (SDL_Surface* shot = SDL_RenderReadPixels(renderer, nullptr)) {
         if (SDL_Surface* rgb = SDL_ConvertSurface(shot, SDL_PIXELFORMAT_RGB24)) {
@@ -3547,9 +3610,6 @@ static int runEditorMain(int argc, char** argv) {
         SDL_DestroySurface(shot);
       }
     }
-#ifdef TOOL_WITH_SPRITEUI
-    if (gDock && !playerMode) gDock->overlay(renderer);   // faixas de abas e guias do arraste: por cima de tudo
-#endif
     zone.restart(editor::Zone::Present);
     SDL_RenderPresent(renderer);
     zone.stop();

@@ -23,7 +23,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -39,7 +41,7 @@ namespace view = editor::view;
 inline view::Pixel px(SU::Vec2 v) { return view::Pixel{v.x, v.y}; }
 
 // Janelas SpriteUI acopláveis. Os ids sao estaveis: o modelo de dock os guarda.
-enum class Kind : std::uint32_t { Hierarchy, Scene, Game, Scenes, Assets, Console, Profiler };
+enum class Kind : std::uint32_t { Hierarchy, Scene, Game, Scenes, Assets, Console, Profiler, Inspector, Settings };
 inline SU::UIHandle idOf(Kind k) { return SU::UIHandle{0xE0000010u + static_cast<std::uint32_t>(k), 1u}; }
 
 inline constexpr float kStripFont = 13.f;
@@ -152,6 +154,28 @@ class Host {
 
   [[nodiscard]] const dock_layout::Model& model() const { return model_; }
 
+  // Volta ao layout padrao (menu Janela > Restaurar layout). Vale no proximo quadro.
+  void resetDefault() {
+    model_.clear();
+    buildDefault();
+  }
+
+  // Salva a organizacao atual (abas, divisoes e tamanhos). False se o arquivo nao pode ser escrito.
+  [[nodiscard]] bool save(const std::string& path) const {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) return false;
+    f << model_.serialize();
+    return static_cast<bool>(f);
+  }
+
+  // Carrega uma organizacao salva. False se o arquivo nao existe ou nao e valido (o dock fica como estava).
+  bool load(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    return model_.deserialize(text, [this](SU::UIHandle h) { return isRegistered(h); });
+  }
+
  private:
   Window* find(SU::UIHandle id) {
     for (Window& w : windows_) {
@@ -237,8 +261,9 @@ class Host {
     return true;
   }
 
-  // Layout padrao: Scene no centro; Hierarquia e Scenes a esquerda; Assets e Game a direita; Console e Profiler
-  // embaixo. So entram as janelas abertas. Sem Scene aberta, o dock fica vazio e as janelas flutuam.
+  // Layout padrao: Hierarquia (em cima) e Scenes (embaixo) a esquerda; Scene e Game em abas no centro, em cima;
+  // Console, Profiler e Assets em abas embaixo do centro; Inspector (em cima) e Settings (embaixo) a direita.
+  // So entram as janelas registradas e abertas. Sem Scene aberta, o dock fica vazio e as janelas flutuam.
   void buildDefault() {
     auto has = [&](Kind k) {
       for (const Window& w : windows_) {
@@ -249,13 +274,39 @@ class Host {
     if (!has(Kind::Scene)) return;
     model_.place(idOf(Kind::Scene));
     model_.setArea(area_);
-    if (has(Kind::Hierarchy)) model_.split(idOf(Kind::Scene), SW::DockSlot::Left, dock_layout::kSideRatio, idOf(Kind::Hierarchy));
-    if (has(Kind::Scenes) && has(Kind::Hierarchy)) model_.split(idOf(Kind::Hierarchy), SW::DockSlot::Bottom, 0.45f, idOf(Kind::Scenes));
-    if (has(Kind::Assets)) model_.split(idOf(Kind::Scene), SW::DockSlot::Right, dock_layout::kSideRatio, idOf(Kind::Assets));
-    if (has(Kind::Game)) model_.split(idOf(Kind::Scene), SW::DockSlot::Right, 0.5f, idOf(Kind::Game));
+    if (has(Kind::Inspector)) {
+      model_.split(idOf(Kind::Scene), SW::DockSlot::Right, dock_layout::kSideRatio, idOf(Kind::Inspector));
+      if (has(Kind::Settings)) model_.split(idOf(Kind::Inspector), SW::DockSlot::Bottom, 0.5f, idOf(Kind::Settings));
+    }
+    if (has(Kind::Hierarchy)) {
+      model_.split(idOf(Kind::Scene), SW::DockSlot::Left, dock_layout::kSideRatio, idOf(Kind::Hierarchy));
+      if (has(Kind::Scenes)) model_.split(idOf(Kind::Hierarchy), SW::DockSlot::Bottom, 0.5f, idOf(Kind::Scenes));
+    }
     if (has(Kind::Console)) model_.split(idOf(Kind::Scene), SW::DockSlot::Bottom, dock_layout::kBottomRatio, idOf(Kind::Console));
-    if (has(Kind::Profiler) && has(Kind::Console)) model_.split(idOf(Kind::Console), SW::DockSlot::Right, 0.5f, idOf(Kind::Profiler));
+    tabInto(Kind::Scene, Kind::Game, has);
+    tabInto(Kind::Console, Kind::Profiler, has);
+    tabInto(Kind::Console, Kind::Assets, has);
+    // A ultima aba adicionada fica ativa; o padrao abre Scene e Console (a primeira de cada grupo).
+    if (has(Kind::Scene)) model_.select(idOf(Kind::Scene));
+    if (has(Kind::Console)) model_.select(idOf(Kind::Console));
     model_.setArea(area_);
+  }
+
+  // Poe a janela `w` como aba da folha de `target` (o mesmo que soltar no centro da folha).
+  template <class Has>
+  void tabInto(Kind target, Kind w, Has& has) {
+    if (!has(w) || !has(target)) return;
+    SW::DockDropResult drop;
+    drop.action = SW::DockAction::Tab;
+    drop.targetLeaf = idOf(target);
+    model_.apply(idOf(w), drop);
+  }
+
+  bool isRegistered(SU::UIHandle id) const {
+    for (const Window& w : windows_) {
+      if (w.id == id) return true;
+    }
+    return false;
   }
 
   dock_layout::Model model_;

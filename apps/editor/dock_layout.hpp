@@ -16,8 +16,15 @@
 #include "SpriteUi/Widgets/Docking.hpp"
 
 #include <algorithm>
+#include <charconv>
+#include <cmath>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <optional>
+#include <sstream>
+#include <string>
+#include <system_error>
 #include <vector>
 
 namespace editor::dock_layout {
@@ -144,7 +151,106 @@ class Model {
     return ok;
   }
 
+  // Esvazia o dock (nenhuma janela). A area nao muda.
+  void clear() { root_ = SW::UIDockNode(); }
+
+  // Texto do layout (arvore de divisoes e folhas, com as abas na ordem). Dock vazio: "E".
+  [[nodiscard]] std::string serialize() const {
+    if (empty()) return "E";
+    std::ostringstream out;
+    write(root_, out);
+    return out.str();
+  }
+
+  // Le um layout salvo. So aceita texto valido em que cada janela aparece uma vez e `known` a reconhece.
+  // Falso: o dock fica como estava.
+  bool deserialize(const std::string& text, const std::function<bool(SU::UIHandle)>& known) {
+    if (text == "E") {
+      clear();
+      return true;
+    }
+    std::istringstream in(text);
+    SW::UIDockNode fresh;
+    std::vector<SU::UIHandle> seen;
+    if (!read(in, fresh, known, seen)) return false;
+    std::string extra;
+    if (in >> extra) return false;
+    root_ = std::move(fresh);
+    root_.Layout(area_);
+    return true;
+  }
+
  private:
+  static std::string handleText(SU::UIHandle h) {
+    return std::to_string(h.index) + ":" + std::to_string(h.generation);
+  }
+
+  static SU::UIHandle parseHandle(const std::string& t) {
+    const auto colon = t.find(':');
+    if (colon == std::string::npos) return {};
+    std::uint32_t index = 0, generation = 0;
+    const char* end = t.data() + t.size();
+    const auto a = std::from_chars(t.data(), t.data() + colon, index);
+    const auto b = std::from_chars(t.data() + colon + 1, end, generation);
+    if (a.ec != std::errc{} || b.ec != std::errc{} || a.ptr != t.data() + colon || b.ptr != end) return {};
+    return SU::UIHandle{index, generation};
+  }
+
+  // Formato: "S H|V <razao> <primeiro> <segundo>" ou "L <n> <aba ativa> <janela>...".
+  static void write(const SW::UIDockNode& n, std::ostringstream& out) {
+    if (n.isSplit) {
+      out << "S " << (n.splitDirection == SU::LayoutDirection::Row ? 'H' : 'V') << ' ' << n.splitRatio << ' ';
+      write(*n.firstChild, out);
+      out << ' ';
+      write(*n.secondChild, out);
+      return;
+    }
+    const auto& tabs = n.tabs.GetTabs();
+    if (tabs.size() < 2) {
+      out << "L 1 0 " << handleText(n.VisibleContent());
+      return;
+    }
+    out << "L " << tabs.size() << ' ' << n.tabs.GetActiveTabIndex();
+    for (const SW::UITab& t : tabs) out << ' ' << handleText(t.contentHandle);
+  }
+
+  static bool read(std::istringstream& in, SW::UIDockNode& n, const std::function<bool(SU::UIHandle)>& known,
+                   std::vector<SU::UIHandle>& seen) {
+    std::string tag;
+    if (!(in >> tag)) return false;
+    if (tag == "S") {
+      std::string dir;
+      float ratio = 0.f;
+      if (!(in >> dir >> ratio) || (dir != "H" && dir != "V") || !std::isfinite(ratio)) return false;
+      n.isSplit = true;
+      n.splitDirection = dir == "H" ? SU::LayoutDirection::Row : SU::LayoutDirection::Column;
+      n.splitRatio = ratio;
+      n.firstChild = std::make_unique<SW::UIDockNode>();
+      n.secondChild = std::make_unique<SW::UIDockNode>();
+      return read(in, *n.firstChild, known, seen) && read(in, *n.secondChild, known, seen);
+    }
+    if (tag != "L") return false;
+    std::size_t count = 0, sel = 0;
+    if (!(in >> count >> sel) || count == 0) return false;
+    std::vector<SU::UIHandle> ids;
+    for (std::size_t i = 0; i < count; ++i) {
+      std::string token;
+      if (!(in >> token)) return false;
+      const SU::UIHandle h = parseHandle(token);
+      if (!h.IsValid() || !known(h) || std::find(seen.begin(), seen.end(), h) != seen.end()) return false;
+      seen.push_back(h);
+      ids.push_back(h);
+    }
+    if (count == 1) {
+      n.content = ids[0];
+      return true;
+    }
+    for (const SU::UIHandle& h : ids) {
+      if (!n.tabs.AddTab("", h)) return false;
+    }
+    return n.tabs.SelectTab(sel);
+  }
+
   // Procura a folha que tem a janela como conteudo unico ou como aba.
   static const SW::UIDockNode* find(const SW::UIDockNode& node, SU::UIHandle w) {
     if (!node.isSplit) {
