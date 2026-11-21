@@ -49,7 +49,8 @@ inline constexpr float kStripPad = 8.f;
 // Abas na barra da moldura (mesma altura do cabecalho): depois do grip e do "?" ate antes de minimizar e X.
 inline constexpr float kHeaderH = 30.f;
 inline constexpr float kHelpReserve = 30.f;   // grip + "?" (quando nao ha grip medido)
-inline constexpr float kCloseReserve = 28.f;  // X da folha agrupada, a direita da barra
+inline constexpr float kCloseReserve = 8.f;   // margem a direita da barra agrupada
+inline constexpr float kTabX = 18.f;          // botao X de cada aba (fecha a janela da aba)
 inline constexpr float kTabMaxWidth = 120.f;
 
 // O que o host precisa de cada janela. As funcoes sao preenchidas pelo main.cpp com os paineis ja criados.
@@ -154,12 +155,12 @@ class Host {
         shapes.rectFilled({x, y}, {x + c->tabW - 1.f, y + kHeaderH},
                           on ? view::Rgba(52, 68, 96) : view::Rgba(24, 31, 46));
         if (on) shapes.rectFilled({x, y + kHeaderH - 2.f}, {x + c->tabW - 1.f, y + kHeaderH}, view::Rgba(74, 130, 200));
-        shapes.text({x + c->tabW * 0.5f, y + (kHeaderH - kStripFont) * 0.5f}, titleOf(tabs[i]), kStripFont,
-                    view::Rgba(233, 234, 238), true, std::max(0.f, c->tabW - kStripPad));
+        // Padrao da barra: nome + X dentro de cada aba.
+        shapes.text({x + (c->tabW - kTabX) * 0.5f, y + (kHeaderH - kStripFont) * 0.5f}, titleOf(tabs[i]), kStripFont,
+                    view::Rgba(233, 234, 238), true, std::max(0.f, c->tabW - kTabX - kStripPad));
+        shapes.text({x + c->tabW - kTabX * 0.5f - 4.f, y + (kHeaderH - kStripFont) * 0.5f}, "X", kStripFont,
+                    view::Rgba(170, 178, 194), true, kTabX);
       }
-      // X da folha agrupada: fecha a janela ativa.
-      shapes.text({leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve * 0.5f - 4.f, y + (kHeaderH - kStripFont) * 0.5f},
-                  "X", kStripFont, view::Rgba(233, 234, 238), true, kCloseReserve);
     }
     if (drag_.IsDragging()) {
       for (const SW::DockLeafRect& leaf : model_.leaves()) {
@@ -248,15 +249,6 @@ class Host {
   bool pressed(SU::Vec2 p) {
     pointer_ = p;
     for (const SW::DockLeafRect& leaf : model_.leaves()) {
-      if (!tabCells(leaf)) continue;
-      const SU::Rect closeBox{{leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve, leaf.bounds.position.y},
-                              {kCloseReserve, kHeaderH}};
-      if (!inside(closeBox, p)) continue;
-      for (Window& w : windows_) {
-        if (w.id == leaf.leaf && w.close) { w.close(); return true; }
-      }
-    }
-    for (const SW::DockLeafRect& leaf : model_.leaves()) {
       const std::optional<TabCells> c = tabCells(leaf);
       if (!c) continue;
       const SU::Rect strip{{c->x0, leaf.bounds.position.y}, {c->x1 - c->x0, kHeaderH}};
@@ -264,6 +256,12 @@ class Host {
       const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
       const auto index = static_cast<std::size_t>(
           std::clamp((p.x - c->x0) / c->tabW, 0.f, static_cast<float>(tabs.size() - 1)));
+      const float localX = p.x - (c->x0 + c->tabW * static_cast<float>(index));
+      if (localX >= c->tabW - kTabX) {   // X da aba: fecha a janela dela
+        for (Window& w : windows_) {
+          if (w.id == tabs[index] && w.close) { w.close(); return true; }
+        }
+      }
       model_.select(tabs[index]);
       return true;
     }
