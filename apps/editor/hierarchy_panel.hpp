@@ -34,6 +34,7 @@
 #include "SpriteUi/Widgets/WindowFrame.hpp"
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
 
+#include <optional>
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -196,6 +197,16 @@ class HierarchyPanel {
         }
     }
 
+    // Area dada pelo dock (folha, sem a faixa de abas). nullopt: a janela flutua na posicao em que estava.
+    void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }
+    [[nodiscard]] bool docked() const { return frame_.docked(); }
+    [[nodiscard]] SU::Rect frameRect() const { return frame_.rect(); }
+    [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
+    void floatAt(SU::Vec2 at) {
+        dock_.reset();
+        frame_.undock(at);
+    }
+
     // Desenha a janela (moldura SpriteUI, barra, lista e menu). Os pedidos saem em `out`.
     bool draw(SDL_Renderer* renderer, SDL_Window* window, bool visible, Source src, Requests& out) {
         visible_ = visible;
@@ -205,7 +216,7 @@ class HierarchyPanel {
         SDL_GetWindowSize(window, &winW, &winH);
         if (winW <= 0 || winH <= 0) return true;
         // Primeira posicao: a esquerda, na parte de baixo, com a altura da lista (cabe ~10 linhas).
-        frame_.place(static_cast<float>(winW), static_cast<float>(winH), kFrameW, kFrameH, 16.f);
+        frame_.placeIn(static_cast<float>(winW), static_cast<float>(winH), dock_, kFrameW, kFrameH, 16.f);
         const SU::Rect content = frame_.content();
         rect_ = sui::Box{content.position.x, content.position.y, content.size.x, content.size.y};
         if (!iconsTried_) {
@@ -860,6 +871,7 @@ class HierarchyPanel {
     static constexpr float kFrameW = 288.f;   // tamanho inicial da janela (px)
     static constexpr float kFrameH = 520.f;
     wf::Frame frame_;
+    std::optional<SU::Rect> dock_;
     SW::WindowFrameColors frameColors_{};
     bool closeRequested_ = false;
     bool helpRequested_ = false;

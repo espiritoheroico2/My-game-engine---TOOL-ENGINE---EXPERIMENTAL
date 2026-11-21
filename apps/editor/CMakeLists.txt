@@ -73,6 +73,12 @@ if(TOOL_WITH_SPRITEUI)
   target_link_libraries(editor_window_frame_tests PRIVATE SpriteUi::SpriteUI)
   add_test(NAME Editor.WindowFrame COMMAND editor_window_frame_tests)
 
+  # Docking das janelas (dock_layout.hpp): layout padrao, abas, encaixe por arraste e flutuar. Sem janela.
+  add_executable(editor_dock_layout_tests tests/test_dock_layout.cpp)
+  target_include_directories(editor_dock_layout_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_dock_layout_tests PRIVATE SpriteUi::SpriteUI)
+  add_test(NAME Editor.DockLayout COMMAND editor_dock_layout_tests)
+
   # Captura headless da janela Editor info (SpriteUI). Nao e um teste do ctest: gera PPM para conferir visualmente.
   add_executable(editor_info_capture tools/editor_info_capture.cpp)
   target_include_directories(editor_info_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

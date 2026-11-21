@@ -34,6 +34,7 @@
 #include "window_help_icon.hpp"
 #include "text_atlas_set.hpp"
 
+#include <optional>
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -162,6 +163,16 @@ class ProfilerPanel {
   }
 
   // Moldura (X fecha, grip arrasta), botao Exportar e roda sobre a lista. Devolve true quando consumiu o evento.
+  // Area dada pelo dock (folha, sem a faixa de abas). nullopt: a janela flutua na posicao em que estava.
+  void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }
+  [[nodiscard]] bool docked() const { return frame_.docked(); }
+  [[nodiscard]] SU::Rect frameRect() const { return frame_.rect(); }
+  [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
+  void floatAt(SU::Vec2 at) {
+    dock_.reset();
+    frame_.undock(at);
+  }
+
   bool handleEvent(const SDL_Event& e, bool visible) {
     if (!visible) return false;
     switch (e.type) {
@@ -223,7 +234,7 @@ class ProfilerPanel {
       return true;
     }
     // Primeira posicao: canto inferior esquerdo, com a largura de antes (420 px). O Console nasce no centro.
-    frame_.place(static_cast<float>(winW), static_cast<float>(winH), Theme::kWidth, wf::Metrics::kHeight, 16.f);
+    frame_.placeIn(static_cast<float>(winW), static_cast<float>(winH), dock_, Theme::kWidth, wf::Metrics::kHeight, 16.f);
     const SU::Rect content = frame_.content();
     const SU::Rect area{{content.position.x, content.position.y + Theme::kToolbarH},
                         {content.size.x, std::max(0.f, content.size.y - Theme::kToolbarH)}};
@@ -654,6 +665,7 @@ class ProfilerPanel {
 
   // Moldura e pedidos da janela (X, grip e botao Exportar)
   wf::Frame frame_;
+  std::optional<SU::Rect> dock_;
   SW::WindowFrameColors frameColors_{};
   SU::Rect exportBox_{};
   bool closeRequested_ = false;

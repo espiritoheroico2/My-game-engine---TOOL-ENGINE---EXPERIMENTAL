@@ -24,6 +24,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -117,19 +118,30 @@ class View {
     removed_ = kNone;
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
 
-    const float panelWidth = std::min(Theme::kPanelWidth, windowWidth - 32.f);
+    const float panelWidth = dock_ ? dock_->size.x : std::min(Theme::kPanelWidth, windowWidth - 32.f);
     const float frameHeight = frameHeightNow();
+    if (dock_) {   // acoplada: a area vem do dock; o arraste nao a move
+      windowPos_ = dock_->position;
+      dragging_ = false;
+      placed_ = true;
+    } else if (docked_) {   // saiu do dock: continua no lugar em que estava
+      windowPos_ = frame_.position;
+      placed_ = true;
+    }
+    docked_ = dock_.has_value();
     if (!placed_) {   // primeira vez: centralizada
       windowPos_ = {std::floor((windowWidth - panelWidth) * 0.5f),
                     std::max(0.f, std::floor((windowHeight - Theme::kPanelHeight - metrics_.headerHeight) * 0.5f))};
       placed_ = true;
     }
-    windowPos_.x = std::clamp(windowPos_.x, 0.f, std::max(0.f, windowWidth - panelWidth));
-    windowPos_.y = std::clamp(windowPos_.y, 0.f, std::max(0.f, windowHeight - frameHeight));
-    frame_ = SU::Rect{windowPos_, {panelWidth, frameHeight}};
+    if (!docked_) {
+      windowPos_.x = std::clamp(windowPos_.x, 0.f, std::max(0.f, windowWidth - panelWidth));
+      windowPos_.y = std::clamp(windowPos_.y, 0.f, std::max(0.f, windowHeight - frameHeight));
+    }
+    frame_ = SU::Rect{windowPos_, {panelWidth, docked_ ? dock_->size.y : frameHeight}};
 
     handleFrameInput(in, actions);
-    frame_ = SU::Rect{windowPos_, {panelWidth, frameHeightNow()}};
+    frame_ = SU::Rect{windowPos_, {panelWidth, docked_ ? (minimized_ ? metrics_.headerHeight : dock_->size.y) : frameHeightNow()}};
 
     // Minimizada: so a moldura (cabecalho). O conteudo nao aparece nem recebe cliques.
     if (minimized_) {
@@ -194,6 +206,17 @@ class View {
   [[nodiscard]] std::size_t removedIndex() const { return removed_; }
   [[nodiscard]] SU::Rect frameRect() const { return frame_; }
   [[nodiscard]] SU::Vec2 windowPos() const { return windowPos_; }
+  // Area dada pelo dock (folha, sem a faixa de abas). nullopt: a janela flutua.
+  void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }
+  [[nodiscard]] bool docked() const { return docked_; }
+  [[nodiscard]] SU::Rect gripRect() const { return SW::WindowGripRect(SW::WindowFrameHeader(frame_, metrics_, false), Theme::kGripWidth); }
+  // Sai do dock na posicao `at`: a janela segue o ponteiro (o arraste da moldura volta a valer).
+  void floatAt(SU::Vec2 at) {
+    dock_.reset();
+    windowPos_ = at;
+    placed_ = true;
+    docked_ = false;
+  }
   [[nodiscard]] bool dragging() const { return dragging_; }
   [[nodiscard]] bool minimized() const { return minimized_; }
   [[nodiscard]] const SW::WindowFrameMetrics& frameMetrics() const { return metrics_; }
@@ -259,7 +282,7 @@ class View {
       return;
     }
     const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, false);
-    if (inside(SW::WindowGripRect(bar, Theme::kGripWidth), p)) {
+    if (!docked_ && inside(SW::WindowGripRect(bar, Theme::kGripWidth), p)) {
       dragging_ = true;
       grab_ = {p.x - windowPos_.x, p.y - windowPos_.y};
     }
@@ -715,6 +738,8 @@ class View {
   SW::WindowFrameColors frameColors_{};
   SU::Rect frame_{};
   SU::Vec2 windowPos_{};
+  std::optional<SU::Rect> dock_;
+  bool docked_ = false;
   SU::Vec2 grab_{};
   bool placed_ = false;
   bool dragging_ = false;

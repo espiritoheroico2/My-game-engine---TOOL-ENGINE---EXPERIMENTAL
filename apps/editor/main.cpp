@@ -1835,6 +1835,8 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
 }
 
 void applyGameRequests(Editor& ed, const game_panel::Requests& r) {
+  if (r.close) ed.showGame = false;
+  if (r.help) editor::openHelp("start");
   if (r.playToggle) { if (ed.playing) ed.stopPlay(); else ed.startPlay(); }
   if (r.pauseToggle) ed.paused = !ed.paused;
   if (r.stepOnce) ed.stepOnce = true;
@@ -1964,25 +1966,30 @@ void buildGameCell(Editor& ed, SDL_Renderer* sdl, std::size_t i, tool::Entity e,
 }
 
 void drawGameSui(Editor& ed, SDL_Renderer* sdl, bool player) {
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-  bool open = false;
-  if (player) {   // jogo exportado (--player): janela cheia, sem barra
+  editor::sui::Box rect{};
+  if (player) {   // jogo exportado (--player): janela cheia, sem barra e sem moldura (ainda pelo ImGui)
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->Pos);
     ImGui::SetNextWindowSize(vp->Size);
-    open = ImGui::Begin("##player", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+    const bool open = ImGui::Begin("##player", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                              ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoDocking);
-  } else {
-    open = ImGui::Begin(W("Game", "game").c_str(), &ed.showGame);
-    if (open) editor::helpIcon("start");
+    ImGui::PopStyleVar();
+    if (!open) { ImGui::End(); return; }
+    const ImVec2 origin = ImGui::GetCursorScreenPos(), avail = ImGui::GetContentRegionAvail();
+    rect = {origin.x, origin.y, avail.x, avail.y};
+    ImGui::End();
+    gGamePanel->setBody(rect);
+  } else {   // janela SpriteUI com moldura (dock, arraste e X): o painel devolve a area do corpo
+    int winW = 0, winH = 0;
+    SDL_GetWindowSize(SDL_GetRenderWindow(sdl), &winW, &winH);
+    if (winW <= 0 || winH <= 0) return;
+    rect = gGamePanel->prepare(static_cast<float>(winW), static_cast<float>(winH));
   }
-  ImGui::PopStyleVar();
-  if (!open) { ImGui::End(); return; }
-  const ImVec2 origin = ImGui::GetCursorScreenPos(), avail = ImGui::GetContentRegionAvail();
   gGameFrame = true;
-  gGameRect = {origin.x, origin.y, avail.x, avail.y};
-  const editor::sui::Box area = player ? gGameRect
-      : editor::sui::Box{origin.x, origin.y + game_panel::kToolbarH, avail.x, std::max(0.f, avail.y - game_panel::kToolbarH)};
+  gGameRect = rect;
+  const editor::sui::Box area = player ? rect
+      : editor::sui::Box{rect.x, rect.y + game_panel::kToolbarH, rect.w, std::max(0.f, rect.h - game_panel::kToolbarH)};
   const auto cams = ed.principalCameras();
   game_panel::Values v;
   v.shown = true;
@@ -2004,7 +2011,6 @@ void drawGameSui(Editor& ed, SDL_Renderer* sdl, bool player) {
     }
   }
   gGameValues = std::move(v);
-  ImGui::End();
 }
 
 // Na build SpriteUI, a janela so existe com o painel (a fonte carregou). Sem fonte, nada e desenhado.
@@ -2022,7 +2028,7 @@ void drawViewPanels(Editor& ed, SDL_Renderer* sdl) {
   const game_panel::Values noGame;
   if (gGamePanel) {   // Jogo primeiro: a janela Scene desenha por cima dela (como as janelas ImGui)
     game_panel::Requests req;
-    if (!gGamePanel->draw(sdl, gGameRect, gGameFrame ? gGameValues : noGame, req)) tool::logError(std::string("Game SpriteUI render failed: ") + SDL_GetError());
+    if (!gGamePanel->draw(sdl, gGameFrame ? gGameValues : noGame, req)) tool::logError(std::string("Game SpriteUI render failed: ") + SDL_GetError());
     applyGameRequests(ed, req);
   }
   if (gScenePanel) {
@@ -2035,8 +2041,8 @@ void drawViewPanels(Editor& ed, SDL_Renderer* sdl) {
 // Eventos: os paineis veem tudo, sem consumir (o ImGui continua recebendo o mouse e o teclado).
 bool forwardViewEvent(const SDL_Event& e) {
   const bool sceneFrame = gScenePanel && gScenePanel->handleEvent(e);
-  if (gGamePanel) gGamePanel->handleEvent(e);
-  return sceneFrame;
+  const bool gameFrame = gGamePanel && gGamePanel->handleEvent(e);
+  return sceneFrame || gameFrame;
 }
 #else
 void beginViewsFrame() {}

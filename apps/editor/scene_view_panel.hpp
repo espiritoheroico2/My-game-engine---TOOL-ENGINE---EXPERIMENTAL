@@ -178,8 +178,17 @@ public:
 
   // Monta a moldura na janela inteira (winW x winH) e devolve o corpo (abaixo do cabecalho): a area da cena.
   // Chame antes de montar os Values, porque a imagem depende desta area. Minimizada, o corpo some (area vazia).
+  void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }
+  [[nodiscard]] bool docked() const { return frame_.docked(); }
+  [[nodiscard]] SU::Rect frameRect() const { return frame_.rect(); }
+  [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
+  void floatAt(SU::Vec2 at) {
+    dock_.reset();
+    frame_.undock(at);
+  }
+
   sui::Box prepare(float winW, float winH) {
-    frame_.place(winW, winH, std::max(320.f, winW * 0.6f), std::max(240.f, winH * 0.6f));
+    frame_.placeIn(winW, winH, dock_, std::max(320.f, winW * 0.6f), std::max(240.f, winH * 0.6f));
     const SU::Rect c = frame_.content();
     rect_ = frame_.minimized() ? sui::Box{} : sui::Box{c.position.x, c.position.y, c.size.x, c.size.y};
     return rect_;
@@ -724,6 +733,7 @@ private:
   view::ShapePainter painter_;
   sui::SpriteUiSdlRenderer& sdl_;
   window_frame::Frame frame_;
+  std::optional<SU::Rect> dock_;
   Wd::WindowFrameColors frameColors_{};
   bool closeRequested_ = false;
   bool helpRequested_ = false;

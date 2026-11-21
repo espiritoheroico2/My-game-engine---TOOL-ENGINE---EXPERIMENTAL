@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace editor::window_frame {
 
@@ -50,6 +51,30 @@ class Frame {
     pos_.y = std::clamp(pos_.y, 0.f, std::max(0.f, windowH - shown));
     frame_ = SU::Rect{pos_, {w, shown}};
   }
+
+  // Janela no dock: `dock` e o retangulo do conteudo que o dock manda neste quadro (o arraste nao move a janela
+  // acoplada). Sem `dock`: volta a flutuar na posicao em que estava (undock). Minimizada, so o cabecalho.
+  void placeIn(float windowW, float windowH, std::optional<SU::Rect> dock, float width = Metrics::kWidth,
+               float height = Metrics::kHeight, float firstX = -1.f) {
+    if (dock) {
+      docked_ = true;
+      fullHeight_ = dock->size.y;
+      const float shown = minimized_ ? std::min(metrics_.headerHeight, dock->size.y) : dock->size.y;
+      frame_ = SU::Rect{dock->position, {dock->size.x, shown}};
+      return;
+    }
+    if (docked_) undock(frame_.position);
+    place(windowW, windowH, width, height, firstX);
+  }
+
+  // Sai do dock na posicao `at` (flutuante). A janela nao e recentrada depois disso.
+  void undock(SU::Vec2 at) {
+    docked_ = false;
+    pos_ = at;
+    placed_ = true;
+  }
+
+  [[nodiscard]] bool docked() const { return docked_; }
 
   [[nodiscard]] SU::Rect rect() const { return frame_; }
   [[nodiscard]] SU::Rect content() const { return SW::WindowFrameContent(frame_, metrics_); }
@@ -125,6 +150,7 @@ class Frame {
   bool placed_ = false;
   bool dragging_ = false;
   bool minimized_ = false;
+  bool docked_ = false;
   float fullHeight_ = Metrics::kHeight;   // altura cheia, guardada para voltar do minimizado
 };
 
