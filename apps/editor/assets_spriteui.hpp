@@ -201,6 +201,13 @@ class View {
     if (!scene.clipHierarchy.valid) return {};
     std::vector<SR::UIRenderItem> extra;
     std::vector<SR::ClipRectGPU> clips = scene.clipHierarchy.effectiveRects;
+    // Recorte pela moldura: conteudo mais largo que a janela (acoplada em folha estreita) nao vaza para fora dela.
+    const SU::Rect framed = frame_;
+    clips.push_back({framed.position.x, framed.position.y, framed.position.x + framed.size.x, framed.position.y + framed.size.y});
+    const auto frameClip = static_cast<std::uint32_t>(clips.size() - 1);
+    for (auto& item : scene.renderItems) {
+      if (item.clipIndex == SR::NoClipIndex) item.clipIndex = frameClip;
+    }
     std::uint64_t paint = 1000;
     addFrame(extra, paint);
     addContent(extra, paint);

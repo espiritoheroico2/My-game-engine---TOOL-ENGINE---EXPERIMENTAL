@@ -47,6 +47,7 @@
 #ifdef TOOL_WITH_SPRITEUI
 #include "scene_view_panel.hpp"
 #include "game_view_panel.hpp"
+#include "dock_host.hpp"
 #include "view_overlays.hpp"
 #endif
 #include "settings_model.hpp"
@@ -1678,6 +1679,29 @@ editor::scene_view_panel::ScenePanel* gScenePanel = nullptr;   // dono: main (un
 editor::game_view_panel::GamePanel* gGamePanel = nullptr;
 bool gSceneFrame = false;   // a janela Scene foi desenhada neste quadro
 bool gGameFrame = false;
+#ifdef TOOL_WITH_SPRITEUI
+editor::dock_host::Host* gDock = nullptr;   // dono: main (unique_ptr); docking das janelas SpriteUI
+// Janela visivel: o host decide (aberta e aba ativa, ou flutuante). Sem host, vale a flag do Editor.
+bool dockShown(editor::dock_host::Kind k, bool open) { return gDock ? gDock->visible(editor::dock_host::idOf(k), open) : open; }
+// Registra uma janela no host. `get` devolve o objeto com frameRect/gripRect/setDock/floatAt, ou nullptr.
+template <class GetFn>
+void addDockWindow(editor::dock_host::Host& host, editor::dock_host::Kind k, std::function<std::string()> title,
+                   std::function<bool()> open, GetFn get) {
+  editor::dock_host::Window w;
+  w.id = editor::dock_host::idOf(k);
+  w.title = std::move(title);
+  w.open = std::move(open);
+  w.frame = [get]() -> std::optional<ToolEngine::SpriteUi::Rect> {
+    auto* p = get();
+    if (!p) return std::nullopt;
+    return p->frameRect();
+  };
+  w.grip = [get]() { auto* p = get(); return p ? p->gripRect() : ToolEngine::SpriteUi::Rect{}; };
+  w.setDock = [get](std::optional<ToolEngine::SpriteUi::Rect> d) { if (auto* p = get()) p->setDock(d); };
+  w.floatAt = [get](ToolEngine::SpriteUi::Vec2 at) { if (auto* p = get()) p->floatAt(at); };
+  host.add(std::move(w));
+}
+#endif
 editor::sui::Box gSceneRect;   // area da janela (pixels da janela)
 editor::sui::Box gGameRect;
 scene_panel::Values gSceneValues;   // montado no quadro, desenhado depois do ImGui
@@ -2039,9 +2063,9 @@ void drawViewPanels(Editor& ed, SDL_Renderer* sdl) {
 }
 
 // Eventos: os paineis veem tudo, sem consumir (o ImGui continua recebendo o mouse e o teclado).
-bool forwardViewEvent(const SDL_Event& e) {
-  const bool sceneFrame = gScenePanel && gScenePanel->handleEvent(e);
-  const bool gameFrame = gGamePanel && gGamePanel->handleEvent(e);
+bool forwardViewEvent(const SDL_Event& e, bool sceneShown, bool gameShown) {
+  const bool sceneFrame = sceneShown && gScenePanel && gScenePanel->handleEvent(e);
+  const bool gameFrame = gameShown && gGamePanel && gGamePanel->handleEvent(e);
   return sceneFrame || gameFrame;
 }
 #else
@@ -3141,6 +3165,19 @@ static int runEditorMain(int argc, char** argv) {
   if (fontReady) gamePanel = std::make_unique<editor::game_view_panel::GamePanel>(uiText, uiRenderer);
   gScenePanel = scenePanel.get();
   gGamePanel = gamePanel.get();
+  std::unique_ptr<editor::dock_host::Host> dockOwner;   // antes do laço: destruido antes dos paineis
+  if (uiReady) {   // docking: as janelas SpriteUI acopláveis; o host decide area, aba e encaixe
+    using editor::dock_host::Kind;
+    dockOwner = std::make_unique<editor::dock_host::Host>(uiText, uiRenderer);
+    gDock = dockOwner.get();
+    addDockWindow(*dockOwner, Kind::Hierarchy, [] { return std::string(T("Hierarchy")); }, [&ed] { return ed.showHierarchy; }, [&] { return hierPanel.get(); });
+    addDockWindow(*dockOwner, Kind::Scene, [] { return std::string(T("Scene")); }, [&ed] { return ed.showScene; }, [&] { return scenePanel.get(); });
+    addDockWindow(*dockOwner, Kind::Game, [] { return std::string(T("Game")); }, [&ed] { return ed.showGame; }, [&] { return gamePanel.get(); });
+    addDockWindow(*dockOwner, Kind::Scenes, [] { return std::string(T("Scenes")); }, [&ed] { return ed.showScenes; }, [&] { return scenesPanel ? &scenesPanel->view() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Assets, [] { return std::string(T("Assets")); }, [&ed] { return ed.showAssets; }, [&] { return assetsPanel ? &assetsPanel->view() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Console, [] { return std::string(T("Console")); }, [&ed] { return ed.showConsole; }, [&] { return consolePanel.get(); });
+    addDockWindow(*dockOwner, Kind::Profiler, [] { return std::string(T("Profiler")); }, [&ed] { return ed.showProfiler; }, [&] { return profPanel.get(); });
+  }
 #endif
   gInspectorSpriteOn = inspPanel != nullptr;
 #else
@@ -3200,15 +3237,17 @@ static int runEditorMain(int argc, char** argv) {
       // e cada pixel de mouse refaz as duas vistas por 3 quadros. A interface continua redesenhando a cada quadro.
       if (!(e.type == SDL_EVENT_MOUSE_MOTION && e.motion.state == 0 && !ed.freeFly)) ++nEvents;
 #ifdef TOOL_WITH_SPRITEUI
+      // Docking primeiro: aba ou grip consumidos aqui nao chegam as janelas (o arraste e do host).
+      const bool dockHandled = !playerMode && gDock && gDock->onEvent(e);
       const bool spriteUiHandled =
           spriteUiDiagnostics.handleEvent(e, ed.showSpriteUiDiagnostics);
-      const bool profHandled = profPanel && profPanel->handleEvent(e, ed.showProfiler);
+      const bool profHandled = !dockHandled && profPanel && profPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Profiler, ed.showProfiler));
       const bool helpHandled = helpPanel && helpPanel->handleEvent(e, window, editor::helpState().open);   // janela Help SpriteUI
       const editor::testmap::Action testMapAction = testMapPanel ? testMapPanel->handleEvent(e, editor::testMapState().open, editor::testMapState().side) : editor::testmap::Action::None;
       if (testMapAction == editor::testmap::Action::Generate) testMapGenerate = true;
       const bool menuHandled = menuPanel && menuPanel->handleEvent(e);
-      const bool consoleHandled = consolePanel && consolePanel->handleEvent(e, ed.showConsole);
-      const bool hierHandled = hierPanel && hierPanel->handleEvent(e);
+      const bool consoleHandled = !dockHandled && consolePanel && consolePanel->handleEvent(e, dockShown(editor::dock_host::Kind::Console, ed.showConsole));
+      const bool hierHandled = !dockHandled && hierPanel && dockShown(editor::dock_host::Kind::Hierarchy, ed.showHierarchy) && hierPanel->handleEvent(e);
       // Pontos cobertos por outro painel SpriteUI (ex.: lista de menu aberta) nao chegam ao Settings.
       const bool pointerEvt = isPointerEvent(e);
       const float ptrX = pointerEvt ? pointerX(e) : 0.f;
@@ -3216,12 +3255,12 @@ static int runEditorMain(int argc, char** argv) {
       const bool settingsMayReceive = !pointerEvt || gPanelRouter.mayReceive(editor::panel_router::kSettingsHandle, ptrX, ptrY);
       const bool setHandled = settingsPanel && settingsMayReceive && settingsPanel->handleEvent(e);
       const bool inspHandled = inspPanel && inspPanel->handleEvent(e);
-      const bool scnHandled = scenesPanel && scenesPanel->handleEvent(e, ed.showScenes);
-      const bool asstHandled = assetsPanel && assetsPanel->handleEvent(e, ed.showAssets);
-      const bool sceneFrameHandled = forwardViewEvent(e);   // Scene e Jogo veem o evento; a moldura da Scene consome o clique
+      const bool scnHandled = !dockHandled && scenesPanel && scenesPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Scenes, ed.showScenes));
+      const bool asstHandled = !dockHandled && assetsPanel && assetsPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Assets, ed.showAssets));
+      const bool sceneFrameHandled = !dockHandled && forwardViewEvent(e, dockShown(editor::dock_host::Kind::Scene, ed.showScene), dockShown(editor::dock_host::Kind::Game, ed.showGame));   // Scene e Jogo veem o evento; a moldura da Scene consome o clique
       // ImGui so recebe o ponteiro se nenhum painel SpriteUI registrado cobre o ponto: senao as janelas ImGui de tras reagiriam.
       const bool ownedBySui = pointerEvt && gPanelRouter.coveredBySui(ptrX, ptrY);
-      if (!spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !scnHandled && !asstHandled && !sceneFrameHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
+      if (!dockHandled && !spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !scnHandled && !asstHandled && !sceneFrameHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
 #else
       ImGui_ImplSDL3_ProcessEvent(&e);
 #endif
@@ -3280,6 +3319,16 @@ static int runEditorMain(int argc, char** argv) {
     } else {
       if (menuSpriteOn) reserveMenuBarStrip();
       if (statusSpriteOn) reserveStatusBarStrip();
+#ifdef TOOL_WITH_SPRITEUI
+      if (gDock) {   // area do dock: entre a barra de menu e a de status; a coluna do Inspector fica de fora
+        int dockW = 0, dockH = 0;
+        SDL_GetWindowSize(window, &dockW, &dockH);
+        const float menuH = menuSpriteOn ? ImGui::GetFrameHeight() : 0.f;
+        const float statusH = statusSpriteOn ? ImGui::GetFrameHeight() : 0.f;
+        const float reserve = ed.showInspector ? static_cast<float>(dockW) * 0.26f : 0.f;
+        gDock->beginFrame({{0.f, menuH}, {static_cast<float>(dockW) - reserve, static_cast<float>(dockH) - menuH - statusH}}, dockW, dockH);
+      }
+#endif
       if (!focusWin.empty() && frame == 24) ImGui::SetWindowFocus(("###" + focusWin).c_str());
       const ImGuiID dock = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
       if (ed.resetLayout || ImGui::DockBuilderGetNode(dock) == nullptr || ImGui::DockBuilderGetNode(dock)->IsLeafNode()) {
@@ -3295,8 +3344,13 @@ static int runEditorMain(int argc, char** argv) {
       if (ed.showInspector) drawInspector(ed);
       ed_::scriptWindowUi(ed); // janela de edicao de script (fora do Inspector)
       if (focusTabs) ImGui::SetNextWindowFocus();
+#ifdef TOOL_WITH_SPRITEUI
+      if (dockShown(editor::dock_host::Kind::Scene, ed.showScene)) drawSceneWindow(ed, renderer);
+      if (dockShown(editor::dock_host::Kind::Game, ed.showGame)) drawGameWindow(ed, renderer, false);
+#else
       if (ed.showScene) drawSceneWindow(ed, renderer);
       if (ed.showGame) drawGameWindow(ed, renderer, false);
+#endif
       if (ed.showEditMesh) drawFeatureStub(ed, T("Edit Mesh"), T("Edit the 3D model of an object: move vertices, faces and edges. In development."), &ed.showEditMesh);
       if (ed.showPaintMesh) drawFeatureStub(ed, T("Paint Mesh"), T("Paint colors and textures directly on the 3D model. In development."), &ed.showPaintMesh);
       if (focusTabs) ImGui::SetNextWindowFocus();
@@ -3323,7 +3377,7 @@ static int runEditorMain(int argc, char** argv) {
     const double nowSec = static_cast<double>(SDL_GetTicksNS()) * 1e-9;
     if (profPanel) {   // Profiler: moldura SpriteUI com o botao Exportar (sem janela ImGui)
       if (profPanel->consumeExportRequest()) profPanel->beginExport(nowSec);
-      const bool profilerVisible = ed.showProfiler;
+      const bool profilerVisible = dockShown(editor::dock_host::Kind::Profiler, ed.showProfiler);
       if (profilerVisible || profPanel->exporting()) {
         if (profPanel->due(nowSec)) profPanel->refresh(nowSec, ed.prof, fillProfilerExtras(ed));   // so 4 vezes por segundo
         profPanel->tickExport(nowSec);
@@ -3359,7 +3413,7 @@ static int runEditorMain(int argc, char** argv) {
       }
     }
     if (hierPanel) {   // Hierarchy: janela SpriteUI com moldura propria (sem janela ImGui)
-      const bool shown = ed.showHierarchy;
+      const bool shown = dockShown(editor::dock_host::Kind::Hierarchy, ed.showHierarchy);
       editor::hierarchy_panel::Requests requests;
       const editor::hierarchy_panel::Source source = shown ? hierarchySource(ed) : editor::hierarchy_panel::Source{};
       if (!hierPanel->draw(renderer, window, shown, source, requests)) {
@@ -3380,7 +3434,7 @@ static int runEditorMain(int argc, char** argv) {
         gInspectorSpriteOn = false;
       }
     }
-    if (assetsPanel && ed.showAssets) {   // Assets: janela SpriteUI flutuante (lista, grade, acoes e texto)
+    if (assetsPanel && dockShown(editor::dock_host::Kind::Assets, ed.showAssets)) {   // Assets: janela SpriteUI flutuante (lista, grade, acoes e texto)
       syncAssetsPanel(ed, *assetsPanel);
       std::vector<editor::assetsui::View::Action> assetsActs;
       int winW = 0, winH = 0;
@@ -3393,7 +3447,7 @@ static int runEditorMain(int argc, char** argv) {
         applyAssetsActions(ed, *assetsPanel, assetsActs);
       }
     }
-    if (scenesPanel && ed.showScenes) {   // Scenes: janela SpriteUI flutuante; o ImGui antigo fica so como legado
+    if (scenesPanel && dockShown(editor::dock_host::Kind::Scenes, ed.showScenes)) {   // Scenes: janela SpriteUI flutuante; o ImGui antigo fica so como legado
       syncScenesPanel(ed, *scenesPanel);
       std::vector<editor::scenesui::View::Action> scenesActs;
       int winW = 0, winH = 0;
@@ -3432,7 +3486,7 @@ static int runEditorMain(int argc, char** argv) {
       const editor::console_panel::Source source{ed.console, ed.consoleSerial, tool::debug().count(tool::Severity::Error),
                                                  tool::debug().count(tool::Severity::Warning)};
       editor::console_panel::Requests requests;
-      if (!consolePanel->draw(renderer, window, ed.showConsole, source, requests)) {
+      if (!consolePanel->draw(renderer, window, dockShown(editor::dock_host::Kind::Console, ed.showConsole), source, requests)) {
         tool::logError(std::string("Console SpriteUI render failed: ") + SDL_GetError());
         ed.showConsole = false;
       }
@@ -3493,6 +3547,9 @@ static int runEditorMain(int argc, char** argv) {
         SDL_DestroySurface(shot);
       }
     }
+#ifdef TOOL_WITH_SPRITEUI
+    if (gDock && !playerMode) gDock->overlay(renderer);   // faixas de abas e guias do arraste: por cima de tudo
+#endif
     zone.restart(editor::Zone::Present);
     SDL_RenderPresent(renderer);
     zone.stop();

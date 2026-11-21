@@ -61,6 +61,7 @@ class Frame {
       fullHeight_ = dock->size.y;
       const float shown = minimized_ ? std::min(metrics_.headerHeight, dock->size.y) : dock->size.y;
       frame_ = SU::Rect{dock->position, {dock->size.x, shown}};
+      placed_ = true;   // acoplada conta como colocada: o painel desenha so depois disso
       return;
     }
     if (docked_) undock(frame_.position);
