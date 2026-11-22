@@ -15,7 +15,8 @@ namespace editor::settings_changes {
 // Campo que o usuario mexeu.
 enum class Field : std::uint8_t {
     Tab, Api, ResMode, CustomW, CustomH, RenderScale, Upscale, Aa, PixelFilter, Fps,
-    Shadows, ShadowQuality, ChunkCacheMax, InterfaceScale, IdleRendering, Palette
+    Shadows, ShadowQuality, ChunkCacheMax, InterfaceScale, IdleRendering, Palette,
+    ButtonRadius, WindowRadius, TextScale
 };
 
 struct Change {
@@ -50,6 +51,9 @@ void ApplyChanges(Target& target, const Requests& requests) {
             case Field::ChunkCacheMax: target.setChunkCacheMax(c.index); break;
             case Field::InterfaceScale: target.setInterfaceScale(c.value); break;
             case Field::IdleRendering: target.setIdleRendering(c.on); break;
+            case Field::ButtonRadius: target.setButtonRadius(c.value); break;
+            case Field::WindowRadius: target.setWindowRadius(c.value); break;
+            case Field::TextScale: target.setTextScale(c.value); break;
         }
     }
 }

@@ -28,6 +28,24 @@ inline constexpr float kInterfaceScaleMax = 2.0f;
     return std::clamp(value, kChunkCacheMin, kChunkCacheMax);
 }
 
+// Estilo da interface (Configuracoes > Appearance): raio dos botoes, raio das janelas e escala do texto.
+inline constexpr float kButtonRadiusMax = 12.f;
+inline constexpr float kWindowRadiusMax = 16.f;
+inline constexpr float kTextScaleMin = 0.8f;
+inline constexpr float kTextScaleMax = 1.6f;
+[[nodiscard]] inline float ClampButtonRadius(float value) noexcept {
+    if (std::isnan(value)) return 3.f;
+    return std::clamp(value, 0.f, kButtonRadiusMax);
+}
+[[nodiscard]] inline float ClampWindowRadius(float value) noexcept {
+    if (std::isnan(value)) return 6.f;
+    return std::clamp(value, 0.f, kWindowRadiusMax);
+}
+[[nodiscard]] inline float ClampTextScale(float value) noexcept {
+    if (std::isnan(value)) return 1.f;
+    return std::clamp(value, kTextScaleMin, kTextScaleMax);
+}
+
 [[nodiscard]] inline float ClampInterfaceScale(float value) noexcept {
     if (value != value) return 1.25f;
     return std::clamp(value, kInterfaceScaleMin, kInterfaceScaleMax);

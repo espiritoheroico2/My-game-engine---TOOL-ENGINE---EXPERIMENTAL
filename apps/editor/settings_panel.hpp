@@ -72,6 +72,9 @@ struct Values {
     bool pixelFilter = false;
     int fps = 0;
     int palette = 0;          // indice da paleta em uso (Configuracoes > Appearance)
+    float buttonRadius = 3.f; // raio dos botoes (px)
+    float windowRadius = 6.f; // raio dos cantos das janelas (px)
+    float textScale = 1.f;    // escala do texto da interface (1 = 100%)
     bool shadows = false;
     int shadowQuality = 0;   // indice (0 a 3), ja convertido pelo main.cpp
     std::string adapter;
@@ -184,6 +187,7 @@ class SettingsPanel {
         items.push_back(sui::Canvas::solidItem(rect_.x, rect_.y, rect_.w, rect_.h, panelColor_, 0.f, owner, kContentClip, paint++));
         canvas_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y + Metrics::kStripH, bottom, owner, kContentClip, paint);
         if (open_[kGraphicsTab]) appendControls(items, paint);
+        if (open_[kAppearanceTab]) appendAppearance(items, paint);
         overlay_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, bottom, owner, kWindowClip, paint);
         if (open_[kGraphicsTab]) appendPopups(items, paint);
 
@@ -292,6 +296,7 @@ class SettingsPanel {
         const float top = contentTop - scroll_.scrollOffset.y;
         const float headerW = rect_.w - 2.f * Metrics::kPad;
         for (auto& row : paletteRows_) row = sui::Box{};   // linhas de tema so existem com a secao aberta
+        appearanceOpen_ = false;
         float y = top;
         for (std::size_t i = 0; i < sm::kTabCount; ++i) {
             headers_[i] = sui::Box{Metrics::kPad, y, headerW, Metrics::kHeaderH};
@@ -345,7 +350,52 @@ class SettingsPanel {
                             textWidth() - 20.f);
             y += Metrics::kRowH + Metrics::kGap;
         }
+        y += Metrics::kGap;
+        appearanceOpen_ = true;
+        y = styleRow(buttonRadius_, v.buttonRadius, "Button corner radius", y, 0.f, sm::kButtonRadiusMax, 1.f, true,
+                     std::to_string(static_cast<int>(v.buttonRadius + 0.5f)) + " px");
+        y = styleRow(windowRadius_, v.windowRadius, "Window corner radius", y, 0.f, sm::kWindowRadiusMax, 1.f, true,
+                     std::to_string(static_cast<int>(v.windowRadius + 0.5f)) + " px");
+        y = styleRow(textScale_, v.textScale, "Interface text size", y, sm::kTextScaleMin, sm::kTextScaleMax, 0.05f, false,
+                     std::to_string(static_cast<int>(v.textScale * 100.f + 0.5f)) + "%");
         return y;
+    }
+
+    // Um slider com rotulo e valor na linha: a faixa do controle fica em `s.border` (coordenadas locais).
+    float styleRow(Elm::Slider& s, float value, const char* label, float y, float lo, float hi, float step, bool integer,
+                   const std::string& shown) {
+        canvas_.addText(Metrics::kPad, y + 5.f, std::string(T(label)), Metrics::kFont, theme_.text, labelW_ - 8.f);
+        s.range = Elm::SliderRange{lo, hi, step, integer};
+        s.SetValue(value);
+        s.border = rectOf(Metrics::kPad + labelW_, y, controlW_ - Metrics::kValueW, Metrics::kRowH);
+        canvas_.addText(Metrics::kPad + labelW_ + controlW_ - Metrics::kValueW + 6.f, y + 5.f, shown, Metrics::kFont,
+                        theme_.textDim, Metrics::kValueW - 6.f);
+        return y + Metrics::kRowH + Metrics::kGap;
+    }
+
+    void appendAppearance(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint) {
+        constexpr float z = Metrics::kControlZ;
+        append(items, paint, Elm::BuildSliderItems(buttonRadius_, sliderStyle_, z, paint), kContentClip);
+        append(items, paint, Elm::BuildSliderItems(windowRadius_, sliderStyle_, z, paint), kContentClip);
+        append(items, paint, Elm::BuildSliderItems(textScale_, sliderStyle_, z, paint), kContentClip);
+    }
+
+    // Arrasto dos sliders de Appearance: cada valor vai pelo mesmo caminho dos outros campos (pedido -> main.cpp).
+    bool appearanceSliderPointer(Elm::PointerPhase phase, const SU::Vec2& p) {
+        if (!appearanceOpen_) return false;
+        struct Slide {
+            Elm::Slider* slider;
+            sc::Field field;
+        };
+        const Slide slides[] = {{&buttonRadius_, sc::Field::ButtonRadius},
+                                {&windowRadius_, sc::Field::WindowRadius},
+                                {&textScale_, sc::Field::TextScale}};
+        for (const Slide& s : slides) {
+            const Elm::SliderEvents ev = s.slider->OnPointer(event(phase, p, s.slider->border));
+            if (ev.valueChanged) pending_.push_back({s.field, 0, s.slider->Value(), false});
+            if (ev.pressStarted || ev.valueChanged || ev.pressEnded) return true;
+        }
+        return false;
     }
 
     // Tema lido a cada quadro: trocar a paleta muda esta janela na hora.
@@ -587,6 +637,7 @@ class SettingsPanel {
         const SU::Vec2 p{x - rect_.x, y - rect_.y};
         if (phase == Elm::PointerPhase::Up && sectionPointer(p)) return true;
         if (phase == Elm::PointerPhase::Up && paletteRowPointer(p)) return true;
+        if (appearanceSliderPointer(phase, p)) return true;
         if (phase == Elm::PointerPhase::Down && scrollbarPointer(p)) return true;
         if (!open_[kGraphicsTab]) return true;
         if (phase == Elm::PointerPhase::Down && stepperClick(p)) return true;
@@ -775,6 +826,8 @@ class SettingsPanel {
     Elm::RadioGroup apis_;
     Elm::Dropdown resolution_;
     Elm::Slider scale_;
+    Elm::Slider buttonRadius_, windowRadius_, textScale_;   // Appearance: raios e escala do texto
+    bool appearanceOpen_ = false;
     Elm::Dropdown upscale_;
     Elm::Dropdown aa_;
     Elm::Checkbox pixel_;

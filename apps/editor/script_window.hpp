@@ -20,6 +20,7 @@
 #include "framed_window.hpp"
 #include "view_painter.hpp"
 #include "view_shapes.hpp"
+#include "ui_style.hpp"
 
 #include "SpriteUi/Elements/ElementTree.hpp"
 #include "SpriteUi/Elements/TextField.hpp"
@@ -69,7 +70,7 @@ class Panel {
     field_->transform.offsetMin = {0.0f, 0.0f};
     field_->transform.offsetMax = {0.0f, 0.0f};
     field_->padding = {4.0f, 8.0f, 4.0f, 8.0f};
-    field_->fontSize = kFont;
+    field_->fontSize = editor::ui_style::uiFont(kFont);
     field_->Edit() = Wd::TextEditState(std::string(), true);   // a area aceita quebra de linha
     chrome_.setDock(std::nullopt);                              // janela flutuante
     paintList_.owner = sui::handleFor(0);
@@ -129,7 +130,7 @@ class Panel {
         return false;
       case SDL_EVENT_MOUSE_WHEEL:
         if (inside(editorBox_, e.wheel.mouse_x, e.wheel.mouse_y)) {
-          field_->Wheel(-e.wheel.y * kFont * 3.f);
+          field_->Wheel(-e.wheel.y * editor::ui_style::uiFont(kFont) * 3.f);
           return true;
         }
         return false;
@@ -232,12 +233,12 @@ class Panel {
     cfg.fontSize = size;
     return ST::LayoutText(utf8, ST::ShapeTruetype(utf8, atlas), atlas.metrics, cfg);
   }
-  float textWidth(const std::string& s) const { return layoutPlain(s, kFont).size.x; }
+  float textWidth(const std::string& s) const { return layoutPlain(s, editor::ui_style::uiFont(kFont)).size.x; }
 
   // Layout do texto do campo com a largura atual (depois de cada edicao, para que cliques e setas usem o texto novo).
   ST::TextLayoutResult fieldLayout() const {
     const std::string& t = field_->Edit().Text();
-    const ST::TruetypeAtlas& atlas = text_.atlasFor(kFont);
+    const ST::TruetypeAtlas& atlas = text_.atlasFor(editor::ui_style::uiFont(kFont));
     return ST::LayoutText(t, ST::ShapeTruetype(t, atlas), atlas.metrics,
                           Elm::MakeTextFieldLayoutConfig(*field_, contentSize(), style_));
   }
@@ -293,8 +294,8 @@ class Panel {
     button(shapes, layout_.close, T("Close"));
     float statusX = layout_.snippets.position.x + layout_.snippets.size.x + 12.f;
     const float statusEnd = layout_.close.position.x - 10.f;
-    if (dirty_) { shapes.text({statusX, top + 4.f}, T("(unsaved)"), kFont, ink_.dim); statusX += 70.f; }
-    if (!msg_.empty() && statusX < statusEnd) shapes.text({statusX, top + 4.f}, msg_, kFont, ink_.dim, false, statusEnd - statusX);
+    if (dirty_) { shapes.text({statusX, top + 4.f}, T("(unsaved)"), editor::ui_style::uiFont(kFont), ink_.dim); statusX += 70.f; }
+    if (!msg_.empty() && statusX < statusEnd) shapes.text({statusX, top + 4.f}, msg_, editor::ui_style::uiFont(kFont), ink_.dim, false, statusEnd - statusX);
     // Fundo do editor e o texto (painel proprio, mesma cor do campo do Inspector).
     shapes.rectFilled({layout_.editor.position.x, layout_.editor.position.y},
                       {layout_.editor.position.x + layout_.editor.size.x, layout_.editor.position.y + layout_.editor.size.y},
@@ -308,11 +309,11 @@ class Panel {
       const float y = layout_.editor.position.y + layout_.editor.size.y + 6.f;
       lists.rectFilled({layout_.editor.position.x, y}, {layout_.editor.position.x + layout_.editor.size.x, y + kCompleteH},
                        ink_.list, 0.f);
-      if (completions_.empty()) lists.text({layout_.editor.position.x + 6.f, y + 4.f}, T("No suggestions."), kFont, ink_.dim);
+      if (completions_.empty()) lists.text({layout_.editor.position.x + 6.f, y + 4.f}, T("No suggestions."), editor::ui_style::uiFont(kFont), ink_.dim);
       for (std::size_t i = 0; i < completions_.size() && i < layout_.completeRows.size(); ++i) {
         const SU::Rect& r = layout_.completeRows[i];
         const ApiItem& it = completions_[i];
-        lists.text({r.position.x + 6.f, r.position.y}, it.name + "   (" + it.kind + ")   " + it.sig, kFont, ink_.text);
+        lists.text({r.position.x + 6.f, r.position.y}, it.name + "   (" + it.kind + ")   " + it.sig, editor::ui_style::uiFont(kFont), ink_.text);
       }
     }
     // Verificador: linha de resumo e lista de erros (com a linha de cada um).
@@ -321,9 +322,9 @@ class Panel {
     bool anyError = false;
     for (const ScriptIssue& is : issues_) if (is.sev == tool::Severity::Error) anyError = true;
     if (issues_.empty()) {
-      lists.text({b.x + kPad, y}, T("Check: OK (no problems found)"), kFont, ink_.ok);
+      lists.text({b.x + kPad, y}, T("Check: OK (no problems found)"), editor::ui_style::uiFont(kFont), ink_.ok);
     } else {
-      lists.text({b.x + kPad, y}, "Check: " + issueSummary(issues_), kFont,
+      lists.text({b.x + kPad, y}, "Check: " + issueSummary(issues_), editor::ui_style::uiFont(kFont),
                  anyError ? ink_.error : ink_.warn);
     }
     y += kRow + 6.f;
@@ -335,14 +336,14 @@ class Panel {
       if (ly + kRow > listBottom) break;
       const ScriptIssue& is = issues_[i];
       const view::Color c = is.sev == tool::Severity::Error ? ink_.error : ink_.warn;
-      lists.text({b.x + kPad + 6.f, ly}, "line " + std::to_string(is.line) + "  " + is.code + "  " + is.msg, kFont, c);
+      lists.text({b.x + kPad + 6.f, ly}, "line " + std::to_string(is.line) + "  " + is.code + "  " + is.msg, editor::ui_style::uiFont(kFont), c);
       ly += kRow;
       if (is.line >= 1 && static_cast<std::size_t>(is.line) <= src.size() && ly + kRow <= listBottom) {
-        lists.text({b.x + kPad + 26.f, ly}, src[static_cast<std::size_t>(is.line) - 1], kFont, ink_.dim);
+        lists.text({b.x + kPad + 26.f, ly}, src[static_cast<std::size_t>(is.line) - 1], editor::ui_style::uiFont(kFont), ink_.dim);
         ly += kRow;
       }
     }
-    if (issues_.size() > 60) lists.text({b.x + kPad + 6.f, ly}, "... " + std::to_string(issues_.size() - 60) + " more (see Console: Check scripts)", kFont, ink_.dim);
+    if (issues_.size() > 60) lists.text({b.x + kPad + 6.f, ly}, "... " + std::to_string(issues_.size() - 60) + " more (see Console: Check scripts)", editor::ui_style::uiFont(kFont), ink_.dim);
     paintBody_.append(lists, kClipFrame, paintList_);
 
     // Lista de exemplos (Snippets), por cima de tudo do corpo.
@@ -357,7 +358,7 @@ class Panel {
       }
       for (std::size_t i = 0; i < layout_.snippetRows.size() && i < list.size(); ++i) {
         const SU::Rect& r = layout_.snippetRows[i];
-        drop.text({r.position.x + 6.f, r.position.y + 2.f}, std::to_string(list[i].n) + ". " + list[i].title, kFont, ink_.text);
+        drop.text({r.position.x + 6.f, r.position.y + 2.f}, std::to_string(list[i].n) + ". " + list[i].title, editor::ui_style::uiFont(kFont), ink_.text);
       }
       paintBody_.append(drop, kClipFrame, paintList_);
     }
@@ -365,17 +366,17 @@ class Panel {
 
   void button(view::ShapeList& shapes, const SU::Rect& r, const std::string& label, bool on = false) {
     const view::Color fill = on ? ink_.buttonOn : ink_.button;
-    shapes.rectFilled({r.position.x, r.position.y}, {r.position.x + r.size.x, r.position.y + r.size.y}, fill, 3.f);
-    shapes.text({r.position.x + r.size.x * 0.5f, r.position.y + (r.size.y - kFont) * 0.5f - 1.f}, label, kFont,
+    shapes.rectFilled({r.position.x, r.position.y}, {r.position.x + r.size.x, r.position.y + r.size.y}, fill, editor::ui_style::buttonRadius());
+    shapes.text({r.position.x + r.size.x * 0.5f, r.position.y + (r.size.y - editor::ui_style::uiFont(kFont)) * 0.5f - 1.f}, label, editor::ui_style::uiFont(kFont),
                 ink_.text, true);
   }
 
   // Itens do campo (fundo do texto ja pintado; aqui texto, selecao e caret) com o recorte da area do editor.
   void buildFieldItems() {
     const ST::TextLayoutResult layout = fieldLayout();
-    const ST::TextLayoutResult placeholder = layoutPlain("", kFont);
+    const ST::TextLayoutResult placeholder = layoutPlain("", editor::ui_style::uiFont(kFont));
     Elm::TextTarget target;
-    target.textureSlice = text_.sliceFor(kFont);
+    target.textureSlice = text_.sliceFor(editor::ui_style::uiFont(kFont));
     target.paintOrder = paintList_.paint;
     const SU::Rect content = field_->ContentRect();
     const auto items = Elm::BuildTextFieldItems(*field_, style_, layout, placeholder, content, target, kClipEditor);
@@ -385,7 +386,7 @@ class Panel {
 
   bool drawMessage(SDL_Renderer* renderer, const sui::Box& b, const char* text) {
     view::ShapeList shapes;
-    shapes.text({b.x + kPad, b.y + kPad}, T(text), kFont, ink_.warn);
+    shapes.text({b.x + kPad, b.y + kPad}, T(text), editor::ui_style::uiFont(kFont), ink_.warn);
     paintBody_.append(shapes, kClipFrame, paintList_);
     return drawBody(renderer);
   }

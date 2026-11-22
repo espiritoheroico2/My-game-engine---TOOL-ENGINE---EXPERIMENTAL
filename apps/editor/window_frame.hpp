@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui_style.hpp"
+
 // Moldura flutuante do Console (SpriteUI): posicao da janela, arraste pelo grip, X para fechar.
 // So regras e geometria, sem SDL nem desenho. O painel (console_panel.hpp) desenha a moldura e repassa os
 // cliques para ca. Testado sem janela em tests/test_window_frame.cpp (Editor.ConsoleFrame).
@@ -94,6 +96,8 @@ class Frame {
   // Onde comeca o texto do titulo: depois do circulo do "?".
   [[nodiscard]] float titleTextX() const { return helpRect().position.x + helpRect().size.x + Metrics::kHelpGap; }
   [[nodiscard]] bool minimized() const { return minimized_; }
+  // Raio dos cantos vem de Configuracoes > Appearance: relido a cada quadro.
+  void refreshStyle() { metrics_.cornerRadius = editor::ui_style::windowRadius(); }
   [[nodiscard]] const SW::WindowFrameMetrics& metrics() const { return metrics_; }
   [[nodiscard]] bool dragging() const { return dragging_; }
   [[nodiscard]] bool placed() const { return placed_; }
@@ -142,7 +146,7 @@ class Frame {
   SW::WindowFrameMetrics metrics_{[] {
     SW::WindowFrameMetrics m{};
     m.headerHeight = 30.f;
-    m.cornerRadius = 6.f;
+    m.cornerRadius = editor::ui_style::windowRadius();
     return m;
   }()};
   SU::Rect frame_{};

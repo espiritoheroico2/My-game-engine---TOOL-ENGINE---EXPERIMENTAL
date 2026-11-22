@@ -55,6 +55,7 @@ class Chrome {
   // Monta a moldura na janela (winW x winH) e devolve o corpo, abaixo do cabecalho. Minimizada, o corpo some.
   sui::Box prepare(float winW, float winH, float width, float height) {
     applyPalette();   // a paleta em uso (Configuracoes > Appearance) vale no quadro atual
+    frame_.refreshStyle();
     frame_.placeIn(winW, winH, dock_, width, height);
     visible_ = true;
     if (frame_.minimized()) return {};
@@ -149,11 +150,11 @@ class Chrome {
     const SU::Rect help = frame_.helpRect();
     const view::Pixel hc{help.position.x + help.size.x * 0.5f, help.position.y + help.size.y * 0.5f};
     out.circleFilled(hc, help.size.x * 0.5f, bubble_);
-    out.text({hc.x, hc.y - kFont * 0.62f}, "?", kFont, titleText_, true);   // texto ancorado no topo
+    out.text({hc.x, hc.y - editor::ui_style::uiFont(kFont) * 0.62f}, "?", editor::ui_style::uiFont(kFont), titleText_, true);   // texto ancorado no topo
     const float tx = frame_.titleTextX();
-    const float ty = head.position.y + (head.size.y - kTitleFont) * 0.5f;
-    out.text({tx, ty}, title, kTitleFont, titleText_);
-    out.text({tx + 0.7f, ty}, title, kTitleFont, titleText_);   // duas passadas: negrito
+    const float ty = head.position.y + (head.size.y - editor::ui_style::uiFont(kTitleFont)) * 0.5f;
+    out.text({tx, ty}, title, editor::ui_style::uiFont(kTitleFont), titleText_);
+    out.text({tx + 0.7f, ty}, title, editor::ui_style::uiFont(kTitleFont), titleText_);   // duas passadas: negrito
     const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
     for (int c = 0; c < 2; ++c) {
       for (int r = 0; r < 3; ++r) {

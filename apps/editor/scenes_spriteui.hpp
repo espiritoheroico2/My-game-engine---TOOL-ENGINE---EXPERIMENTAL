@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui_style.hpp"
+
 // Janela "Scenes" feita com SpriteUI (sem Dear ImGui). Estado e regras: scenes_model.hpp.
 // Esta view so desenha e reporta cliques e digitacao. Quem salva, abre, apaga, cria, renomeia e atribui assets e o
 // host (scenes_panel.hpp e main.cpp, via Action). Moldura: grip, "?" (abre a Help na secao Scenes), titulo em negrito,
@@ -75,7 +77,7 @@ inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
 }
 
-// Cores: mesmas do editor info (tema escuro).
+// Cores: mesmas do editor info (tema escuro). PaletteColors() as troca pela paleta em uso.
 struct Colors {
   SU::Vec4 field = Srgb(0.165f, 0.165f, 0.176f);
   SU::Vec4 fieldFocus = Srgb(0.196f, 0.196f, 0.216f);
@@ -90,6 +92,28 @@ struct Colors {
   SU::Vec4 caret = Srgb(0.930f, 0.930f, 0.950f);
   SU::Vec4 warning = Srgb(1.000f, 0.800f, 0.300f);
 };
+
+// Cores do painel a partir da paleta em uso (Configuracoes > Appearance).
+inline Colors PaletteColors() {
+  const palette::Palette& p = palette::active();
+  auto mix = [](const palette::Rgb& a, const palette::Rgb& b, float t) {
+    return palette::Rgb{a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, 1.f};
+  };
+  Colors c;
+  c.field = sui::PaletteColor(p.surface);
+  c.fieldFocus = sui::PaletteColor(mix(p.surface, p.text, 0.08f));
+  c.rowSelected = sui::PaletteColor(mix(p.surface, p.accent, 0.45f));
+  c.button = sui::PaletteColor(mix(p.surface, p.accent, 0.6f));
+  c.buttonHover = sui::PaletteColor(mix(p.surface, p.accent, 0.8f));
+  c.buttonDanger = sui::PaletteColor(mix(p.surface, p.error, 0.6f));
+  c.help = sui::PaletteColor(p.accent);
+  c.disabled = sui::PaletteColor(mix(p.panel, p.surface, 0.5f));
+  c.text = sui::PaletteColor(p.text);
+  c.textDim = sui::PaletteColor(p.textDim);
+  c.caret = sui::PaletteColor(p.text);
+  c.warning = sui::PaletteColor(p.error);
+  return c;
+}
 
 // Entrada do quadro (ponteiro e foco da janela), ja lida do SDL pelo host.
 struct FrameInput {
@@ -117,6 +141,7 @@ class View {
 
   // Calcula um quadro e devolve o pacote para desenhar. `actions` recebe o que foi clicado neste quadro.
   SR::FramePacket Frame(float windowWidth, float windowHeight, const FrameInput& in, std::vector<Action>& actions) {
+    metrics_.cornerRadius = editor::ui_style::windowRadius();
     actions.clear();
     removed_ = kNone;
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
@@ -309,7 +334,7 @@ class View {
   // ---------- Arvore de layout ----------
   void buildTree() {
     metrics_.headerHeight = 30.f;
-    metrics_.cornerRadius = 6.f;
+    metrics_.cornerRadius = editor::ui_style::windowRadius();
     panelColor_ = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
 
     SU::FlexItem panel;
@@ -616,6 +641,7 @@ class View {
     state.docked = docked_;
     frameColors_ = editor::window_palette::Standard();
     panelColor_ = frameColors_.body;
+    colors_ = PaletteColors();
     auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_, metrics_, state, frameColors_, -2.f, paint);
     paint += frameItems.size() + 1;
     out.insert(out.end(), frameItems.begin(), frameItems.end());

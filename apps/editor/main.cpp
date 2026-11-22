@@ -53,6 +53,7 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "view_overlays.hpp"
 #endif
 #include "settings_model.hpp"
+#include "ui_style.hpp"
 #endif
 
 #include "backends/imgui_impl_sdl3.h"
@@ -985,12 +986,6 @@ constexpr ImGuiWindowFlags kFramedBodyFlags = ImGuiWindowFlags_NoTitleBar | ImGu
 void placeFramedBody(editor::sui::Box b) {
   ImGui::SetNextWindowPos({b.x, b.y}, ImGuiCond_Always);
   ImGui::SetNextWindowSize({b.w, b.h}, ImGuiCond_Always);
-}
-// Janela Coding: o corpo e desenhado sobre a area da moldura SpriteUI (lista e editor, na camada do primeiro plano).
-void drawCoding(Editor& ed, editor::coding::Panel& panel) {
-  if (gCodingBody.h <= 0.f) return;   // minimizada ou escondida
-  panel.setRoot(ed.project.root);
-  panel.drawBody(ImVec2(gCodingBody.x, gCodingBody.y), ImVec2(gCodingBody.w, gCodingBody.h));
 }
 #endif
 void drawInspectorBlock(Editor& ed) {
@@ -2032,6 +2027,9 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   auto& L = ed.sceneInfo.render.lighting;
   v.tab = ed.settingsTab < 0 ? 1 : ed.settingsTab;
   v.palette = static_cast<int>(editor::palette::activeIndex());
+  v.buttonRadius = editor::ui_style::buttonRadius();
+  v.windowRadius = editor::ui_style::windowRadius();
+  v.textScale = editor::ui_style::textScale();
   v.api = ed.apiRequested;
   v.apiBuilt = settingsApiBuilt();
   v.apiStatus = F("Active API: %s", ed.apiStatus.c_str());
@@ -2084,6 +2082,18 @@ struct SettingsEditorTarget {
   }
   void setChunkCacheMax(int value) {
     ed.chunkCacheMax = ::editor::settings_model::ClampChunkCacheSize(value);
+    ed.settingsDirty = true;
+  }
+  void setButtonRadius(float value) {
+    editor::ui_style::buttonRadius() = ::editor::settings_model::ClampButtonRadius(value);
+    ed.settingsDirty = true;
+  }
+  void setWindowRadius(float value) {
+    editor::ui_style::windowRadius() = ::editor::settings_model::ClampWindowRadius(value);
+    ed.settingsDirty = true;
+  }
+  void setTextScale(float value) {
+    editor::ui_style::textScale() = ::editor::settings_model::ClampTextScale(value);
     ed.settingsDirty = true;
   }
   void setInterfaceScale(float value) {
@@ -2358,6 +2368,7 @@ void saveSettings(Editor& ed) {
   j.set("chunkCacheMax", static_cast<double>(ed.chunkCacheMax));
   j.set("idleRendering", ed.idleRendering);
   j.set("interfaceScale", static_cast<double>(ed.theme.scale));
+  j.set("buttonRadius", static_cast<double>(editor::ui_style::buttonRadius())); j.set("windowRadius", static_cast<double>(editor::ui_style::windowRadius())); j.set("textScale", static_cast<double>(editor::ui_style::textScale()));
   j.set("lockInterface", ed.lockInterface); j.set("dockWithShift", ed.dockWithShift);
   j.set("dockLockV2", true); j.set("dockLockV3", true);
   j.set("renderScaleSet", ed.renderScaleSet); if (ed.renderScaleSet) j.set("renderScale", static_cast<double>(ed.renderScale));
@@ -2383,6 +2394,9 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
       ed.upscaleMode = std::clamp(static_cast<int>(editor::ser::num(*j, "upscaleMode", 2.f)), 0, 3); ed.aaMode = std::clamp(static_cast<int>(editor::ser::num(*j, "aaMode", 0.f)), 0, 1);
       ed.chunkCacheMax = ::editor::settings_model::ClampChunkCacheSize(static_cast<int>(editor::ser::num(*j, "chunkCacheMax", 8192.f)));
       ed.idleRendering = editor::ser::flag(*j, "idleRendering", true);
+      editor::ui_style::buttonRadius() = ::editor::settings_model::ClampButtonRadius(editor::ser::num(*j, "buttonRadius", 3.f));
+      editor::ui_style::windowRadius() = ::editor::settings_model::ClampWindowRadius(editor::ser::num(*j, "windowRadius", 6.f));
+      editor::ui_style::textScale() = ::editor::settings_model::ClampTextScale(editor::ser::num(*j, "textScale", 1.f));
       if ((*j)["interfaceScale"].isNumber()) {
         interfaceScaleSet = true;
         interfaceScale = static_cast<float>((*j)["interfaceScale"].asNumber(ed.theme.scale));
@@ -2621,7 +2635,7 @@ static int runEditorMain(int argc, char** argv) {
         ImGui_ImplSDL3_ProcessEvent(&ev);
         if (ev.type == SDL_EVENT_QUIT || (ev.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && ev.window.windowID == SDL_GetWindowID(window))) closed = true;
       }
-      ImGui_ImplSDLRenderer3_NewFrame(); ImGui_ImplSDL3_NewFrame(); ImGui::NewFrame();
+      ImGui_ImplSDLRenderer3_NewFrame(); ImGui_ImplSDL3_NewFrame(); ImGui::NewFrame(); ImGui::GetIO().FontGlobalScale = editor::ui_style::textScale();
       editor::drawProjectDialog(dlg, window);
       ImGui::Render();
       { const ImVec4 bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg); SDL_SetRenderDrawColor(renderer, static_cast<Uint8>(bg.x * 255), static_cast<Uint8>(bg.y * 255), static_cast<Uint8>(bg.z * 255), 255); }
@@ -2810,6 +2824,10 @@ static int runEditorMain(int argc, char** argv) {
       gPanelRouter.add(pr::kScenesHandle, {sr.position.x, sr.position.y, sr.size.x, sr.size.y},
                        ToolEngine::SpriteUi::UILayer::Docked);
     }
+    if (codingPanel && ed.showCoding && gCodingBody.h > 0.f) {   // Coding: corpo SpriteUI cobre o ponteiro por cima do ImGui
+      gPanelRouter.add(pr::kCodingHandle, {gCodingBody.x, gCodingBody.y, gCodingBody.w, gCodingBody.h},
+                       ToolEngine::SpriteUi::UILayer::Docked);
+    }
 #endif
     SDL_Event e;
     // Ocioso: espera ate 16 ms pelo proximo evento (em vez de girar o quadro sem parar). O evento volta para a fila.
@@ -2849,7 +2867,7 @@ static int runEditorMain(int argc, char** argv) {
       const bool setHandled = !dockHandled && settingsPanel && dockShown(editor::dock_host::Kind::Settings, ed.showSettings) && settingsMayReceive && settingsPanel->handleEvent(e);
       const bool inspHandled = !dockHandled && inspPanel && dockShown(editor::dock_host::Kind::Inspector, ed.showInspector) && inspPanel->handleEvent(e);
       const bool scrHandled = !dockHandled && gScriptPanel && gScriptPanel->handleEvent(e, ed);
-      const bool codHandled = !dockHandled && codingPanel && dockShown(editor::dock_host::Kind::Coding, ed.showCoding) && codingPanel->chrome().handleEvent(e);
+      const bool codHandled = !dockHandled && codingPanel && dockShown(editor::dock_host::Kind::Coding, ed.showCoding) && codingPanel->handleEvent(e);
       const bool scnHandled = !dockHandled && scenesPanel && scenesPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Scenes, ed.showScenes));
       const bool asstHandled = !dockHandled && assetsPanel && assetsPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Assets, ed.showAssets));
       const bool sceneFrameHandled = !dockHandled && forwardViewEvent(e, dockShown(editor::dock_host::Kind::Scene, ed.showScene), dockShown(editor::dock_host::Kind::Game, ed.showGame));   // Scene e Jogo veem o evento; a moldura da Scene consome o clique
@@ -2894,7 +2912,7 @@ static int runEditorMain(int argc, char** argv) {
     zone.stop();
     const auto panelsStart = editor::FrameProfiler::Clock::now();
 
-    ImGui_ImplSDLRenderer3_NewFrame(); ImGui_ImplSDL3_NewFrame(); ImGui::NewFrame();
+    ImGui_ImplSDLRenderer3_NewFrame(); ImGui_ImplSDL3_NewFrame(); ImGui::NewFrame(); ImGui::GetIO().FontGlobalScale = editor::ui_style::textScale();
     if (!playerMode && !ImGui::GetIO().WantTextInput && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) ed.saveScene();
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) { // F1: ajuda do topico da janela em foco
       const char* topic = "start"; ImGuiWindow* nav = ImGui::GetCurrentContext()->NavWindow;
@@ -2974,7 +2992,6 @@ static int runEditorMain(int argc, char** argv) {
       const float inner = ed.prof.cur[static_cast<int>(editor::Zone::SceneRender)] + ed.prof.cur[static_cast<int>(editor::Zone::GameRender)] + ed.prof.cur[static_cast<int>(editor::Zone::PostFx)] + ed.prof.cur[static_cast<int>(editor::Zone::Sky)];
       ed.prof.add(editor::Zone::Hierarchy, std::max(0.f, total - inner));
     }
-    if (codingPanel && dockShown(editor::dock_host::Kind::Coding, ed.showCoding)) drawCoding(ed, *codingPanel);   // por ultimo entre as janelas ImGui: cobre as de tras
     zone.restart(editor::Zone::Ui);
     ImGui::Render();
     if (!headless && !playerMode && (ed.themeDirty || ed.langDirty || ed.settingsDirty) && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) { saveSettings(ed); ed.themeDirty = ed.langDirty = ed.settingsDirty = false; }
@@ -3048,6 +3065,10 @@ static int runEditorMain(int argc, char** argv) {
       if (!codingPanel->chrome().draw(renderer, T("Coding"))) tool::logError(std::string("Coding frame render failed: ") + SDL_GetError());
       if (codingPanel->chrome().consumeClose()) ed.showCoding = false;
       codingPanel->chrome().consumeHelp();
+      if (dockShown(editor::dock_host::Kind::Coding, ed.showCoding) &&
+          !codingPanel->drawBody(renderer, gCodingBody, ed.project.root)) {
+        tool::logError(std::string("Coding render failed: ") + SDL_GetError());
+      }
     }
     if (assetsPanel && dockShown(editor::dock_host::Kind::Assets, ed.showAssets)) {   // Assets: janela SpriteUI flutuante (lista, grade, acoes e texto)
       syncAssetsPanel(ed, *assetsPanel);

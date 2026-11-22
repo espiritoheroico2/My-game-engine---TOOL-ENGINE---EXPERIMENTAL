@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui_style.hpp"
+
 // Janela "Editor info" feita com SpriteUI (sem Dear ImGui). Estado e regras: editor_info_model.hpp.
 // Ligacao com o SDL_Renderer: editor::sui::SpriteUiSdlRenderer (spriteui_host.hpp). Fonte: assets/fonts/Xmind-Regular.ttf.
 //
@@ -124,6 +126,7 @@ class View {
 
   // Calcula um quadro e retorna o pacote para desenhar. `actions` recebe o que foi clicado neste quadro.
   SR::FramePacket Frame(float windowWidth, float windowHeight, const FrameInput& in, std::vector<Action>& actions) {
+    metrics_.cornerRadius = editor::ui_style::windowRadius();
     actions.clear();
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
 
@@ -230,7 +233,7 @@ class View {
   void buildTree() {
     // Visual da moldura: cantos arredondados, aba de 30 px, borda azul ao arrastar.
     metrics_.headerHeight = 30.f;
-    metrics_.cornerRadius = 6.f;
+    metrics_.cornerRadius = editor::ui_style::windowRadius();
     colors_.panel = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
 
     SU::FlexItem panel;

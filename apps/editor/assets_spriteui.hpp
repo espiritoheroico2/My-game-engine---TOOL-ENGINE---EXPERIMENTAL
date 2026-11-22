@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui_style.hpp"
+
 // Janela "Assets" feita com SpriteUI (sem Dear ImGui). Estado e regras: assets_model.hpp.
 // Esta view so desenha e reporta cliques, digitacao e rolagem. Quem lista a pasta, cria, renomeia, apaga, importa,
 // abre e salva e o host (assets_sprite_panel.hpp e main.cpp, via Action). Moldura: grip, "?" (abre a Help na secao
@@ -126,6 +128,7 @@ class View {
 
   // Calcula um quadro e devolve o pacote para desenhar. `actions` recebe o que foi pedido neste quadro.
   SR::FramePacket Frame(float windowWidth, float windowHeight, const FrameInput& in, std::vector<Action>& actions) {
+    metrics_.cornerRadius = editor::ui_style::windowRadius();
     actions.clear();
     now_ = in.timeSeconds;
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
@@ -375,7 +378,7 @@ class View {
   // ---------- Arvore de layout ----------
   void buildTree() {
     metrics_.headerHeight = 30.f;
-    metrics_.cornerRadius = 6.f;
+    metrics_.cornerRadius = editor::ui_style::windowRadius();
     panelColor_ = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
 
     SU::FlexItem panel;

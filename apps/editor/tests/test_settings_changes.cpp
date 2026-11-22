@@ -31,6 +31,7 @@ struct RecordingTarget {
   bool shadows = false;
   int chunkCacheMax = -1;
   float interfaceScale = -1.f;
+  float buttonRadius = -1.f, windowRadius = -1.f, textScale = -1.f;
   bool idleRendering = false;
   int calls = 0;
 
@@ -49,6 +50,9 @@ struct RecordingTarget {
   void setShadowQuality(int i) { shadowQuality = i; ++calls; }
   void setChunkCacheMax(int i) { chunkCacheMax = i; ++calls; }
   void setInterfaceScale(float s) { interfaceScale = s; ++calls; }
+  void setButtonRadius(float v) { buttonRadius = v; ++calls; }
+  void setWindowRadius(float v) { windowRadius = v; ++calls; }
+  void setTextScale(float v) { textScale = v; ++calls; }
   void setIdleRendering(bool on) { idleRendering = on; ++calls; }
   void setPalette(int) { ++calls; }
 };
