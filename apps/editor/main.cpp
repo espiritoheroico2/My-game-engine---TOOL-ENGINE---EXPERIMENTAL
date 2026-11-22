@@ -2564,7 +2564,9 @@ static int runEditorMain(int argc, char** argv) {
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) { std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
   enterProjectRoot();
   if (selfTest) { const int rc = editor::runSelfTest("assets/samples"); SDL_Quit(); return rc; } // sem janela
-  SDL_Window* window = SDL_CreateWindow("ToolEngine Editor", 1600, 900, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+  int winW = 1600, winH = 900;   // --size LARGURAxALTURA: captura de outro tamanho (janela estreita, layout responsivo)
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--size") == 0) std::sscanf(argv[i + 1], "%dx%d", &winW, &winH);
+  SDL_Window* window = SDL_CreateWindow("ToolEngine Editor", winW, winH, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   SDL_Renderer* renderer = createEditorRenderer(window, maxFrames > 0);
   if (!window || !renderer) { std::fprintf(stderr, "window/renderer: %s\n", SDL_GetError()); return 1; }
   SDL_SetRenderVSync(renderer, 0); // o limite so e ativado se o usuario selecionar VSync ou um FPS fixo
