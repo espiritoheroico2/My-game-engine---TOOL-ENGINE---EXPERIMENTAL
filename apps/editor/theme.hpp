@@ -117,7 +117,7 @@ public:
     c[ImGuiCol_SliderGrab] = b.accent;
     c[ImGuiCol_SliderGrabActive] = mix(b.accent, b.text, 0.3f);
     c[ImGuiCol_Button] = mix(b.surface, b.accent, 0.45f);
-    c[ImGuiCol_ButtonHovered] = mix(b.surface, b.accent, 0.75f);
+    c[ImGuiCol_ButtonHovered] = mix(b.surface, b.accent, 0.65f);   // 0.75 dava 3.88:1 (Noturno) e 4.06:1 (Grafite) com o texto
     c[ImGuiCol_ButtonActive] = b.accent;
     c[ImGuiCol_Header] = mix(b.surface, b.accent, 0.40f);
     c[ImGuiCol_HeaderHovered] = mix(b.surface, b.accent, 0.65f);
