@@ -740,6 +740,8 @@ class View {
     for (std::size_t i = 0; i < rows_.size(); ++i) {
       line(rows_h_[i], rows_[i].current ? rows_[i].name + T(" (open)") : rows_[i].name, colors_.text, Theme::kLabelSize + 1.f);
     }
+    // Sem cenas: a primeira linha diz o que fazer, em vez de uma faixa vazia.
+    if (rows_.empty()) line(rows_h_[0], T("No scenes yet. Press New scene... to create one."), colors_.textDim, Theme::kLabelSize);
 
     // Campo de nome: placeholder quando vazio, caret quando focado. Em apagar, mostra a pergunta (sem edicao).
     const SU::Rect fr = nodeRect(nameField_);
