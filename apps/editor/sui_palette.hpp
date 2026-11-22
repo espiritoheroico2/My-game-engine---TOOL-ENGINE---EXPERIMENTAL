@@ -4,7 +4,7 @@
 // teste (tests/test_sui_palette.cpp) rodar sem janela. sui_panel.hpp converte para o espaco de cor da SpriteUI.
 //
 // Padrao: "Azul escuro" (tom das referencias em docs/referencias/ui). A troca pelo usuario vai na aba
-// Configuracoes > Appearance (ainda nao ligada; ver docs/planejamento-ui.md).
+// Configuracoes > Appearance (ligada: as molduras e os paineis SpriteUI leem palette::active() a cada quadro).
 #include <array>
 #include <cstddef>
 

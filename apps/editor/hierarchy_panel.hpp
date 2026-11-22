@@ -137,7 +137,6 @@ class HierarchyPanel {
     HierarchyPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
         : toolbar_{text}, list_{text}, overlay_{text}, chrome_{text}, sdl_{sdl} {
         // Moldura: mesmo visual do Console e do Profiler.
-        frameColors_ = editor::window_palette::Standard();
     }
     HierarchyPanel(const HierarchyPanel&) = delete;
     HierarchyPanel& operator=(const HierarchyPanel&) = delete;
@@ -206,6 +205,7 @@ class HierarchyPanel {
 
     // Desenha a janela (moldura SpriteUI, barra, lista e menu). Os pedidos saem em `out`.
     bool draw(SDL_Renderer* renderer, SDL_Window* window, bool visible, Source src, Requests& out) {
+      theme_ = sui::Theme{};   // cores da paleta em uso (Configuracoes > Appearance)
         visible_ = visible;
         window_ = window;
         if (!visible) return true;
@@ -705,6 +705,7 @@ class HierarchyPanel {
         state.active = true;
         state.dragging = frame_.dragging();
         state.docked = frame_.docked();
+        frameColors_ = editor::window_palette::Standard();
         auto frameItems = SW::BuildWindowFrameItems(owner, frame_.rect(), frame_.metrics(), state, frameColors_, -2.f, paint);
         paint += frameItems.size() + 1;
         out.insert(out.end(), frameItems.begin(), frameItems.end());

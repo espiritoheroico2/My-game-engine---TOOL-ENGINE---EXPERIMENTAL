@@ -376,7 +376,6 @@ class View {
   void buildTree() {
     metrics_.headerHeight = 30.f;
     metrics_.cornerRadius = 6.f;
-    frameColors_ = editor::window_palette::Standard();
     panelColor_ = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
 
     SU::FlexItem panel;
@@ -808,6 +807,8 @@ class View {
     state.active = true;
     state.dragging = dragging_;
     state.docked = docked_;
+    frameColors_ = editor::window_palette::Standard();
+    panelColor_ = frameColors_.body;
     auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_, metrics_, state, frameColors_, -2.f, paint);
     paint += frameItems.size() + 1;
     out.insert(out.end(), frameItems.begin(), frameItems.end());

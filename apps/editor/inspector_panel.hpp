@@ -233,6 +233,7 @@ class InspectorPanel {
     // Desenha o bloco. origin = canto superior esquerdo do bloco na tela; visible = parte que cabe na janela ImGui
     // (a janela rola e corta o bloco por esse retangulo).
     bool draw(SDL_Renderer* renderer, sui::Box origin, sui::Box visible, bool shown) {
+      theme_ = sui::Theme{};   // cores da paleta em uso (Configuracoes > Appearance)
         origin_ = origin;
         visible_ = visible;
         shown_ = shown && visible.w > 0.f && visible.h > 0.f;   // sem objeto, o proprio bloco mostra o aviso

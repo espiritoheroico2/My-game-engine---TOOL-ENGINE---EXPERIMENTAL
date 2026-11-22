@@ -151,7 +151,6 @@ Para cada etapa, eu faço: modelo e teste automático primeiro, depois a janela 
 
 ## 9. Partículas 2D/3D, gizmos e debug (para você ajudar em paralelo)
 
-O plano, a arquitetura proposta e os prompts prontos para cada peça estão em
-`docs/PARTICULAS_E_DEBUG_PROMPTS.md`. Resumo: partículas 2D espaciais na SpriteUI, partículas 3D com Light Prism,
+O plano de partículas e debug foi removido do repositório (documento antigo). Resumo: partículas 2D espaciais na SpriteUI, partículas 3D com Light Prism,
 núcleo de simulação compartilhado, e classes `DebugDraw`, `Gizmos` e `Canvas2D` (estilo GameMaker/Turtle) para
-remover o ImGui dos gizmos e da grade. As decisões em aberto estão na seção 5 desse documento.
+remover o ImGui dos gizmos e da grade.

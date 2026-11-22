@@ -31,7 +31,6 @@ inline constexpr float kTitleFont = 12.f;
 class Chrome {
  public:
   Chrome(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {
-    colors_ = editor::window_palette::Standard();
   }
   Chrome(const Chrome&) = delete;
   Chrome& operator=(const Chrome&) = delete;
@@ -39,9 +38,8 @@ class Chrome {
   // Corpo ImGui: a moldura nao pinta corpo nem borda (a borda, que e a caixa inteira, apareceria por baixo do ImGui).
   // O ImGui desenha o proprio fundo e o contorno dentro da area do corpo.
   void setBodyFill(bool on) {
-    const auto clear = sui::Srgb(0.f, 0.f, 0.f, 0.f);
-    colors_.body = on ? editor::window_palette::Standard().body : clear;
-    colors_.border = on ? editor::window_palette::Standard().border : clear;
+    bodyFill_ = on;
+    applyPalette();
   }
 
   // Acoplamento: o host manda a area da folha (ou nullopt, flutuante) e le a moldura para o grip.
@@ -56,6 +54,7 @@ class Chrome {
 
   // Monta a moldura na janela (winW x winH) e devolve o corpo, abaixo do cabecalho. Minimizada, o corpo some.
   sui::Box prepare(float winW, float winH, float width, float height) {
+    applyPalette();   // a paleta em uso (Configuracoes > Appearance) vale no quadro atual
     frame_.placeIn(winW, winH, dock_, width, height);
     visible_ = true;
     if (frame_.minimized()) return {};
@@ -130,6 +129,15 @@ class Chrome {
   }
 
  private:
+  // Cores da moldura = paleta em uso; sem corpo (ImGui desenha por dentro), corpo e borda ficam transparentes.
+  void applyPalette() {
+    colors_ = editor::window_palette::Standard();
+    if (!bodyFill_) {
+      const auto clear = sui::Srgb(0.f, 0.f, 0.f, 0.f);
+      colors_.body = clear;
+      colors_.border = clear;
+    }
+  }
   void buildHeader(view::ShapeList& out, const std::string& title) {
     const SU::Rect head = frame_.header();
     const SU::Rect grip = frame_.gripRect();
@@ -152,6 +160,7 @@ class Chrome {
 
   window_frame::Frame frame_;
   Wd::WindowFrameColors colors_{};
+  bool bodyFill_ = true;
   std::optional<SU::Rect> dock_;
   bool visible_ = false;
   bool closeRequested_ = false, helpRequested_ = false;

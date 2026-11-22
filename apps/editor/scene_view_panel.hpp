@@ -141,7 +141,6 @@ class ScenePanel {
 public:
   ScenePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {
     // Mesmas cores da moldura do Console (window_frame.hpp, janelas SpriteUI).
-    frameColors_ = editor::window_palette::Standard();
   }
   ScenePanel(const ScenePanel&) = delete;
   ScenePanel& operator=(const ScenePanel&) = delete;
@@ -238,6 +237,7 @@ public:
     st.active = true;
     st.dragging = frame_.dragging();
     st.docked = frame_.docked();
+    frameColors_ = editor::window_palette::Standard();
     auto frameItems = Wd::BuildWindowFrameItems(list.owner, frame, frame_.metrics(), st, frameColors_, -2.f, list.paint);
     list.paint += frameItems.size() + 1;
     list.items.insert(list.items.end(), frameItems.begin(), frameItems.end());

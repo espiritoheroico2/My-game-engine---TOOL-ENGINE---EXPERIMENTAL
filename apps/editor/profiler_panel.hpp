@@ -121,7 +121,6 @@ class ProfilerPanel {
   ProfilerPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : text_{text}, sdl_{sdl} {
     buildTree();
     // Moldura: mesmo visual do Console (corpo navy, aba de 30 px).
-    frameColors_ = editor::window_palette::Standard();
   }
   ProfilerPanel(const ProfilerPanel&) = delete;
   ProfilerPanel& operator=(const ProfilerPanel&) = delete;
@@ -310,6 +309,7 @@ class ProfilerPanel {
     state.active = true;
     state.dragging = frame_.dragging();
     state.docked = frame_.docked();
+    frameColors_ = editor::window_palette::Standard();
     auto frameItems = SW::BuildWindowFrameItems(panel_, frame_.rect(), frame_.metrics(), state, frameColors_, -2.f, paint);
     paint += frameItems.size() + 1;
     out.insert(out.end(), frameItems.begin(), frameItems.end());

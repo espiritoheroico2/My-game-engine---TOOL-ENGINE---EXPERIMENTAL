@@ -93,7 +93,6 @@ class GamePanel {
 public:
   GamePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {
     // Mesmas cores da moldura do Console e da Scene (window_frame.hpp).
-    frameColors_ = editor::window_palette::Standard();
   }
   GamePanel(const GamePanel&) = delete;
   GamePanel& operator=(const GamePanel&) = delete;
@@ -177,6 +176,7 @@ public:
       st.active = true;
       st.dragging = frame_.dragging();
       st.docked = frame_.docked();
+      frameColors_ = editor::window_palette::Standard();
       auto frameItems = ToolEngine::SpriteUi::Widgets::BuildWindowFrameItems(list.owner, frame_.rect(), frame_.metrics(), st, frameColors_, -2.f, list.paint);
       list.paint += frameItems.size() + 1;
       list.items.insert(list.items.end(), frameItems.begin(), frameItems.end());
