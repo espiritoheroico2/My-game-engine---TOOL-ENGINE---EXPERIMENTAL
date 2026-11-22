@@ -894,12 +894,12 @@ inline int runSelfTest(const std::string& samplesDir) {
     ed.generateChunkMap(1);
   }
   { // configuracoes de oclusao e ray tracing: ida e volta pelo project.json (render.occlusionCull, render.lighting.rtAo*)
-    RenderSettings r; r.occlusionCull = false; r.lighting.rtAo = true; r.lighting.rtAoRays = 24; r.lighting.rtAoRadius = 1.25f;
+    RenderSettings r; r.occlusionCull = false; r.lighting.rayTracing = false; r.lighting.rtAo = true; r.lighting.rtAoRays = 24; r.lighting.rtAoRadius = 1.25f;
     const RenderSettings back = loadRenderSettings(saveRenderSettings(r));
     check(!back.occlusionCull, "render settings: occlusion culling survives save and load");
-    check(back.lighting.rtAo && back.lighting.rtAoRays == 24 && std::fabs(back.lighting.rtAoRadius - 1.25f) < 1e-4f, "render settings: ray-traced AO survives save and load");
+    check(!back.lighting.rayTracing && back.lighting.rtAo && back.lighting.rtAoRays == 24 && std::fabs(back.lighting.rtAoRadius - 1.25f) < 1e-4f, "render settings: ray tracing master and RT AO survive save and load");
     const RenderSettings def = loadRenderSettings(saveRenderSettings(RenderSettings{}));
-    check(def.occlusionCull && !def.lighting.rtAo, "render settings: occlusion on and ray tracing off by default");
+    check(def.occlusionCull && def.lighting.rayTracing && !def.lighting.rtAo, "render settings: occlusion on, ray tracing master on and RT AO off by default");
   }
 
   fs::remove_all(tmp, ec);

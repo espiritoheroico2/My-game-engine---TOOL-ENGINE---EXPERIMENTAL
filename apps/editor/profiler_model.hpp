@@ -286,11 +286,13 @@ class ProfilerModel {
           text(line);
         }
         char backendLine[kTextChars];
-        std::snprintf(backendLine, sizeof backendLine, "Backend: %llu draws, %llu triangles, %llu uploads, %llu switches",
+        std::snprintf(backendLine, sizeof backendLine, "Backend: %llu draws, %llu triangles, %llu uploads, %llu switches, %llu submits, %llu flushes",
                       static_cast<unsigned long long>(view.backendDrawCalls),
                       static_cast<unsigned long long>(view.backendTriangles),
                       static_cast<unsigned long long>(view.backendBufferUploads),
-                      static_cast<unsigned long long>(view.backendPipelineSwitches));
+                      static_cast<unsigned long long>(view.backendPipelineSwitches),
+                      static_cast<unsigned long long>(view.backendSubmitCount),
+                      static_cast<unsigned long long>(view.backendFlushCount));
         text(backendLine);
         appendShadowCache(view.shadowCache);
       }

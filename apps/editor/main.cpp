@@ -1908,11 +1908,15 @@ void drawLightingTab(Editor& ed) {
   c |= ImGui::SliderFloat(T("AO power (contrast)"), &L.ssaoPower, 0.1f, 4.f, "%.2f");
   ImGui::EndDisabled();
   // Ray tracing (CPU): a oclusao ambiente passa a ser por raios reais e substitui o SSAO.
+  c |= ImGui::Checkbox(T("Enable ray tracing"), &L.rayTracing);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Master switch for CPU ray tracing. Disabling it skips BVH construction and ray-traced effects."));
+  ImGui::BeginDisabled(!L.rayTracing);
   c |= ImGui::Checkbox(T("Ray-traced ambient occlusion (CPU)"), &L.rtAo);
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Casts real rays from each visible surface to find occluders. Replaces the SSAO above. Software renderer only (the GPU keeps the SSAO); sun shadows and voxels are not ray traced yet."));
   ImGui::BeginDisabled(!L.rtAo);
   c |= sliderU(T("RT AO rays per pixel"), L.rtAoRays, 1, 64);
   c |= ImGui::SliderFloat(T("RT AO radius (m)"), &L.rtAoRadius, 0.05f, 5.f, "%.2f");
+  ImGui::EndDisabled();
   ImGui::EndDisabled();
   // Bloom: o brilho acima do limiar (objetos emissivos e superficies muito claras) vira um halo.
   c |= ImGui::Checkbox(T("Bloom (glow of emissive objects)"), &L.bloom);
@@ -2053,6 +2057,8 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   v.fps = ed.fpsMode;
   v.shadows = L.shadows;
   v.shadowQuality = ::editor::settings_model::ShadowQualityIndex(L.shadowMapResolution);
+  v.rayTracing = L.rayTracing;
+  v.rtAo = L.rtAo;
   v.adapter = F("Adapter: %s", ed.gpuDev ? ed.gpuDev->deviceName().c_str() : "(software renderer)");
   v.pixelsLine = F("Pixels per frame: %.2f M (all views)", static_cast<double>(ed.prof.last.pixels) / 1e6);
   v.gpuErrorLine = F("Consecutive GPU error frames: %d / 5 (then the editor falls back to the CPU renderer)", ed.gpuBadFrames);
@@ -2082,6 +2088,8 @@ struct SettingsEditorTarget {
   void setPixelFilter(bool on) { ed.pixelFilter = on; ed.settingsDirty = true; }
   void setFps(int i) { ed.fpsMode = i; ed.fpsDirty = true; ed.settingsDirty = true; }
   void setShadows(bool on) { ed.sceneInfo.render.lighting.shadows = on; ed.settingsDirty = true; }
+  void setRayTracing(bool on) { ed.sceneInfo.render.lighting.rayTracing = on; ed.settingsDirty = true; }
+  void setRtAo(bool on) { ed.sceneInfo.render.lighting.rtAo = on; ed.settingsDirty = true; }
   void setShadowQuality(int i) {
     auto& L = ed.sceneInfo.render.lighting;
     L.shadowMapResolution = ::editor::settings_model::ShadowResolution(i);
@@ -3208,6 +3216,7 @@ static int runEditorMain(int argc, char** argv) {
         SDL_DestroySurface(shot);
       }
     }
+    ed.endRenderStatsFrame();
     zone.restart(editor::Zone::Present);
     SDL_RenderPresent(renderer);
     zone.stop();

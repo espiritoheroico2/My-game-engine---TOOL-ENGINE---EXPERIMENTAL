@@ -76,6 +76,7 @@ struct LightingSettings {
   f32 ssaoPower = 1.f;                  // contraste: ao = ao^power
   // Ray tracing (CPU): oclusao ambiente por raios reais (BVH da LightPrism) no lugar do SSAO. So o renderizador de software;
   // sombras do sol e objetos de voxel ainda nao sao ray traced.
+  bool rayTracing = true;                // mestre global: false desativa a construcao e o uso de efeitos RT
   bool rtAo = false;
   u32 rtAoRays = 16;                    // raios por pixel (1..64)
   // Bloom (halo): o brilho acima do limiar (objetos emissivos e superficies muito claras) vira um halo ao redor.

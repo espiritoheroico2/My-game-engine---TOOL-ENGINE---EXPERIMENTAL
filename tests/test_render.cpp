@@ -90,6 +90,43 @@ TEST(rhi_backend_priority_and_fallback) {
   CHECK(debug().hasCode("TOOL-W120"));
 }
 
+TEST(rhi_frame_stats_accumulate_and_split_views) {
+  auto dev = createNullDevice();
+  dev->beginFrame();
+  DrawStats view1Before = dev->frameStats();
+
+  float verts[9] = {}; unsigned idx[3] = {0, 1, 2};
+  auto vb = dev->createBuffer({sizeof verts, BufferUsage::Vertex, false}, verts);
+  auto ib = dev->createBuffer({sizeof idx, BufferUsage::Index, false}, idx);
+  ShaderDesc sd; sd.bytecode = {1, 2, 3};
+  auto vs = dev->createShader(sd), ps = dev->createShader(sd);
+  PipelineDesc pd; pd.vs = vs; pd.ps = ps;
+  auto pipe = dev->createPipeline(pd);
+  auto rt = dev->createTexture({64, 64, 1, Format::RGBA8, true}, nullptr);
+  auto cl = dev->beginCommands();
+  cl->begin(rt, kNullHandle, 0, 0, 0, 1);
+  cl->setPipeline(pipe); cl->setVertexBuffer(vb); cl->setIndexBuffer(ib);
+  cl->drawIndexed(3, 1);
+  cl->end();
+  dev->submit(*cl);
+
+  const DrawStats view1After = dev->frameStats();
+  const DrawStats view1 = drawStatsDelta(view1After, view1Before);
+  CHECK(view1.draws == 1 && view1.triangles == 1);
+
+  const DrawStats view2Before = dev->frameStats();
+  dev->submit(*dev->beginCommands());
+  const DrawStats view2 = drawStatsDelta(dev->frameStats(), view2Before);
+  CHECK(view2.draws == 0);
+
+  dev->endFrame();
+  CHECK(dev->frameStats().draws == 1);
+  dev->beginFrame();
+  CHECK(dev->frameStats().draws == 0);
+  dev->endFrame();
+  CHECK(dev->frameStats().draws == 0);
+}
+
 TEST(rhi_null_device_draw_and_validation) {
   Quiet q;
   auto dev = createNullDevice();

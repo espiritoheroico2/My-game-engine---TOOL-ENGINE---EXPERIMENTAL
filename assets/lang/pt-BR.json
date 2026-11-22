@@ -549,6 +549,8 @@
   "Bright areas glow into their surroundings. Emissive objects: Inspector > Emission. GPU and software renderer.": "As áreas claras brilham ao redor. Objetos emissivos: Inspetor > Emissão. Renderizador GPU e por software.",
   "Bloom threshold": "Limiar do bloom",
   "Bloom strength": "Força do bloom",
+  "Enable ray tracing": "Ativar ray tracing",
+  "Master switch for CPU ray tracing. Disabling it skips BVH construction and ray-traced effects.": "Interruptor principal do ray tracing da CPU. Desativá-lo pula a construção do BVH e os efeitos de ray tracing.",
   "CPU work per frame (ms)": "Trabalho da CPU por quadro (ms)",
   "CPU work only (no VSync wait): avg %.2f ms   jitter %.2f ms": "So trabalho da CPU (sem espera do VSync): media %.2f ms   oscilacao %.2f ms",
   "Edit Mesh": "Editar malha",

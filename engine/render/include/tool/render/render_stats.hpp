@@ -121,6 +121,8 @@ struct RenderViewStats {
   std::uint64_t backendTriangles = 0;
   std::uint64_t backendPipelineSwitches = 0;
   std::uint64_t backendBufferUploads = 0;
+  std::uint64_t backendSubmitCount = 0;
+  std::uint64_t backendFlushCount = 0;
   std::array<PassStats, kRenderPassCount> passes{};
   ShadowCacheStats shadowCache{};
 
@@ -135,6 +137,8 @@ struct RenderViewStats {
     backendTriangles += other.backendTriangles;
     backendPipelineSwitches += other.backendPipelineSwitches;
     backendBufferUploads += other.backendBufferUploads;
+    backendSubmitCount += other.backendSubmitCount;
+    backendFlushCount += other.backendFlushCount;
   }
 };
 

@@ -75,7 +75,21 @@ using TextureId = Handle;
 using ShaderId = Handle;
 using PipelineId = Handle;
 
-struct DrawStats { u32 draws = 0, triangles = 0, pipelineSwitches = 0, bufferUploads = 0; };
+struct DrawStats {
+  u32 draws = 0, triangles = 0, pipelineSwitches = 0, bufferUploads = 0;
+  u32 submitCount = 0, flushCount = 0;
+};
+
+inline DrawStats drawStatsDelta(const DrawStats& after, const DrawStats& before) {
+  return {
+    after.draws - before.draws,
+    after.triangles - before.triangles,
+    after.pipelineSwitches - before.pipelineSwitches,
+    after.bufferUploads - before.bufferUploads,
+    after.submitCount - before.submitCount,
+    after.flushCount - before.flushCount
+  };
+}
 
 // Lista de comandos gravavel; o backend a executa. Mantida simples de proposito.
 class ICommandList {
@@ -119,6 +133,10 @@ public:
   virtual void updateBuffer(BufferId b, const void* data, size_t size) = 0;
   virtual std::unique_ptr<ICommandList> beginCommands() = 0;
   virtual void submit(ICommandList& cl) = 0;
+  // Delimita o estatistico de um frame real. beginFrame() inicia a acumulacao; endFrame() finaliza,
+  // apresenta (quando aplicavel) e publica frameStats() sem apagar os dados das vistas.
+  virtual void beginFrame() {}
+  virtual void endFrame() { present(); }
   virtual void present() = 0;
   // Backbuffer da janela (nulo se o dispositivo for offscreen) e leitura de textura para a CPU (RGBA8, origem no topo-esquerdo).
   virtual TextureId backbuffer() { return kNullHandle; }

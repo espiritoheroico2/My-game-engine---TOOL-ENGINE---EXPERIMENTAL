@@ -319,7 +319,13 @@ struct Editor {
     sigGpuValid = false;
     gpuBadFrames = 0;
   }
-  void beginRenderStatsFrame() { renderFrameStats.beginFrame(); }
+  void beginRenderStatsFrame() {
+    renderFrameStats.beginFrame();
+    if (gpuDev) gpuDev->beginFrame();
+  }
+  void endRenderStatsFrame() {
+    if (gpuDev) gpuDev->endFrame();
+  }
   static const char* apiName(int c) {
     return c == 0 ? "Software (CPU)" : c == 1 ? "Vulkan" : c == 2 ? "OpenGL" : c == 3 ? "Direct3D 12" : "Direct3D 11";
   }
@@ -969,6 +975,7 @@ private:
       const size_t errBefore = tool::debug().count(tool::Severity::Error);
       if (glCtx) SDL_GL_MakeCurrent(gpuWin, glCtx);
       struct Release { Editor& e; ~Release() { if (e.glCtx && e.gpuWin) SDL_GL_MakeCurrent(e.gpuWin, nullptr); } } release{*this};
+      const tool::rhi::DrawStats gpuViewBefore = gpuDev->frameStats();
       gpu.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
       gpu.begin(cam, {0.02f, 0.025f, 0.035f}, bgAlpha);
       const bool reGpu = shadows && sigGpuValid && sigGpu == sigNow;
@@ -992,12 +999,13 @@ private:
         gpu.setBloom(sceneInfo.render.lighting.bloom, sceneInfo.render.lighting.bloomThreshold, sceneInfo.render.lighting.bloomStrength);
         gpu.end();
         auto viewStats = gpu.renderStats();
-        gpuDev->present();
-        const tool::rhi::DrawStats deviceStats = gpuDev->frameStats();
+        const tool::rhi::DrawStats deviceStats = tool::rhi::drawStatsDelta(gpuDev->frameStats(), gpuViewBefore);
         viewStats.backendDrawCalls = deviceStats.draws;
         viewStats.backendTriangles = deviceStats.triangles;
         viewStats.backendBufferUploads = deviceStats.bufferUploads;
         viewStats.backendPipelineSwitches = deviceStats.pipelineSwitches;
+        viewStats.backendSubmitCount = deviceStats.submitCount;
+        viewStats.backendFlushCount = deviceStats.flushCount;
         renderFrameStats.views[static_cast<std::size_t>(vi)] = viewStats;
         tool::u32 rw = 0, rh = 0;
         // Leitura sem esperar a GPU: o quadro lido pode ser de 1 ou 2 quadros atras (ver readTextureAsync).
@@ -1048,7 +1056,7 @@ private:
     // Ray tracing (CPU): BVH da LightPrism com os triangulos dos objetos visiveis (voxels de fora, por enquanto).
     // Vive ate o pixels() abaixo, que conclui o desenho e aplica a oclusao.
     const tool::LightingSettings& lset = sceneInfo.render.lighting;
-    if (lset.rtAo) {
+    if (lset.rayTracing && lset.rtAo) {
       const std::uint64_t sig = rtSignature();
       if (!rtBvh_ || sig != rtSig_) {
         std::vector<LightPrism::Rt::Triangle> rtTris;

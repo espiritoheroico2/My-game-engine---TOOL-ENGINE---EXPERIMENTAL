@@ -222,7 +222,13 @@ public:
   }
 
   std::unique_ptr<ICommandList> beginCommands() override;
-  void submit(ICommandList&) override { ctx->Flush(); }
+  void submit(ICommandList&) override {
+    ++stats_.submitCount;
+    ++stats_.flushCount;
+    ctx->Flush();
+  }
+  void beginFrame() override { stats_ = {}; frameActive_ = true; }
+  void endFrame() override { present(); frameActive_ = false; }
 
   // Buffer criado fora (LightPrism): o handle guarda uma referencia a mais; destruir o handle nao apaga o buffer original.
   BufferId importBuffer(void* native) override {
@@ -244,7 +250,7 @@ public:
     ctx->FinishFrame();
     last_ = stats_; stats_ = {};
   }
-  DrawStats frameStats() const override { return last_; }
+  DrawStats frameStats() const override { return frameActive_ ? stats_ : last_; }
 
   TextureId backbuffer() override {
     if (!swapchain) return kNullHandle;
@@ -354,6 +360,7 @@ public:
   bool isBackbuffer(Handle h) const { return swapchain && h == backbufferHandle_ && !h.isNull(); }
   void err(const char* m) { debug().report("TOOL-E135", Severity::Error, std::string("RHI: ") + m); }
   DrawStats stats_, last_;
+  bool frameActive_ = false;
   const HandleAllocator& ids() const { return ids_; }
 
 private:

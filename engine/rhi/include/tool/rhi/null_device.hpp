@@ -40,13 +40,16 @@ public:
   }
 
   std::unique_ptr<ICommandList> beginCommands() override { return std::make_unique<Cmd>(*this); }
-  void submit(ICommandList&) override {}
+  void submit(ICommandList&) override { ++stats_.submitCount; }
+  void beginFrame() override { stats_ = {}; frameActive_ = true; }
+  void endFrame() override { present(); frameActive_ = false; }
   void present() override { last_ = stats_; stats_ = {}; }
-  DrawStats frameStats() const override { return last_; }
+  DrawStats frameStats() const override { return frameActive_ ? stats_ : last_; }
 
   size_t liveResources() const { return ids_.liveCount(); }
 
 private:
+  bool frameActive_ = false;
   enum class Kind : u8 { Buffer, Texture, Shader, Pipeline };
   bool valid(Handle h, Kind k) const { auto it = kind_.find(h.index); return ids_.alive(h) && it != kind_.end() && it->second == k; }
 

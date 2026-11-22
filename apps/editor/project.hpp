@@ -287,7 +287,7 @@ inline tool::Json saveLightingSettings(const tool::LightingSettings& s) {
   o.set("pointShadowLights", static_cast<double>(s.pointShadowLights)); o.set("pointShadowResolution", static_cast<double>(s.pointShadowResolution));
   o.set("ssao", s.ssao); o.set("ssaoKernel", static_cast<double>(s.ssaoKernel)); o.set("ssaoRadius", static_cast<double>(s.ssaoRadius));
   o.set("ssaoBias", static_cast<double>(s.ssaoBias)); o.set("ssaoPower", static_cast<double>(s.ssaoPower));
-  o.set("rtAo", s.rtAo); o.set("rtAoRays", static_cast<double>(s.rtAoRays)); o.set("rtAoRadius", static_cast<double>(s.rtAoRadius));
+  o.set("rayTracing", s.rayTracing); o.set("rtAo", s.rtAo); o.set("rtAoRays", static_cast<double>(s.rtAoRays)); o.set("rtAoRadius", static_cast<double>(s.rtAoRadius));
   o.set("bloom", s.bloom); o.set("bloomThreshold", static_cast<double>(s.bloomThreshold)); o.set("bloomStrength", static_cast<double>(s.bloomStrength));
   o.set("ambientIntensity", static_cast<double>(s.ambientIntensity)); o.set("preExposure", static_cast<double>(s.preExposure));
   return o;
@@ -312,6 +312,7 @@ inline tool::LightingSettings loadLightingSettings(const tool::Json& o) {
   s.ssaoRadius = ser::clampNum(o, "ssaoRadius", 0.5f, 0.01f, 5.f);
   s.ssaoBias = ser::clampNum(o, "ssaoBias", 0.025f, 0.f, 0.5f);
   s.ssaoPower = ser::clampNum(o, "ssaoPower", 1.f, 0.1f, 4.f);
+  s.rayTracing = ser::flag(o, "rayTracing", true);
   s.rtAo = ser::flag(o, "rtAo", false);
   s.rtAoRays = static_cast<tool::u32>(std::clamp(static_cast<int>(ser::num(o, "rtAoRays", 16.f)), 1, 64));
   s.rtAoRadius = ser::clampNum(o, "rtAoRadius", 0.6f, 0.05f, 5.f);

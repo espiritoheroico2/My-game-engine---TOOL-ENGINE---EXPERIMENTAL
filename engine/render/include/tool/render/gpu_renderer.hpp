@@ -401,22 +401,33 @@ public:
     if (!open_ || !dev_) return;
     open_ = false;
     std::stable_sort(draws_.begin(), draws_.end(), [](const Draw& a, const Draw& b) { return a.mesh->vertex.index < b.mesh->vertex.index; });
+    const Mat4 view = Mat4::lookAt(cam_.eye, cam_.target, cam_.up);
+    const Mat4 vp = cam_.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * view;
+    const render::Frustum cameraFrustum = render::frustumFromViewProj(vp.m, dev_->backend() != rhi::Backend::GLES);
     queueItems_.clear();
     queueItems_.reserve(draws_.size());
     for (const Draw& d : draws_) {
+      const render::SphereBounds worldBounds = render::transformSphere(d.world.m, d.mesh->bounds);
+      const bool cameraVisible = render::sphereInFrustum(cameraFrustum, worldBounds);
       const bool emissive = !(d.mat.emissive.x <= 0.f && d.mat.emissive.y <= 0.f && d.mat.emissive.z <= 0.f);
-      queueItems_.push_back({true, false, emissive, true, d.mat.castShadow && d.mesh->count > 0});
+      queueItems_.push_back({cameraVisible, false, cameraVisible && emissive, true, d.mat.castShadow && d.mesh->count > 0});
     }
     render::buildRenderQueues(queueItems_, renderQueues_);
-    if (!ensureInstanceBuffer(std::max(draws_.size(), tdraws_.size()))) {
+    tdraws_.erase(std::remove_if(tdraws_.begin(), tdraws_.end(), [&](const Draw& d) {
+      const render::SphereBounds worldBounds = render::transformSphere(d.world.m, d.mesh->bounds);
+      return !render::sphereInFrustum(cameraFrustum, worldBounds);
+    }), tdraws_.end());
+    if (!ensureInstanceBuffer(std::max(renderQueues_.opaque.size(), tdraws_.size()))) {
       lastError_ = "storage buffer de instancias indisponivel";
       releaseImports();
       return;
     }
     shadowCasters_.clear();
     shadowInstances_.clear();
-    shadowCasters_.reserve(renderQueues_.shadowCasters.size());
-    for (u32 index : renderQueues_.shadowCasters) shadowCasters_.push_back(&draws_[index]);
+    shadowCasters_.reserve(draws_.size());
+    for (const Draw& d : draws_) {
+      if (d.mat.castShadow && d.mesh->count > 0) shadowCasters_.push_back(&d);
+    }
     std::array<std::array<bool, kMaxPointShadowFaces>, kMaxPointShadowLights> pointFaceDirty{};
     std::array<std::array<PointFaceSignature, kMaxPointShadowFaces>, kMaxPointShadowLights> pointFaceSignatures{};
     for (u32 k = 0; k < shadowCount_ && shadowOn_ && !shadowSkip_; ++k) {
@@ -543,8 +554,6 @@ public:
       }
     }
     // ---- 2) passe principal ----
-    const Mat4 view = Mat4::lookAt(cam_.eye, cam_.target, cam_.up);
-    const Mat4 vp = cam_.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * view;
     FrameCB fc; fc.viewProj = vp; fc.view = view; fc.camera[0] = cam_.eye.x; fc.camera[1] = cam_.eye.y; fc.camera[2] = cam_.eye.z;
     dev_->updateBuffer(frameCb_, &fc, sizeof fc);
     // ---- 1c) SSAO: prepasso (normal de view + profundidade), AO bruto e blur. Sem SSAO o AO fica 1 (limpo). ----
