@@ -338,7 +338,6 @@ class View {
   void buildTree() {
     metrics_.headerHeight = 30.f;
     metrics_.cornerRadius = editor::ui_style::windowRadius();
-    panelColor_ = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
 
     SU::FlexItem panel;
     panel.width = {SU::SizeMode::Fixed, Theme::kPanelWidth};
@@ -374,13 +373,6 @@ class View {
       assetRemove_[i] = tree_.Create(assetRow_[i], assetRemoveStyle());
     }
     status_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
-
-    SU::ElementVisual panelVisual;
-    panelVisual.tintPremultipliedLinear = panelColor_;
-    panelVisual.interactable = false;
-    panelVisual.clipOverflow = false;
-    panelVisual.zOrder = -1.f;   // fundo do painel atras dos elementos (zOrder 0)
-    bridge_.SetVisual(panelHandle_, panelVisual);
   }
 
   // Filhos de altura fixa nao encolhem (shrink = 0): sem isso o flex os reduz a zero dentro da coluna.
@@ -486,6 +478,17 @@ class View {
 
   void applyVisuals() {
     enabled_.clear();
+    // Fundo do painel: o corpo da moldura da paleta em uso, lido a cada quadro. Feito aqui (e nao na montagem da
+    // arvore) porque frameColors_ so recebe a paleta no quadro: antes, o painel pegava o padrao da SpriteUI (cinza).
+    frameColors_ = editor::window_palette::Standard();
+    panelColor_ = frameColors_.body;
+    SU::ElementVisual panelVisual;
+    panelVisual.tintPremultipliedLinear = panelColor_;
+    panelVisual.interactable = false;
+    panelVisual.clipOverflow = false;
+    panelVisual.zOrder = -1.f;   // fundo do painel atras dos elementos (zOrder 0)
+    bridge_.SetVisual(panelHandle_, panelVisual);
+
     const SM::Actions acts = SM::ActionsFor(model_.selected, model_.current);
     const bool confirming = model_.mode != NameMode::None;
     for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
