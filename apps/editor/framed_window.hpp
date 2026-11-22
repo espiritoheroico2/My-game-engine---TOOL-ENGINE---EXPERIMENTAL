@@ -132,6 +132,11 @@ class Chrome {
   // Cores da moldura = paleta em uso; sem corpo (ImGui desenha por dentro), corpo e borda ficam transparentes.
   void applyPalette() {
     colors_ = editor::window_palette::Standard();
+    const palette::Palette& p = palette::active();
+    auto c = [](const palette::Rgb& x) { return view::rgbaF(x.r, x.g, x.b, 1.f); };
+    titleText_ = c(p.text);
+    bubble_ = c(p.accent);
+    titleDim_ = c(p.textDim);
     if (!bodyFill_) {
       const auto clear = sui::Srgb(0.f, 0.f, 0.f, 0.f);
       colors_.body = clear;
@@ -143,17 +148,17 @@ class Chrome {
     const SU::Rect grip = frame_.gripRect();
     const SU::Rect help = frame_.helpRect();
     const view::Pixel hc{help.position.x + help.size.x * 0.5f, help.position.y + help.size.y * 0.5f};
-    out.circleFilled(hc, help.size.x * 0.5f, view::Rgba(64, 102, 178));
-    out.text({hc.x, hc.y - kFont * 0.62f}, "?", kFont, view::Rgba(233, 234, 238), true);   // texto ancorado no topo
+    out.circleFilled(hc, help.size.x * 0.5f, bubble_);
+    out.text({hc.x, hc.y - kFont * 0.62f}, "?", kFont, titleText_, true);   // texto ancorado no topo
     const float tx = frame_.titleTextX();
     const float ty = head.position.y + (head.size.y - kTitleFont) * 0.5f;
-    out.text({tx, ty}, title, kTitleFont, view::Rgba(233, 234, 238));
-    out.text({tx + 0.7f, ty}, title, kTitleFont, view::Rgba(233, 234, 238));   // duas passadas: negrito
+    out.text({tx, ty}, title, kTitleFont, titleText_);
+    out.text({tx + 0.7f, ty}, title, kTitleFont, titleText_);   // duas passadas: negrito
     const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
     for (int c = 0; c < 2; ++c) {
       for (int r = 0; r < 3; ++r) {
         out.circleFilled({cx + (static_cast<float>(c) - 0.5f) * 4.f, cy + (static_cast<float>(r) - 1.f) * 4.f}, 1.2f,
-                         view::Rgba(120, 135, 160));
+                         titleDim_);
       }
     }
   }
@@ -161,6 +166,7 @@ class Chrome {
   window_frame::Frame frame_;
   Wd::WindowFrameColors colors_{};
   bool bodyFill_ = true;
+  view::Color titleText_ = view::Rgba(233, 234, 238), bubble_ = view::Rgba(64, 102, 178), titleDim_ = view::Rgba(120, 135, 160);
   std::optional<SU::Rect> dock_;
   bool visible_ = false;
   bool closeRequested_ = false, helpRequested_ = false;

@@ -38,6 +38,11 @@
 
 namespace editor::script_window {
 
+// Cores do painel, tiradas da paleta em uso (Configuracoes > Appearance). Ok, aviso e erro sao semanticos.
+struct Ink {
+  view::Color text, dim, field, fieldFocus, list, panelUp, button, buttonOn, error, warn, ok;
+};
+
 namespace SU = ToolEngine::SpriteUi;
 namespace Elm = ToolEngine::SpriteUi::Elements;
 namespace ST = ToolEngine::SpriteUi::Text;
@@ -67,11 +72,6 @@ class Panel {
     field_->fontSize = kFont;
     field_->Edit() = Wd::TextEditState(std::string(), true);   // a area aceita quebra de linha
     chrome_.setDock(std::nullopt);                              // janela flutuante
-    style_.background = {0.07f, 0.09f, 0.13f, 1.0f};
-    style_.focusBackground = {0.09f, 0.12f, 0.17f, 1.0f};
-    style_.text = {0.92f, 0.93f, 0.94f, 1.0f};
-    style_.caret = {0.95f, 0.95f, 1.0f, 1.0f};
-    style_.selection = {0.20f, 0.30f, 0.50f, 0.60f};
     paintList_.owner = sui::handleFor(0);
   }
   Panel(const Panel&) = delete;
@@ -150,6 +150,7 @@ class Panel {
     if (!open_) return true;
     if (!renderer || !window) return false;
     window_ = window;
+    refreshInk();
     int winW = 0, winH = 0;
     SDL_GetWindowSize(window, &winW, &winH);
     if (winW <= 0 || winH <= 0) return true;
@@ -173,6 +174,31 @@ class Panel {
   }
 
  private:
+  // Cores e estilo do campo a partir da paleta em uso.
+  void refreshInk() {
+    const palette::Palette& p = palette::active();
+    auto c = [](const palette::Rgb& x) { return view::rgbaF(x.r, x.g, x.b, x.a); };
+    auto mix = [](const palette::Rgb& a, const palette::Rgb& b, float t) {
+      return palette::Rgb{a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, 1.f};
+    };
+    const palette::Rgb list = mix(p.panel, p.surface, 0.5f);
+    const palette::Rgb focus = mix(p.panel, p.surface, 0.7f);
+    // Em fundo claro, os tons de estado escurecem para manter o contraste.
+    const bool light = (p.panel.r + p.panel.g + p.panel.b) / 3.f > 0.5f;
+    const view::Color okC = light ? view::rgbaF(0.10f, 0.45f, 0.18f, 1.f) : view::rgbaF(0.51f, 1.f, 0.59f, 1.f);
+    const view::Color warnC = light ? view::rgbaF(0.62f, 0.38f, 0.00f, 1.f) : view::rgbaF(1.f, 0.85f, 0.3f, 1.f);
+    const view::Color errC = light ? view::rgbaF(0.72f, 0.12f, 0.12f, 1.f) : c(p.error);
+    ink_ = Ink{c(p.text), c(p.textDim), c(p.surface), c(focus), c(list), c(p.surface), c(p.surface), c(p.accent),
+               errC, warnC, okC};
+    style_.background = sui::PaletteColor(p.surface);
+    style_.focusBackground = sui::PaletteColor(focus);
+    style_.text = sui::PaletteColor(p.text);
+    style_.caret = sui::PaletteColor(p.text);
+    palette::Rgb sel = p.accent;
+    sel.a = 0.45f;
+    style_.selection = sui::PaletteColor(sel);
+  }
+
   // ---------- Layout ----------
   struct Layout {
     SU::Rect save, complete, snippets, close;
@@ -267,12 +293,12 @@ class Panel {
     button(shapes, layout_.close, T("Close"));
     float statusX = layout_.snippets.position.x + layout_.snippets.size.x + 12.f;
     const float statusEnd = layout_.close.position.x - 10.f;
-    if (dirty_) { shapes.text({statusX, top + 4.f}, T("(unsaved)"), kFont, view::Rgba(140, 150, 170)); statusX += 70.f; }
-    if (!msg_.empty() && statusX < statusEnd) shapes.text({statusX, top + 4.f}, msg_, kFont, view::Rgba(140, 150, 170), false, statusEnd - statusX);
+    if (dirty_) { shapes.text({statusX, top + 4.f}, T("(unsaved)"), kFont, ink_.dim); statusX += 70.f; }
+    if (!msg_.empty() && statusX < statusEnd) shapes.text({statusX, top + 4.f}, msg_, kFont, ink_.dim, false, statusEnd - statusX);
     // Fundo do editor e o texto (painel proprio, mesma cor do campo do Inspector).
     shapes.rectFilled({layout_.editor.position.x, layout_.editor.position.y},
                       {layout_.editor.position.x + layout_.editor.size.x, layout_.editor.position.y + layout_.editor.size.y},
-                      view::Rgba(18, 23, 34), 0.f);
+                      ink_.field, 0.f);
     paintBody_.append(shapes, 0u, paintList_);
     buildFieldItems();
 
@@ -281,12 +307,12 @@ class Panel {
     if (layout_.showComplete) {
       const float y = layout_.editor.position.y + layout_.editor.size.y + 6.f;
       lists.rectFilled({layout_.editor.position.x, y}, {layout_.editor.position.x + layout_.editor.size.x, y + kCompleteH},
-                       view::Rgba(22, 28, 40), 0.f);
-      if (completions_.empty()) lists.text({layout_.editor.position.x + 6.f, y + 4.f}, T("No suggestions."), kFont, view::Rgba(140, 150, 170));
+                       ink_.list, 0.f);
+      if (completions_.empty()) lists.text({layout_.editor.position.x + 6.f, y + 4.f}, T("No suggestions."), kFont, ink_.dim);
       for (std::size_t i = 0; i < completions_.size() && i < layout_.completeRows.size(); ++i) {
         const SU::Rect& r = layout_.completeRows[i];
         const ApiItem& it = completions_[i];
-        lists.text({r.position.x + 6.f, r.position.y}, it.name + "   (" + it.kind + ")   " + it.sig, kFont, view::Rgba(220, 224, 232));
+        lists.text({r.position.x + 6.f, r.position.y}, it.name + "   (" + it.kind + ")   " + it.sig, kFont, ink_.text);
       }
     }
     // Verificador: linha de resumo e lista de erros (com a linha de cada um).
@@ -295,28 +321,28 @@ class Panel {
     bool anyError = false;
     for (const ScriptIssue& is : issues_) if (is.sev == tool::Severity::Error) anyError = true;
     if (issues_.empty()) {
-      lists.text({b.x + kPad, y}, T("Check: OK (no problems found)"), kFont, view::Rgba(130, 255, 150));
+      lists.text({b.x + kPad, y}, T("Check: OK (no problems found)"), kFont, ink_.ok);
     } else {
       lists.text({b.x + kPad, y}, "Check: " + issueSummary(issues_), kFont,
-                 anyError ? view::Rgba(255, 102, 102) : view::Rgba(255, 217, 77));
+                 anyError ? ink_.error : ink_.warn);
     }
     y += kRow + 6.f;
     const float listBottom = b.y + b.h - kPad;
-    lists.rectFilled({b.x + kPad, y}, {b.x + b.w - kPad, listBottom}, view::Rgba(22, 28, 40), 0.f);
+    lists.rectFilled({b.x + kPad, y}, {b.x + b.w - kPad, listBottom}, ink_.list, 0.f);
     const std::vector<std::string> src = splitLines(field_->Edit().Text());
     float ly = y + 4.f;
     for (std::size_t i = 0; i < issues_.size() && i < 60; ++i) {
       if (ly + kRow > listBottom) break;
       const ScriptIssue& is = issues_[i];
-      const view::Color c = is.sev == tool::Severity::Error ? view::Rgba(255, 102, 102) : view::Rgba(255, 217, 77);
+      const view::Color c = is.sev == tool::Severity::Error ? ink_.error : ink_.warn;
       lists.text({b.x + kPad + 6.f, ly}, "line " + std::to_string(is.line) + "  " + is.code + "  " + is.msg, kFont, c);
       ly += kRow;
       if (is.line >= 1 && static_cast<std::size_t>(is.line) <= src.size() && ly + kRow <= listBottom) {
-        lists.text({b.x + kPad + 26.f, ly}, src[static_cast<std::size_t>(is.line) - 1], kFont, view::Rgba(120, 130, 150));
+        lists.text({b.x + kPad + 26.f, ly}, src[static_cast<std::size_t>(is.line) - 1], kFont, ink_.dim);
         ly += kRow;
       }
     }
-    if (issues_.size() > 60) lists.text({b.x + kPad + 6.f, ly}, "... " + std::to_string(issues_.size() - 60) + " more (see Console: Check scripts)", kFont, view::Rgba(120, 130, 150));
+    if (issues_.size() > 60) lists.text({b.x + kPad + 6.f, ly}, "... " + std::to_string(issues_.size() - 60) + " more (see Console: Check scripts)", kFont, ink_.dim);
     paintBody_.append(lists, kClipFrame, paintList_);
 
     // Lista de exemplos (Snippets), por cima de tudo do corpo.
@@ -327,21 +353,21 @@ class Panel {
         const float h = layout_.snippetRows.back().position.y + layout_.snippetRows.back().size.y - layout_.snippetRows.front().position.y;
         drop.rectFilled({layout_.snippetRows.front().position.x, layout_.snippetRows.front().position.y},
                         {layout_.snippetRows.front().position.x + 420.f, layout_.snippetRows.front().position.y + h},
-                        view::Rgba(30, 38, 56), 0.f);
+                        ink_.panelUp, 0.f);
       }
       for (std::size_t i = 0; i < layout_.snippetRows.size() && i < list.size(); ++i) {
         const SU::Rect& r = layout_.snippetRows[i];
-        drop.text({r.position.x + 6.f, r.position.y + 2.f}, std::to_string(list[i].n) + ". " + list[i].title, kFont, view::Rgba(230, 232, 238));
+        drop.text({r.position.x + 6.f, r.position.y + 2.f}, std::to_string(list[i].n) + ". " + list[i].title, kFont, ink_.text);
       }
       paintBody_.append(drop, kClipFrame, paintList_);
     }
   }
 
   void button(view::ShapeList& shapes, const SU::Rect& r, const std::string& label, bool on = false) {
-    const view::Color fill = on ? view::Rgba(74, 130, 200) : view::Rgba(42, 64, 104);
+    const view::Color fill = on ? ink_.buttonOn : ink_.button;
     shapes.rectFilled({r.position.x, r.position.y}, {r.position.x + r.size.x, r.position.y + r.size.y}, fill, 3.f);
     shapes.text({r.position.x + r.size.x * 0.5f, r.position.y + (r.size.y - kFont) * 0.5f - 1.f}, label, kFont,
-                view::Rgba(233, 234, 238), true);
+                ink_.text, true);
   }
 
   // Itens do campo (fundo do texto ja pintado; aqui texto, selecao e caret) com o recorte da area do editor.
@@ -359,7 +385,7 @@ class Panel {
 
   bool drawMessage(SDL_Renderer* renderer, const sui::Box& b, const char* text) {
     view::ShapeList shapes;
-    shapes.text({b.x + kPad, b.y + kPad}, T(text), kFont, view::Rgba(255, 153, 102));
+    shapes.text({b.x + kPad, b.y + kPad}, T(text), kFont, ink_.warn);
     paintBody_.append(shapes, kClipFrame, paintList_);
     return drawBody(renderer);
   }
@@ -549,6 +575,7 @@ class Panel {
   std::vector<ScriptIssue> issues_;
   std::vector<ApiItem> completions_;
   SDL_Window* window_ = nullptr;
+  Ink ink_{};
 };
 
 }  // namespace editor::script_window

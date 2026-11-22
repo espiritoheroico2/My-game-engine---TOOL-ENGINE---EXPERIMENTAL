@@ -2519,6 +2519,7 @@ static int runEditorMain(int argc, char** argv) {
   for (int i = 1; i + 1 < argc; ++i) {
     if (std::strcmp(argv[i], "--lang") == 0) startLang = argv[i + 1];
     if (std::strcmp(argv[i], "--theme") == 0) startTheme = argv[i + 1];
+    if (std::strcmp(argv[i], "--palette") == 0) editor::palette::activeIndex() = static_cast<std::size_t>(std::atoi(argv[i + 1]));   // captura: paleta de Appearance pelo indice
     if (std::strcmp(argv[i], "--tab") == 0) startTab = std::atoi(argv[i + 1]);
     if (std::strcmp(argv[i], "--scene") == 0) startScene = argv[i + 1];
     if (std::strcmp(argv[i], "--focus") == 0) focusWin = argv[i + 1];   // para capturas de tela: traz uma janela (hier, game, assets...) para frente
