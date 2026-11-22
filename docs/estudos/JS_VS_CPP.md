@@ -3,7 +3,7 @@
 **Pergunta:** manter JS nos scripts ou migrar tudo para C++ para ganhar desempenho?
 
 ## Estado real hoje
-- **Nenhum JavaScript roda hoje.** Os arquivos `.tool.js` são criados/editados, mas ainda não há VM (ver `RUNTIME.md`).
+- **Nenhum JavaScript roda hoje.** Os arquivos `.tool.js` são criados/editados, mas ainda não há VM (ver `RUNTIME_CODIGO.md`).
 - **Todo o caminho quente já é C++ nativo:** renderização (SoftRenderer/GpuRenderer), física (Newtoon), Tools (Jump/Move/Follow/Spin/OnCollision),
   partículas, UI, Controlador Narrativo (compilado para IR e executado nativamente) e pós-processamento.
 - Portanto, trocar "JS por C++" **não acelera nada que existe hoje**: o JS nunca esteve no caminho de desempenho.
@@ -22,4 +22,4 @@ Só a linguagem do **código de jogo escrito pelo usuário** (lógica de gamepla
 2. **Mover lógica comum para blocos nativos** (já feito): Tools, Narrative (Start/Update/Create/SavePoint), UI e Partículas cobrem o que mais se repete em jogos sem escrever código — e rodam em C++.
 3. **Script = cola.** Regra prática: se algo roda por objeto por quadro em laço grande (ex.: IA de 1000 inimigos), vira **Tool nativo** ou módulo C++ (plugin), não script.
 4. **Orçamento por quadro:** o Profiler já tem zonas; ao ligar a VM, medir o tempo de script por quadro e avisar quando passar de ~2 ms.
-5. Revisar quando houver benchmarks reais com a VM ligada (Fase A do `ROADMAP.md`).
+5. Revisar quando houver benchmarks reais com a VM ligada (Fase A do `../../planos/00_ROADMAP.md`).

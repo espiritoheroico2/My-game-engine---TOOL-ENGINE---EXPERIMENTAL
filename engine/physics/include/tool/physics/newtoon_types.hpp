@@ -13,7 +13,7 @@ constexpr Entity kNoEntity = 0xFFFFFFFFu;
 
 // Forma do collider usada na deteccao de colisao.
 enum class ShapeType : uint8_t { Box, Sphere, Cylinder, CustomConvex };
-// Cylinder/CustomConvex: ainda sem narrow-phase proprio; sao tratados como a caixa envolvente (extents). Ver docs/PHYSICS.md.
+// Cylinder/CustomConvex: ainda sem narrow-phase proprio; sao tratados como a caixa envolvente (extents). Ver docs/planos/10_FISICA.md.
 // Como combinar dois coeficientes de material (atrito ou quique) de corpos que colidem.
 enum class CombineMode : uint8_t { Average, Minimum, Maximum, Multiply };
 
@@ -126,7 +126,7 @@ inline void SetMassFromShape(Rigidbody& rb, const Collider& c, float mass) {
   rb.inverseInertiaLocal = {1.f / (k * (e.y * e.y + e.z * e.z)), 1.f / (k * (e.x * e.x + e.z * e.z)), 1.f / (k * (e.x * e.x + e.y * e.y))};
 }
 
-// Juntas (estrutura de dados; solver de juntas esta no roteiro - docs/PHYSICS.md).
+// Juntas (estrutura de dados; solver de juntas esta no roteiro - docs/planos/10_FISICA.md).
 enum class JointType : uint8_t { Fixed, Hinge, BallAndSocket };
 // Junta entre dois corpos: tipo, corpos conectados, pontos de ancoragem e eixo da dobradica. So dados; o solver ainda nao existe.
 struct Joint { JointType type = JointType::Fixed; Entity bodyA = kNoEntity, bodyB = kNoEntity; Vec3 anchorPointA, anchorPointB, hingeAxis; };

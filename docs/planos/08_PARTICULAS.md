@@ -28,7 +28,7 @@ Limites que continuam:
 | Estrutura SoA (`ParticleStateComponent`) | Parcial | Cada emissor tem sua lista de partículas; SoA só compensa quando a simulação vai para a GPU ou para SIMD. Próximo passo. |
 | Simulação em compute shader | **Não agora** | O RHI não tem compute nem buffers estruturados; e a imagem da GPU ainda é lida de volta para a CPU a cada quadro. Sem zero-copy, a simulação na GPU não ganha, porque o resultado precisa voltar. |
 | Indirect draw + culling na GPU | **Não agora** | Mesmo motivo (exige compute e indirect no RHI). Equivalente aproximado já feito: culling na CPU + lotes. |
-| Zero-copy de apresentação | **Não agora** | Exige apresentar a textura da GPU direto no ImGui (sem `readback`). É o maior custo de sincronização do editor, listado em `docs/PERFORMANCE_AUDIT.md`. |
+| Zero-copy de apresentação | **Não agora** | Exige apresentar a textura da GPU direto no ImGui (sem `readback`). É o maior custo de sincronização do editor, listado em `../estudos/AUDITORIA_DESEMPENHO.md`. |
 | Vento por textura 3D | Viável depois | Campo de vetores amostrado na CPU (trilinear) em cada partícula: custo alto sem SIMD; começar com campo de baixa resolução. |
 | Espiral parametrizada (`cos/sin` de idade) | **Viável** | Barato na CPU; pode entrar como opção do emissor. |
 | Quaternião e Slerp para rotação | Viável | Só relevante quando houver rotação por partícula (quads já são billboards). |

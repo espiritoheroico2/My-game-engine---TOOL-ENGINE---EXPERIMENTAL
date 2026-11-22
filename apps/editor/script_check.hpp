@@ -7,7 +7,7 @@
 //      que costumam fazer um objeto "nao funcionar" sem mensagem: obj.position (nao existe), class, this,
 //      console.log, nome de funcao digitado errado (com sugestao), numero errado de argumentos, tecla invalida.
 //
-// Codigos (documentados em docs/SCRIPT_ERRORS.md):
+// Codigos (documentados em docs/referencia/ERROS_SCRIPT.md):
 //   TOOL-S001 erro de sintaxe / codigo que nao carrega     TOOL-S002 erro durante start/update/evento
 //   TOOL-S003 objeto sem start/update/OnEventTrigger        TOOL-S004 nome, argumento ou tecla invalidos
 //   TOOL-S005 comando para objeto que nao existe (Play)     TOOL-S006 valor invalido ignorado (NaN, fora da faixa)

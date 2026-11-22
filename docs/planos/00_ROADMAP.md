@@ -6,8 +6,8 @@ Branch de trabalho desta etapa: `ui-settings-router` (ainda nao mesclada no `mai
 
 Este documento e a fonte resumida para decidir o que fazer a seguir. Ele consolida os antigos documentos
 operacionais de tarefas (`CODAR.MD`, `ESTADO_ATUAL.md`, `P1_IMPLEMENTACAO.md`, removidos no commit `908cbaf`),
-o plano de P1 a P6 e os proximos passos. Os detalhes de cada versao ficam em `docs/CHANGELOG.md`, e as
-verificacoes detalhadas em `docs/CHECKLIST.md`.
+o plano de P1 a P6 e os proximos passos. Os detalhes de cada versao ficam em `../referencia/CHANGELOG.md`, e as
+verificacoes detalhadas em `00_CHECKLIST.md`.
 
 Em caso de contradicao, esta pagina define a prioridade. O changelog define o que entrou em cada versao.
 
@@ -21,7 +21,7 @@ Em caso de contradicao, esta pagina define a prioridade. O changelog define o qu
 | **[ ]** | Pendente |
 | **[X]** | Adiado ou descartado nesta versao, com motivo |
 
-Regra: nenhum item vira **[F]** por texto. So testes automatizados ou observacao registrada no `docs/CHECKLIST.md`.
+Regra: nenhum item vira **[F]** por texto. So testes automatizados ou observacao registrada no `00_CHECKLIST.md`.
 
 ---
 
@@ -158,7 +158,7 @@ Regra: nenhum item vira **[F]** por texto. So testes automatizados ou observacao
    - Feito: checador de bindings no ctest; GLSL regenerado; `build_glsl.py --check` confere a sincronia com o HLSL. A contagem de arquivos aparece como 23 no changelog e 26 no relatorio de 2026-11-18; conferir antes de citar.
    - Pendente: pastas separadas `assets/shaders/hlsl` e `assets/shaders/glsl`; `build_glsl.py` vira ferramenta
      de comparacao, nao o caminho de producao.
-   - Pendente conhecido (`docs/SHADER_AUDIT.md`): PBR com 9 buffers uniformes dinamicos no Vulkan (limite de 8).
+   - Pendente conhecido (`../estudos/AUDITORIA_SHADERS.md`): PBR com 9 buffers uniformes dinamicos no Vulkan (limite de 8).
      Correcao proposta, nao aplicada.
    - Limite do checador: so entende `#ifdef` simples. Se usar `#if` com expressao, revisar o checador.
 
@@ -359,7 +359,7 @@ real com a cena benchmark e manter callbacks seguros que possam criar/destruir e
 - C++ deve ser opcional para plugins/mods de alto desempenho, nao o substituto dos scripts.
 - WASM pode ser estudado posteriormente para modding seguro e scripts portaveis.
 
-Detalhes: `docs/RUNTIME.md` e `docs/JS_VS_CPP.md`.
+Detalhes: `../estudos/RUNTIME_CODIGO.md` e `../estudos/JS_VS_CPP.md`.
 
 ---
 
@@ -426,10 +426,10 @@ Detalhes: `docs/RUNTIME.md` e `docs/JS_VS_CPP.md`.
 - Nao executar scripts externos ou limpar limites de tamanho.
 - Validar todos os numeros de render, path, package e shader.
 - Mover implementacoes pesadas de headers para `.cpp` em modulos, com render primeiro.
-- Fixar ou vendorizar dependencias com licenca registrada (DiligentCore: pin ou vendor, ver `docs/BUILD.md`).
+- Fixar ou vendorizar dependencias com licenca registrada (DiligentCore: pin ou vendor, ver `../referencia/COMPILAR.md`).
 - Reduzir artefatos de build fora do pacote; manter os dos terceiros necessarios.
 - Atualizar nomes de versao em um unico lugar.
-- `build_log.txt` fora do repositorio (`.gitignore`); ver `docs/REPO_WEIGHT.md`.
+- `build_log.txt` fora do repositorio (`.gitignore`); ver `../estudos/PESO_REPOSITORIO.md`.
 - Remover `proj_ecs/` (projeto de teste) do repositorio local antes de commitar.
 
 ### Nucleo e desempenho do ECS
@@ -460,18 +460,18 @@ Nenhuma tarefa fica pronta sem:
 
 | Tema | Documento |
 |---|---|
-| Estado por versao | `docs/CHANGELOG.md` |
-| Checklist detalhada | `docs/CHECKLIST.md` |
+| Estado por versao | `../referencia/CHANGELOG.md` |
+| Checklist detalhada | `00_CHECKLIST.md` |
 | Tarefas, testes do responsavel e plano de remocao do ImGui | `docs/CODAR.MD` (branch `ui-settings-router`) |
 | Tarefas e estado P1-P6 | Este documento |
 | Pesquisa de milhoes de objetos | `docs/PESQUISA_MILHARES_OBJETOS.md` e secoes P1-P6 deste documento |
-| Performance | `docs/PERFORMANCE_PLAN.md`, `docs/PERFORMANCE_AUDIT.md` |
-| SpriteUI | `docs/UI_SPRITE_PLAN.md`, `docs/UI.md`, `docs/UI_FX.md` |
-| Shaders | `docs/SHADER_AUDIT.md`, `docs/SHADER_API_MATRIX.md` |
-| Build | `docs/BUILD.md` |
-| Scripts | `docs/RUNTIME.md`, `docs/JS_VS_CPP.md`, `docs/SCRIPT_ERRORS.md` |
-| Seguranca | `docs/SECURITY.md` |
-| Peso do repo | `docs/REPO_WEIGHT.md` |
+| Performance | `03_DESEMPENHO_EDITOR.md`, `../estudos/AUDITORIA_DESEMPENHO.md` |
+| SpriteUI | `06_SPRITEUI.md`, `../referencia/IDIOMAS_E_TEMAS.md`, `07_UI_DE_JOGO.md` |
+| Shaders | `../estudos/AUDITORIA_SHADERS.md`, `../estudos/MATRIZ_APIS_SHADER.md` |
+| Build | `../referencia/COMPILAR.md` |
+| Scripts | `../estudos/RUNTIME_CODIGO.md`, `../estudos/JS_VS_CPP.md`, `../referencia/ERROS_SCRIPT.md` |
+| Seguranca | `../estudos/SEGURANCA_ARQUIVOS.md` |
+| Peso do repo | `../estudos/PESO_REPOSITORIO.md` |
 
 Removidos no commit `908cbaf`: `CODAR.MD` (raiz), `P1_IMPLEMENTACAO.md` (raiz), `docs/ESTADO_ATUAL.md`,
 `docs/IMPLEMENTATION_STATUS.md`, `docs/NEXT_STEPS.md`, `docs/ALPHA.md`, `docs/BETA.md`, `docs/BUILD_TIME.md`,

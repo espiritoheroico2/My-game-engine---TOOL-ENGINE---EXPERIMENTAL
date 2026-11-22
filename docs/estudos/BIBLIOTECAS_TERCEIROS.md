@@ -18,8 +18,8 @@ Dependências **do DiligentCore** (SPIRV-Cross, glslang, SPIRV-Tools, volk, GLEW
 ## Candidatos estudados (ainda NÃO incluídos)
 | Componente | Dono | Repositório | Licença | Situação |
 |---|---|---|---|---|
-| RTX Neural Texture Compression | NVIDIA | github.com/NVIDIA-RTX/RTXNTC | "NVIDIA RTX SDKs LICENSE" (verificar termos antes de redistribuir) | Ver `docs/NTC.md` |
-| AMD FidelityFX / FSR | AMD | gpuopen.com | MIT (SDK) | Ver `docs/FSR.md` |
+| RTX Neural Texture Compression | NVIDIA | github.com/NVIDIA-RTX/RTXNTC | "NVIDIA RTX SDKs LICENSE" (verificar termos antes de redistribuir) | Ver `NVIDIA_NTC.md` |
+| AMD FidelityFX / FSR | AMD | gpuopen.com | MIT (SDK) | Ver `AMD_FSR.md` |
 | QuickJS-ng v0.17.0 | Fabrice Bellard / Charlie Gordon / quickjs-ng | github.com/quickjs-ng/quickjs | MIT | Runtime dos scripts ToolObject (`third_party/quickjs-ng`, vendorizado; `TOOL_WITH_QUICKJS`) |
 
 ## Regras

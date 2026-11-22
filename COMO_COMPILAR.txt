@@ -110,5 +110,5 @@ O QUE VOCE RECEBE
   tests/, fuzz/, tools/, docs/                extras de desenvolvimento (o
                                               preset editor nao compila)
   O demo sandbox e os testes ficam DESLIGADOS por padrao; os presets
-  "dev"/"test" os ligam para desenvolvimento (veja docs/BUILD.md).
+  "dev"/"test" os ligam para desenvolvimento (veja docs/referencia/COMPILAR.md).
 ==============================================================================

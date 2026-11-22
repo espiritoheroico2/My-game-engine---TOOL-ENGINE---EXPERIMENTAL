@@ -1,7 +1,7 @@
 # Changelog
 
 > Histórico de versões. Para o estado atual consolidado e o que fazer em seguida, veja
-> [`ROADMAP.md`](ROADMAP.md).
+> [`../../planos/00_ROADMAP.md`](../../planos/00_ROADMAP.md).
 
 ## 0.7.19-beta (em andamento)
 
@@ -17,7 +17,7 @@
 - Build MSVC: aviso C4324 desligado (relleno de alinhamento intencional). Commit `1048fa7`.
 - Shaders: `Instances` em `t17` (conflito com `IblBrdfLut` em `t15`), `check_bindings.py` no ctest, GLSL regenerado. Commit `f974d2f`.
 - Validacao desta sessao: `ctest` do editor 34/34; `ctest` da SpriteUI 39/39; execucao headless do editor com 259 quadros sem erro. Nao validado: aparencia em janela real e GPU.
-- Documentacao: `docs/ROADMAP.md` reescrito com estado por item e fases; `CODAR.MD` na branch com os testes do responsavel. `docs/ESTADO_ATUAL.md`, `P1_IMPLEMENTACAO.md` e `CODAR.MD` (raiz) foram removidos no `908cbaf`.
+- Documentacao: `../../planos/00_ROADMAP.md` reescrito com estado por item e fases; `CODAR.MD` na branch com os testes do responsavel. `docs/ESTADO_ATUAL.md`, `P1_IMPLEMENTACAO.md` e `CODAR.MD` (raiz) foram removidos no `908cbaf`.
 
 **Sessao de manutencao (SpriteUI, fonte, shaders, repositorio)**
 
@@ -26,8 +26,8 @@
 - Correcao de UV no SpriteUI da tela inicial: o UV de cada canto sai do `uvRect` do sprite (`uvAt` em `start_screen_spriteui.hpp`).
 - Fonte: `assets/fonts/Xmind-Regular.ttf` (licenca SIL Open Font License 1.1, texto em `assets/fonts/OFL-Xmind.txt`), usada no SpriteUI pelo atlas de glifos.
 - Teste: alvo `editor_start_screen_model_tests` (ctest `Editor.StartScreenModel`), sem janela. Cobre digitacao, backspace, selecionar tudo, erro ao abrir e criacao de projeto.
-- Peso do repositorio: `build_log.txt` (log gerado pelo build do Windows) saiu do repositorio e foi para o `.gitignore`. Lista completa e itens que dependem de decisao em `docs/REPO_WEIGHT.md`.
-- Shaders: GLSL commitado conferido contra o HLSL (em sincronia, 23 arquivos). `build_glsl.py --check` agora compara bytes. O PBR esta com 9 buffers uniformes dinamicos no Vulkan (o limite do driver e 8): o resource extra e o `ObjectBuffer` lido pelo PS para a neblina. Analise e correcao proposta em `docs/SHADER_AUDIT.md` (nao aplicada).
+- Peso do repositorio: `build_log.txt` (log gerado pelo build do Windows) saiu do repositorio e foi para o `.gitignore`. Lista completa e itens que dependem de decisao em `../estudos/PESO_REPOSITORIO.md`.
+- Shaders: GLSL commitado conferido contra o HLSL (em sincronia, 23 arquivos). `build_glsl.py --check` agora compara bytes. O PBR esta com 9 buffers uniformes dinamicos no Vulkan (o limite do driver e 8): o resource extra e o `ObjectBuffer` lido pelo PS para a neblina. Analise e correcao proposta em `../estudos/AUDITORIA_SHADERS.md` (nao aplicada).
 
 **Estabilidade da interface e renderizacao (em andamento)**
 - SpriteUI agora trata os atlas TrueType de cobertura como bitmap por padrao; MSDF precisa ser selecionado explicitamente. A rasterizacao do editor usa buckets ajustados ao DPI da janela (24 a 256 px) e amplia o atlas quando necessario. A fonte ImGui usa 18 px e oversampling 3x2.
@@ -40,8 +40,8 @@
 - Grid, eixos e marcadores vetoriais X/Y/Z do Game agora sao meshes 3D transparentes, renderizados com teste de profundidade em CPU e GPU; cameras divididas mantem caches independentes. O teste `Editor.GameGrid` compara pixels com e sem um objeto opaco e confirma que o grid nao o cobre.
 - Faixa de abas do Settings usa a camada `Docked`, acima do fundo/conteudo, mantendo a ordem de pintura entre fundo, abas e rotulos.
 - Validacao: CTest completo CPU, 30/30 aprovado. CTest GPU, 32 testes aprovados; `gpu_test_opengl` e `spriteui_gpu_opengl` nao executaram porque `xvfb-run` nao esta disponivel. O teste de oclusao do grid foi repetido nas duas configuracoes.
-- Benchmark CPU do SpriteUI executado em Release: 20 janelas, 200 botoes e 1000 quadros medidos apos 20 de aquecimento; total de 1.2953 ms/quadro (772.0 quadros/s). A medicao e apenas uma referencia atual, nao uma comparacao antes/depois; os detalhes consolidados estao em `docs/ROADMAP.md`.
-- A migracao do editor para SpriteUI continua parcial; as secoes indicadas como ImGui em `docs/UI.md` ainda nao foram convertidas.
+- Benchmark CPU do SpriteUI executado em Release: 20 janelas, 200 botoes e 1000 quadros medidos apos 20 de aquecimento; total de 1.2953 ms/quadro (772.0 quadros/s). A medicao e apenas uma referencia atual, nao uma comparacao antes/depois; os detalhes consolidados estao em `../../planos/00_ROADMAP.md`.
+- A migracao do editor para SpriteUI continua parcial; as secoes indicadas como ImGui em `IDIOMAS_E_TEMAS.md` ainda nao foram convertidas.
 
 **Pendente (nesta versao)**
 - SpriteUI sobre DX11: nao iniciado. O preset `editor-gpu-dx11` existe para o renderer 3D; nao ha teste de SpriteUI nele.
@@ -441,7 +441,7 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - Teste no selftest: um laco ocupado aparece como uso do editor; percentuais no intervalo; RAM e cache presentes.
 - Windows: codigo escrito sem compilar nem rodar nesta maquina (ambiente Linux). Revise no seu build.
 
-**Iluminacao: revisao (docs/LIGHTING_REVIEW.md)**
+**Iluminacao: revisao (../estudos/REVISAO_ILUMINACAO.md)**
 - Corrigido: o Help dizia que luz pontual tinha sombra com "Casts shadows". Era falso (a caixa nao existe). Texto corrigido em EN e PT.
 - Achados: sombra so para o sol; mapa unico de 40 m; PCF fixo; bias constante; `cascadeSplits` e `assignLights` nao usados; sem tempo de GPU do passe de sombra.
 - Nenhuma sombra nova nesta versao: planejada para a biblioteca de iluminacao.
@@ -476,7 +476,7 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - Botao "Check scripts" e comando `scripts`.
 
 **Help**
-- Secao "Erros e try/catch" nos topicos da API (EN e PT). Tabela de codigos em `docs/SCRIPT_ERRORS.md`.
+- Secao "Erros e try/catch" nos topicos da API (EN e PT). Tabela de codigos em `ERROS_SCRIPT.md`.
 - Dois tutoriais novos no grupo Scripts (EN e PT): "Tutorial: criar um jogo de FPS" (movimento, mira, tiro com instantiate, alvo que muda de cor) e "Tutorial: portas que abrem com E" (porta que sobe perto do jogador, com evento "abrir"). O codigo dos tutoriais roda no selftest.
 
 **Testes**
@@ -524,7 +524,7 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - Nao verificado visualmente nesta versao (ambiente sem tela): layout dos icones, barra flutuante, escala 125% e console.
 
 **Planejado (nao implementado)**
-- Biblioteca SpriteUi (UI e sprites no lugar do ImGui): plano por fases em `docs/UI_SPRITE_PLAN.md`.
+- Biblioteca SpriteUi (UI e sprites no lugar do ImGui): plano por fases em `../../planos/06_SPRITEUI.md`.
 - Propriedades de shader expostas aos scripts.
 
 ## 0.7.7-beta — desempenho (stutters, partículas, skybox por imagens, heap)
@@ -543,7 +543,7 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - **Skybox não é mais procedural.** Agora são **6 slots de imagem** (+X, -X, +Y, -Y, +Z, -Z) no Settings > Game, cada um com o seletor de Assets (PNG, JPG, BMP, TGA). Lado sem imagem usa a cor sólida. Cenas antigas com o skybox procedural ficam sem imagens (cor sólida).
 - Amostragem: para cada pixel de fundo, a direção do raio escolhe o lado e lê a imagem pelo vizinho mais próximo. A orientação segue a tabela de cube map do OpenGL. Se algum lado aparecer girado ou espelhado, confira visualmente (a troca está comentada em `skybox.hpp`).
 
-**Não mudou nesta versão (plano em `docs/PERFORMANCE_PLAN.md`)**
+**Não mudou nesta versão (plano em `../planos/03_DESEMPENHO_EDITOR.md`)**
 - O caminho da GPU ainda faz leitura de volta (readback) com espera total a cada quadro. Esse é o custo principal que sobrou. O readback assíncrono está no plano.
 - FXAA ainda roda na CPU.
 - OpenGL: a janela já é sempre criada pelo editor (`applyApi`). A textura continua desligada no GLES.
@@ -596,7 +596,7 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - **Split screen "Fill each half"** (Settings → Game): cada câmera preenche a própria metade, sem barras pretas com resolução 16:9. A câmera mantém o campo de visão vertical; as laterais são cortadas. Padrão: desligado (comportamento anterior).
 - **Câmera 2D** (Inspector → Camera → "2D camera (orthographic)"): projeção ortográfica com altura visível em unidades do mundo. Salva no objeto.
 - **Skybox procedural de 6 lados** (Settings → Game): cada lado (+X, -X, +Y, -Y, +Z, -Z) escolhe entre Gradiente de céu, Montanhas e mar, Mar ou Cor sólida. Padrão em cena nova: laterais com montanhas e mar, topo com gradiente, base com mar. Cenas antigas continuam sem skybox. Ver `apps/editor/skybox.hpp`.
-- `docs/CHECKLIST.md`: tudo o que foi feito e o que falta.
+- `../../planos/00_CHECKLIST.md`: tudo o que foi feito e o que falta.
 
 **Mudanças no núcleo**
 - `tool::Camera` ganhou `ortho` e `orthoHeight` e o método `projection(w, h)`, usado pelo renderizador de software e pela GPU.
@@ -630,13 +630,13 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 ## 0.7.2-beta — etapa 2: upscaling e antisserrilhado por software, partículas em lotes, auditoria
 
 **Novo**
-- Upscaling por software (Bilinear, Bicubic Catmull-Rom, Lanczos2) e FXAA simplificado, em `engine/render/include/tool/render/upscale.hpp`. Configurável em Settings → Graphics; aplicado às vistas Scene e Game. Ver `docs/RENDER_SCALING.md`.
+- Upscaling por software (Bilinear, Bicubic Catmull-Rom, Lanczos2) e FXAA simplificado, em `engine/render/include/tool/render/upscale.hpp`. Configurável em Settings → Graphics; aplicado às vistas Scene e Game. Ver `../estudos/ESCALONAMENTO_RENDER.md`.
 - Orçamento global de partículas (`particleBudget`, padrão 100 000).
 - `GpuRenderer::drawDynamic`: malhas dinâmicas reaproveitadas por slot.
 - Testes: 4 de upscaling/FXAA em `tests/test_render.cpp`; 3 checks de orçamento e lotes no selftest.
 
 **Mudanças**
-- Partículas desenhadas em lotes por cor (≤ 64 chamadas por vista) com teste de profundidade, no lugar de uma chamada por partícula e do overlay 2D. Ver `docs/PARTICLES.md`.
+- Partículas desenhadas em lotes por cor (≤ 64 chamadas por vista) com teste de profundidade, no lugar de uma chamada por partícula e do overlay 2D. Ver `../../planos/08_PARTICULAS.md`.
 - Criação e integração de partículas em paralelo por emissor.
 - Remoção de emissores sem `std::find` (marca de quadro).
 - `meshBounds` limitado a 4096 entradas e limpo ao abrir cena.
@@ -648,12 +648,12 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - Uso após liberação em `selftest` (ponteiro de `ScriptComp` após `duplicate`), achado pelo ASan.
 
 **Verificação**
-- ASan + UBSan: selftest 119/0, sem erros de memória nem de UB. LeakSanitizer reporta 96 bytes de bibliotecas carregadas com `dlopen` (miniaudio/JACK), fora do projeto. Ver `docs/PERFORMANCE_AUDIT.md`.
+- ASan + UBSan: selftest 119/0, sem erros de memória nem de UB. LeakSanitizer reporta 96 bytes de bibliotecas carregadas com `dlopen` (miniaudio/JACK), fora do projeto. Ver `../estudos/AUDITORIA_DESEMPENHO.md`.
 - `tool_tests`: 131/0. `ctest` editor-gpu: 4/4.
 
 **Documentação**
-- Novos: `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`.
-- Retroativo à etapa 1: `docs/ECS.md` (ECS, uso, desempenho e teste `test ECS: N`).
+- Novos: `../../planos/08_PARTICULAS.md`, `../estudos/AUDITORIA_DESEMPENHO.md`, `../estudos/ESCALONAMENTO_RENDER.md`.
+- Retroativo à etapa 1: `ECS.md` (ECS, uso, desempenho e teste `test ECS: N`).
 
 **Pendente (medido ou identificado, não corrigido)**
 - Readback GPU → CPU a cada quadro (maior custo de sincronização restante).
@@ -665,8 +665,8 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - **Partículas atrás dos objetos**: cada partícula agora é um cubo pequeno no pipeline 3D (vale para GPU e CPU), então o teste de profundidade a esconde quando há um objeto na frente. Continua emitindo. Antes era um desenho 2D por cima de tudo (removido).
 - **Economia com o editor ocioso**: sem evento (mouse, teclado, janela) por 3 quadros e sem Play, a espera do laço vai a até 100 ms e as vistas Scene e Game reaproveitam a imagem anterior. Causa do uso alto de GPU: a cena era renderizada a cada quadro mesmo parada, com VSync ligado. Qualquer interação volta a renderizar na hora.
 - **Console com linha de comando**: `help`, `clear`, `test ECS: N`.
-- **Teste de ECS** (`docs/ECS.md`): `test ECS: N` cria o objeto `ECScall` e N esferas filhas dele, que caem do céu com Newtoon, em lotes de ~N/240 por quadro. Padrão 10 000, máximo 1 000 000. Parar o Play remove tudo.
-- **Documentação do ECS**: `docs/ECS.md` (conceitos, API, como o editor usa, como adicionar sistema, pontos de desempenho, resposta sobre "entidade única por tag/código" e caminho recomendado).
+- **Teste de ECS** (`ECS.md`): `test ECS: N` cria o objeto `ECScall` e N esferas filhas dele, que caem do céu com Newtoon, em lotes de ~N/240 por quadro. Padrão 10 000, máximo 1 000 000. Parar o Play remove tudo.
+- **Documentação do ECS**: `ECS.md` (conceitos, API, como o editor usa, como adicionar sistema, pontos de desempenho, resposta sobre "entidade única por tag/código" e caminho recomendado).
 - Testes: selftest 116 checks, 0 falhas (inclui ECS e comandos do Console).
 
 ### Pendências desta etapa (próximas etapas, em ordem)
@@ -705,23 +705,23 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - **Narrative em execução**: gatilhos Start / Update / Create(objeto); blocos SavePoint / LoadPoint (`Project/Saves`); ações log/spawn/destroy/ui_show/ui_hide/particles_on/off; **toda cena ganha grafo + código** (`Assets/Narrative`, `Assets/Scripts/Scenes`) e o Play executa o grafo.
 - **Desempenho**: pós-fx em ponto fixo + pool de threads persistente (`tool::parallelFor`); **sleeper de sombras** (reaproveita o shadow map se luz/casters não mudaram, CPU e GPU).
 - **Build**: preset `editor-gpu-dx12` (Windows) para Direct3D 12.
-- Docs: `JS_VS_CPP.md`, `DX12_DXR.md`, `TEXTURES.md`, `UI_FX.md`, `ROADMAP.md`.
+- Docs: `../estudos/JS_VS_CPP.md`, `../estudos/DIRECTX12_DXR.md`, `../../planos/09_TEXTURAS_E_MATERIAIS.md`, `../../planos/07_UI_DE_JOGO.md`, `../../planos/00_ROADMAP.md`.
 - Correção de build no Windows: `far` é macro do windows.h (selftest.hpp); recursos não implementados aparecem BLOQUEADOS no menu "+ Add Resource".
 - Correções: `d` das Tools não era lido ao carregar; avisos de sombra/parâmetro não usado.
 - **Não feito (planejado):** sombras de point light, texturas/normal map/materiais .tmat, shader por objeto, NTC, DXR, pós-fx na GPU.
 
 ## 0.5.0-beta — física Newtoon, Tools, Input Map, Help
 
-- **Física Newtoon** completa (`engine/physics`, `docs/PHYSICS.md`): colisão esfera/caixa, solver com atrito, sono, CCD, gatilhos, eventos, raycast, BVH, pool de threads.
+- **Física Newtoon** completa (`engine/physics`, `../../planos/10_FISICA.md`): colisão esfera/caixa, solver com atrito, sono, CCD, gatilhos, eventos, raycast, BVH, pool de threads.
 - **Vector physics**: gravidade própria por objeto que substitui a do mundo. **Settings > Physics**: gravidade do mundo em X/Y/Z, iterações, passos/s, desenhar colliders.
 - **Inspector**: componentes *Physics* e *Tools* (Jump, Move, Follow Target, Spin, On Collision, Script library). O Play simula e, ao parar, restaura a cena.
 - **Input Map** (janela): vários mapas de controle, ação = tecla OU botão/eixo do gamepad escolhidos em listas, botão "Listen"; SDL3 gamepad (XInput no Windows). Salvo em `Project/input_map.json`.
 - **Help** (F1 / ícone "?" em cada janela): 16 tópicos PT/EN com exemplos (pular, andar, câmera seguindo, colisão/moeda, gravidade).
 - **Edit external** nos scripts (Settings > Project define o editor; executado direto, sem shell).
 - **Narrative Controller**: largura dos nós fixa e texto cortado (corrige nós esticando); posições limitadas.
-- Docs: `THIRD_PARTY.md` (APIs, donos, repositórios, licenças), `NTC.md`, `RUNTIME.md` (recomendação: QuickJS + WASM depois).
+- Docs: `../estudos/BIBLIOTECAS_TERCEIROS.md` (APIs, donos, repositórios, licenças), `../estudos/NVIDIA_NTC.md`, `../estudos/RUNTIME_CODIGO.md` (recomendação: QuickJS + WASM depois).
 - Testes: 124 de motor, selftest do editor 79 checks.
-- **Não feito nesta versão:** sombras de point light, Material/shader por objeto, botão "Compress as NTC" (ver `NTC.md`), execução de scripts.
+- **Não feito nesta versão:** sombras de point light, Material/shader por objeto, botão "Compress as NTC" (ver `../estudos/NVIDIA_NTC.md`), execução de scripts.
 
 ## 0.4.1-beta — desfazer/refazer e seleção por raio
 
@@ -757,7 +757,7 @@ A fisica (Update) ficou em 29-30 ms com 5000 objetos: nao e o gargalo.
 - **Tags editáveis**: adicionar/remover/renomear no Inspector (renomeia em todos os objetos e nos arquivos das outras cenas).
 - **Settings > Tags**: tags pré-definidas (`Principal`, `player`, `enemy`) e **ligações** (ex.: `jogador` → `player`); salvas em `Project/project.json`.
 - **Scripts**: todo objeto nasce com `Assets/Scripts/<Objeto>.tool.js` (ToolObject com `start`, `update`, `OnDelete`, `DeleteAndReuse`);
-  edição e salvamento no Inspector. *A execução dos scripts ainda não existe* (ver `ROADMAP.md`).
+  edição e salvamento no Inspector. *A execução dos scripts ainda não existe* (ver `../../planos/00_ROADMAP.md`).
 - **Settings > Lighting**: sol, ambiente, sombras (qualidade, distância, suavidade, força, bias) e pós-processamento global, por cena.
 - **Settings > Graphics**: qualidade de sombra, detalhes da GPU. **Settings > Project**: preset de plataforma de exportação (guardado, **desativado**).
 - **Profiler**: FPS médio/mín/máx, 1% low, jitter, gráfico, tempo por zona (eventos, update, painéis, render Scene/Game, pós-fx, UI, present),

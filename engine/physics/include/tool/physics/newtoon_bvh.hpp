@@ -1,5 +1,5 @@
 // Newtoon Physics - BVH (arvore de volumes envolventes) para broad-phase e raycast. Reconstruida a cada passo (O(n log n)),
-// vetor contiguo de nos, sem ponteiros. A mesma arvore pode servir ao render (culling de luzes) - ver docs/PHYSICS.md.
+// vetor contiguo de nos, sem ponteiros. A mesma arvore pode servir ao render (culling de luzes) - ver docs/planos/10_FISICA.md.
 #pragma once
 #include "newtoon_types.hpp"
 

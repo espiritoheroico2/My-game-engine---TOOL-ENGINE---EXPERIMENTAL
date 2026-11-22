@@ -48,25 +48,25 @@ O renderizador esta sendo dividido em etapas, sem substituir o `GpuRenderer` de 
 - metricas por passe e vista, alem de culling e cache de sombras por regiao/face.
 
 A comparacao visual das mudancas recentes ainda esta pendente. O estado detalhado e as proximas etapas estao em
-[`docs/PENDENCIAS.md`](docs/PENDENCIAS.md), e a proposta de arquitetura esta em
+[`docs/planos/04_PENDENCIAS_EDITOR.md`](docs/planos/04_PENDENCIAS_EDITOR.md), e a proposta de arquitetura esta em
 [`docs/sugestaoarquiteturanova.md`](docs/sugestaoarquiteturanova.md).
 
-Status: **0.7.19-beta (em andamento)** - veja `docs/CHANGELOG.md`, `docs/LIGHT_PRISM.md`, `docs/UI_SPRITE_PLAN.md`, `docs/SCRIPT_ERRORS.md`, `docs/LIGHTING_REVIEW.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`, `docs/REPO_WEIGHT.md` (peso do repositorio), `docs/SHADER_AUDIT.md` (shaders GLSL/HLSL e limite de buffers do Vulkan).
+Status: **0.7.19-beta (em andamento)** - veja `docs/referencia/CHANGELOG.md`, `docs/estudos/LIGHT_PRISM.md`, `docs/planos/06_SPRITEUI.md`, `docs/referencia/ERROS_SCRIPT.md`, `docs/estudos/REVISAO_ILUMINACAO.md`, `docs/planos/08_PARTICULAS.md`, `docs/estudos/AUDITORIA_DESEMPENHO.md`, `docs/estudos/ESCALONAMENTO_RENDER.md`, `docs/referencia/ECS.md`, `docs/planos/03_DESEMPENHO_EDITOR.md`, `docs/estudos/AMD_FSR.md`, `docs/estudos/SEGURANCA_ARQUIVOS.md`, `docs/planos/00_CHECKLIST.md`, `docs/estudos/PESO_REPOSITORIO.md` (peso do repositorio), `docs/estudos/AUDITORIA_SHADERS.md` (shaders GLSL/HLSL e limite de buffers do Vulkan).
 
 Para a ordem recomendada de implementacao, prioridades, criterios de aceite e tarefas consolidadas:
-**`docs/ROADMAP.md`**. O roteiro vence duvidas entre documentos de tarefa antigos; os documentos
+**`docs/planos/00_ROADMAP.md`**. O roteiro vence duvidas entre documentos de tarefa antigos; os documentos
 especializados continuam contendo os detalhes tecnicos e historicos.
 
-O que ficou pendente, e o que foi feito na ultima sessao: ver a secao *0.7.19-beta (em andamento)* em `docs/CHANGELOG.md`.
+O que ficou pendente, e o que foi feito na ultima sessao: ver a secao *0.7.19-beta (em andamento)* em `docs/referencia/CHANGELOG.md`.
 
-**Novidades da 0.7.9-beta (erros de script):** verificador de scripts enquanto voce digita (linha e trecho), erros de execucao com linha, try/catch, avisos para objeto inexistente e NaN, e filtros no Console. Codigos em `docs/SCRIPT_ERRORS.md`.
+**Novidades da 0.7.9-beta (erros de script):** verificador de scripts enquanto voce digita (linha e trecho), erros de execucao com linha, try/catch, avisos para objeto inexistente e NaN, e filtros no Console. Codigos em `docs/referencia/ERROS_SCRIPT.md`.
 
-**0.7.8-beta (editor):** escala de UI 125% por padrao; icones de olho e cadeado na Hierarchy; botao direito na cena (Editar/Excluir); barra flutuante na cena com ima e "Encostar no contato"; campo de comando no Console com historico; autocomplete de scripts no VS Code (`toolengine.d.ts`, snippets e `jsconfig.json` criados ao abrir o projeto). Detalhes em `docs/CHANGELOG.md`.
+**0.7.8-beta (editor):** escala de UI 125% por padrao; icones de olho e cadeado na Hierarchy; botao direito na cena (Editar/Excluir); barra flutuante na cena com ima e "Encostar no contato"; campo de comando no Console com historico; autocomplete de scripts no VS Code (`toolengine.d.ts`, snippets e `jsconfig.json` criados ao abrir o projeto). Detalhes em `docs/referencia/CHANGELOG.md`.
 
 ## Novidades da v0.4.0-beta
 Sombras em tempo real (cast/receive por objeto), gizmos mover/girar/escalar (W/E/R), navegação livre (Alt), foco por duplo clique,
 tags editáveis com ligações (`jogador` → `player`), script ToolObject em todo objeto, pós-processamento global/local,
-Settings > Lighting / Tags / Project (exportação, desativada), Profiler detalhado. Detalhes em `docs/CHANGELOG.md`.
+Settings > Lighting / Tags / Project (exportação, desativada), Profiler detalhado. Detalhes em `docs/referencia/CHANGELOG.md`.
 
 ## Recursos do editor (v0.3.0-beta)
 - APIs gráficas trocáveis em Settings: CPU (multithread), Vulkan, OpenGL (Direct3D 12 compilado, ainda não testado).

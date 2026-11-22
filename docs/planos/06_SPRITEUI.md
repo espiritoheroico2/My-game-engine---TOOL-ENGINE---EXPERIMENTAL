@@ -8,7 +8,7 @@ O painel usa `LayoutTree`, `LayoutSceneBridge`, `UIEventRouter` e `RenderExtract
 evitar um segundo dispositivo ou event loop, a geometria solida do `FramePacket` e desenhada no
 `SDL_Renderer` ja usado pelo editor; o texto usa a fonte de depuracao do SDL. Isso valida o fluxo
 incremental, mas ainda nao e um backend SpriteUI de producao nem substitui ImGui no editor. O
-componente de UI de jogo `UiCanvas` permanece separado (`docs/UI.md` e `docs/UI_FX.md`).
+componente de UI de jogo `UiCanvas` permanece separado (`../referencia/IDIOMAS_E_TEMAS.md` e `07_UI_DE_JOGO.md`).
 
 O CMake usa o SpriteUI no commit fixo `8f45694fdf4f3543c6cf3f691aecc19a3239e7ce`. A integracao pode
 ser desligada com `-DTOOL_WITH_SPRITEUI=OFF`; nesse caso o editor permanece com ImGui.
@@ -19,8 +19,8 @@ Pontos do documento que nao batem com o projeto, e como tratamos:
 
 | Ponto do documento | Situacao no ToolEngine | Decisao |
 |---|---|---|
-| Base ECS em Flecs | O projeto tem ECS proprio (`engine/ecs`, `docs/ECS.md`). Flecs nao e dependencia. | Usar o ECS proprio. Nao adicionar Flecs so por causa da UI. Registrar a decisao em ADR. |
-| HarfBuzz e FreeType | Nao estao em `docs/THIRD_PARTY.md`. | Revisao de licenca antes de vendorizar (ambas sao permissivas/compativeis, mas precisam entrar na tabela). |
+| Base ECS em Flecs | O projeto tem ECS proprio (`engine/ecs`, `../referencia/ECS.md`). Flecs nao e dependencia. | Usar o ECS proprio. Nao adicionar Flecs so por causa da UI. Registrar a decisao em ADR. |
+| HarfBuzz e FreeType | Nao estao em `../estudos/BIBLIOTECAS_TERCEIROS.md`. | Revisao de licenca antes de vendorizar (ambas sao permissivas/compativeis, mas precisam entrar na tabela). |
 | API QuickJS `UI.createPanel`, `UI.bind` | `UiCanvas` ja tem API de script e componentes em uso. A API do documento e outra. | Migrar `UiCanvas` como camada de compatibilidade. Nao quebrar cenas existentes. |
 | "Uma draw call para milhares de elementos" | O proprio documento corrige isso (V2.0). | Meta: reduzir draw calls por material/textura/clip, sem quebrar ordem visual. Medir antes de prometer numero. |
 | Tudo POD no ECS | O documento permite handles para strings e dados variaveis. | Igual ao documento: handles/pools para texto e dados variaveis. |
@@ -31,7 +31,7 @@ Cada fase termina com testes passando e documentacao atualizada (CHANGELOG, CHEC
 
 ### Fase 0: decisoes (sem codigo de runtime)
 - ADR: ECS proprio no lugar de Flecs.
-- Revisao de licenca de HarfBuzz e FreeType; atualizar `docs/THIRD_PARTY.md`.
+- Revisao de licenca de HarfBuzz e FreeType; atualizar `../estudos/BIBLIOTECAS_TERCEIROS.md`.
 - Escolher o alvo da primeira UI: o editor (menos risco) ou a engine (mais impacto).
 
 ### Fase 1: nucleo (layout e transformacao)

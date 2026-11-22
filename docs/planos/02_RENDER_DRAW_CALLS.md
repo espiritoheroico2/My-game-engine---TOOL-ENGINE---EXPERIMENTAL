@@ -1310,8 +1310,8 @@ Arquivos que devem continuar sendo revisados durante a implementação:
 - `engine/rhi/include/tool/rhi/rhi.hpp`
 - `engine/rhi_diligent/src/diligent_device.cpp`
 - `apps/editor/editor_state.hpp`
-- `docs/ROADMAP.md`
-- `docs/CHANGELOG.md`
+- `00_ROADMAP.md`
+- `../referencia/CHANGELOG.md`
 
 Repositório de referência:
 https://github.com/espiritoheroico2/toolgameengine

@@ -269,7 +269,7 @@
   "Material (.tmat) and custom shader": "Material (.tmat) y shader propio",
   "Point light shadows": "Sombras de point light",
   "Compress as NTC": "Comprimir como NTC",
-  "Planned: see docs/TEXTURES.md, docs/RENDER_PERF.md, docs/DX12_DXR.md": "Planificado: vea docs/TEXTURES.md, docs/RENDER_PERF.md, docs/DX12_DXR.md",
+  "Planned: see docs/planos/09_TEXTURAS_E_MATERIAIS.md, docs/RENDER_PERF.md, docs/estudos/DIRECTX12_DXR.md": "Planificado: vea docs/planos/09_TEXTURAS_E_MATERIAIS.md, docs/RENDER_PERF.md, docs/estudos/DIRECTX12_DXR.md",
   "Add Script": "Añadir Script",
   "- Remove Resource": "- Quitar recurso",
   "Add a component to this object: physics, tools, mesh, light, camera, audio, particles, UI, script": "Añade un componente a este objeto: física, tools, malla, luz, cámara, audio, partículas, UI, script",

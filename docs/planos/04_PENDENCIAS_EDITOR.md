@@ -88,14 +88,14 @@ Ordem (cada janela só sai do ImGui depois da aprovação visual):
 Removidos nesta revisão: `PARTICULAS_E_DEBUG_PROMPTS.md`, `planejamento-ui.md`, `PENDENCIAS_REMOCAO_IMGUI.md`.
 
 Candidatos a revisão (referenciados pouco ou com dados de versões antigas, por decisão sua):
-`design-janelas.md`, `JS_VS_CPP.md`, `NTC.md`, `FSR.md`, `TEXTURES.md`, `RUNTIME.md`, `SECURITY.md`,
-`SHADER_API_MATRIX.md`, `CHECKLIST.md`.
+`../estudos/DESIGN_JANELAS.md`, `../estudos/JS_VS_CPP.md`, `../estudos/NVIDIA_NTC.md`, `../estudos/AMD_FSR.md`, `09_TEXTURAS_E_MATERIAIS.md`, `../estudos/RUNTIME_CODIGO.md`, `../estudos/SEGURANCA_ARQUIVOS.md`,
+`../estudos/MATRIZ_APIS_SHADER.md`, `00_CHECKLIST.md`.
 
 ## 7. Plano incremental de renderização
 
 Base: `docs/sugestaoarquiteturanova.md`. Adotar a proposta por etapas, sem substituir o `GpuRenderer` ou duplicar
 o batching existente. Os nomes P0-P5 do documento são locais à proposta; mapear para as prioridades do
-`ROADMAP.md` antes de reordenar o roadmap oficial.
+`00_ROADMAP.md` antes de reordenar o roadmap oficial.
 
 - [x] **P0 parcial**: contar os `drawIndexed` do `GpuRenderer` por passe, vista Scene/Game e total; capturar o
       `DrawStats` do backend logo após cada `present()` e somar explicitamente as vistas; medir CPU por passe;

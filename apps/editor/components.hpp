@@ -117,7 +117,7 @@ struct ToolItem {
   int kind = 0; bool enabled = true;
   char action[40] = "";   // Jump/Move: nome da acao do Input Map (ex.: "jump"); ScriptLib: caminho do arquivo .js
   char target[40] = "";   // FollowTarget: nome do objeto; OnCollision: tag do outro objeto (vazio = qualquer)
-  float a = 0.f, b = 0.f, c = 0.f, d = 0.f;  // parametros (ver a janela Help e docs/PHYSICS.md)
+  float a = 0.f, b = 0.f, c = 0.f, d = 0.f;  // parametros (ver a janela Help e docs/planos/10_FISICA.md)
   int player = 1;         // qual "controle" do Input Map (1 = primeiro)
   int mode = 0;           // OnCollision: 0 registrar no Console, 1 destruir o outro, 2 destruir este, 3 quicar
 };

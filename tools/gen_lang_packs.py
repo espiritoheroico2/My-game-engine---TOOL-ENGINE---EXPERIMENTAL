@@ -278,7 +278,7 @@ Material (.tmat) and custom shader	Material (.tmat) e shader próprio	Material (
 Point light shadows	Sombras de point light	Sombras de point light
 Compress as NTC	Comprimir como NTC	Comprimir como NTC
 Ray tracing (DXR)	Ray tracing (DXR)	Ray tracing (DXR)
-Planned: see docs/TEXTURES.md, docs/RENDER_PERF.md, docs/DX12_DXR.md	Planejado: veja docs/TEXTURES.md, docs/RENDER_PERF.md, docs/DX12_DXR.md	Planificado: vea docs/TEXTURES.md, docs/RENDER_PERF.md, docs/DX12_DXR.md
+Planned: see docs/planos/09_TEXTURAS_E_MATERIAIS.md, docs/RENDER_PERF.md, docs/estudos/DIRECTX12_DXR.md	Planejado: veja docs/planos/09_TEXTURAS_E_MATERIAIS.md, docs/RENDER_PERF.md, docs/estudos/DIRECTX12_DXR.md	Planificado: vea docs/planos/09_TEXTURAS_E_MATERIAIS.md, docs/RENDER_PERF.md, docs/estudos/DIRECTX12_DXR.md
 Add Script	Adicionar Script	Añadir Script
 - Remove Resource	- Remover recurso	- Quitar recurso
 Add a component to this object: physics, tools, mesh, light, camera, audio, particles, UI, script	Adiciona um componente a este objeto: física, tools, malha, luz, câmera, áudio, partículas, UI, script	Añade un componente a este objeto: física, tools, malla, luz, cámara, audio, partículas, UI, script

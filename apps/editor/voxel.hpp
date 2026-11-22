@@ -2,7 +2,7 @@
 //
 // Um chunk e uma grade 16x16x16 (VoxelChunk). Em vez de uma entidade por bloco, a malha do chunk tem so as faces
 // que dao para o ar, separadas por tipo de bloco: cada tipo vira um lote desenhado uma vez por chunk. Um chunk de
-// terreno com 500 chunks custa ~500 x 7 desenhos, nao milhoes de cubos. Veja docs/PHYSICS.md para a fisica (nao usada aqui).
+// terreno com 500 chunks custa ~500 x 7 desenhos, nao milhoes de cubos. Veja docs/planos/10_FISICA.md para a fisica (nao usada aqui).
 #pragma once
 
 #include "components.hpp"

@@ -307,5 +307,5 @@ set_tests_properties(editor_selftest PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=dum
 # Copia o que o editor precisa para rodar para "Projeto Final" (ver CMakeLists.txt da raiz)
 add_custom_command(TARGET tool_editor POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets" "${TOOL_FINAL_DIR}/assets"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/docs/LEIA-ME_Projeto_Final.txt" "${TOOL_FINAL_DIR}/LEIA-ME.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/docs/referencia/LEIA_ME_PROJETO_FINAL.txt" "${TOOL_FINAL_DIR}/LEIA-ME.txt"
   COMMAND_EXPAND_LISTS VERBATIM)

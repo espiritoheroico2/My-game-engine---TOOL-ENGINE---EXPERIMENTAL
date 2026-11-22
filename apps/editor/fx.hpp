@@ -5,7 +5,7 @@
 // Dados: UiCanvas e ParticleComp dos componentes; cores float 0..1.
 // Troca SpriteUI: TODO o desenho de UI do jogo (drawUiOverlay) e o desenho de sprites das particulas viram SpriteUI.
 // fx.hpp - Particulas (CPU, integrador simples com gravidade/quique da fisica Newtoon da cena) e UI de jogo (overlay ImGui por camera).
-// Particulas e UI sao DESENHADAS por cima da imagem (ImDrawList): sem teste de profundidade contra a cena (limite conhecido; ver docs/UI_FX.md).
+// Particulas e UI sao DESENHADAS por cima da imagem (ImDrawList): sem teste de profundidade contra a cena (limite conhecido; ver docs/planos/07_UI_DE_JOGO.md).
 #pragma once
 #include "editor_state.hpp"
 #include "viewport_tools.hpp"

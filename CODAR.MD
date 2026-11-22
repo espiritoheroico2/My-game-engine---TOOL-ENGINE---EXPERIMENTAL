@@ -4,7 +4,7 @@ Data: 2026-11-19
 Branch: `ui-settings-router` (base: `main` em `908cbaf`). Não faça merge no `main` antes dos testes abaixo.
 
 Este arquivo substitui o CODAR.MD antigo, que foi removido no commit `908cbaf` ("remove old docs").
-O roteiro geral continua em `docs/ROADMAP.md`. Aqui ficam só o que mudou e o que você precisa testar.
+O roteiro geral continua em `docs/planos/00_ROADMAP.md`. Aqui ficam só o que mudou e o que você precisa testar.
 
 ---
 
@@ -23,7 +23,7 @@ O roteiro geral continua em `docs/ROADMAP.md`. Aqui ficam só o que mudou e o qu
 | Commit | O que faz |
 |---|---|
 | `f2cdd24` | Menu e Settings passam pelo `PanelRouter`. Com a lista de um menu aberta, o fundo de captura bloqueia cliques nas janelas de trás. Pontos cobertos por painel SpriteUI não são repassados ao ImGui |
-| `a8b1676` | Texto de aviso da GPU no Profiler aponta para `docs/ROADMAP.md` (o `CODAR.MD` antigo não existe mais) |
+| `a8b1676` | Texto de aviso da GPU no Profiler aponta para `docs/planos/00_ROADMAP.md` (o `CODAR.MD` antigo não existe mais) |
 | (este commit) | Este `CODAR.MD` |
 
 ---
@@ -36,7 +36,7 @@ O roteiro geral continua em `docs/ROADMAP.md`. Aqui ficam só o que mudou e o qu
    git checkout ui-settings-router
    git pull
    ```
-2. Compile com `build_editor.bat` (ver `docs/BUILD.md`).
+2. Compile com `build_editor.bat` (ver `docs/referencia/COMPILAR.md`).
 3. Rode os testes automáticos (passo 3).
 4. Abra `Projeto Final\ToolEditor.exe`.
 
@@ -96,7 +96,7 @@ Para cada teste, marque **OK**, **FALHOU** ou **NÃO TESTADO**. Em caso de falha
 
 ### T-6. Aviso de GPU no Profiler
 1. Abra o Profiler e procure a linha sobre GPU %.
-2. **Esperado:** o texto termina com "see docs/ROADMAP.md, item 7".
+2. **Esperado:** o texto termina com "see docs/planos/00_ROADMAP.md, item 7".
 
 ### T-7. Capturas da nova janela Editor info (SpriteUI, ainda fora do menu)
 1. Na pasta de build, rode `editor_info_capture` com a fonte e uma pasta de saída (ver o cabeçalho de `apps/editor/tools/editor_info_capture.cpp`). Ele grava três `.ppm`.
@@ -139,13 +139,13 @@ Para cada etapa, eu faço: modelo e teste automático primeiro, depois a janela 
 
 ---
 
-## 7. Erros nos documentos (corrigidos em `docs/ROADMAP.md`, seção 9)
+## 7. Erros nos documentos (corrigidos em `docs/planos/00_ROADMAP.md`, seção 9)
 
-- `docs/ROADMAP.md`: `test ECS: 500/10000` corrigido para `500/1000`. Confirme no teste T-5.
-- `docs/ROADMAP.md`: o item do Settings dizia para integrar `settings_bridge.hpp`, mas a ponte ja esta integrada.
-- As pendências T11, T12 e T13 agora estão no `docs/ROADMAP.md` (Fases A, C e D) e no `docs/CHECKLIST.md`.
-- Não verifiquei se `HOW_TO_BUILD.txt` e `COMO_COMPILAR.txt` (citados em `docs/BUILD.md`) existem no repositório.
-- `docs/CHANGELOG.md` e o relatório de 2026-11-18 divergem na contagem de arquivos GLSL (23 e 26). Conferir antes de citar.
+- `docs/planos/00_ROADMAP.md`: `test ECS: 500/10000` corrigido para `500/1000`. Confirme no teste T-5.
+- `docs/planos/00_ROADMAP.md`: o item do Settings dizia para integrar `settings_bridge.hpp`, mas a ponte ja esta integrada.
+- As pendências T11, T12 e T13 agora estão no `docs/planos/00_ROADMAP.md` (Fases A, C e D) e no `docs/planos/00_CHECKLIST.md`.
+- Não verifiquei se `HOW_TO_BUILD.txt` e `COMO_COMPILAR.txt` (citados em `docs/referencia/COMPILAR.md`) existem no repositório.
+- `docs/referencia/CHANGELOG.md` e o relatório de 2026-11-18 divergem na contagem de arquivos GLSL (23 e 26). Conferir antes de citar.
 
 ---
 
