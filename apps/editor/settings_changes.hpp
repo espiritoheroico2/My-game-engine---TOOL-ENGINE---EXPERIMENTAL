@@ -8,6 +8,7 @@
 // ApplyChanges chama target.applyApi(1). Se o jogo ja usasse a API 1, nada seria chamado.
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace editor::settings_changes {
@@ -16,7 +17,8 @@ namespace editor::settings_changes {
 enum class Field : std::uint8_t {
     Tab, Api, ResMode, CustomW, CustomH, RenderScale, Upscale, Aa, PixelFilter, Fps,
     Shadows, ShadowQuality, RayTracing, RtAo, ChunkCacheMax, InterfaceScale, IdleRendering, Palette,
-    ButtonRadius, WindowRadius, TextScale
+    ButtonRadius, WindowRadius, TextScale,
+    Form   // linha generica (settings_form.hpp): id, value, on, index e text
 };
 
 struct Change {
@@ -24,6 +26,8 @@ struct Change {
     int index = 0;      // combos, radio, aba e tamanhos personalizados
     float value = 0.f;  // escala
     bool on = false;    // caixas
+    int id = 0;         // Field::Form: id da linha
+    std::string text;   // Field::Form: texto (campo de texto)
 };
 using Requests = std::vector<Change>;
 
@@ -56,6 +60,7 @@ void ApplyChanges(Target& target, const Requests& requests) {
             case Field::ButtonRadius: target.setButtonRadius(c.value); break;
             case Field::WindowRadius: target.setWindowRadius(c.value); break;
             case Field::TextScale: target.setTextScale(c.value); break;
+            case Field::Form: target.setForm(c.id, c.value, c.on, c.index, c.text); break;
         }
     }
 }

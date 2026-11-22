@@ -19,6 +19,7 @@
 #include "framed_window.hpp"
 #include "settings_bridge.hpp"
 #include "settings_changes.hpp"
+#include "settings_form.hpp"
 #include "settings_model.hpp"
 #include "sui_panel.hpp"
 #include "ui_style.hpp"
@@ -58,6 +59,9 @@ inline constexpr std::size_t kAppearanceTab = 0;   // indice da secao Appearance
 // Valores que a janela mostra. O main.cpp copia do Editor a cada quadro.
 struct Values {
     int tab = kGraphicsTab;
+    // Linhas extra de cada secao (settings_form.hpp), desenhadas depois dos controles fixos da secao.
+    // Lighting, Game, Optimizing e Language usam so estas linhas; API/Graphics recebe Physics, Tags e Project.
+    std::array<editor::settings_form::Rows, sm::kTabCount> form{};
     int api = 0;
     std::array<bool, sb::kApiCount> apiBuilt{};
     std::string apiStatus;

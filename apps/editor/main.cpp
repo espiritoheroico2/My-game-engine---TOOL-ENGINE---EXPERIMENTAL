@@ -2108,6 +2108,8 @@ struct SettingsEditorTarget {
     editor::ui_style::windowRadius() = ::editor::settings_model::ClampWindowRadius(value);
     ed.settingsDirty = true;
   }
+  // Linhas genericas (settings_form.hpp). Stub ate a secao ser portada: ver settingsForm().
+  void setForm(int, float, bool, int, const std::string&) {}
   void setTextScale(float value) {
     editor::ui_style::textScale() = ::editor::settings_model::ClampTextScale(value);
     ed.settingsDirty = true;
