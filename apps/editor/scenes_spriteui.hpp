@@ -104,8 +104,10 @@ inline Colors PaletteColors() {
   c.field = sui::PaletteColor(p.surface);
   c.fieldFocus = sui::PaletteColor(mix(p.surface, p.text, 0.08f));
   c.rowSelected = sui::PaletteColor(mix(p.surface, p.accent, 0.45f));
-  c.button = sui::PaletteColor(mix(p.surface, p.accent, 0.6f));
-  c.buttonHover = sui::PaletteColor(mix(p.surface, p.accent, 0.8f));
+  // Texto do botao (text) sobre o fundo: repouso 0.5 e hover 0.65 dão contraste >= 4.5:1 nas quatro paletas
+  // (antes, hover 0.8 dava 3.52 no Noturno e 3.74 no Grafite). Hover continua distinto do repouso.
+  c.button = sui::PaletteColor(mix(p.surface, p.accent, 0.5f));
+  c.buttonHover = sui::PaletteColor(mix(p.surface, p.accent, 0.65f));
   c.buttonDanger = sui::PaletteColor(mix(p.surface, p.error, 0.6f));
   c.help = sui::PaletteColor(p.accent);
   c.disabled = sui::PaletteColor(mix(p.panel, p.surface, 0.5f));
