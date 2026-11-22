@@ -96,3 +96,46 @@ TEST(frustum_d3d_perspective) {
   CHECK(!sphereInFrustum(f, 50, 0, -10, 0.5f));
   CHECK(sphereInFrustum(f, 9.8f, 0, -10, 0.5f));
 }
+
+// Esfera tangente ao plano: a borda conta como dentro (conservador); um pouco alem, fora.
+TEST(frustum_tangent_sphere_is_kept_and_epsilon_beyond_is_culled) {
+  float m[4][4]; Identity(m);
+  const Frustum f = frustumFromViewProj(m, false);
+  CHECK(sphereInFrustum(f, 1.5f, 0, 0, 0.5f));       // toca o plano direito x = 1 por fora
+  CHECK(!sphereInFrustum(f, 1.6f, 0, 0, 0.5f));      // 0.1 alem do alcance
+}
+
+// Ortografica: x em [-10, 10] (escala 0.1 no clip), y e z na caixa unitaria.
+TEST(frustum_orthographic_box_culls_by_world_extent) {
+  float m[4][4]; Identity(m);
+  m[0][0] = 0.1f;
+  const Frustum f = frustumFromViewProj(m, false);
+  CHECK(sphereInFrustum(f, 10.5f, 0, 0, 1.f));       // cruza a borda em x = 10
+  CHECK(!sphereInFrustum(f, 12.f, 0, 0, 1.f));       // fora
+  CHECK(sphereInFrustum(f, 0, 0, 0, 0.5f));          // origem sempre dentro
+}
+
+// Escala negativa espelha o centro e nao pode diminuir o raio (a esfera e simetrica).
+TEST(bounds_negative_scale_mirrors_center_and_keeps_radius) {
+  float world[4][4]; Identity(world);
+  world[0][0] = -2.f;
+  const SphereBounds local{{1.f, 0.f, 0.f}, 1.f, true};
+  const SphereBounds out = transformSphere(world, local);
+  CHECK(out.valid);
+  CHECK(out.center[0] == -2.f);
+  CHECK(out.center[1] == 0.f);
+  CHECK(out.radius >= 2.f);
+}
+
+// Rotacao de 90 graus em torno de Z: o centro gira e o raio nao cresce (bound conservador, sem escala).
+TEST(bounds_rotation_moves_center_and_keeps_radius) {
+  float world[4][4]; Identity(world);
+  world[0][0] = 0.f; world[1][0] = -1.f;   // coluna 0 = (0,1,0)
+  world[0][1] = 1.f; world[1][1] = 0.f;    // coluna 1 = (-1,0,0)
+  const SphereBounds local{{1.f, 0.f, 0.f}, 1.f, true};
+  const SphereBounds out = transformSphere(world, local);
+  CHECK(out.valid);
+  CHECK(std::abs(out.center[0]) < 1e-5f);
+  CHECK(std::abs(out.center[1] - 1.f) < 1e-5f);
+  CHECK(out.radius >= 1.f && out.radius < 1.0001f);
+}
