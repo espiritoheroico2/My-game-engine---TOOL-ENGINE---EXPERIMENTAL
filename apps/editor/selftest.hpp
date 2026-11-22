@@ -8,8 +8,10 @@
 #include "viewport_tools.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include "skybox.hpp"
 #include "image_io.hpp"
 #include "help_content.hpp"
@@ -48,6 +50,47 @@ inline int runSelfTest(const std::string& samplesDir) {
   std::error_code ec; fs::remove_all(tmp, ec);
   ed.project.root = tmp; ed.project.ensure();
   ed.sceneInfo.name = "Main"; ed.createDefaultContent(); check(ed.saveScene(), "save default scene");
+  { // bounds e assinatura de sombra invalidam caches quando geometria, estado ou transformacao mudam
+    tool::Mesh probe = tool::Mesh::cube(0.5f);
+    const Editor::Bounds oldBounds = ed.meshBounds(probe);
+    const size_t oldCount = probe.pos.size(); const void* oldData = probe.pos.data();
+    probe.pos[0].x += 10.f; ++probe.revision;
+    const Editor::Bounds newBounds = ed.meshBounds(probe);
+    check(probe.pos.size() == oldCount && probe.pos.data() == oldData &&
+          (std::fabs(newBounds.center.x - oldBounds.center.x) > 1e-4f || std::fabs(newBounds.radius - oldBounds.radius) > 1e-4f),
+          "render cache: mesh revision refreshes bounds even when vertex storage is unchanged");
+
+    const tool::Entity caster = ed.scene.world().create();
+    ed.scene.world().add<Transform>(caster, Transform{});
+    MeshRenderer mr; mr.shape = 0; mr.castShadow = true;
+    ed.scene.world().add<MeshRenderer>(caster, mr);
+    auto signature = [&]() {
+      std::uint64_t hash = 1469598103934665603ull;
+      auto mixu = [&](std::uint64_t v) { hash ^= v; hash *= 1099511628211ull; };
+      auto mixf = [&](float f) { std::uint32_t bits; std::memcpy(&bits, &f, sizeof bits); mixu(bits); };
+      tool::Camera camera;
+      ed.hashCasters(camera, mixu, mixf);
+      return hash;
+    };
+    const std::uint64_t activeHash = signature();
+    ed.scene.world().add<Inactive>(caster);
+    check(signature() != activeHash, "shadow cache: deactivating a caster invalidates its signature");
+    ed.scene.world().remove<Inactive>(caster);
+    const std::uint64_t restoredHash = signature();
+    const std::uint64_t rtHash = ed.rtSignature();
+    ++ed.cube.revision;
+    check(signature() != restoredHash, "shadow cache: mesh revision invalidates caster signature");
+    check(ed.rtSignature() != rtHash, "RT cache: mesh revision invalidates the BVH signature");
+
+    const tool::Entity chunk = ed.scene.world().create();
+    ed.scene.world().add<Transform>(chunk, Transform{});
+    ed.scene.world().add<VoxelChunk>(chunk, VoxelChunk{});
+    const std::uint64_t chunkHash = signature();
+    ed.scene.world().get<Transform>(chunk)->pos[0] = 4.f;
+    check(signature() != chunkHash, "shadow cache: moving a voxel chunk invalidates caster signature");
+    ed.scene.world().destroy(caster);
+    ed.scene.world().destroy(chunk);
+  }
 
   // --- cameras: Principal e split screen
   check(ed.principalCameras().size() == 1, "default scene has exactly one Principal camera");
@@ -717,15 +760,19 @@ inline int runSelfTest(const std::string& samplesDir) {
   { // teste de ECS: N esferas filhas do ECScall, criadas durante o Play; o Stop desfaz tudo
     tool::World& w = ed.scene.world();
     size_t physBefore = 0; w.each<PhysicsComp>([&](tool::Entity e, PhysicsComp&) { if (!w.has<Inactive>(e)) ++physBefore; });
-    ed.startEcsTest(500);   // perFrame = 3 -> 167 quadros
+    const float previousSimRadius = ed.sceneInfo.physics.simRadius;
+    ed.sceneInfo.physics.simRadius = 100.f;
+    runConsoleCommand(ed, "test ECS: 100");   // perFrame = 1 -> 100 quadros
     check(ed.playing, "ECS test starts Play by itself");
-    for (int i = 0; i < 180; ++i) ed.tick(1.0 / 60.0);
+    for (int i = 0; i < 120; ++i) ed.tick(1.0 / 60.0);
     tool::Entity call = ed.findByName("ECScall");
     int children = 0; w.each<Parent>([&](tool::Entity, Parent& pa) { if (pa.e == call) ++children; });
-    check(children == 500, "ECS test: 500 spheres are children of ECScall");
-    check(ed.play.ents.size() == physBefore + 500, "ECS test: each sphere gets a Newtoon body (one rebuild per frame)");
-    check(w.get<SpawnerComp>(call) && w.get<SpawnerComp>(call)->spawned == 500 && !w.get<SpawnerComp>(call)->armed, "ECS test: spawner finished and disarmed");
+    check(children == 100, "ECS test: 100 spheres are children of ECScall");
+    check(ed.play.ents.size() == physBefore + 100, "ECS test: each sphere gets a Newtoon body (one rebuild per frame)");
+    check(ed.play.culled.size() == ed.play.ents.size(), "ECS test: runtime bodies keep simulation-culling state aligned");
+    check(w.get<SpawnerComp>(call) && w.get<SpawnerComp>(call)->spawned == 100 && !w.get<SpawnerComp>(call)->armed, "ECS test: spawner finished and disarmed");
     ed.stopPlay();
+    ed.sceneInfo.physics.simRadius = previousSimRadius;
     int leftover = 0; w.each<Name>([&](tool::Entity, Name& nm) { if (std::string(nm.text) == "sphere") ++leftover; });
     check(leftover == 0, "ECS test: Stop removes every sphere");
     ed.scene.world().destroy(ed.findByName("ECScall"));

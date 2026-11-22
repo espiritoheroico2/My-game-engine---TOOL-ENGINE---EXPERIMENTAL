@@ -53,17 +53,21 @@ private:
   class Cmd final : public ICommandList {
   public:
     explicit Cmd(NullDevice& d) : d_(d) {}
-    void begin(TextureId t, TextureId, f32, f32, f32, f32) override {
+    void begin(TextureId t, TextureId depth, f32, f32, f32, f32) override {
       if (open_) d_.err("begin() dentro de begin()");
       open_ = true;
       if (!d_.valid(t, Kind::Texture)) d_.err("begin() com alvo invalido");
+      hasDepth_ = !depth.isNull();
+      if (hasDepth_ && !d_.valid(depth, Kind::Texture)) d_.err("begin() com profundidade invalida");
     }
     void beginKeep(TextureId t, TextureId d) override {
       if (open_) d_.err("beginKeep() dentro de begin()");
       open_ = true;
       if (!d_.valid(t, Kind::Texture)) d_.err("beginKeep() com alvo invalido");
-      if (!d.isNull() && !d_.valid(d, Kind::Texture)) d_.err("beginKeep() com profundidade invalida");
+      hasDepth_ = !d.isNull();
+      if (hasDepth_ && !d_.valid(d, Kind::Texture)) d_.err("beginKeep() com profundidade invalida");
     }
+    void clearDepth(float) override { if (check() && !hasDepth_) d_.err("clearDepth sem alvo de profundidade"); }
     void setPipeline(PipelineId p) override {
       if (!check()) return;
       if (!d_.valid(p, Kind::Pipeline)) { d_.err("setPipeline com handle invalido"); pipeline_ = false; return; }
@@ -86,12 +90,12 @@ private:
       if (n == 0) { d_.err("drawIndexedRange sem indices"); return; }
       ++d_.stats_.draws; d_.stats_.triangles += (n / 3) * inst;
     }
-    void end() override { if (!open_) d_.err("end() sem begin()"); open_ = false; }
+    void end() override { if (!open_) d_.err("end() sem begin()"); open_ = false; hasDepth_ = false; }
 
   private:
     bool check() { if (!open_) d_.err("comando fora de begin()/end()"); return open_; }
     NullDevice& d_;
-    bool open_ = false, pipeline_ = false, vb_ = false, ib_ = false;
+    bool open_ = false, hasDepth_ = false, pipeline_ = false, vb_ = false, ib_ = false;
   };
 
   void err(const char* m) { debug().report("TOOL-E135", Severity::Error, std::string("RHI: ") + m); }

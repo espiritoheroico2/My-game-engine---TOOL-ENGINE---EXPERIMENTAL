@@ -36,7 +36,8 @@ inline bool Editor::pushRuntimeBody(tool::Entity e) {
   r.useGravity = p->useGravity; r.gravityScale = p->gravityScale; r.linearDamping = p->linearDamping; r.angularDamping = p->angularDamping;
   r.freezeRotation = p->freezeRotation; r.useCCD = p->ccd; r.overrideGravity = p->overrideGravity; r.gravity = {p->gravity[0], p->gravity[1], p->gravity[2]};
   play.indexOf[e.index] = static_cast<uint32_t>(play.ents.size());
-  play.ents.push_back(e); play.tf.push_back(nt); play.rb.push_back(r); play.col.push_back(c); play.dead.push_back(0);
+  play.ents.push_back(e); play.tf.push_back(nt); play.rb.push_back(r); play.col.push_back(c);
+  play.dead.push_back(0); play.culled.push_back(0);
   return true;
 }
 

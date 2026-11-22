@@ -131,6 +131,7 @@ class ProfilerPanel {
   // Roda o modelo e reconstroi o conteudo. Chamar so quando due() for true: entre dois refreshes nada muda.
   void refresh(double nowSec, const editor::FrameProfiler& prof, const pm::Extras& extras) {
     model_.refresh(nowSec, prof, prof.sys.get(), extras, [](const char* s) { return T(s); });
+    latestRenderStats_ = extras.renderStats;
     rebuild();
   }
 
@@ -148,7 +149,7 @@ class ProfilerPanel {
 
   void tickExport(double nowSec) {
     if (!exporting_ || !exportSchedule_.due(nowSec)) return;
-    exportSamples_.push_back(profiler_export::Capture(model_, nowSec - exportStart_));
+    exportSamples_.push_back(profiler_export::Capture(model_, nowSec - exportStart_, latestRenderStats_));
     if (!exportSchedule_.record(nowSec)) {
       exportStatus_ = "Collecting Profiler data (" + std::to_string(exportSchedule_.sampleCount()) + "/5)";
       return;
@@ -670,6 +671,7 @@ class ProfilerPanel {
   double exportStart_ = 0.0;
   profiler_export::CaptureSchedule exportSchedule_;
   std::vector<profiler_export::Snapshot> exportSamples_;
+  tool::render::FrameRenderStats latestRenderStats_;
   std::string exportStatus_;
 
   void saveExport() {
@@ -713,7 +715,20 @@ class ProfilerPanel {
       exportStatus_ = "Profiler export failed while writing " + outputPath.string();
       return;
     }
-    exportStatus_ = "Saved: " + outputPath.string();
+    fs::path csvPath = outputPath;
+    csvPath.replace_extension(".csv");
+    std::ofstream csv(csvPath, std::ios::binary | std::ios::trunc);
+    if (!csv) {
+      exportStatus_ = "Saved Markdown, but CSV export failed: could not open " + csvPath.string();
+      return;
+    }
+    csv << profiler_export::ToCsv(exportSamples_);
+    csv.close();
+    if (!csv) {
+      exportStatus_ = "Saved Markdown, but CSV export failed while writing " + csvPath.string();
+      return;
+    }
+    exportStatus_ = "Saved: " + outputPath.string() + " and " + csvPath.string();
   }
 };
 

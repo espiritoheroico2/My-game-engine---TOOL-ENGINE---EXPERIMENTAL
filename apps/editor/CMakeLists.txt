@@ -183,12 +183,14 @@ add_test(NAME Editor.ChunkCache COMMAND editor_chunk_cache_tests)
 # Modelo do painel do Profiler (profiler_model.hpp): quais numeros aparecem, formatacao fixa e taxa de atualizacao.
 add_executable(editor_profiler_model_tests tests/test_profiler_model.cpp)
 target_include_directories(editor_profiler_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(editor_profiler_model_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/render/include)
 target_link_libraries(editor_profiler_model_tests PRIVATE tool::core)
 add_test(NAME Editor.ProfilerModel COMMAND editor_profiler_model_tests)
 
-# Exportacao do Profiler: snapshots completos e serializacao Markdown, sem janela nem SDL.
+# Exportacao do Profiler: snapshots completos e serializacao Markdown/CSV, sem janela nem SDL.
 add_executable(editor_profiler_export_tests tests/test_profiler_export.cpp)
 target_include_directories(editor_profiler_export_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(editor_profiler_export_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/render/include)
 target_link_libraries(editor_profiler_export_tests PRIVATE tool::core)
 add_test(NAME Editor.ProfilerExport COMMAND editor_profiler_export_tests)
 

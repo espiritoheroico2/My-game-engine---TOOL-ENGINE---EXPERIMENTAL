@@ -351,6 +351,45 @@ void TestCpuAndCoresRows() {
   CHECK(busy != nullptr && Eq(busy->value, "  1"));
 }
 
+void TestGpuPassMetricsShowPerViewAndTotal() {
+  current = "TestGpuPassMetricsShowPerViewAndTotal";
+  pm::ProfilerModel m;
+  FrameProfiler p;
+  SysSnapshot sys;
+  pm::Extras ex;
+  ex.hasGpu = true;
+  ex.renderStats.beginFrame();
+  auto& scene = ex.renderStats.views[static_cast<std::size_t>(tool::render::RenderViewId::Scene)];
+  scene.valid = true;
+  scene.passes[static_cast<std::size_t>(tool::render::RenderPassId::Opaque)].recordDraw(6, 2);
+  scene.shadowCache.pointFacesReused = 2;
+  scene.shadowCache.pointFacesRendered = 1;
+  auto& game = ex.renderStats.views[static_cast<std::size_t>(tool::render::RenderViewId::Game)];
+  game.valid = true;
+  game.passes[static_cast<std::size_t>(tool::render::RenderPassId::Opaque)].recordDraw(3, 1);
+  game.shadowCache.pointFacesReused = 4;
+  game.shadowCache.pointFacesCastersChanged = 3;
+  m.refresh(0.0, p, sys, ex, Identity);
+
+  bool sawScene = false, sawGame = false, sawSceneOpaque = false, sawGameOpaque = false, sawPassTotal = false;
+  bool sawSceneCache = false, sawGameCache = false, sawCacheTotal = false;
+  for (int i = 0; i < m.rowCount(); ++i) {
+    const pm::Row& row = m.row(i);
+    if (std::strstr(row.text, "Scene") != nullptr) sawScene = true;
+    if (std::strstr(row.text, "Game") != nullptr) sawGame = true;
+    if (std::strstr(row.text, "Opaque: 1 draws, 2 instances, 4 triangles") != nullptr) sawSceneOpaque = true;
+    if (std::strstr(row.text, "Opaque: 1 draws, 1 instances, 1 triangles") != nullptr) sawGameOpaque = true;
+    if (std::strstr(row.text, "Opaque: 2 draws, 3 instances, 5 triangles") != nullptr) sawPassTotal = true;
+    if (std::strstr(row.text, "2 reused, 1 rendered") != nullptr) sawSceneCache = true;
+    if (std::strstr(row.text, "3 caster changes") != nullptr) sawGameCache = true;
+    if (std::strstr(row.text, "6 reused, 1 rendered") != nullptr) sawCacheTotal = true;
+  }
+  CHECK(sawScene && sawGame);
+  CHECK(sawSceneOpaque && sawGameOpaque && sawPassTotal);
+  CHECK(sawSceneCache && sawGameCache && sawCacheTotal);
+  CHECK(!m.truncated());
+}
+
 }  // namespace
 
 int main() {
@@ -371,6 +410,7 @@ int main() {
   TestRowBufferDoesNotMove();
   TestZoneBarFractionsAreBounded();
   TestCpuAndCoresRows();
+  TestGpuPassMetricsShowPerViewAndTotal();
   std::printf("Editor.ProfilerModel: %d checks, %d failed\n", run, failed);
   return failed == 0 ? 0 : 1;
 }

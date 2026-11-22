@@ -1,6 +1,7 @@
 // Agrupamento para instanciamento (P1): ordem estavel, lotes por malha e textura, limite por lote.
 #include "test.hpp"
 #include "tool/render/instance_batch.hpp"
+#include "tool/render/render_queue.hpp"
 
 using namespace tool::render;
 
@@ -55,6 +56,18 @@ TEST(instance_batch_max_per_batch_splits) {
   CHECK(total(p) == 7);
 }
 
+TEST(instance_batch_reuses_output_plan) {
+  const std::vector<BatchItem> items = {{2, 0}, {1, 0}, {2, 0}};
+  BatchPlan reused;
+  reused.order = {99, 99, 99, 99};
+  reused.batches = {{99, 99, 0, 4}};
+  planInstanceBatches(items, reused);
+  CHECK(reused.order.size() == 3);
+  CHECK(reused.order[0] == 1 && reused.order[1] == 0 && reused.order[2] == 2);
+  CHECK(reused.batches.size() == 2);
+  CHECK(total(reused) == items.size());
+}
+
 TEST(instance_batch_order_is_permutation) {
   std::vector<BatchItem> items;
   for (std::uint64_t i = 0; i < 50; ++i) items.push_back({i % 4, i % 3});
@@ -72,6 +85,39 @@ TEST(instance_batch_order_is_permutation) {
     }
 }
 
+TEST(instance_batch_queue_plan_maps_order_to_queue_positions) {
+  const std::vector<std::uint32_t> queue = {42, 13, 99};
+  std::vector<BatchItem> items = {{77, 88}};
+  BatchPlan plan;
+  planQueuedBatches(queue, items, plan, [](std::uint32_t item) {
+    return BatchItem{item == 13 ? 1u : 2u, 0u};
+  }, 1);
+  CHECK(plan.order.size() == queue.size());
+  CHECK(queue[plan.order[0]] == 13);
+  CHECK(queue[plan.order[1]] == 42);
+  CHECK(queue[plan.order[2]] == 99);
+  CHECK(plan.batches.size() == 3);
+  CHECK(total(plan) == queue.size());
+}
+
 TEST(instance_gpu_layout_matches_object_cb) {
   CHECK(sizeof(InstanceGPU) == 160);
+}
+
+TEST(render_queues_select_pass_items_by_index) {
+  const std::vector<RenderQueueItem> items = {
+      {true, false, true, true, true},
+      {false, true, true, false, true},
+      {true, false, false, false, false},
+      {false, false, true, true, true},
+  };
+  RenderQueues queues;
+  queues.opaque = {99};
+  queues.emissive = {99};
+  buildRenderQueues(items, queues);
+  CHECK(queues.opaque.size() == 2 && queues.opaque[0] == 0 && queues.opaque[1] == 2);
+  CHECK(queues.transparent.size() == 1 && queues.transparent[0] == 1);
+  CHECK(queues.emissive.size() == 1 && queues.emissive[0] == 0);
+  CHECK(queues.prepass.size() == 1 && queues.prepass[0] == 0);
+  CHECK(queues.shadowCasters.size() == 1 && queues.shadowCasters[0] == 0);
 }

@@ -13,6 +13,7 @@
 
 #include "profiler.hpp"
 #include "sysmon.hpp"
+#include "tool/render/render_stats.hpp"
 
 #include <algorithm>
 #include <array>
@@ -81,6 +82,7 @@ struct Extras {
   std::string cpuName;              // CPU (ja vem do SysMonitor; deixe vazio para usar a dele)
   bool hasGpu = false;
   unsigned gpuDraws = 0, gpuTriangles = 0, gpuUploads = 0, gpuPipelineSwitches = 0;
+  tool::render::FrameRenderStats renderStats;
   unsigned gpuBadFrames = 0;
   bool lightShadows = false;
   unsigned lightCascades = 0, lightShadowRes = 0, lightDropped = 0;
@@ -248,11 +250,76 @@ class ProfilerModel {
     }
     textValue(tr("post-processing"), ex.postOn ? tr("on") : tr("off"));
     if (ex.hasGpu) {
+      auto appendShadowCache = [&](const tool::render::ShadowCacheStats& cache) {
+        heading(tr("Point/Spot face cache"));
+        char line[kTextChars];
+        std::snprintf(line, sizeof line, "%llu reused, %llu rendered, %llu first use, %llu target resets",
+                      static_cast<unsigned long long>(cache.pointFacesReused),
+                      static_cast<unsigned long long>(cache.pointFacesRendered),
+                      static_cast<unsigned long long>(cache.pointFacesFirstUse),
+                      static_cast<unsigned long long>(cache.pointFacesTargetReset));
+        text(line);
+        std::snprintf(line, sizeof line, "%llu light changes, %llu caster changes, %llu render failures",
+                      static_cast<unsigned long long>(cache.pointFacesLightChanged),
+                      static_cast<unsigned long long>(cache.pointFacesCastersChanged),
+                      static_cast<unsigned long long>(cache.pointFaceRenderFailures));
+        text(line);
+      };
       Row& r = beginRow(RowKind::Cells);
       cell(r, tr("GPU draws"), static_cast<double>(ex.gpuDraws), 0, 6);
       cell(r, tr("GPU triangles"), static_cast<double>(ex.gpuTriangles), 0, 9);
       cell(r, tr("uploads"), static_cast<double>(ex.gpuUploads), 0, 5);
       cell(r, tr("switches"), static_cast<double>(ex.gpuPipelineSwitches), 0, 5);
+      heading(tr("GpuRenderer passes (CPU ms; GPU time unavailable)"));
+      for (std::size_t viewIndex = 0; viewIndex < tool::render::kRenderViewCount; ++viewIndex) {
+        const auto& view = ex.renderStats.views[viewIndex];
+        if (!view.valid) continue;
+        heading(tr(tool::render::renderViewName(static_cast<tool::render::RenderViewId>(viewIndex))));
+        for (std::size_t passIndex = 0; passIndex < tool::render::kRenderPassCount; ++passIndex) {
+          const auto& pass = view.passes[passIndex];
+          char line[kTextChars];
+          std::snprintf(line, sizeof line, "%s: %llu draws, %llu instances, %llu triangles, %.3f ms CPU",
+                        tr(tool::render::renderPassName(static_cast<tool::render::RenderPassId>(passIndex))),
+                        static_cast<unsigned long long>(pass.drawCalls),
+                        static_cast<unsigned long long>(pass.instances),
+                        static_cast<unsigned long long>(pass.triangles), pass.cpuMs);
+          text(line);
+        }
+        char backendLine[kTextChars];
+        std::snprintf(backendLine, sizeof backendLine, "Backend: %llu draws, %llu triangles, %llu uploads, %llu switches",
+                      static_cast<unsigned long long>(view.backendDrawCalls),
+                      static_cast<unsigned long long>(view.backendTriangles),
+                      static_cast<unsigned long long>(view.backendBufferUploads),
+                      static_cast<unsigned long long>(view.backendPipelineSwitches));
+        text(backendLine);
+        appendShadowCache(view.shadowCache);
+      }
+      heading(tr("All views by pass"));
+      for (std::size_t passIndex = 0; passIndex < tool::render::kRenderPassCount; ++passIndex) {
+        const auto pass = ex.renderStats.total(static_cast<tool::render::RenderPassId>(passIndex));
+        char line[kTextChars];
+        std::snprintf(line, sizeof line, "%s: %llu draws, %llu instances, %llu triangles, %.3f ms CPU",
+                      tr(tool::render::renderPassName(static_cast<tool::render::RenderPassId>(passIndex))),
+                      static_cast<unsigned long long>(pass.drawCalls),
+                      static_cast<unsigned long long>(pass.instances),
+                      static_cast<unsigned long long>(pass.triangles), pass.cpuMs);
+        text(line);
+      }
+      const auto total = ex.renderStats.total();
+      char totalLine[kTextChars];
+      std::snprintf(totalLine, sizeof totalLine, "%s: %llu draws, %llu instances, %llu triangles, %.3f ms CPU",
+                    tr("All rendered views"), static_cast<unsigned long long>(total.drawCalls),
+                    static_cast<unsigned long long>(total.instances), static_cast<unsigned long long>(total.triangles),
+                    total.cpuMs);
+      text(totalLine);
+      const auto backendTotal = ex.renderStats.backendTotal();
+      std::snprintf(totalLine, sizeof totalLine, "%s: %llu draws, %llu triangles, %llu uploads, %llu switches",
+                    tr("Backend total"), static_cast<unsigned long long>(backendTotal.backendDrawCalls),
+                    static_cast<unsigned long long>(backendTotal.backendTriangles),
+                    static_cast<unsigned long long>(backendTotal.backendBufferUploads),
+                    static_cast<unsigned long long>(backendTotal.backendPipelineSwitches));
+      text(totalLine);
+      appendShadowCache(ex.renderStats.shadowCacheTotal());
     }
     textValue(tr("Adapter"), ex.adapter.c_str());
 

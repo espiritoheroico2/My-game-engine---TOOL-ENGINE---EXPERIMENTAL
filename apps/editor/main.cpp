@@ -1178,12 +1178,13 @@ editor::profiler_model::Extras fillProfilerExtras(Editor& ed) {
   x.api = ed.apiStatus;
   x.adapter = ed.gpuDev ? ed.gpuDev->deviceName() : std::string("(software renderer)");
   x.hasGpu = ed.gpuDev != nullptr;
+  x.renderStats = ed.renderFrameStats;
   if (ed.gpuDev) {
-    const auto g = ed.gpuDev->frameStats();
-    x.gpuDraws = static_cast<unsigned>(g.draws);
-    x.gpuTriangles = static_cast<unsigned>(g.triangles);
-    x.gpuUploads = static_cast<unsigned>(g.bufferUploads);
-    x.gpuPipelineSwitches = static_cast<unsigned>(g.pipelineSwitches);
+    const auto g = ed.renderFrameStats.backendTotal();
+    x.gpuDraws = static_cast<unsigned>(g.backendDrawCalls);
+    x.gpuTriangles = static_cast<unsigned>(g.backendTriangles);
+    x.gpuUploads = static_cast<unsigned>(g.backendBufferUploads);
+    x.gpuPipelineSwitches = static_cast<unsigned>(g.backendPipelineSwitches);
   }
   const auto q = tool::makeQuality(ed.sceneInfo.render.lighting);
   const auto& lf = ed.lightRig.frame();
@@ -1691,7 +1692,12 @@ void drawGraphicsTab(Editor& ed) {
   ImGui::Text("%s", F("Adapter: %s", ed.gpuDev ? ed.gpuDev->deviceName().c_str() : "(software renderer)").c_str());
   ImGui::Text("%s", F("Pixels per frame: %.2f M (all views)", static_cast<double>(ed.prof.last.pixels) / 1e6).c_str());
   ImGui::Text("%s", F("Consecutive GPU error frames: %d / 5 (then the editor falls back to the CPU renderer)", ed.gpuBadFrames).c_str());
-  if (ed.gpuDev) { const auto s = ed.gpuDev->frameStats(); ImGui::Text("%s", F("GPU: %u draws, %u triangles, %u uploads/frame", s.draws, s.triangles, s.bufferUploads).c_str()); }
+  if (ed.gpuDev) {
+    const auto s = ed.renderFrameStats.backendTotal();
+    ImGui::Text("%s", F("GPU: %u draws, %u triangles, %u uploads/frame",
+                        static_cast<unsigned>(s.backendDrawCalls), static_cast<unsigned>(s.backendTriangles),
+                        static_cast<unsigned>(s.backendBufferUploads)).c_str());
+  }
   ImGui::TextDisabled("%s", T("Tip: lower render scale and shadow quality first when you need more FPS."));
 }
 
@@ -2051,8 +2057,10 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   v.pixelsLine = F("Pixels per frame: %.2f M (all views)", static_cast<double>(ed.prof.last.pixels) / 1e6);
   v.gpuErrorLine = F("Consecutive GPU error frames: %d / 5 (then the editor falls back to the CPU renderer)", ed.gpuBadFrames);
   if (ed.gpuDev) {
-    const auto s = ed.gpuDev->frameStats();
-    v.gpuStatsLine = F("GPU: %u draws, %u triangles, %u uploads/frame", s.draws, s.triangles, s.bufferUploads);
+    const auto s = ed.renderFrameStats.backendTotal();
+    v.gpuStatsLine = F("GPU: %u draws, %u triangles, %u uploads/frame",
+                       static_cast<unsigned>(s.backendDrawCalls), static_cast<unsigned>(s.backendTriangles),
+                       static_cast<unsigned>(s.backendBufferUploads));
   }
   return v;
 }
@@ -2899,6 +2907,7 @@ static int runEditorMain(int argc, char** argv) {
     ed.scene.collectPool(ed.time);
     ed.uiTyping = ImGui::GetIO().WantTextInput;
     ed.tick(static_cast<double>(tool::debug().lastFrameMs()) / 1000.0);
+    ed.beginRenderStatsFrame();
     if (!ed.paused) ed.updateParticles(static_cast<float>(tool::debug().lastFrameMs()) / 1000.f);
     editor::processImports(ed);
     { // navegacao livre (Alt): o mouse fica preso na janela (modo relativo) e a UI ignora o mouse ate sair

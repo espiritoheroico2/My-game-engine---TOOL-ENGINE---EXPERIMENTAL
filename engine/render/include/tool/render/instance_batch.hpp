@@ -1,9 +1,6 @@
 #pragma once
-// Agrupamento para instanciamento (ver docs/PESQUISA_MILHARES_OBJETOS.md, prioridade P1). Puro: sem GPU, sem RHI.
-// Objetos opacos com a mesma malha e a mesma textura viram UM comando de desenho com N instancias.
-// Transparentes NAO passam por aqui: precisam de ordenacao de profundidade, nao de agrupamento.
-// Ainda NAO esta ligado ao renderizador: ligar exige shader (VS le a instancia por SV_InstanceID),
-// suporte de buffer de instancias na VS no backend Diligent e teste visual.
+// Planejador puro de batches, sem GPU ou RHI. O GpuRenderer o usa nos passes opacos, emissao, prepass e sombras.
+// Transparentes NAO passam por agrupamento: precisam de ordenacao de profundidade.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -36,10 +33,11 @@ struct BatchPlan {
 
 // Agrupa por (malha, textura) com ordem estavel: dentro de cada grupo, a ordem original e preservada.
 // maxPerBatch: limite de instancias por lote (tamanho do buffer de instancias); 0 = sem limite.
-inline BatchPlan planInstanceBatches(const std::vector<BatchItem>& items, std::uint32_t maxPerBatch = 0) {
-  BatchPlan plan;
-  plan.order.resize(items.size());
-  for (std::size_t i = 0; i < items.size(); ++i) plan.order[i] = static_cast<std::uint32_t>(i);
+inline void planInstanceBatches(const std::vector<BatchItem>& items, BatchPlan& plan, std::uint32_t maxPerBatch = 0) {
+  plan.order.clear();
+  plan.batches.clear();
+  plan.order.reserve(items.size());
+  for (std::size_t i = 0; i < items.size(); ++i) plan.order.push_back(static_cast<std::uint32_t>(i));
   std::stable_sort(plan.order.begin(), plan.order.end(), [&](std::uint32_t a, std::uint32_t b) {
     const BatchItem& x = items[a];
     const BatchItem& y = items[b];
@@ -63,7 +61,22 @@ inline BatchPlan planInstanceBatches(const std::vector<BatchItem>& items, std::u
     }
     k = end;
   }
+}
+
+inline BatchPlan planInstanceBatches(const std::vector<BatchItem>& items, std::uint32_t maxPerBatch = 0) {
+  BatchPlan plan;
+  planInstanceBatches(items, plan, maxPerBatch);
   return plan;
+}
+
+template <typename QueueItem, typename BatchItemFn>
+inline void planQueuedBatches(const std::vector<QueueItem>& queue, std::vector<BatchItem>& items,
+                              BatchPlan& plan, BatchItemFn makeBatchItem,
+                              std::uint32_t maxPerBatch = 0) {
+  items.clear();
+  items.reserve(queue.size());
+  for (const QueueItem& item : queue) items.push_back(makeBatchItem(item));
+  planInstanceBatches(items, plan, maxPerBatch);
 }
 
 }  // namespace tool::render

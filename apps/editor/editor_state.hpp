@@ -172,6 +172,7 @@ struct Editor {
   tool::Vec3 target{0, 0.5f, 0};
   bool showGridScene = true, showGridGame = false, showGizmos = true;
   bool showPostInScene = true; // aplicar o pos-processamento GLOBAL tambem na janela Scene
+  tool::render::FrameRenderStats renderFrameStats;
   // Gizmo de transformacao (Scene): 0 = mover (W), 1 = rotacionar (E), 2 = escalar (R); espaco global/local nao e usado (eixos do mundo)
   int gizmoMode = 0;
   bool gizmoLocal = false;   // Q: gizmo na Scene pelos eixos do objeto (Local) ou do mundo
@@ -211,12 +212,11 @@ struct Editor {
   void startEcsTest(long long n);
   void sendEvent(const std::string& target, const std::string& ev); void setActiveByName(const std::string& n, bool on);
   struct Bounds { tool::Vec3 center{}; float radius = 0.f; };
-  struct BoundsEntry { size_t n = 0; const void* data = nullptr; Bounds b; };
+  struct BoundsEntry { size_t n = 0; const void* data = nullptr; tool::u32 revision = 0; Bounds b; };
   std::unordered_map<const tool::Mesh*, BoundsEntry> boundsCache_;   // esfera de cada malha (para o frustum culling)
   std::unique_ptr<LightPrism::Rt::Bvh> rtBvh_;                         // BVH da cena para o RT AO (CPU); refeito so se a cena mudou
   std::uint64_t rtSig_ = 0; bool rtHave_ = false;
   std::uint64_t psigCpu[2] = {0, 0}; bool psigCpuValid[2] = {false, false};   // assinatura das sombras de pontual/spot (CPU), por vista (0 = Scene, 1 = Game)
-  std::uint64_t psigGpu = 0; bool psigGpuValid = false;   // a mesma, para a GPU
  std::vector<std::string> uiEvents;
   struct Particle { tool::Vec3 p, v; float age = 0.f, life = 1.f; float phase = 0.f; tool::Vec3 jit{}; };  // jit: deslocamento do nascimento (local)
   struct ParticleSim { std::vector<Particle> list; float acc = 0.f; uint32_t seed = 12345u; uint32_t touched = 0; };
@@ -317,9 +317,9 @@ struct Editor {
       gpuPixW[i] = gpuPixH[i] = 0;
     }
     sigGpuValid = false;
-    psigGpuValid = false;
     gpuBadFrames = 0;
   }
+  void beginRenderStatsFrame() { renderFrameStats.beginFrame(); }
   static const char* apiName(int c) {
     return c == 0 ? "Software (CPU)" : c == 1 ? "Vulkan" : c == 2 ? "OpenGL" : c == 3 ? "Direct3D 12" : "Direct3D 11";
   }
@@ -654,7 +654,8 @@ struct Editor {
   Bounds meshBounds(const tool::Mesh& m) {
     const size_t n = m.pos.size(); const void* dp = m.pos.data();
     auto it = boundsCache_.find(&m);
-    if (it != boundsCache_.end() && it->second.n == n && it->second.data == dp) return it->second.b;
+    if (it != boundsCache_.end() && it->second.n == n && it->second.data == dp && it->second.revision == m.revision)
+      return it->second.b;
     // Teto de tamanho: o cache indexa pelo endereco da malha; enderecos reaproveitados sao cobertos pela checagem acima.
     if (boundsCache_.size() > 4096) boundsCache_.clear();
     Bounds b;
@@ -665,7 +666,7 @@ struct Editor {
       for (const tool::Vec3& p : m.pos) { const tool::Vec3 d = p - b.center; r2 = std::max(r2, d.x * d.x + d.y * d.y + d.z * d.z); }
       b.radius = std::sqrt(r2);
     }
-    boundsCache_[&m] = BoundsEntry{n, dp, b};
+    boundsCache_[&m] = BoundsEntry{n, dp, m.revision, b};
     return b;
   }
   // 6 planos do frustum (normalizados) a partir de view*proj. Usa o plano "near" de GL (-1..1): conservador tambem para D3D (0..1).
@@ -724,14 +725,15 @@ struct Editor {
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
       if (scene.world().has<Inactive>(e)) return;
       const tool::Mesh* m = meshOf(mr); if (!m) return;
-      mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m)); mixu(m->idx.size());
+      mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m));
+      mixu(m->revision); mixu(m->pos.size()); mixu(m->idx.size());
       const tool::Mat4 wm = worldMat(e);
       for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(wm.m[c][r]);
     });
     return hs;
   }
 
-  // Assinatura do que define o mapa de sombras: sol, objetos que projetam, camera e ajustes da Light Prism.
+  // Assinatura do que define o mapa de sombras: sol, objetos ativos que projetam, camera e ajustes da Light Prism.
   // Igual ao quadro anterior = os mapas de sombra sao reaproveitados (ver renderScene).
   std::uint64_t shadowSignature(const tool::Camera& cam, int w, int h, const std::vector<tool::Light>& lights) {
     std::uint64_t hs = 1469598103934665603ull;
@@ -750,19 +752,22 @@ struct Editor {
     return hs;
   }
 
-  // Quem projeta sombra (objetos com castShadow e chunks de bloco), com a malha de LOD deste quadro e a transformacao.
+  // Quem projeta sombra (objetos ativos com castShadow e chunks), incluindo revisao da malha e transformacao mundial.
   template <class MU, class MF>
   void hashCasters(const tool::Camera& cam, MU&& mixu, MF&& mixf) {
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-      if (!mr.castShadow) return;
+      if (scene.world().has<Inactive>(e) || !mr.castShadow) return;
       const tool::Mesh* m = lodMeshOf(e, mr, cam); if (!m) return;
       mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m));
+      mixu(m->revision); mixu(m->pos.size()); mixu(m->idx.size());
       const tool::Mat4 wm = worldMat(e);
       for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(wm.m[c][r]);
     });
     scene.world().each<VoxelChunk, Transform>([&](tool::Entity ce, VoxelChunk& vc, Transform&) {
       if (scene.world().has<Inactive>(ce)) return;
       mixu(ce.index); mixu(ce.generation); mixu(vc.revision); mixf(vc.cell);
+      const tool::Mat4 wm = worldMat(ce);
+      for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(wm.m[c][r]);
     });
   }
 
@@ -843,7 +848,7 @@ private:
     // Sombras de pontual/spot: assinatura sem a camera (ver pointShadowSignature). Igual para a GPU e a CPU.
     const bool pointShadows = !lf.shadowLights.empty();
     const std::uint64_t psigNow = pointShadows ? pointShadowSignature(cam, lf) : 0;
-    if (!pointShadows) { psigGpuValid = false; psigCpuValid[vi] = false; }
+    if (!pointShadows) psigCpuValid[vi] = false;
     tool::u64 tris = 0; unsigned draws = 0, casters = 0;
     // Emissao do objeto: cor x intensidade (linear). Vale para todas as partes de um modelo.
     // Sem "Enable emission" o objeto nao emite: nem cor extra nem brilho (bloom).
@@ -967,14 +972,12 @@ private:
       gpu.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
       gpu.begin(cam, {0.02f, 0.025f, 0.035f}, bgAlpha);
       const bool reGpu = shadows && sigGpuValid && sigGpu == sigNow;
-      const bool rePointGpu = pointShadows && psigGpuValid && psigGpu == psigNow;
-      if (!gpu.setLighting(lightRig, view, proj, reGpu, rePointGpu)) {
+      if (!gpu.setLighting(lightRig, view, proj, reGpu)) {
         // Light Prism nao conseguiu montar a iluminacao na GPU: a CPU desenha este quadro e os seguintes.
         const std::string why = gpu.lastError();
         applyApi(0); apiStatus = "Software (CPU) - " + why;
       } else {
         if (shadows) { sigGpu = sigNow; sigGpuValid = true; if (gpu.shadowPassSkipped()) ++prof.counters.shadowReused; }
-        if (pointShadows) { psigGpu = psigNow; psigGpuValid = true; }
         if (depthGrid) {
           for (std::size_t i = 0; i < editor::game_grid::kBatchCount; ++i) {
             const tool::Mesh& mesh = depthGrid->MeshAt(i);
@@ -988,7 +991,14 @@ private:
         drawChunks(gpu);
         gpu.setBloom(sceneInfo.render.lighting.bloom, sceneInfo.render.lighting.bloomThreshold, sceneInfo.render.lighting.bloomStrength);
         gpu.end();
+        auto viewStats = gpu.renderStats();
         gpuDev->present();
+        const tool::rhi::DrawStats deviceStats = gpuDev->frameStats();
+        viewStats.backendDrawCalls = deviceStats.draws;
+        viewStats.backendTriangles = deviceStats.triangles;
+        viewStats.backendBufferUploads = deviceStats.bufferUploads;
+        viewStats.backendPipelineSwitches = deviceStats.pipelineSwitches;
+        renderFrameStats.views[static_cast<std::size_t>(vi)] = viewStats;
         tool::u32 rw = 0, rh = 0;
         // Leitura sem esperar a GPU: o quadro lido pode ser de 1 ou 2 quadros atras (ver readTextureAsync).
         int rd = 0;

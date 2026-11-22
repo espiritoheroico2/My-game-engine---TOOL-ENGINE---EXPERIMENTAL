@@ -86,6 +86,8 @@ public:
   virtual void setTargets(TextureId, TextureId) {}
   // Abre a lista SEM limpar o alvo (passes extras, como o transparente): equivale a begin() sem clear.
   virtual void beginKeep(TextureId target, TextureId depth) = 0;
+  // Limpa somente o depth target atual, preservando a cor. depth pode ser nulo apenas se este metodo nao for chamado.
+  virtual void clearDepth(f32 depth = 1.f) = 0;
   virtual void setPipeline(PipelineId p) = 0;
   virtual void setVertexBuffer(BufferId b) = 0;
   virtual void setIndexBuffer(BufferId b) = 0;

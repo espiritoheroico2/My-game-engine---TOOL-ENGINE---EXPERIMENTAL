@@ -378,6 +378,7 @@ public:
     else if (auto* t = d_.obj<dl::ITexture>(target, DiligentDevice::Kind::Texture)) rtv = t->GetDefaultView(dl::TEXTURE_VIEW_RENDER_TARGET);
     if (!rtv) { d_.err("begin() com alvo invalido"); open_ = false; return; }
     if (!depth.isNull()) { if (auto* t = d_.obj<dl::ITexture>(depth, DiligentDevice::Kind::Texture)) dsv = t->GetDefaultView(dl::TEXTURE_VIEW_DEPTH_STENCIL); }
+    dsv_ = dsv;
     dl::ITextureView* rtvs[] = {rtv};
     d_.ctx->SetRenderTargets(1, rtvs, dsv, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     // Viewport/scissor = tamanho do alvo. Alvos de tamanhos diferentes no mesmo quadro (mapa de sombra 1024^2 e imagem
@@ -403,6 +404,7 @@ public:
     else if (auto* t = d_.obj<dl::ITexture>(target, DiligentDevice::Kind::Texture)) rtv = t->GetDefaultView(dl::TEXTURE_VIEW_RENDER_TARGET);
     if (!rtv) { d_.err("beginKeep() com alvo invalido"); open_ = false; return; }
     if (!depth.isNull()) { if (auto* t = d_.obj<dl::ITexture>(depth, DiligentDevice::Kind::Texture)) dsv = t->GetDefaultView(dl::TEXTURE_VIEW_DEPTH_STENCIL); }
+    dsv_ = dsv;
     dl::ITextureView* rtvs[] = {rtv};
     d_.ctx->SetRenderTargets(1, rtvs, dsv, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     const auto& td = rtv->GetTexture()->GetDesc();
@@ -417,8 +419,14 @@ public:
     if (auto* t = d_.obj<dl::ITexture>(target, DiligentDevice::Kind::Texture)) rtv = t->GetDefaultView(dl::TEXTURE_VIEW_RENDER_TARGET);
     if (!rtv) { d_.err("setTargets() com alvo invalido"); return; }
     if (!depth.isNull()) { if (auto* t = d_.obj<dl::ITexture>(depth, DiligentDevice::Kind::Texture)) dsv = t->GetDefaultView(dl::TEXTURE_VIEW_DEPTH_STENCIL); }
+    dsv_ = dsv;
     dl::ITextureView* rtvs[] = {rtv};
     d_.ctx->SetRenderTargets(1, rtvs, dsv, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  }
+  void clearDepth(f32 depth) override {
+    if (!check()) return;
+    if (!dsv_) { d_.err("clearDepth sem alvo de profundidade"); return; }
+    d_.ctx->ClearDepthStencil(dsv_, dl::CLEAR_DEPTH_FLAG, depth, 0, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
   }
   void setPipeline(PipelineId p) override {
     if (!check()) return;
@@ -511,7 +519,7 @@ public:
     d_.ctx->DrawIndexed(da);
     ++d_.stats_.draws; d_.stats_.triangles += (n / 3) * inst;
   }
-  void end() override { if (!open_) d_.err("end() sem begin()"); open_ = false; }
+  void end() override { if (!open_) d_.err("end() sem begin()"); open_ = false; dsv_ = nullptr; }
 
 private:
   bool check() { if (!open_) d_.err("comando fora de begin()/end()"); return open_; }
@@ -527,6 +535,7 @@ private:
   }
   DiligentDevice& d_;
   bool open_ = false, vb_ = false, ib_ = false;
+  dl::ITextureView* dsv_ = nullptr;
   u32 targetW_ = 0, targetH_ = 0; // tamanho do alvo do begin() atual
   DiligentDevice::PipelineData* pipe_ = nullptr;
 };

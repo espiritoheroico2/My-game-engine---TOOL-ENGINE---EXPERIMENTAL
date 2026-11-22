@@ -100,6 +100,7 @@ TEST(rhi_null_device_draw_and_validation) {
   auto vs = dev->createShader(sd), ps = dev->createShader(sd);
   PipelineDesc pdesc; pdesc.vs = vs; pdesc.ps = ps; auto pipe = dev->createPipeline(pdesc);
   auto rt = dev->createTexture({64, 64, 1, Format::RGBA8, true}, nullptr);
+  auto depth = dev->createTexture({64, 64, 1, Format::D32F, true}, nullptr);
   auto cl = dev->beginCommands();
   cl->begin(rt, kNullHandle, 0, 0, 0, 1);
   cl->setPipeline(pipe); cl->setVertexBuffer(vb); cl->setIndexBuffer(ib);
@@ -107,6 +108,8 @@ TEST(rhi_null_device_draw_and_validation) {
   cl->end();
   dev->submit(*cl); dev->present();
   CHECK(dev->frameStats().draws == 1 && dev->frameStats().triangles == 2);
+  auto keep = dev->beginCommands();
+  keep->beginKeep(rt, depth); keep->clearDepth(); keep->end(); dev->submit(*keep);
   CHECK(debug().count(Severity::Error) == 0);
   // erros de uso detectados
   auto cl2 = dev->beginCommands();

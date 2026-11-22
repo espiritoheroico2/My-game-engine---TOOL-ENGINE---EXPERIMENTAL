@@ -1,6 +1,7 @@
 #pragma once
 
 #include "profiler_model.hpp"
+#include "tool/render/render_stats.hpp"
 
 #include <algorithm>
 #include <array>
@@ -50,13 +51,16 @@ struct Snapshot {
     bool truncated = false;
     std::array<profiler_model::Row, profiler_model::kMaxRows> rows{};
     std::array<std::array<float, profiler_model::kGraphSamples>, profiler_model::kGraphCount> graphs{};
+    tool::render::FrameRenderStats renderStats;
 };
 
-inline Snapshot Capture(const profiler_model::ProfilerModel& model, double elapsedSeconds) {
+inline Snapshot Capture(const profiler_model::ProfilerModel& model, double elapsedSeconds,
+                        const tool::render::FrameRenderStats& renderStats) {
     Snapshot snapshot;
     snapshot.elapsedSeconds = elapsedSeconds;
     snapshot.rowCount = model.rowCount();
     snapshot.truncated = model.truncated();
+    snapshot.renderStats = renderStats;
     for (int i = 0; i < snapshot.rowCount; ++i) snapshot.rows[static_cast<std::size_t>(i)] = model.row(i);
     for (int graph = 0; graph < profiler_model::kGraphCount; ++graph) {
         const float* values = model.graph(graph);
@@ -64,6 +68,10 @@ inline Snapshot Capture(const profiler_model::ProfilerModel& model, double elaps
             snapshot.graphs[static_cast<std::size_t>(graph)][static_cast<std::size_t>(i)] = values[i];
     }
     return snapshot;
+}
+
+inline Snapshot Capture(const profiler_model::ProfilerModel& model, double elapsedSeconds) {
+    return Capture(model, elapsedSeconds, {});
 }
 
 inline std::string EscapeMarkdown(const char* text) {
@@ -159,6 +167,101 @@ inline std::string ToMarkdown(const std::vector<Snapshot>& snapshots) {
         }
         if (sample.truncated) out += "\n> Profiler row list was truncated.\n";
         out += "\n";
+    }
+    return out;
+}
+
+inline std::string ToCsv(const std::vector<Snapshot>& snapshots) {
+    std::string out = "sample_seconds,frame,view,pass,draw_calls,instances,triangles,cpu_ms,gpu_ms,backend_draws,backend_triangles,backend_uploads,backend_pipeline_switches,point_faces_reused,point_faces_rendered,point_faces_first_use,point_faces_target_reset,point_faces_light_changed,point_faces_casters_changed,point_face_render_failures\n";
+    for (const Snapshot& sample : snapshots) {
+        for (std::size_t viewIndex = 0; viewIndex < tool::render::kRenderViewCount; ++viewIndex) {
+            const auto& view = sample.renderStats.views[viewIndex];
+            if (!view.valid) continue;
+            const char* viewName = tool::render::renderViewName(static_cast<tool::render::RenderViewId>(viewIndex));
+            for (std::size_t passIndex = 0; passIndex < tool::render::kRenderPassCount; ++passIndex) {
+                const auto& pass = view.passes[passIndex];
+                char row[512];
+                if (passIndex == static_cast<std::size_t>(tool::render::RenderPassId::PointShadow)) {
+                    const auto& cache = view.shadowCache;
+                    std::snprintf(row, sizeof row, "%.3f,%llu,%s,%s,%llu,%llu,%llu,%.6f,,,,,,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                                  sample.elapsedSeconds, static_cast<unsigned long long>(sample.renderStats.frameId),
+                                  viewName, tool::render::renderPassName(static_cast<tool::render::RenderPassId>(passIndex)),
+                                  static_cast<unsigned long long>(pass.drawCalls),
+                                  static_cast<unsigned long long>(pass.instances),
+                                  static_cast<unsigned long long>(pass.triangles), pass.cpuMs,
+                                  static_cast<unsigned long long>(cache.pointFacesReused),
+                                  static_cast<unsigned long long>(cache.pointFacesRendered),
+                                  static_cast<unsigned long long>(cache.pointFacesFirstUse),
+                                  static_cast<unsigned long long>(cache.pointFacesTargetReset),
+                                  static_cast<unsigned long long>(cache.pointFacesLightChanged),
+                                  static_cast<unsigned long long>(cache.pointFacesCastersChanged),
+                                  static_cast<unsigned long long>(cache.pointFaceRenderFailures));
+                } else {
+                    std::snprintf(row, sizeof row, "%.3f,%llu,%s,%s,%llu,%llu,%llu,%.6f,,,,,,,,,,,,\n",
+                                  sample.elapsedSeconds, static_cast<unsigned long long>(sample.renderStats.frameId),
+                                  viewName, tool::render::renderPassName(static_cast<tool::render::RenderPassId>(passIndex)),
+                                  static_cast<unsigned long long>(pass.drawCalls),
+                                  static_cast<unsigned long long>(pass.instances),
+                                  static_cast<unsigned long long>(pass.triangles), pass.cpuMs);
+                }
+                out += row;
+            }
+            char backendRow[256];
+            std::snprintf(backendRow, sizeof backendRow, "%.3f,%llu,%s,Backend total,,,,,,%llu,%llu,%llu,%llu,,,,,,,\n",
+                          sample.elapsedSeconds, static_cast<unsigned long long>(sample.renderStats.frameId),
+                          viewName, static_cast<unsigned long long>(view.backendDrawCalls),
+                          static_cast<unsigned long long>(view.backendTriangles),
+                          static_cast<unsigned long long>(view.backendBufferUploads),
+                          static_cast<unsigned long long>(view.backendPipelineSwitches));
+            out += backendRow;
+        }
+        if (sample.renderStats.views[0].valid || sample.renderStats.views[1].valid) {
+            for (std::size_t passIndex = 0; passIndex < tool::render::kRenderPassCount; ++passIndex) {
+                const auto pass = sample.renderStats.total(static_cast<tool::render::RenderPassId>(passIndex));
+                char row[256];
+                if (passIndex == static_cast<std::size_t>(tool::render::RenderPassId::PointShadow)) {
+                    const auto cache = sample.renderStats.shadowCacheTotal();
+                    std::snprintf(row, sizeof row, "%.3f,%llu,Total,%s,%llu,%llu,%llu,%.6f,,,,,,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                                  sample.elapsedSeconds, static_cast<unsigned long long>(sample.renderStats.frameId),
+                                  tool::render::renderPassName(static_cast<tool::render::RenderPassId>(passIndex)),
+                                  static_cast<unsigned long long>(pass.drawCalls),
+                                  static_cast<unsigned long long>(pass.instances),
+                                  static_cast<unsigned long long>(pass.triangles), pass.cpuMs,
+                                  static_cast<unsigned long long>(cache.pointFacesReused),
+                                  static_cast<unsigned long long>(cache.pointFacesRendered),
+                                  static_cast<unsigned long long>(cache.pointFacesFirstUse),
+                                  static_cast<unsigned long long>(cache.pointFacesTargetReset),
+                                  static_cast<unsigned long long>(cache.pointFacesLightChanged),
+                                  static_cast<unsigned long long>(cache.pointFacesCastersChanged),
+                                  static_cast<unsigned long long>(cache.pointFaceRenderFailures));
+                } else {
+                    std::snprintf(row, sizeof row, "%.3f,%llu,Total,%s,%llu,%llu,%llu,%.6f,,,,,,,,,,,,\n",
+                                  sample.elapsedSeconds, static_cast<unsigned long long>(sample.renderStats.frameId),
+                                  tool::render::renderPassName(static_cast<tool::render::RenderPassId>(passIndex)),
+                                  static_cast<unsigned long long>(pass.drawCalls),
+                                  static_cast<unsigned long long>(pass.instances),
+                                  static_cast<unsigned long long>(pass.triangles), pass.cpuMs);
+                }
+                out += row;
+            }
+            const auto total = sample.renderStats.total();
+            char row[256];
+            std::snprintf(row, sizeof row, "%.3f,%llu,Total,All passes,%llu,%llu,%llu,%.6f,,,,,,,,,,,,\n",
+                          sample.elapsedSeconds, static_cast<unsigned long long>(sample.renderStats.frameId),
+                          static_cast<unsigned long long>(total.drawCalls),
+                          static_cast<unsigned long long>(total.instances),
+                          static_cast<unsigned long long>(total.triangles), total.cpuMs);
+            out += row;
+            const auto backendTotal = sample.renderStats.backendTotal();
+            char backendRow[256];
+            std::snprintf(backendRow, sizeof backendRow, "%.3f,%llu,Total,Backend total,,,,,,%llu,%llu,%llu,%llu,,,,,,,\n",
+                          sample.elapsedSeconds, static_cast<unsigned long long>(sample.renderStats.frameId),
+                          static_cast<unsigned long long>(backendTotal.backendDrawCalls),
+                          static_cast<unsigned long long>(backendTotal.backendTriangles),
+                          static_cast<unsigned long long>(backendTotal.backendBufferUploads),
+                          static_cast<unsigned long long>(backendTotal.backendPipelineSwitches));
+            out += backendRow;
+        }
     }
     return out;
 }

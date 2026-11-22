@@ -30,6 +30,7 @@ JOBS = [
     ("shadow.hlsl", "frag", "PSMain", "shadow.ps"),
     ("shadow_point.hlsl", "vert", "VSMain", "shadowpoint.vs"),
     ("shadow_point.hlsl", "frag", "PSMain", "shadowpoint.ps"),
+    ("shadow_clear.hlsl", "frag", "PSMain", "shadowclear.ps"),
     ("prepass.hlsl", "vert", "VSMain", "prepass.vs"),
     ("prepass.hlsl", "frag", "PSMain", "prepass.ps"),
     ("ssao.hlsl", "vert", "VSMain", "ssao.vs"),

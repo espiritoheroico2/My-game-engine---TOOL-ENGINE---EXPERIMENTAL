@@ -1,6 +1,6 @@
 # Pendências do editor
 
-Atualizado em 2026-11-21. Branch de trabalho: `main`.
+Atualizado em 2026-11-22. Branch de trabalho: `main`.
 
 ## Estado da rodada (2026-11-21)
 
@@ -16,6 +16,8 @@ Atualizado em 2026-11-21. Branch de trabalho: `main`.
       Os handlers de selecao continuam iniciando no evento do botao esquerdo; falta conferir arraste em execucao.
 - [~] Inspector: a moldura opaca estava sendo desenhada por cima do conteudo SpriteUI. O corpo da moldura ficou
       transparente; teste cobre a preparacao dos campos Nome e Transform. Falta confirmar visualmente ao reabrir.
+- [x] `test ECS: 100` agora inclui um teste com raio de simulacao ativo. Corpos criados durante o Play passaram a
+      adicionar tambem seu estado `culled`, mantendo os vetores de fisica alinhados e evitando acesso fora dos limites.
 - [ ] Lighting, Physics, Game, Optimizing e Language ainda precisam ser portados para controles SpriteUI;
       as implementacoes ImGui existentes nao foram removidas nesta rodada.
 - [ ] Nenhuma janela foi removida do ImGui nesta rodada: cada remocao continua condicionada a aprovacao
@@ -88,3 +90,36 @@ Removidos nesta revisão: `PARTICULAS_E_DEBUG_PROMPTS.md`, `planejamento-ui.md`,
 Candidatos a revisão (referenciados pouco ou com dados de versões antigas, por decisão sua):
 `design-janelas.md`, `JS_VS_CPP.md`, `NTC.md`, `FSR.md`, `TEXTURES.md`, `RUNTIME.md`, `SECURITY.md`,
 `SHADER_API_MATRIX.md`, `CHECKLIST.md`.
+
+## 7. Plano incremental de renderização
+
+Base: `docs/sugestaoarquiteturanova.md`. Adotar a proposta por etapas, sem substituir o `GpuRenderer` ou duplicar
+o batching existente. Os nomes P0-P5 do documento são locais à proposta; mapear para as prioridades do
+`ROADMAP.md` antes de reordenar o roadmap oficial.
+
+- [x] **P0 parcial**: contar os `drawIndexed` do `GpuRenderer` por passe, vista Scene/Game e total; capturar o
+      `DrawStats` do backend logo após cada `present()` e somar explicitamente as vistas; medir CPU por passe;
+      mostrar no Profiler e exportar CSV junto ao Markdown. `gpu_ms` fica vazio: timestamps reais não existem ainda.
+- [ ] Completar P0: validar os contadores locais contra o backend por vista e decidir como incluir uploads,
+      mudanças de pipeline e tempos reais de GPU sem confundir CPU com GPU.
+- [x] Bounds/cache: bounds invalidam por revisão; assinaturas de sombra ignoram casters inativos e incluem
+      revisão/contagens da malha e transformação mundial dos chunks. A assinatura do BVH de RT também considera
+      revisão da geometria. Autotestes cobrem revisão sem realocação, desativação e movimento de chunk.
+- [x] Culling CPU de casters por frustum de cada cascata CSM e face Point/Spot; bounds de malha são calculados
+      ao atualizar o buffer e transformados conservadoramente. CSM testa os quatro planos laterais para manter
+      casters fora do intervalo de profundidade que ainda podem projetar sombra. Falta validação visual em GPU.
+- [x] Cache Point/Spot por face: assinatura da luz, projeção, resolução e casters que intersectam a face. Faces
+      sujas preservam as demais cores do atlas, limpam a região por um passe scissored e limpam a profundidade
+      compartilhada antes de redesenhar. Erros síncronos de gravação mantêm a face inválida.
+- [x] Profiler mostra, por vista e no total, faces reutilizadas/refeitas, primeiro uso, recriação do alvo,
+      mudanças de luz/casters e falhas; CSV inclui as sete métricas e testes cobrem exibição, agregação e schema.
+- [ ] Validar visualmente cache ligado/desligado e compilar o GLSL gerado; o RHI ainda não expõe um resultado
+      de submissão assíncrona.
+- [x] Passe de emissão GPU agrupa objetos emissivos por malha e usa instâncias (até 4096 por lote), mantendo
+      transparência fora do agrupamento. Falta comparar visualmente o bloom em execução GPU.
+- [~] Extraída a seleção por índices das filas opaca, prepass, emissores e casters de sombra para um builder
+      CPU reutilizável. Planejamento de batches agora consome as filas; `plan.order` referencia posições nelas,
+      enquanto os dados de instância são empacotados depois. A transparência continua no caminho ordenado atual
+      (`tdraws_`), sem mudança de ordem. Falta comparar imagens e validar visualmente em execução GPU.
+- [ ] Medir `Flush()` no Diligent antes de alterar submissão.
+- [ ] Deixar compute/indirect e Hi-Z para depois do caminho CPU validado, com capacidades explícitas e fallback.
