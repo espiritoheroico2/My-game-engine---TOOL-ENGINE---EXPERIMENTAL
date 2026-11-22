@@ -58,7 +58,7 @@ public:
   }
 
 private:
-  mutable std::mutex mu_;
+  mutable std::recursive_mutex mu_;   // recursivo: um sink que chame log() de novo nao trava
   Sink sink_;
   LogLevel min_ = LogLevel::Info;
 };
