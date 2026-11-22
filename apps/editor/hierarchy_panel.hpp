@@ -85,6 +85,8 @@ inline constexpr int kCreateCount = 9;
 
 struct Metrics {
     static constexpr float kToolbarH = 30.f;
+    static constexpr float kToolbarBtnH = 22.f;
+    static constexpr float kToolbarBtnFont = 11.f;
     static constexpr float kRowH = 22.f;
     static constexpr float kIndent = 14.f;        // recuo por nivel da arvore
     static constexpr float kPad = sui::kPanelPadding;
@@ -309,7 +311,10 @@ class HierarchyPanel {
     }
 
     [[nodiscard]] sui::Box menuBox() const {
-        return {createX_, Metrics::kToolbarH, Metrics::kMenuW, Metrics::kRowH * kCreateCount};
+        const float h = std::min(Metrics::kRowH * kCreateCount + 8.f, std::max(0.f, rect_.h - Metrics::kToolbarH - 8.f));
+        const float w = std::min(Metrics::kMenuW, std::max(120.f, rect_.w - Metrics::kPad));
+        return {std::clamp(createX_, 0.f, std::max(0.f, rect_.w - w)),
+                Metrics::kToolbarH, w, h};
     }
 
     [[nodiscard]] sui::Box contextMenuBox() const {
@@ -379,11 +384,12 @@ class HierarchyPanel {
         if (menuOpen_) {
             const int item = menuItemAt(x, y);
             menuOpen_ = false;
+            hoverCreateItem_ = -1;
             if (item >= 0) pending_.push_back(Action{Act::Create, hm::NoId, hm::NoId, item, {}});
             return true;
         }
         switch (buttonAt(x, y)) {
-            case Button::Create: menuOpen_ = true; return true;
+            case Button::Create: menuOpen_ = true; hoverCreateItem_ = -1; return true;
             case Button::Duplicate:
                 if (model_.Selected() != hm::NoId) pending_.push_back(Action{Act::Duplicate, model_.Selected()});
                 return true;
@@ -455,6 +461,7 @@ class HierarchyPanel {
             moveRenameCaret(x, y);
             return true;
         }
+        if (menuOpen_) hoverCreateItem_ = menuItemAt(x, y);
         const bool dragging = drag_.Phase() != Dd::DragPhase::Idle;
         if (dragging) (void)drag_.PointerMove(SU::Vec2{x - rect_.x, y - rect_.y}, buildTargets());
         if (contains(x, y)) hoverRow_ = rowAt(x, y);
@@ -741,11 +748,12 @@ class HierarchyPanel {
 
     float addButton(Button which, const char* label, float x) {
         const float w = toolbar_.layout(label, Metrics::kSmallFont).size.x + 2.f * Metrics::kBtnPad;
-        const float h = Metrics::kToolbarH - 2.f * Metrics::kPad;
-        toolbar_.addSolid(x, Metrics::kPad, w, h, colors_.btn, 0.2f);
-        const float textY = Metrics::kPad + (h - toolbar_.lineHeight(Metrics::kSmallFont)) * 0.5f;
-        toolbar_.addText(x + Metrics::kBtnPad, textY, label, Metrics::kSmallFont, theme_.text, w);
-        buttons_.push_back({sui::Box{x, Metrics::kPad, w, h}, which});
+        const float h = Metrics::kToolbarBtnH;
+        const float y = (Metrics::kToolbarH - h) * 0.5f;
+        toolbar_.addSolid(x, y, w, h, colors_.btn, 0.2f);
+        const float textY = y + (h - toolbar_.lineHeight(Metrics::kToolbarBtnFont)) * 0.5f;
+        toolbar_.addText(x + Metrics::kBtnPad, textY, label, Metrics::kToolbarBtnFont, theme_.text, w - 2.f * Metrics::kBtnPad);
+        buttons_.push_back({sui::Box{x, y, w, h}, which});
         return x + w + Metrics::kBtnGap;
     }
 
@@ -824,6 +832,9 @@ class HierarchyPanel {
             overlay_.addSolid(menu.x, menu.y, menu.w, menu.h, colors_.menu, 0.6f);
             for (int i = 0; i < kCreateCount; ++i) {
                 const float y = menu.y + static_cast<float>(i) * Metrics::kRowH;
+                if (i == hoverCreateItem_) {
+                    overlay_.addSolid(menu.x + 2.f, y + 1.f, menu.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, 0.72f);
+                }
                 const float textY = y + (Metrics::kRowH - overlay_.lineHeight(Metrics::kFont)) * 0.5f;
                 overlay_.addText(menu.x + Metrics::kPad, textY, T(kCreateLabels[i]), Metrics::kFont, theme_.text,
                                  menu.w - 2.f * Metrics::kPad);
@@ -879,6 +890,7 @@ class HierarchyPanel {
     std::vector<std::pair<sui::Box, Button>> buttons_;
     float createX_ = 0.f;
     bool menuOpen_ = false;
+    int hoverCreateItem_ = -1;
     bool contextOpen_ = false;
     hm::Id contextTarget_ = hm::NoId;
     float contextX_ = 0.f;

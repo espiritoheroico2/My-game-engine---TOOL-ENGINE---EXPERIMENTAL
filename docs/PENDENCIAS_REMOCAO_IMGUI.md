@@ -2,6 +2,67 @@
 
 Estado em 2026-11-21. Branch `ui-settings-router`.
 
+## Verificacao realizada nesta atualizacao
+
+- Build GPU sem Direct3D 12 configurada e compilada com sucesso (`build_editor.bat gpu nodx12 norun`).
+- Todos os targets foram reconstruidos apos o build; a build completa passou.
+- Suíte relevante: 42/43 testes passaram. A unica falha era uma expectativa antiga no teste
+  `Editor.MainMenuModel` (F1 estava no indice 15, apos o item SpriteUI diagnostics); o indice foi corrigido no teste.
+- Corrigida uma dependencia de cabeçalho: `window_palette.hpp` agora inclui `sui_panel.hpp`, necessária para
+  `sui::Srgb` em targets isolados (testes e capturas).
+- Estado conferido no repositorio: branch atual `main`, worktree limpo antes desta atualizacao.
+- A descrição original de "janela de script portada para SpriteUI" não corresponde ao estado atual:
+  `script_window.hpp` ainda contém a implementação antiga com ImGui e não existe `gScriptPanel` neste codigo.
+  A janela de Coding ja usa uma moldura SpriteUI, mas o corpo continua sobre `ImDrawList`/ImGui.
+
+## Melhorias de desempenho do SpriteUI verificadas nesta etapa
+
+- Backend SDL: cache do recorte ativo evita chamadas repetidas a `SDL_SetRenderClipRect` em batches consecutivos.
+- Backend SDL: reservas exatas de vértices e índices por batch reduzem realocações durante o desenho.
+- Cantos arredondados: seno e cosseno dos arcos são calculados uma vez e reutilizados em todos os quadros.
+- Conversão linear para sRGB: tabela estática de 256 entradas substitui chamadas repetidas a `std::pow`.
+- Medição de texto: `Canvas::lineHeight` guarda o último tamanho medido, evitando reformatar `"Ag"` a cada linha.
+- Extrator: comparação de ordenação manual no lugar da tupla temporária em cada comparação do `stable_sort`.
+- Build completa passou e a suíte relevante passou com 43/43 testes.
+- Captura headless: 120 quadros concluídos; SpriteUI produziu 8639 chamadas SDL, média de 72 chamadas por quadro.
+
+## Adaptador ECS da SpriteUI
+
+- Implementado o adaptador host `apps/editor/spriteui_ecs.hpp`.
+- Elementos SpriteUI passam a ter entidades ECS da ToolEngine e componentes separados:
+  `UINode`, `UIRectTransform`, `UIVisualState` e `UIVisibility`.
+- O adaptador mantém handles com geração em ambos os lados, layout flexível, visual, extração
+  de render/hit-test e remoção recursiva da subárvore.
+- Existe limpeza para entidades destruídas diretamente pelo `tool::World`, via `PruneDestroyed()`.
+- Teste dedicado `Editor.SpriteUiEcs`: criação, pai-filho, layout, visual, visibilidade,
+  destruição recursiva e poda de entidade destruída fora do adaptador.
+- Próximo passo: ligar um painel piloto real a este adaptador e migrar seus dados/callbacks
+  sem substituir o restante do editor. Manter `LayoutTree` como layout interno até essa integração
+  estar validada visualmente.
+
+## Light Prism e ECS
+
+- `LightComp` e `GlobalLight` já são componentes ECS da ToolEngine; `collectLights` é a ponte para a Light Prism.
+- O core da Light Prism permanece independente de ECS e usa `SlotMap` com handles e geração.
+- `LightRig` agora atualiza pontuais/spots existentes pelo handle, evitando remover e recriar toda a lista.
+
+## Correcoes de sobreposicao e cursor
+
+- Settings: o conteudo das secoes agora comeca abaixo da faixa de abas; recolher uma secao limpa seu
+  canvas e os controles so sao desenhados quando a secao Graphics esta aberta.
+- Hierarchy: botoes da barra usam altura propria de 22 px em vez de reutilizar o padding da janela.
+- Menu `+ Create`: fundo, largura limitada, altura limitada e hover por linha; as linhas nao transbordam
+  nem desenham texto sobre texto.
+- Cursor de texto: usa o cursor I-beam do sistema; se o SDL nao suportar o cursor nativo, cria um cursor
+  I-beam bitmap de fallback. A arvore da Hierarchy ativa o cursor durante renomeacao e selecao arrastada.
+
+## Janela Coding
+
+- Contador de linhas na coluna esquerda do editor.
+- Texto do codigo limitado ao tamanho minimo de 12 px.
+- Controles `-` e `+` na barra superior alteram o tamanho da fonte de 12 a 28 px.
+- Selecao por arrasto, retorno visual do caret e cursor I-beam no editor de codigo.
+
 ## Feito e enviado
 
 - `3d688ef` — remoção do código ImGui morto da Scene, Game e Hierarchy (`drawSceneView`,

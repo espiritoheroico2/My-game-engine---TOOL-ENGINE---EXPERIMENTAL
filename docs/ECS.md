@@ -71,7 +71,33 @@ Medições deste documento são **estimativas de código**, não benchmarks. Os 
 - **Custa:** `eachTagged` percorre **todos** os índices até o maior já usado.
 - **Custa:** o painel Hierarquia percorre todas as entidades a cada quadro; com 10 mil filhos, a árvore fica pesada mesmo fechada.
 
-## 6. "Todo ToolObject como entidade otimizada" e "mesma tag + mesmo código = uma entidade só"
+## 6. ToolObject e componentes
+
+`ToolObject` e um handle de acesso a uma entidade ECS. Ele nao substitui nem duplica a entidade:
+ele guarda `Scene*` e `Entity` com geracao. `Scene::object(entity)` cria uma view temporaria para codigo
+que ja possui uma entidade do editor.
+
+API de componentes:
+
+- `object.get<T>()` / `object.component<T>()` / `object.module<T>()`: leitura do componente.
+- `object.has<T>()`: presença do componente.
+- `object.add<T>(args...)` / `tryAdd<T>(args...)`: adiciona ou substitui o componente.
+- `object.remove<T>()`: remove o componente.
+
+Os componentes continuam armazenados no ECS, nao sao copiados para o objeto. Ponteiros podem ficar
+invalidos quando o storage ou a entidade muda; leia o componente quando usar, nao o guarde entre
+frames. A validacao do handle impede acesso apos destruir ou reciclar o objeto.
+
+O Blueprint define quais componentes existem antes do spawn e quais voltarao apos reciclagem.
+Componentes extras adicionados depois podem ser removidos pelo reset de reciclagem. Para reutilizar
+objetos com um modulo permanente, adicione esse tipo ao `Blueprint` usado pelo spawn.
+
+No C++ a forma direta para um modulo conhecido e criar metodos tipados no wrapper da engine/editor,
+por exemplo `object.transform()` ou `object.physics()`. Essas conveniencias podem ser ligadas diretamente
+ao componente ECS e nao devem chamar `World::get` em outros sistemas. Modulos arbitrarios continuam
+usando `component<T>()`, sem fila de "GetComponent" pelo nome.
+
+## 7. "Todo ToolObject como entidade otimizada" e "mesma tag + mesmo código = uma entidade só"
 
 Resposta direta: **a parte de "uma entidade só para muitos objetos" não é viável como você descreveu**, e o motivo importa.
 
@@ -87,7 +113,7 @@ O que **é viável** e dá o ganho que você procura:
 
 Ordem sugerida (do mais barato ao mais caro): (a) `each` sem cópia quando a função não cria/apaga; (b) lote de instancing para meshes repetidas; (c) chunks; (d) contexto de script por arquivo.
 
-## 7. Teste de eficiência
+## 8. Teste de eficiência
 
 `test ECS: N` no Console (padrão 10 000, máximo 1 000 000):
 - Cria o objeto `ECScall` e as N esferas como filhas dele, nascendo no céu em alturas e posições aleatórias, com Newtoon (colisor de esfera).

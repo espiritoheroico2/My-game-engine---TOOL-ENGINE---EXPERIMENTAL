@@ -14,7 +14,36 @@ TEST(scene_spawn_and_access) {
   Scene s; auto bp = enemyBp(s);
   auto o = s.spawn(bp);
   CHECK(o.valid() && o.has<Hp>() && o.get<Hp>()->v == 50);
+  CHECK(o.component<Hp>() == o.get<Hp>());
   CHECK(o.hasTag(s.tag("enemy")));
+}
+
+TEST(scene_object_add_remove_and_module_alias) {
+  Quiet q;
+  Scene s;
+  auto o = s.spawn(Blueprint{}.with<Pos>(1.f));
+
+  Hp* hp = o.add<Hp>(75);
+  CHECK(hp != nullptr && hp->v == 75);
+  CHECK(o.module<Hp>() == hp);
+
+  CHECK(o.remove<Hp>());
+  CHECK(!o.has<Hp>() && o.get<Hp>() == nullptr);
+  CHECK(!o.remove<Hp>());
+
+  Hp* stale = o.tryAdd<Hp>(25);
+  CHECK(stale != nullptr && o.component<Hp>()->v == 25);
+}
+
+TEST(scene_object_view_for_raw_entity) {
+  Quiet q;
+  Scene s;
+  Entity raw = s.world().create();
+  s.world().add<Pos>(raw, 4.f);
+  ToolObject o = s.object(raw);
+  CHECK(o.valid());
+  CHECK(o.component<Pos>()->x == 4.f);
+  CHECK(!s.object(Entity{}).valid());
 }
 
 TEST(scene_delete_and_reuse_reuses_identical) {

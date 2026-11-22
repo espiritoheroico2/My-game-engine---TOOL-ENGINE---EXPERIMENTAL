@@ -564,6 +564,28 @@ TEST(light_rig_keeps_point_lights_registered_and_follows_changes) {
   CHECK(rig.frame().points.empty());
 }
 
+TEST(light_rig_updates_only_changed_light_types) {
+  Camera cam; cam.eye = {0, 1, 3}; cam.target = {0, 0, 0}; cam.up = {0, 1, 0};
+  Light point; point.type = LightType::Point; point.position = {0, 2, 0}; point.range = 6; point.intensity = 3;
+  Light spot; spot.type = LightType::Spot; spot.position = {2, 2, 0}; spot.direction = {0, -1, 0};
+  spot.range = 8; spot.intensity = 5; spot.innerAngle = 0.2f; spot.outerAngle = 0.5f;
+  LightRig rig;
+
+  lightFrame(rig, {point, spot}, {}, cam, 64, 64);
+  CHECK(rig.frame().points.size() == 1 && rig.frame().spots.size() == 1);
+
+  point.position = {1, 3, 0};
+  lightFrame(rig, {point, spot}, {}, cam, 64, 64);
+  CHECK(rig.frame().points.size() == 1);
+  CHECK(std::fabs(rig.frame().points[0].position.x - 1.f) < 1e-4f);
+
+  Light spotInPlace = spot;
+  spotInPlace.position = {4, 2, 0};
+  lightFrame(rig, {spotInPlace}, {}, cam, 64, 64);
+  CHECK(rig.frame().points.empty() && rig.frame().spots.size() == 1);
+  CHECK(std::fabs(rig.frame().spots[0].position.x - 4.f) < 1e-4f);
+}
+
 
 // Bloom (CPU): um pixel branco no centro espalha luz para os vizinhos, sem mudar o alfa nem o canto distante.
 TEST(bloom_cpu_spreads_a_bright_pixel_and_keeps_alpha) {

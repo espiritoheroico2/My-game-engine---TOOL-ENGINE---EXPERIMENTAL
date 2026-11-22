@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <tuple>
 
 namespace ToolEngine::SpriteUi::Rendering {
 namespace {
@@ -147,9 +146,11 @@ FramePacket RenderExtractor::Build(
     // Paint order is authoritative. Material sorting is intentionally forbidden
     // across non-adjacent items because alpha blending is order dependent.
     std::stable_sort(ordered.begin(), ordered.end(),
-        [](const UIRenderItem* a, const UIRenderItem* b) {
-            return std::tuple{a->layer, a->zOrder, a->paintOrder, a->handle.Pack()} <
-                   std::tuple{b->layer, b->zOrder, b->paintOrder, b->handle.Pack()};
+        [](const UIRenderItem* a, const UIRenderItem* b) noexcept {
+            if (a->layer != b->layer) return a->layer < b->layer;
+            if (a->zOrder != b->zOrder) return a->zOrder < b->zOrder;
+            if (a->paintOrder != b->paintOrder) return a->paintOrder < b->paintOrder;
+            return a->handle.Pack() < b->handle.Pack();
         });
 
     packet.instances.reserve(ordered.size());

@@ -35,7 +35,10 @@ Cada fase termina com testes passando e documentacao atualizada (CHANGELOG, CHEC
 - Escolher o alvo da primeira UI: o editor (menos risco) ou a engine (mais impacto).
 
 ### Fase 1: nucleo (layout e transformacao)
-- Componentes `UIRectTransform`, `UILayoutComponent`, `UIComputedLayout` no ECS proprio.
+- [~] Componentes `UIRectTransform`, `UILayoutComponent`, `UIComputedLayout` no ECS proprio.
+  Adicionado o adaptador host `apps/editor/spriteui_ecs.hpp`: `UINode`, `UIRectTransform`,
+  `UIVisualState` e `UIVisibility`, com testes de pai-filho, layout, visual, visibilidade e
+  remocao recursiva. Falta ligar os paineis reais e computar o layout por sistemas ECS dedicados.
 - Ancoras (`Rmin = P0 + anchorMin * parentSize + offsetMin`), Measure (bottom-up) e Arrange (top-down).
 - Flex (grow/shrink) e Grid. Nine-slice com a regra de reducao proporcional.
 - Testes: matematica (ancoras, flex, grid) e snapshots de arvore em varias resolucoes e DPI.

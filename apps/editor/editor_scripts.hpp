@@ -184,37 +184,44 @@ inline void Editor::applyScriptCmds() {
         case K::RemoveComp: {
           const tool::Entity t = findByName(c.a);
           if (!w.alive(t)) break;
+          tool::ToolObject object = scene.object(t);
           const bool add = c.kind == K::AddComp;
           if (c.b == "MeshRenderer") {
-            if (add) { if (!w.has<MeshRenderer>(t)) w.add<MeshRenderer>(t, MeshRenderer{}); }
-            else if (w.has<MeshRenderer>(t)) w.remove<MeshRenderer>(t);
+            if (add) object.tryAdd<MeshRenderer>(MeshRenderer{});
+            else object.remove<MeshRenderer>();
           } else if (c.b == "AudioSource") {
-            if (add) { if (!w.has<AudioSource>(t)) w.add<AudioSource>(t, AudioSource{}); }
-            else if (w.has<AudioSource>(t)) w.remove<AudioSource>(t);
+            if (add) object.tryAdd<AudioSource>(AudioSource{});
+            else object.remove<AudioSource>();
           } else if (c.b == "ParticleComp") {
-            if (add) { if (!w.has<ParticleComp>(t)) w.add<ParticleComp>(t, ParticleComp{}); }
-            else if (w.has<ParticleComp>(t)) w.remove<ParticleComp>(t);
+            if (add) object.tryAdd<ParticleComp>(ParticleComp{});
+            else object.remove<ParticleComp>();
+          } else if (c.b == "PhysicsComp") {
+            if (add) object.tryAdd<PhysicsComp>(PhysicsComp{});
+            else object.remove<PhysicsComp>();
+          } else if (c.b == "CameraComp") {
+            if (add) object.tryAdd<CameraComp>(CameraComp{});
+            else object.remove<CameraComp>();
           } else {
-            tool::logWarn("addComponent/removeComponent: '" + c.b + "' is not available from scripts (MeshRenderer, AudioSource, ParticleComp).");
+            tool::logWarn("addComponent/removeComponent: '" + c.b + "' is not available from scripts (MeshRenderer, AudioSource, ParticleComp, PhysicsComp, CameraComp).");
           }
           break;
         }
         case K::SetPos: {
           const tool::Entity t = findByName(c.a);
           if (!w.alive(t)) break;
-          if (Transform* tr = w.get<Transform>(t)) std::memcpy(tr->pos, c.v, sizeof tr->pos);
+          if (Transform* tr = scene.object(t).component<Transform>()) std::memcpy(tr->pos, c.v, sizeof tr->pos);
           break;
         }
         case K::SetRot: {
           const tool::Entity t = findByName(c.a);
           if (!w.alive(t)) break;
-          if (Transform* tr = w.get<Transform>(t)) std::memcpy(tr->rot, c.v, sizeof tr->rot);
+          if (Transform* tr = scene.object(t).component<Transform>()) std::memcpy(tr->rot, c.v, sizeof tr->rot);
           break;
         }
         case K::SetColor: {
           const tool::Entity t = findByName(c.a);
           if (!w.alive(t)) break;
-          if (MeshRenderer* mr = w.get<MeshRenderer>(t)) for (int i = 0; i < 3; ++i) mr->color[i] = std::clamp(c.v[i], 0.f, 1.f);
+          if (MeshRenderer* mr = scene.object(t).component<MeshRenderer>()) for (int i = 0; i < 3; ++i) mr->color[i] = std::clamp(c.v[i], 0.f, 1.f);
           break;
         }
       }

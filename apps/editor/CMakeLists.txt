@@ -162,6 +162,12 @@ if(TOOL_WITH_SPRITEUI)
   target_include_directories(editor_panel_router_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(editor_panel_router_tests PRIVATE SpriteUi::SpriteUI)
   add_test(NAME Editor.PanelRouter COMMAND editor_panel_router_tests)
+
+  # Adaptador da SpriteUI para o ECS da ToolEngine: entidade, pai, layout, visual e extracao.
+  add_executable(editor_spriteui_ecs_tests tests/test_spriteui_ecs.cpp)
+  target_include_directories(editor_spriteui_ecs_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_spriteui_ecs_tests PRIVATE tool::ecs SpriteUi::SpriteUI)
+  add_test(NAME Editor.SpriteUiEcs COMMAND editor_spriteui_ecs_tests)
 endif()
 
 add_executable(editor_ui_presets_tests tests/test_ui_presets.cpp)

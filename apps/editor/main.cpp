@@ -2701,6 +2701,21 @@ static int runEditorMain(int argc, char** argv) {
   std::unique_ptr<editor::console_panel::ConsolePanel> consolePanel;
   if (uiReady) consolePanel = std::make_unique<editor::console_panel::ConsolePanel>(uiText, uiRenderer);
   SDL_Cursor* spriteTextCursor = uiReady ? SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT) : nullptr;
+  if (uiReady && !spriteTextCursor) {
+    static const Uint8 iBeamData[32] = {
+      0x18,0x00, 0x18,0x00, 0x18,0x00, 0x18,0x00,
+      0x18,0x00, 0x18,0x00, 0x18,0x00, 0x18,0x00,
+      0x18,0x00, 0x18,0x00, 0x18,0x00, 0x18,0x00,
+      0x18,0x00, 0x18,0x00, 0x18,0x00, 0x18,0x00
+    };
+    static const Uint8 iBeamMask[32] = {
+      0x3C,0x00, 0x7E,0x00, 0xFF,0x00, 0xFF,0x00,
+      0x7E,0x00, 0x3C,0x00, 0x18,0x00, 0x18,0x00,
+      0x18,0x00, 0x18,0x00, 0x18,0x00, 0x18,0x00,
+      0x18,0x00, 0x18,0x00, 0x18,0x00, 0x18,0x00
+    };
+    spriteTextCursor = SDL_CreateCursor(iBeamData, iBeamMask, 16, 16, 7, 7);
+  }
   bool spriteTextCursorActive = false;
   bool cursorWarningLogged = false;
   if (uiReady && !spriteTextCursor) tool::logWarn(std::string("Could not create text cursor: ") + SDL_GetError());
@@ -3117,6 +3132,7 @@ static int runEditorMain(int argc, char** argv) {
         (hierPanel && ed.showHierarchy && hierPanel->wantsTextCursor(mouseX, mouseY)) ||
         (consolePanel && ed.showConsole && consolePanel->wantsTextCursor(mouseX, mouseY)) ||
         (inspPanel && ed.showInspector && gInspectorFrame && inspPanel->wantsTextCursor(mouseX, mouseY)) ||
+        (codingPanel && ed.showCoding && codingPanel->wantsTextCursor(mouseX, mouseY)) ||
         (helpPanel && editor::helpState().open && helpPanel->wantsTextCursor(mouseX, mouseY));
     if (textFieldHovered && spriteTextCursor) {
       if (!SDL_SetCursor(spriteTextCursor) && !cursorWarningLogged) {

@@ -183,14 +183,13 @@ public:
   // `ambient` = cor da luz ambiente (cor * intensidade). `view` = mundo -> camera; `p00`/`p11` = P[0][0], P[1][1] da camera.
   const LightFrame& build(const std::vector<Light>& lights, const Vec3& ambient, const Vec3& cameraPos, const tool::Mat4& view,
                           f32 p00, f32 p11, f32 zNear, f32 zFar) {
-    // Luzes pontuais/spot so sao removidas e readicionadas quando a LISTA muda (posicao, cor, raio...). Com a cena
-    // parada, os handles do quadro anterior continuam validos e o custo de registro some. O sol e refeito sempre (e barato).
+    // Luzes pontuais/spot sao atualizadas nos handles existentes quando o tipo nao muda. Slots mudados ou removidos
+    // sao os unicos que precisam de insercao/remocao, evitando recriar a lista inteira a cada alteracao pequena.
     const u64 lsig = lightsSignature(lights);
     const bool relist = !lightsValid_ || lsig != lightsSig_;
-    if (relist) {
-      for (auto h : handles_) (void)sys_->RemoveLight(h);
-      handles_.clear();
-    }
+    std::vector<LightPrism::LightHandle> nextHandles;
+    std::vector<LightType> nextTypes;
+    if (relist) nextHandles.reserve(handles_.size());
     sys_->ClearDirectionalLight();
     bool haveSun = false; Vec3 sunDir{0, -1, 0};
     for (const Light& l : lights) {
@@ -198,14 +197,34 @@ public:
       case LightType::Point: {
         LightPrism::PointLightDesc d;
         d.position = lp(l.position); d.radius = l.range; d.color = lp(l.color); d.intensity = l.intensity;
-        if (relist) handles_.push_back(sys_->AddPointLight(d));
+        if (relist) {
+          const size_t slot = nextHandles.size();
+          if (slot < handles_.size() && handleTypes_[slot] == LightType::Point) {
+            (void)sys_->UpdatePointLight(handles_[slot], d);
+            nextHandles.push_back(handles_[slot]);
+          } else {
+            if (slot < handles_.size()) (void)sys_->RemoveLight(handles_[slot]);
+            nextHandles.push_back(sys_->AddPointLight(d));
+          }
+          nextTypes.push_back(LightType::Point);
+        }
         break;
       }
       case LightType::Spot: {
         LightPrism::SpotLightDesc d;
         d.position = lp(l.position); d.radius = l.range; d.direction = lp(normalize(l.direction));
         d.innerAngleRad = l.innerAngle; d.outerAngleRad = l.outerAngle; d.color = lp(l.color); d.intensity = l.intensity;
-        if (relist) handles_.push_back(sys_->AddSpotLight(d));
+        if (relist) {
+          const size_t slot = nextHandles.size();
+          if (slot < handles_.size() && handleTypes_[slot] == LightType::Spot) {
+            (void)sys_->UpdateSpotLight(handles_[slot], d);
+            nextHandles.push_back(handles_[slot]);
+          } else {
+            if (slot < handles_.size()) (void)sys_->RemoveLight(handles_[slot]);
+            nextHandles.push_back(sys_->AddSpotLight(d));
+          }
+          nextTypes.push_back(LightType::Spot);
+        }
         break;
       }
       case LightType::Directional:
@@ -218,6 +237,11 @@ public:
         }
         break;
       }
+    }
+    if (relist) {
+      for (size_t i = nextHandles.size(); i < handles_.size(); ++i) (void)sys_->RemoveLight(handles_[i]);
+      handles_.swap(nextHandles);
+      handleTypes_.swap(nextTypes);
     }
     lightsSig_ = lsig; lightsValid_ = true;
     LightPrism::FrameParams fp;
@@ -305,7 +329,7 @@ private:
   void rebuild(const LightingSettings& s) {
     cfg_ = s;
     sys_ = std::make_unique<LightPrism::LightingSystem>(makeLightingConfig(s));
-    handles_.clear(); built_ = true; ambValid_ = false; lightsValid_ = false;
+    handles_.clear(); handleTypes_.clear(); built_ = true; ambValid_ = false; lightsValid_ = false;
   }
 
   // Assinatura da lista de luzes (tudo que entra na LightPrism por luz pontual/spot).
@@ -328,6 +352,7 @@ private:
   LightingSettings cfg_;
   std::unique_ptr<LightPrism::LightingSystem> sys_;
   std::vector<LightPrism::LightHandle> handles_;
+  std::vector<LightType> handleTypes_;
   LightFrame out_;
   LightPrism::FrameLightView lastView_{};
   u64 lightsSig_ = 0; bool lightsValid_ = false;   // lista de luzes registrada na LightPrism (ver build)

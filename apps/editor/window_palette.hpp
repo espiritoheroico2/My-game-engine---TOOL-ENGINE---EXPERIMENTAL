@@ -4,6 +4,7 @@
 // assim o cabecalho, a borda e o corpo ficam iguais em todo o editor.
 
 #include "spriteui_host.hpp"
+#include "sui_panel.hpp"
 
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
 

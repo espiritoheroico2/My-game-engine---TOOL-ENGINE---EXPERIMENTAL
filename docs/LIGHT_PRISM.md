@@ -51,3 +51,13 @@ sol sempre valem.
 - D3D12: teste na GPU real.
 - Sombras da GPU: o teste de cena encontra 172 pixels escurecidos (limite 150). A cena de teste e pequena na tela, por
   isso a diferenca de luminancia total e pequena (razao 0,996). Vale conferir visualmente no editor.
+
+## ECS e atualizacao incremental
+
+- `LightComp` e `GlobalLight` ja sao componentes ECS da cena; `collectLights` monta a lista que entra na Light Prism.
+- O core da Light Prism nao usa o ECS da ToolEngine: usa `SlotMap` com handles/generacao e vetores densos, o que evita
+  acoplamento da biblioteca independente a uma engine concreta.
+- `LightRig` passou a reutilizar handles existentes para luzes pontuais e spot: trocas de posicao, cor, raio e angulo
+  usam `UpdatePointLight`/`UpdateSpotLight`; remocao e troca de tipo alteram somente os slots afetados.
+- O ECS pode ser ampliado para cachear luzes sujas, mas nao substitui o `SlotMap`: a ECS pertence a entidades da cena
+  e o SlotMap pertence ao registro DOD da Light Prism.

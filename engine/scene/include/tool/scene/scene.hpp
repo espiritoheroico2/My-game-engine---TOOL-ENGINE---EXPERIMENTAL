@@ -76,6 +76,11 @@ public:
   Entity entity() const { return e_; }
   template <class T> T* get() const;
   template <class T> bool has() const;
+  template <class T, class... Args> T* add(Args&&... args) const;
+  template <class T, class... Args> T* tryAdd(Args&&... args) const;
+  template <class T> bool remove() const;
+  template <class T> T* component() const;
+  template <class T> T* module() const { return component<T>(); }
   void addTag(TagId t) const;
   bool hasTag(TagId t) const;
   void destroy();          // apaga de verdade
@@ -94,6 +99,9 @@ public:
   TagRegistry& tags() { return tags_; }
   EventBus& events() { return events_; }
   PoolStats stats() const { return stats_; }
+  [[nodiscard]] ToolObject object(Entity entity) {
+    return world_.alive(entity) ? ToolObject{this, entity} : ToolObject{};
+  }
   void setPoolPolicy(PoolPolicy p) { policy_ = p; }
   // Relogio da cena (segundos), atualizado pelo laco principal.
   double clock() const { return clock_; }
@@ -267,6 +275,19 @@ private:
 inline bool ToolObject::valid() const { return scene_ && scene_->world().alive(e_) && !scene_->world().isDormant(e_); }
 template <class T> T* ToolObject::get() const { return valid() ? scene_->world().get<T>(e_) : nullptr; }
 template <class T> bool ToolObject::has() const { return valid() && scene_->world().has<T>(e_); }
+template <class T, class... Args> T* ToolObject::add(Args&&... args) const {
+  return valid() ? scene_->world().tryAdd<T>(e_, std::forward<Args>(args)...) : nullptr;
+}
+template <class T, class... Args> T* ToolObject::tryAdd(Args&&... args) const {
+  return valid() ? scene_->world().tryAdd<T>(e_, std::forward<Args>(args)...) : nullptr;
+}
+template <class T> bool ToolObject::remove() const {
+  if (!valid()) return false;
+  if (!scene_->world().has<T>(e_)) return false;
+  scene_->world().remove<T>(e_);
+  return true;
+}
+template <class T> T* ToolObject::component() const { return get<T>(); }
 inline void ToolObject::addTag(TagId t) const {
   if (valid()) scene_->world().addTag(e_, t);
 }

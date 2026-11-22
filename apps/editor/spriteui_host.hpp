@@ -16,6 +16,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -81,10 +82,26 @@ class SpriteUiSdlRenderer {
 
   bool draw(SDL_Renderer* renderer, const SR::FramePacket& packet) {
     if (!renderer) return false;
+    activeClipIndex_ = SR::NoClipIndex;
     for (const auto& batch : packet.batches) {
       if (!setClip(renderer, packet, batch.clipIndex)) return false;
       vertices_.clear();
       indices_.clear();
+      std::size_t vertexReserve = 0;
+      std::size_t indexReserve = 0;
+      for (std::uint32_t i = 0; i < batch.instanceCount; ++i) {
+        const auto& inst = packet.instances[batch.firstInstance + i];
+        if (inst.tint[3] <= 0.f) continue;
+        if (isRounded(inst)) {
+          vertexReserve += static_cast<std::size_t>(kCornerSegments * 4 + 5);
+          indexReserve += static_cast<std::size_t>((kCornerSegments + 1) * 4 * 3);
+        } else {
+          vertexReserve += 4;
+          indexReserve += 6;
+        }
+      }
+      vertices_.reserve(vertexReserve);
+      indices_.reserve(indexReserve);
       for (std::uint32_t i = 0; i < batch.instanceCount; ++i) {
         const auto& inst = packet.instances[batch.firstInstance + i];
         // Alfa zero e invisivel por definicao. Sem este pulo, o SDL desenhava preto nas barras "passivas".
@@ -160,7 +177,9 @@ class SpriteUiSdlRenderer {
     return atlas_;
   }
 
-  static bool setClip(SDL_Renderer* renderer, const SR::FramePacket& packet, std::uint32_t clipIndex) {
+  bool setClip(SDL_Renderer* renderer, const SR::FramePacket& packet, std::uint32_t clipIndex) {
+    if (clipIndex == activeClipIndex_) return true;
+    activeClipIndex_ = clipIndex;
     if (clipIndex == SR::NoClipIndex || clipIndex >= packet.clipRects.size()) return SDL_SetRenderClipRect(renderer, nullptr);
     const auto& clip = packet.clipRects[clipIndex];
     const int left = static_cast<int>(std::floor(clip.minX));
@@ -187,23 +206,36 @@ class SpriteUiSdlRenderer {
     const float ry = std::min(0.5f, inst.transformRow1[3] / height);
     // Arcos no sentido horario da tela: centro do arco e angulo inicial; cada arco gira um quarto de volta.
     struct Corner {
-      float cx, cy, start;
+      float cx, cy;
     };
     const Corner corners[4] = {
-        {rx, ry, kPi},
-        {1.f - rx, ry, kPi + kHalfPi},
-        {1.f - rx, 1.f - ry, 0.f},
-        {rx, 1.f - ry, kHalfPi},
+        {rx, ry},
+        {1.f - rx, ry},
+        {1.f - rx, 1.f - ry},
+        {rx, 1.f - ry},
     };
     const int base = static_cast<int>(vertices_.size());
     const auto addVertex = [&](float u, float v) {
       vertices_.push_back({transform(inst, u, v), color, uvAt(inst, u, v, textured)});
     };
     addVertex(0.5f, 0.5f);
+    static const auto arc = [] {
+      std::array<std::array<float, 2>, kCornerSegments * 4 + 4> values{};
+      const float starts[4] = {kPi, kPi + kHalfPi, 0.f, kHalfPi};
+      std::size_t index = 0;
+      for (float start : starts) {
+        for (int k = 0; k <= kCornerSegments; ++k) {
+          const float a = start + kHalfPi * static_cast<float>(k) / static_cast<float>(kCornerSegments);
+          values[index++] = {std::cos(a), std::sin(a)};
+        }
+      }
+      return values;
+    }();
+    std::size_t arcIndex = 0;
     for (const Corner& c : corners) {
       for (int k = 0; k <= kCornerSegments; ++k) {
-        const float a = c.start + kHalfPi * static_cast<float>(k) / static_cast<float>(kCornerSegments);
-        addVertex(c.cx + rx * std::cos(a), c.cy + ry * std::sin(a));
+        addVertex(c.cx + rx * arc[arcIndex][0], c.cy + ry * arc[arcIndex][1]);
+        ++arcIndex;
       }
     }
     const int ring = 4 * (kCornerSegments + 1);
@@ -232,7 +264,16 @@ class SpriteUiSdlRenderer {
   }
   static float encode(float linear) {
     linear = std::clamp(linear, 0.f, 1.f);
-    return linear <= 0.0031308f ? linear * 12.92f : 1.055f * std::pow(linear, 1.f / 2.4f) - 0.055f;
+    static const auto table = [] {
+      std::array<float, 256> values{};
+      for (std::size_t i = 0; i < values.size(); ++i) {
+        const float v = static_cast<float>(i) / 255.f;
+        values[i] = v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.f / 2.4f) - 0.055f;
+      }
+      return values;
+    }();
+    const int index = static_cast<int>(linear * 255.f + 0.5f);
+    return table[std::clamp(index, 0, 255)];
   }
 
   static constexpr int kCornerSegments = 6;   // segmentos de cada arco de canto (fan do retangulo arredondado)
@@ -244,6 +285,7 @@ class SpriteUiSdlRenderer {
   SDL_Texture* views_[kViewSlots] = {};
   const TextAtlasSet* textSet_ = nullptr;          // conjunto de atlas por tamanho (opcional)
   SDL_Texture* sizeTex_[TextAtlasSet::kSlots] = {};   // uma textura por tamanho, criada sob demanda
+  std::uint32_t activeClipIndex_ = SR::NoClipIndex;
   std::vector<SDL_Vertex> vertices_;
   std::vector<int> indices_;
 };

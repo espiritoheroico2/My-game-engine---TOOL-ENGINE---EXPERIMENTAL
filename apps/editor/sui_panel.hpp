@@ -81,7 +81,13 @@ class Canvas {
     return ST::LayoutText(utf8, ST::ShapeTruetype(utf8, atlas), atlas.metrics, cfg);
   }
 
-  [[nodiscard]] float lineHeight(float fontSize) const { return layout("Ag", fontSize).lineHeight; }
+  [[nodiscard]] float lineHeight(float fontSize) const {
+    if (lineHeightValid_ && lineHeightSize_ == fontSize) return lineHeight_;
+    lineHeightSize_ = fontSize;
+    lineHeight_ = layout("Ag", fontSize).lineHeight;
+    lineHeightValid_ = true;
+    return lineHeight_;
+  }
 
   // Texto de largura limitada (cortado com "..."). Retorna a largura desenhada, para alinhar o que vem depois.
   float addText(float x, float y, const std::string& text, float fontSize, SU::Vec4 color, float maxWidth, bool alignRight = false) {
@@ -197,6 +203,9 @@ class Canvas {
 
   const TextAtlasSet& text_;
   float textZ_ = 0.9f;
+  mutable float lineHeightSize_ = -1.f;
+  mutable float lineHeight_ = 0.f;
+  mutable bool lineHeightValid_ = false;
   std::vector<Prim> prims_;
   std::vector<ST::TextLayoutResult> texts_;
 };

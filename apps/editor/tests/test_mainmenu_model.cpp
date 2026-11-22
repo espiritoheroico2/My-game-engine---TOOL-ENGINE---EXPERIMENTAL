@@ -46,7 +46,7 @@ void TestSeparatorsAndShortcuts() {
   CHECK(file.items[1].shortcut == "Ctrl+S");
   CHECK(file.items[3].separator);
   CHECK(file.items[6].separator);
-  CHECK(menus[2].items[14].shortcut == "F1");
+  CHECK(menus[2].items[15].shortcut == "F1");
 }
 
 void TestRequestsFollowTheRows() {

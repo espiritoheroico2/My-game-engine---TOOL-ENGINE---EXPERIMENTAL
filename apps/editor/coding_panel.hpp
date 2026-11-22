@@ -14,6 +14,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -35,6 +36,13 @@ class Panel {
 
   [[nodiscard]] framed::Chrome& chrome() { return chrome_; }
   [[nodiscard]] const framed::Chrome& chrome() const { return chrome_; }
+
+  [[nodiscard]] float fontSize() const { return codeFont_; }
+  void setFontSize(float size) { codeFont_ = std::clamp(size, kMinCodeFont, kMaxCodeFont); }
+  [[nodiscard]] bool wantsTextCursor(float x, float y) const {
+    return editing_ && x >= editorRect_.x && x < editorRect_.x + editorRect_.w &&
+           y >= editorRect_.y && y < editorRect_.y + editorRect_.h;
+  }
 
   // Pasta do projeto: varre os codigos quando ela muda. Trocar de projeto salva o arquivo aberto antes.
   void setRoot(const fs::path& root) {
@@ -63,9 +71,27 @@ class Panel {
     const std::string name = current_ >= 0 ? files_[static_cast<std::size_t>(current_)].rel + (dirty_ ? " *" : "")
                                            : std::string(T("No file open"));
     text(dl, font, ImVec2(saveB.x + kPad, o.y + 8.f), name.c_str(), col(kDim));
+
+    // Controles de tamanho do codigo: ficam no topo, como na barra da janela, e nunca dependem da lista.
+    const float zoomW = 28.f;
+    const float zoomGap = 4.f;
+    const ImVec2 plusA{e.x - kPad - zoomW, saveA.y}, plusB{e.x - kPad, saveB.y};
+    const ImVec2 minusA{plusA.x - zoomGap - zoomW, saveA.y}, minusB{plusA.x - zoomGap, saveB.y};
+    if (button(dl, font, minusA, minusB, "-", mouse, click)) {
+      setFontSize(codeFont_ - 1.f);
+    }
+    if (button(dl, font, plusA, plusB, "+", mouse, click)) {
+      setFontSize(codeFont_ + 1.f);
+    }
+
+    char zoomLabel[16];
+    std::snprintf(zoomLabel, sizeof zoomLabel, "%.0f", codeFont_);
+    const float zoomLabelW = font->CalcTextSizeA(kFont, FLT_MAX, 0.f, zoomLabel).x;
+    text(dl, font, ImVec2(minusA.x - zoomLabelW - 8.f, o.y + 8.f), zoomLabel, col(kDim));
+
     const char* toggle = listShown_ ? T("Hide list") : T("Show list");
     const float tw = font->CalcTextSizeA(kFont, FLT_MAX, 0.f, toggle).x + 16.f;
-    const ImVec2 tA{e.x - kPad - tw, saveA.y}, tB{e.x - kPad, saveB.y};
+    const ImVec2 tA{minusA.x - kPad - tw - 8.f, saveA.y}, tB{minusA.x - kPad - 8.f, saveB.y};
     if (button(dl, font, tA, tB, toggle, mouse, click)) listShown_ = !listShown_;
     dl->AddLine(ImVec2(o.x, o.y + kBar), ImVec2(e.x, o.y + kBar), col(kBorder));
 
@@ -107,6 +133,9 @@ class Panel {
 
  private:
   static constexpr float kFont = 12.f;
+  static constexpr float kMinCodeFont = 12.f;
+  static constexpr float kMaxCodeFont = 28.f;
+  static constexpr float kCodeFontStep = 1.f;
   static constexpr float kPad = 8.f;
   static constexpr float kBar = 30.f;
   static constexpr float kRow = 18.f;
@@ -136,6 +165,10 @@ class Panel {
     dl->AddText(font, kFont, p, c, t);
   }
 
+  static void codeText(ImDrawList* dl, ImFont* font, float size, ImVec2 p, const char* t, ImU32 c) {
+    dl->AddText(font, size, p, c, t);
+  }
+
   static bool button(ImDrawList* dl, ImFont* font, ImVec2 a, ImVec2 b, const char* label, ImVec2 mouse, bool click) {
     const bool hover = inside(mouse, a, b);
     dl->AddRectFilled(a, b, col(hover ? kButtonHover : kButton), 3.f);
@@ -144,16 +177,16 @@ class Panel {
     return click && hover;
   }
 
-  static float widthOf(ImFont* font, const std::string& s, std::size_t n) {
-    return font->CalcTextSizeA(kFont, FLT_MAX, 0.f, s.c_str(), s.c_str() + n).x;
+  static float widthOf(ImFont* font, float size, const std::string& s, std::size_t n) {
+    return font->CalcTextSizeA(size, FLT_MAX, 0.f, s.c_str(), s.c_str() + n).x;
   }
 
   // Coluna (em bytes) mais proxima da posicao x dentro da linha.
-  static int columnAt(ImFont* font, const std::string& s, float x) {
+  static int columnAt(ImFont* font, float size, const std::string& s, float x) {
     int best = 0;
     float bestD = FLT_MAX;
     for (std::size_t c = 0; c <= s.size(); ++c) {
-      const float d = std::abs(widthOf(font, s, c) - x);
+      const float d = std::abs(widthOf(font, size, s, c) - x);
       if (d < bestD) { bestD = d; best = static_cast<int>(c); }
     }
     return best;
@@ -168,19 +201,41 @@ class Panel {
   }
 
   void drawEditor(ImDrawList* dl, ImFont* font, ImGuiIO& io, ImVec2 ea, ImVec2 eb, ImVec2 mouse, bool click) {
-    const int visible = std::max(1, static_cast<int>((eb.y - ea.y) / kLine));
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) save();
+
+    const float lineHeight = codeFont_ * 1.35f;
+    const int digits = std::max(2, static_cast<int>(std::to_string(std::max(1, static_cast<int>(lines_.size()))).size()));
+    const float gutterW = std::max(36.f, static_cast<float>(digits) * codeFont_ * 0.68f + 10.f);
+    const ImVec2 codeA{ea.x + gutterW, ea.y};
+    const ImVec2 codeB{eb.x, eb.y};
+    editorRect_ = {codeA.x, codeA.y, codeB.x - codeA.x, codeB.y - codeA.y};
+
+    dl->AddRectFilled(ImVec2(ea.x, ea.y - 4.f), ImVec2(codeA.x - 4.f, eb.y), col(kBody));
+    dl->AddLine(ImVec2(codeA.x - 5.f, ea.y - 4.f), ImVec2(codeA.x - 5.f, eb.y), col(kBorder));
+
+    const int visible = std::max(1, static_cast<int>((eb.y - ea.y) / lineHeight));
     const int count = static_cast<int>(lines_.size());
 
     if (click) {
-      if (inside(mouse, ea, eb)) {
+      if (inside(mouse, codeA, codeB)) {
         editing_ = true;
-        caretLine_ = std::clamp(topLine_ + static_cast<int>((mouse.y - ea.y) / kLine), 0, count - 1);
-        caretCol_ = columnAt(font, lines_[static_cast<std::size_t>(caretLine_)], mouse.x - ea.x);
+        caretLine_ = std::clamp(topLine_ + static_cast<int>((mouse.y - codeA.y) / lineHeight), 0, count - 1);
+        caretCol_ = columnAt(font, codeFont_, lines_[static_cast<std::size_t>(caretLine_)], mouse.x - codeA.x);
+        selectionAnchorLine_ = caretLine_;
+        selectionAnchorCol_ = caretCol_;
+        selecting_ = true;
       } else {
         editing_ = false;
+        selecting_ = false;
       }
     }
-    if (io.MouseWheel != 0.f && inside(mouse, ea, eb)) {
+    if (selecting_ && io.MouseDown[0] && inside(mouse, codeA, codeB)) {
+      caretLine_ = std::clamp(topLine_ + static_cast<int>((mouse.y - codeA.y) / lineHeight), 0, count - 1);
+      caretCol_ = columnAt(font, codeFont_, lines_[static_cast<std::size_t>(caretLine_)], mouse.x - codeA.x);
+    } else if (selecting_ && !io.MouseDown[0]) {
+      selecting_ = false;
+    }
+    if (io.MouseWheel != 0.f && inside(mouse, codeA, codeB)) {
       topLine_ = std::clamp(topLine_ - static_cast<int>(io.MouseWheel) * 3, 0, std::max(0, count - 1));
     }
 
@@ -207,14 +262,34 @@ class Panel {
     if (caretLine_ >= topLine_ + visible) topLine_ = caretLine_ - visible + 1;
 
     for (int i = topLine_; i < std::min(count, topLine_ + visible + 1); ++i) {
-      const ImVec2 p{ea.x, ea.y + static_cast<float>(i - topLine_) * kLine};
-      text(dl, font, p, lines_[static_cast<std::size_t>(i)].c_str(), col(kText));
+      const float y = codeA.y + static_cast<float>(i - topLine_) * lineHeight;
+      char number[24];
+      std::snprintf(number, sizeof number, "%d", i + 1);
+      const float numberW = font->CalcTextSizeA(codeFont_, FLT_MAX, 0.f, number).x;
+      codeText(dl, font, codeFont_, ImVec2(codeA.x - gutterW + gutterW - numberW - 8.f, y), number, col(kDim));
+
+      int startLine = selectionAnchorLine_, startCol = selectionAnchorCol_;
+      int endLine = caretLine_, endCol = caretCol_;
+      if (endLine < startLine || (endLine == startLine && endCol < startCol)) {
+        std::swap(startLine, endLine); std::swap(startCol, endCol);
+      }
+      if (i >= startLine && i <= endLine && (startLine != endLine || startCol != endCol)) {
+        const std::string& line = lines_[static_cast<std::size_t>(i)];
+        const int beginCol = i == startLine ? startCol : 0;
+        const int finishCol = i == endLine ? endCol : static_cast<int>(line.size());
+        if (finishCol >= beginCol) {
+          const float x0 = codeA.x + widthOf(font, codeFont_, line, static_cast<std::size_t>(beginCol));
+          const float x1 = codeA.x + widthOf(font, codeFont_, line, static_cast<std::size_t>(finishCol));
+          dl->AddRectFilled(ImVec2(x0, y), ImVec2(std::max(x0 + 1.f, x1), y + lineHeight), col(kSelect));
+        }
+      }
+      codeText(dl, font, codeFont_, ImVec2(codeA.x, y), lines_[static_cast<std::size_t>(i)].c_str(), col(kText));
     }
     if (editing_) {
       const std::string& l = lines_[static_cast<std::size_t>(caretLine_)];
-      const float x = ea.x + widthOf(font, l, static_cast<std::size_t>(caretCol_));
-      const float y = ea.y + static_cast<float>(caretLine_ - topLine_) * kLine;
-      if (caretLine_ >= topLine_ && caretLine_ < topLine_ + visible) dl->AddLine(ImVec2(x, y), ImVec2(x, y + kLine), col(kCaret));
+      const float x = codeA.x + widthOf(font, codeFont_, l, static_cast<std::size_t>(caretCol_));
+      const float y = codeA.y + static_cast<float>(caretLine_ - topLine_) * lineHeight;
+      if (caretLine_ >= topLine_ && caretLine_ < topLine_ + visible) dl->AddLine(ImVec2(x, y), ImVec2(x, y + lineHeight), col(kCaret));
     }
   }
 
@@ -225,13 +300,41 @@ class Panel {
   }
 
   // Edicao: a linha do cursor e as operacoes sobre lines_.
+  bool hasSelection() const {
+    return selectionAnchorLine_ != caretLine_ || selectionAnchorCol_ != caretCol_;
+  }
+  void deleteSelection() {
+    if (!hasSelection()) return;
+    int startLine = selectionAnchorLine_, startCol = selectionAnchorCol_;
+    int endLine = caretLine_, endCol = caretCol_;
+    if (endLine < startLine || (endLine == startLine && endCol < startCol)) {
+      std::swap(startLine, endLine); std::swap(startCol, endCol);
+    }
+    if (startLine == endLine) {
+      lines_[static_cast<std::size_t>(startLine)].erase(static_cast<std::size_t>(startCol),
+                                                        static_cast<std::size_t>(endCol - startCol));
+    } else {
+      std::string& first = lines_[static_cast<std::size_t>(startLine)];
+      std::string& last = lines_[static_cast<std::size_t>(endLine)];
+      first.erase(static_cast<std::size_t>(startCol));
+      first += last.substr(static_cast<std::size_t>(endCol));
+      lines_.erase(lines_.begin() + startLine + 1, lines_.begin() + endLine + 1);
+    }
+    caretLine_ = startLine;
+    caretCol_ = startCol;
+    selectionAnchorLine_ = caretLine_;
+    selectionAnchorCol_ = caretCol_;
+    dirty_ = true;
+  }
   void insertText(const std::string& t) {
+    if (hasSelection()) deleteSelection();
     std::string& l = lines_[static_cast<std::size_t>(caretLine_)];
     l.insert(static_cast<std::size_t>(caretCol_), t);
     caretCol_ += static_cast<int>(t.size());
     dirty_ = true;
   }
   void newline() {
+    if (hasSelection()) deleteSelection();
     std::string& l = lines_[static_cast<std::size_t>(caretLine_)];
     std::string rest = l.substr(static_cast<std::size_t>(caretCol_));
     l.resize(static_cast<std::size_t>(caretCol_));
@@ -241,6 +344,7 @@ class Panel {
     dirty_ = true;
   }
   void backspace() {
+    if (hasSelection()) { deleteSelection(); return; }
     if (caretCol_ > 0) {
       lines_[static_cast<std::size_t>(caretLine_)].erase(static_cast<std::size_t>(caretCol_ - 1), 1);
       --caretCol_;
@@ -256,6 +360,7 @@ class Panel {
     dirty_ = true;
   }
   void deleteForward() {
+    if (hasSelection()) { deleteSelection(); return; }
     std::string& l = lines_[static_cast<std::size_t>(caretLine_)];
     if (static_cast<std::size_t>(caretCol_) < l.size()) {
       l.erase(static_cast<std::size_t>(caretCol_), 1);
@@ -372,6 +477,10 @@ class Panel {
   bool dirty_ = false;
   bool editing_ = false;
   bool listShown_ = true;
+  bool selecting_ = false;
+  int selectionAnchorLine_ = 0, selectionAnchorCol_ = 0;
+  float codeFont_ = kMinCodeFont;
+  struct RectState { float x = 0.f, y = 0.f, w = 0.f, h = 0.f; } editorRect_{};
 };
 
 }  // namespace editor::coding

@@ -182,7 +182,7 @@ class SettingsPanel {
         std::uint64_t paint = 1;
         const float bottom = rect_.y + rect_.h;
         items.push_back(sui::Canvas::solidItem(rect_.x, rect_.y, rect_.w, rect_.h, panelColor_, 0.f, owner, kContentClip, paint++));
-        canvas_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, bottom, owner, kContentClip, paint);
+        canvas_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y + Metrics::kStripH, bottom, owner, kContentClip, paint);
         if (open_[kGraphicsTab]) appendControls(items, paint);
         overlay_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, bottom, owner, kWindowClip, paint);
         if (open_[kGraphicsTab]) appendPopups(items, paint);
@@ -288,7 +288,8 @@ class SettingsPanel {
     void layoutSections(const Values& v) {
         labelW_ = std::min(Metrics::kLabelW, rect_.w * 0.5f);
         controlW_ = rect_.w - 2.f * Metrics::kPad - labelW_;
-        const float top = Metrics::kPad - scroll_.scrollOffset.y;
+        const float contentTop = Metrics::kStripH + Metrics::kPad;
+        const float top = contentTop - scroll_.scrollOffset.y;
         const float headerW = rect_.w - 2.f * Metrics::kPad;
         for (auto& row : paletteRows_) row = sui::Box{};   // linhas de tema so existem com a secao aberta
         float y = top;
