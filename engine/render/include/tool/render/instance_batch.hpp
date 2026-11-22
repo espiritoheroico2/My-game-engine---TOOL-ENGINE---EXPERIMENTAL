@@ -1,6 +1,6 @@
 #pragma once
-// Planejador puro de batches, sem GPU ou RHI. O GpuRenderer o usa nos passes opacos, emissao, prepass e sombras.
-// Transparentes NAO passam por agrupamento: precisam de ordenacao de profundidade.
+// Planejador puro de batches, sem GPU ou RHI. O GpuRenderer o usa em passes opacos, emissao, prepass e sombras.
+// Transparencia usa somente planAdjacentInstanceBatches para preservar a ordenacao de profundidade.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -20,7 +20,7 @@ struct InstanceGPU {
 };
 static_assert(sizeof(InstanceGPU) == 160, "layout de InstanceGPU deve bater com ObjectCB (160 bytes)");
 
-// Chave de agrupamento de um objeto opaco: id da malha e id da textura (0 = sem textura).
+// Chave de agrupamento por malha e textura (0 = sem textura); transparencia exige adjacencia.
 struct BatchItem { std::uint64_t mesh; std::uint64_t texture; };
 
 // Um comando de desenho: 'count' instancias a partir de 'first' na ordem de 'BatchPlan::order'.
@@ -77,6 +77,33 @@ inline void planQueuedBatches(const std::vector<QueueItem>& queue, std::vector<B
   items.reserve(queue.size());
   for (const QueueItem& item : queue) items.push_back(makeBatchItem(item));
   planInstanceBatches(items, plan, maxPerBatch);
+}
+
+// Preserva a ordem de entrada e agrupa somente sequencias adjacentes com a mesma chave.
+inline void planAdjacentInstanceBatches(const std::vector<BatchItem>& items, BatchPlan& plan,
+                                        std::uint32_t maxPerBatch = 0) {
+  plan.order.clear();
+  plan.batches.clear();
+  plan.order.reserve(items.size());
+  for (std::size_t i = 0; i < items.size(); ++i) plan.order.push_back(static_cast<std::uint32_t>(i));
+
+  std::size_t begin = 0;
+  std::uint32_t first = 0;
+  while (begin < items.size()) {
+    const BatchItem& key = items[begin];
+    std::size_t end = begin + 1;
+    while (end < items.size() && items[end].mesh == key.mesh && items[end].texture == key.texture) ++end;
+    std::size_t next = begin;
+    while (next < end) {
+      const std::size_t count = maxPerBatch == 0
+          ? end - next
+          : std::min<std::size_t>(maxPerBatch, end - next);
+      plan.batches.push_back({key.mesh, key.texture, first, static_cast<std::uint32_t>(count)});
+      first += static_cast<std::uint32_t>(count);
+      next += count;
+    }
+    begin = end;
+  }
 }
 
 }  // namespace tool::render

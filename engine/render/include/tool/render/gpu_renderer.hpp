@@ -159,12 +159,8 @@ public:
     ed.layout = pd.layout; ed.vertexStride = pd.vertexStride; ed.color = rhi::Format::RGBA16F;
     ed.uniformNames = {"FrameBuffer", "BatchBuffer"}; ed.textureNames.clear(); ed.storageNames = {"Instances"};
     emiPipe_ = dev.createPipeline(ed);
-    // Transparente: mesmo PBR, com mistura alfa e sem escrever profundidade (o alfa vem de ObjectCB.color[3]).
-    rhi::PipelineDesc td; td.vs = legacyVs_; td.ps = legacyPs_; td.name = "transparent"; td.blend = true; td.depthWrite = false;
-    td.layout = pd.layout; td.vertexStride = pd.vertexStride; td.color = pd.color;
-    td.uniformNames = {"FrameBuffer", "ObjectBuffer", "GlobalLightCB", "SunLightCB", "CsmCB", "IblCB", "ClusterGridCB", "PointShadowCB"};
-    td.textureNames = pbrTextureNames();
-    td.storageNames = {"PointLightsBuffer", "SpotLightsBuffer", "LightGrid", "LightIndexList"};
+    // Transparente usa o PBR instanciado; somente lotes adjacentes sao agrupados para preservar a ordem alfa.
+    rhi::PipelineDesc td = pd; td.name = "transparent"; td.blend = true; td.depthWrite = false;
     transPipe_ = dev.createPipeline(td);
 
     // passe de sombra: so posicao, grava z da luz num alvo R32F, sem culling (as duas faces projetam sombra)
@@ -244,7 +240,7 @@ public:
       brdfTex_ = dev.createTexture({lut.size, lut.size, 1, rhi::Format::RGBA8, false}, px.data());
     }
     pointCb_ = dev.createBuffer({sizeof(PointShadowGPU), rhi::BufferUsage::Uniform, true}, nullptr);
-    if (prePipe_.isNull() || ssaoPipe_.isNull() || blurPipe_.isNull() || pointClearPipe_.isNull() || fsVb_.isNull() || fsIb_.isNull() || ssaoCb_.isNull() || pipe_.isNull() || legacyVs_.isNull() || legacyPs_.isNull() || shPipe_.isNull() || ptPipe_.isNull() || frameCb_.isNull() || objCb_.isNull() || batchCb_.isNull() || shCb_.isNull() || csmCb_.isNull() || iblCb_.isNull() || pointCb_.isNull()) { release(); return false; }
+    if (prePipe_.isNull() || ssaoPipe_.isNull() || blurPipe_.isNull() || pointClearPipe_.isNull() || fsVb_.isNull() || fsIb_.isNull() || ssaoCb_.isNull() || pipe_.isNull() || transPipe_.isNull() || legacyVs_.isNull() || legacyPs_.isNull() || shPipe_.isNull() || ptPipe_.isNull() || frameCb_.isNull() || objCb_.isNull() || batchCb_.isNull() || shCb_.isNull() || csmCb_.isNull() || iblCb_.isNull() || pointCb_.isNull()) { release(); return false; }
     ensureShadowTargets(1024); // alvos "vazios" para o shader sempre ter as 4 texturas ligadas
     ensurePointTargets(64);    // idem para as sombras de pontuais/spot (4 faixas pequenas ate uma luz pedir a resolucao)
     resize(w, h);
@@ -412,6 +408,11 @@ public:
       queueItems_.push_back({true, false, emissive, true, d.mat.castShadow && d.mesh->count > 0});
     }
     render::buildRenderQueues(queueItems_, renderQueues_);
+    if (!ensureInstanceBuffer(std::max(draws_.size(), tdraws_.size()))) {
+      lastError_ = "storage buffer de instancias indisponivel";
+      releaseImports();
+      return;
+    }
     shadowCasters_.clear();
     shadowInstances_.clear();
     shadowCasters_.reserve(renderQueues_.shadowCasters.size());
@@ -649,29 +650,14 @@ public:
     instCpu_.reserve(plan.order.size());
     for (u32 k : plan.order) {
       const Draw& d = draws_[renderQueues_.opaque[k]];
-      ObjectCB oc{}; oc.world = d.world; oc.color[0] = d.mat.albedo.x; oc.color[1] = d.mat.albedo.y; oc.color[2] = d.mat.albedo.z; oc.color[3] = 1.f;
-      oc.metallic = d.mat.metallic; oc.roughness = d.mat.roughness; oc.receiveShadow = d.mat.receiveShadow ? 1.f : 0.f; // o shader decide: sol (cascatas) e pontuais/spot
-      oc.texInfo[0] = d.tw; oc.texInfo[1] = d.th; oc.texInfo[2] = d.tw > 0.f ? 1.f : 0.f;
-      oc.emissive[0] = d.mat.emissive.x; oc.emissive[1] = d.mat.emissive.y; oc.emissive[2] = d.mat.emissive.z; oc.emissive[3] = 0.f;
-      fillFog(oc, d.mat);
-      InstanceGPU inst{};
-      std::memcpy(inst.world, &oc.world, sizeof oc.world);
-      std::memcpy(inst.color, oc.color, sizeof oc.color);
-      inst.metallic = oc.metallic; inst.roughness = oc.roughness; inst.receiveShadow = oc.receiveShadow; inst.pad = oc.pad;
-      std::memcpy(inst.texInfo, oc.texInfo, sizeof oc.texInfo);
-      std::memcpy(inst.emissive, oc.emissive, sizeof oc.emissive);
-      std::memcpy(inst.fogColor, oc.fogColor, sizeof oc.fogColor);
-      std::memcpy(inst.fogParams, oc.fogParams, sizeof oc.fogParams);
-      instCpu_.push_back(inst);
+      instCpu_.push_back(makeInstanceGPU(d, 1.f));
     }
     if (!instCpu_.empty()) {
-      if (instCpu_.size() > instCap_) {
-        u32 newCap = instCap_ ? instCap_ : 64u;
-        while (newCap < instCpu_.size()) newCap *= 2u;
-        if (!instBuf_.isNull()) dev_->destroy(instBuf_);
-        instBuf_ = dev_->createBuffer({static_cast<size_t>(newCap) * sizeof(InstanceGPU), rhi::BufferUsage::Storage, true, sizeof(InstanceGPU)}, nullptr);
-        instCap_ = instCap_ ? newCap : newCap;
-        if (instBuf_.isNull()) { cl_->end(); dev_->submit(*cl_); cl_.reset(); lastError_ = "storage buffer de instancias indisponivel"; releaseImports(); return; }
+      if (!ensureInstanceBuffer(instCpu_.size())) {
+        cl_->end(); dev_->submit(*cl_); cl_.reset();
+        lastError_ = "storage buffer de instancias indisponivel";
+        releaseImports();
+        return;
       }
       dev_->updateBuffer(instBuf_, instCpu_.data(), instCpu_.size() * sizeof(InstanceGPU));
       cl_->setStorage(4, instBuf_);
@@ -737,22 +723,43 @@ public:
       const Vec3 eye = cam_.eye;
       auto dist2 = [&](const Draw& d) { const Vec3 p = d.world.transformPoint({0, 0, 0}); const Vec3 q = p - eye; return dot(q, q); };
       std::sort(tdraws_.begin(), tdraws_.end(), [&](const Draw& a, const Draw& b) { return dist2(a) > dist2(b); });
+      transparentItemsScratch_.clear();
+      transparentItemsScratch_.reserve(tdraws_.size());
+      for (const Draw& d : tdraws_) {
+        const u64 meshId = reinterpret_cast<u64>(d.mesh);
+        const u64 texId = d.tex.isNull() ? 0u : (static_cast<u64>(d.tex.generation) << 32) | d.tex.index;
+        transparentItemsScratch_.push_back({meshId, texId});
+      }
+      planAdjacentInstanceBatches(transparentItemsScratch_, transparentPlan_, 4096);
+      instCpu_.clear();
+      instCpu_.reserve(transparentPlan_.order.size());
+      for (u32 index : transparentPlan_.order) {
+        const Draw& d = tdraws_[index];
+        instCpu_.push_back(makeInstanceGPU(d, d.mat.opacity));
+      }
+      if (!instCpu_.empty()) {
+        if (!ensureInstanceBuffer(instCpu_.size())) {
+          lastError_ = "storage buffer de instancias indisponivel";
+          transparentTimer.stop();
+          releaseImports();
+          return;
+        }
+        dev_->updateBuffer(instBuf_, instCpu_.data(), instCpu_.size() * sizeof(InstanceGPU));
+      }
       auto tl = dev_->beginCommands();
       tl->beginKeep(color_, depth_);
       bindScene(tl.get(), transPipe_);
-      const GpuMesh* lastT = nullptr;
-      for (const Draw& d : tdraws_) {
-        ObjectCB oc{}; oc.world = d.world;
-        oc.color[0] = d.mat.albedo.x; oc.color[1] = d.mat.albedo.y; oc.color[2] = d.mat.albedo.z; oc.color[3] = d.mat.opacity;
-        oc.metallic = d.mat.metallic; oc.roughness = d.mat.roughness; oc.receiveShadow = d.mat.receiveShadow ? 1.f : 0.f;
-        oc.texInfo[0] = d.tw; oc.texInfo[1] = d.th; oc.texInfo[2] = d.tw > 0.f ? 1.f : 0.f;
-        oc.emissive[0] = d.mat.emissive.x; oc.emissive[1] = d.mat.emissive.y; oc.emissive[2] = d.mat.emissive.z; oc.emissive[3] = 0.f;
-        fillFog(oc, d.mat);
-        dev_->updateBuffer(objCb_, &oc, sizeof oc);
-        tl->setUniform(1, objCb_);
+      if (!instCpu_.empty()) tl->setStorage(4, instBuf_);
+      for (const InstanceBatch& b : transparentPlan_.batches) {
+        BatchCB bc{};
+        bc.first = b.first;
+        dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+        tl->setUniform(1, batchCb_);
+        const Draw& d = tdraws_[transparentPlan_.order[b.first]];
         tl->setTexture(0, d.tex.isNull() ? white_ : d.tex);
-        if (d.mesh != lastT) { tl->setVertexBuffer(d.mesh->vertex); tl->setIndexBuffer(d.mesh->index); lastT = d.mesh; }
-        recordDraw(*tl, render::RenderPassId::Transparent, d.mesh->count, 1);
+        tl->setVertexBuffer(d.mesh->vertex);
+        tl->setIndexBuffer(d.mesh->index);
+        recordDraw(*tl, render::RenderPassId::Transparent, d.mesh->count, b.count);
       }
       tl->end(); dev_->submit(*tl);
     }
@@ -1041,6 +1048,8 @@ private:
   render::RenderQueues renderQueues_;
   std::vector<BatchItem> emissionItemsScratch_;
   BatchPlan emissionPlan_;
+  std::vector<BatchItem> transparentItemsScratch_;
+  BatchPlan transparentPlan_;
   std::vector<BatchItem> shadowItemsScratch_;
   std::vector<ShadowInstanceGPU> shadowInstances_;
   rhi::TextureId brdfTex_;
@@ -1073,6 +1082,34 @@ private:
   static void fillFog(ObjectCB& oc, const Material& m) {
     oc.fogColor[0] = m.fogColor.x; oc.fogColor[1] = m.fogColor.y; oc.fogColor[2] = m.fogColor.z; oc.fogColor[3] = 0.f;
     oc.fogParams[0] = m.fogStart; oc.fogParams[1] = m.fogEnd; oc.fogParams[2] = m.fogAmount; oc.fogParams[3] = 0.f;
+  }
+  static InstanceGPU makeInstanceGPU(const Draw& d, f32 alpha) {
+    ObjectCB oc{};
+    oc.world = d.world;
+    oc.color[0] = d.mat.albedo.x; oc.color[1] = d.mat.albedo.y; oc.color[2] = d.mat.albedo.z; oc.color[3] = alpha;
+    oc.metallic = d.mat.metallic; oc.roughness = d.mat.roughness; oc.receiveShadow = d.mat.receiveShadow ? 1.f : 0.f;
+    oc.texInfo[0] = d.tw; oc.texInfo[1] = d.th; oc.texInfo[2] = d.tw > 0.f ? 1.f : 0.f;
+    oc.emissive[0] = d.mat.emissive.x; oc.emissive[1] = d.mat.emissive.y; oc.emissive[2] = d.mat.emissive.z;
+    fillFog(oc, d.mat);
+    InstanceGPU inst{};
+    std::memcpy(inst.world, &oc.world, sizeof oc.world);
+    std::memcpy(inst.color, oc.color, sizeof oc.color);
+    inst.metallic = oc.metallic; inst.roughness = oc.roughness; inst.receiveShadow = oc.receiveShadow; inst.pad = oc.pad;
+    std::memcpy(inst.texInfo, oc.texInfo, sizeof oc.texInfo);
+    std::memcpy(inst.emissive, oc.emissive, sizeof oc.emissive);
+    std::memcpy(inst.fogColor, oc.fogColor, sizeof oc.fogColor);
+    std::memcpy(inst.fogParams, oc.fogParams, sizeof oc.fogParams);
+    return inst;
+  }
+  bool ensureInstanceBuffer(size_t required) {
+    if (required == 0) return true;
+    if (required <= instCap_ && !instBuf_.isNull()) return true;
+    u32 newCap = instCap_ ? instCap_ : 64u;
+    while (newCap < required) newCap *= 2u;
+    if (!instBuf_.isNull()) dev_->destroy(instBuf_);
+    instBuf_ = dev_->createBuffer({static_cast<size_t>(newCap) * sizeof(InstanceGPU), rhi::BufferUsage::Storage, true, sizeof(InstanceGPU)}, nullptr);
+    instCap_ = newCap;
+    return !instBuf_.isNull();
   }
   void addDraw(Draw&& d) { (d.mat.opacity < 1.f ? tdraws_ : draws_).push_back(std::move(d)); }
   rhi::PipelineId transPipe_;

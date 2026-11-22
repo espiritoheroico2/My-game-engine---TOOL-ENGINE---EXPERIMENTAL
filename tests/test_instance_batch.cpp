@@ -100,6 +100,20 @@ TEST(instance_batch_queue_plan_maps_order_to_queue_positions) {
   CHECK(total(plan) == queue.size());
 }
 
+TEST(instance_batch_adjacent_preserves_order_and_splits_runs) {
+  const std::vector<BatchItem> items = {{1, 0}, {1, 0}, {2, 0}, {1, 0}, {1, 0}, {1, 0}};
+  BatchPlan plan;
+  planAdjacentInstanceBatches(items, plan, 2);
+  CHECK(plan.order.size() == items.size());
+  for (std::uint32_t i = 0; i < plan.order.size(); ++i) CHECK(plan.order[i] == i);
+  CHECK(plan.batches.size() == 4);
+  CHECK(plan.batches[0].mesh == 1 && plan.batches[0].first == 0 && plan.batches[0].count == 2);
+  CHECK(plan.batches[1].mesh == 2 && plan.batches[1].first == 2 && plan.batches[1].count == 1);
+  CHECK(plan.batches[2].mesh == 1 && plan.batches[2].first == 3 && plan.batches[2].count == 2);
+  CHECK(plan.batches[3].mesh == 1 && plan.batches[3].first == 5 && plan.batches[3].count == 1);
+  CHECK(total(plan) == items.size());
+}
+
 TEST(instance_gpu_layout_matches_object_cb) {
   CHECK(sizeof(InstanceGPU) == 160);
 }

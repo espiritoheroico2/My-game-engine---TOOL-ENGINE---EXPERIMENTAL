@@ -115,11 +115,12 @@ o batching existente. Os nomes P0-P5 do documento são locais à proposta; mapea
       mudanças de luz/casters e falhas; CSV inclui as sete métricas e testes cobrem exibição, agregação e schema.
 - [ ] Validar visualmente cache ligado/desligado e compilar o GLSL gerado; o RHI ainda não expõe um resultado
       de submissão assíncrona.
-- [x] Passe de emissão GPU agrupa objetos emissivos por malha e usa instâncias (até 4096 por lote), mantendo
-      transparência fora do agrupamento. Falta comparar visualmente o bloom em execução GPU.
+- [x] Passe de emissão GPU agrupa objetos emissivos por malha e usa instâncias (até 4096 por lote), em um passe
+      separado da transparência. Falta comparar visualmente o bloom em execução GPU.
 - [~] Extraída a seleção por índices das filas opaca, prepass, emissores e casters de sombra para um builder
       CPU reutilizável. Planejamento de batches agora consome as filas; `plan.order` referencia posições nelas,
-      enquanto os dados de instância são empacotados depois. A transparência continua no caminho ordenado atual
-      (`tdraws_`), sem mudança de ordem. Falta comparar imagens e validar visualmente em execução GPU.
+      enquanto os dados de instância são empacotados depois. Transparentes continuam ordenados do mais distante
+      para o mais perto e agora só agrupam sequencias adjacentes com a mesma malha e textura. Falta comparar
+      imagens e validar visualmente em execução GPU.
 - [ ] Medir `Flush()` no Diligent antes de alterar submissão.
 - [ ] Deixar compute/indirect e Hi-Z para depois do caminho CPU validado, com capacidades explícitas e fallback.

@@ -38,6 +38,19 @@ docs/           notas de construção
 ```
 Dependências apontam sempre para baixo: scene → events/ecs → debug → core.
 
+## Renderizador GPU (em evolucao)
+
+O renderizador esta sendo dividido em etapas, sem substituir o `GpuRenderer` de uma vez:
+
+- filas por indices para opacos, prepass, emissores e casters de sombra;
+- batches instanciados para opacos, prepass, emissores e sombras;
+- transparentes ordenados do mais distante para o mais perto; somente sequencias adjacentes com a mesma malha e textura compartilham um draw;
+- metricas por passe e vista, alem de culling e cache de sombras por regiao/face.
+
+A comparacao visual das mudancas recentes ainda esta pendente. O estado detalhado e as proximas etapas estao em
+[`docs/PENDENCIAS.md`](docs/PENDENCIAS.md), e a proposta de arquitetura esta em
+[`docs/sugestaoarquiteturanova.md`](docs/sugestaoarquiteturanova.md).
+
 Status: **0.7.19-beta (em andamento)** - veja `docs/CHANGELOG.md`, `docs/LIGHT_PRISM.md`, `docs/UI_SPRITE_PLAN.md`, `docs/SCRIPT_ERRORS.md`, `docs/LIGHTING_REVIEW.md`, `docs/PARTICLES.md`, `docs/PERFORMANCE_AUDIT.md`, `docs/RENDER_SCALING.md`, `docs/ECS.md`, `docs/PERFORMANCE_PLAN.md`, `docs/FSR.md`, `docs/SECURITY.md`, `docs/CHECKLIST.md`, `docs/REPO_WEIGHT.md` (peso do repositorio), `docs/SHADER_AUDIT.md` (shaders GLSL/HLSL e limite de buffers do Vulkan).
 
 Para a ordem recomendada de implementacao, prioridades, criterios de aceite e tarefas consolidadas:
