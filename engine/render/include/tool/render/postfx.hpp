@@ -20,6 +20,7 @@
 
 namespace tool {
 
+// Parametros de pos-processamento, globais ou locais de uma camera. Valores neutros: exposure 0, contrast 1, saturation 1.
 struct PostFx {
   bool enabled = false;
   float exposure = 0.f;      // em "stops" (EV): +1 dobra o brilho

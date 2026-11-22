@@ -22,6 +22,7 @@
 namespace tool::assets {
 
 // ---- base64 (usado por buffers "data:application/octet-stream;base64,...") --------------------------------
+// Decodifica base64 (padrao ou URL-safe) em "out". Retorna false se houver caractere invalido ou se passar de maxOut.
 inline bool base64Decode(const std::string& in, std::vector<u8>& out, size_t maxOut) {
   auto val = [](char c) -> int {
     if (c >= 'A' && c <= 'Z') return c - 'A';
@@ -51,6 +52,7 @@ inline bool base64Decode(const std::string& in, std::vector<u8>& out, size_t max
 
 namespace gltf_detail {
 
+// Estado da importacao glTF: JSON, buffers carregados, pasta base, opcoes e o modelo de saida.
 struct Doc {
   tool::Json json;
   std::vector<std::vector<u8>> buffers;
@@ -61,6 +63,7 @@ struct Doc {
   size_t nodesVisited = 0;
 };
 
+// Tamanho em bytes de um componentType do glTF (5120 a 5126); 0 se invalido.
 inline size_t compSize(int ctype) {
   switch (ctype) {
     case 5120: case 5121: return 1;
@@ -69,6 +72,7 @@ inline size_t compSize(int ctype) {
     default: return 0;
   }
 }
+// Numero de componentes de um tipo de accessor (SCALAR, VEC2 a MAT4); 0 se desconhecido.
 inline int typeComps(const std::string& t) {
   if (t == "SCALAR") return 1;
   if (t == "VEC2") return 2;
@@ -90,6 +94,7 @@ inline double readComp(const u8* p, int ctype, bool normalized) {
   }
 }
 
+// Verdade se j for um inteiro em [0, count); grava o valor em "out".
 inline bool indexOk(const tool::Json& j, size_t count, size_t& out) {
   if (!j.isNumber()) return false;
   const double d = j.asNumber(-1);
@@ -161,6 +166,7 @@ inline Mat4 nodeMatrix(const tool::Json& n) {
   return Mat4::translation({t[0], t[1], t[2]}) * R * Mat4::scale({s[0], s[1], s[2]});
 }
 
+// Material PBR da primitive (cor, metalico, rugosidade). Sem material usa o padrao fosco neutro.
 inline Material materialOf(const Doc& d, const tool::Json& prim) {
   Material m; // padrao da glTF: branco, metalico 1, rugosidade 1
   m.albedo = {1, 1, 1}; m.metallic = 1.f; m.roughness = 1.f;
@@ -259,6 +265,7 @@ inline bool visitNode(Doc& d, size_t idx, int parent, size_t depth) {
   return true;
 }
 
+// Carrega os buffers: data URI (base64), arquivo externo dentro da pasta do modelo, ou o chunk BIN do GLB.
 inline bool loadBuffers(Doc& d) {
   const auto& bufs = d.json["buffers"].items();
   for (size_t i = 0; i < bufs.size(); ++i) {

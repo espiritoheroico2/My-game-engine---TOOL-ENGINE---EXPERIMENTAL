@@ -23,6 +23,7 @@
 
 namespace tool::render {
 
+// Buffer de oclusao por software (ver o cabecalho): grade grossa de profundidade e teste de caixa envolvente.
 class OcclusionBuffer {
 public:
   // Prepara a grade para uma imagem w x h. viewProj = projecao * vista da camera (mesma do renderizador).
@@ -33,6 +34,7 @@ public:
     zfar_.assign(static_cast<size_t>(gw_) * gh_, kInf);
     active_ = true;
   }
+  // true depois de begin(). Sem begin(), hidden() nunca esconde nada.
   bool active() const { return active_; }
 
   // Oclusor: triangulo em coordenadas do mundo. Ignorado se algum vertice estiver atras do plano near.
@@ -148,15 +150,21 @@ public:
   }
 
 private:
+  // Profundidade 'infinita' de uma celula sem oclusor.
   static constexpr float kInf = std::numeric_limits<float>::max();
   static constexpr float kNear = 1e-4f;  // w minimo aceito (a frente da camera)
   static constexpr float kEps = 1e-5f;   // tolerancia de borda na cobertura
 
+  // Subtracao de Vec3.
   static Vec3 sub3(const Vec3& a, const Vec3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+  // Produto vetorial de Vec3.
   static Vec3 cross3(const Vec3& a, const Vec3& b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
+  // Produto escalar de Vec3.
   static float dot3(const Vec3& a, const Vec3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+  // Limita v ao intervalo [lo, hi].
   static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+  // Projeta um ponto do mundo em clip space. false se w <= kNear (atras da camera).
   bool project(const Vec3& p, Vec4& out) const {
     out = vp_.mul({p.x, p.y, p.z, 1.f});
     return out.w > kNear;
@@ -167,7 +175,9 @@ private:
     y = (0.5f - c.y / c.w * 0.5f) * static_cast<float>(gh_);
   }
 
+  // Matriz view*projecao da camera do quadro.
   Mat4 vp_;
+  // Tamanho da grade de oclusao, em celulas.
   u32 gw_ = 0, gh_ = 0;
   bool active_ = false;
   std::vector<float> zfar_;  // por celula: profundidade mais distante do oclusor mais proximo que cobre a celula

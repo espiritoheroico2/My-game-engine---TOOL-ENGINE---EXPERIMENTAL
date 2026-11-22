@@ -22,6 +22,7 @@ using Entity = Handle;
 using ComponentId = u32;
 
 namespace detail {
+// Gera o proximo id de tipo de componente (um por tipo T, de forma sequencial).
 inline ComponentId nextComponentId() {
   static ComponentId n = 0;
   if (n == static_cast<ComponentId>(-1)) std::abort(); // mais de 4 bilhoes de tipos de componente: o id daria a volta e corromperia os storages
@@ -29,13 +30,16 @@ inline ComponentId nextComponentId() {
 }
 } // namespace detail
 
+// Id unico do tipo T, criado na primeira vez que e pedido.
 template <class T> ComponentId componentId() {
   static const ComponentId id = detail::nextComponentId();
   return id;
 }
 
+// Mundo ECS: cria e destroi entidades, guarda componentes por tipo e tags, e oferece as iteracoes (each, forEachDense, parallelEach).
 class World {
 public:
+  // Cria uma entidade viva, sem componentes, sem tags e visivel. Devolve o handle.
   Entity create() {
     Entity e = ids_.create();
     ensure(e.index);
@@ -45,8 +49,10 @@ public:
     return e;
   }
 
+  // True se o handle ainda aponta para uma entidade viva.
   bool alive(Entity e) const { return ids_.alive(e); }
 
+  // Destroi a entidade e remove todos os seus componentes. False (com aviso) se o handle ja estava obsoleto.
   bool destroy(Entity e) {
     if (!ids_.alive(e)) {
       debug().report(diag::kStaleHandle, Severity::Warning, "destroy() com handle obsoleto");
@@ -63,27 +69,33 @@ public:
   // --- componentes ------------------------------------------------------------
   // F-02: handle nulo, destruido ou obsoleto (indice reaproveitado) nao pode receber componente;
   // gravar no indice contaminaria a entidade atual que ocupa o slot. add lanca; tryAdd devolve nullptr.
+  // Adiciona (ou substitui) o componente T com os argumentos dados e devolve referencia a ele. Lanca std::invalid_argument se e nao estiver vivo. Atenção: a referencia fica invalida depois que outro T for adicionado (o armazenamento pode crescer).
   template <class T, class... Args> T& add(Entity e, Args&&... args) {
     if (!alive(e)) throw std::invalid_argument("World::add: entidade invalida ou obsoleta");
     return storage<T>().set(e.index, T{std::forward<Args>(args)...});
   }
+  // Igual a add, mas devolve ponteiro ao componente, ou nullptr se a entidade nao estiver viva.
   template <class T, class... Args> T* tryAdd(Entity e, Args&&... args) {
     if (!alive(e)) return nullptr;
     return &storage<T>().set(e.index, T{std::forward<Args>(args)...});
   }
+  // True se a entidade esta viva e tem componente T.
   template <class T> bool has(Entity e) const {
     const auto* st = findStorage<T>();
     return alive(e) && st && st->has(e.index);
   }
+  // Ponteiro para o componente T da entidade, ou nullptr se nao existir. Fica invalido depois que outro T for adicionado.
   template <class T> T* get(Entity e) {
     auto* st = findStorage<T>();
     return (alive(e) && st) ? st->get(e.index) : nullptr;
   }
+  // Remove o componente T da entidade (nada se nao existir).
   template <class T> void remove(Entity e) {
     if (auto* st = findStorage<T>(); st && alive(e)) st->remove(e.index);
   }
 
   // --- tags -------------------------------------------------------------------
+  // Liga a tag t na entidade. Avisa se t for invalido (limite de 128 tags).
   void addTag(Entity e, TagId t) {
     if (!alive(e)) return;
     if (t == kInvalidIndex) {
@@ -92,15 +104,19 @@ public:
     }
     tags_[e.index].set(t);
   }
+  // Desliga a tag t na entidade.
   void removeTag(Entity e, TagId t) {
     if (alive(e) && t != kInvalidIndex) tags_[e.index].clear(t);
   }
+  // True se a entidade viva tem a tag t.
   bool hasTag(Entity e, TagId t) const { return alive(e) && t != kInvalidIndex && tags_[e.index].test(t); }
+  // Mascara de tags da entidade (vazia se o handle nao for valido).
   TagMask tagMask(Entity e) const { return alive(e) ? tags_[e.index] : TagMask{}; }
 
   // --- iteracao -----------------------------------------------------------------
   // Percorre entidades vivas (e nao dormentes) com todos os componentes Ts.
   // fn pode alterar o mundo (copia dos indices). A copia usa um vetor reaproveitado: sem alocacao por chamada.
+  // Atenção: se fn adicionar um componente Ts, as referencias recebidas podem ficar invalidas; nao faca isso dentro de fn.
   template <class... Ts, class F> void each(F&& fn) {
     static_assert(sizeof...(Ts) > 0);
     if (((findStorage<Ts>() == nullptr) || ...)) return;
@@ -164,6 +180,7 @@ public:
   void setSimulating(Entity e, bool v) {
     if (alive(e)) sim_[e.index] = v ? 1 : 0;
   }
+  // True se a entidade viva esta ligada na simulacao.
   bool isSimulating(Entity e) const { return alive(e) && sim_[e.index] != 0; }
 
   // Entidades com todas as tags de `mask`.
@@ -181,10 +198,13 @@ public:
   }
 
   // --- suporte ao DeleteAndReuse ----------------------------------------------------
+  // Liga ou desliga o modo dormente da entidade (dormente = fora das consultas e iteracoes).
   void setDormant(Entity e, bool v) {
     if (alive(e)) dormant_[e.index] = v;
   }
+  // True se a entidade viva esta dormente.
   bool isDormant(Entity e) const { return alive(e) && dormant_[e.index]; }
+  // Renova o handle: invalida o antigo e devolve um novo com a geracao seguinte (mantem o slot).
   Entity renew(Entity e) { return ids_.renew(e); }
 
   // Remove componentes fora de `keep` e restaura as tags (reuso identico).
@@ -198,24 +218,33 @@ public:
     tags_[e.index] = mask;
   }
 
+  // Quantidade de entidades vivas.
   size_t liveCount() const { return ids_.liveCount(); }
 
 private:
+  // Interface base dos armazenamentos por tipo, para poder remover um componente sem saber o tipo.
   struct IStorage {
     virtual ~IStorage() = default;
+    // Remove o componente do indice de entidade dado, se existir.
     virtual void remove(u32 index) = 0;
   };
 
+  // Armazenamento denso de componentes T: array esparso (entidade -> posicao) e vetor de dados contiguo.
   template <class T> struct Storage final : IStorage {
     std::vector<u32> sparse; // indice da entidade -> posicao densa
     std::vector<u32> denseIdx;
     std::vector<T> data;
 
+    // True se a entidade de indice i tem este componente.
     bool has(u32 i) const { return i < sparse.size() && sparse[i] != kInvalidIndex; }
+    // Componente da entidade i, ou nullptr.
     T* get(u32 i) { return has(i) ? &data[sparse[i]] : nullptr; }
+    // Quantidade de componentes armazenados.
     size_t size() const { return data.size(); }
+    // Indices das entidades que tem este componente, na ordem densa.
     const std::vector<u32>& indices() const { return denseIdx; }
 
+    // Define (ou substitui) o componente da entidade i e devolve referencia a ele.
     T& set(u32 i, T&& v) {
       if (i >= sparse.size()) sparse.resize(i + 1, kInvalidIndex);
       if (sparse[i] != kInvalidIndex) return data[sparse[i]] = std::move(v);
@@ -224,6 +253,7 @@ private:
       data.push_back(std::move(v));
       return data.back();
     }
+    // Remove o componente da entidade i por troca com o ultimo (O(1)).
     void remove(u32 i) override {
       if (!has(i)) return;
       const u32 pos = sparse[i];
@@ -239,12 +269,14 @@ private:
     }
   };
 
+  // True se todos os tipos Ts estao presentes na entidade de indice i.
   template <class... Ts> bool matchAll(u32 i) const {
     bool ok = true;
     ((ok = ok && findStorage<Ts>() && findStorage<Ts>()->has(i)), ...);
     return ok;
   }
 
+  // Lista de indices do armazenamento de menor tamanho entre Ts (para iterar o minimo possivel).
   template <class... Ts> const std::vector<u32>& smallestIndices() const {
     const std::vector<u32>* best = nullptr;
     size_t n = static_cast<size_t>(-1);
@@ -252,17 +284,20 @@ private:
     return *best;
   }
 
+  // Armazenamento de T, criado se ainda nao existir.
   template <class T> Storage<T>& storage() {
     const ComponentId id = componentId<T>();
     if (id >= storages_.size()) storages_.resize(id + 1);
     if (!storages_[id]) storages_[id] = std::make_unique<Storage<T>>();
     return static_cast<Storage<T>&>(*storages_[id]);
   }
+  // Armazenamento de T, ou nullptr se nenhum T foi adicionado ainda.
   template <class T> Storage<T>* findStorage() const {
     const ComponentId id = componentId<T>();
     return id < storages_.size() ? static_cast<Storage<T>*>(storages_[id].get()) : nullptr;
   }
 
+  // Garante que os vetores de tags, dormencia e simulacao cabem o indice dado.
   void ensure(u32 index) {
     if (index >= tags_.size()) {
       tags_.resize(index + 1);
@@ -278,6 +313,7 @@ private:
     std::vector<u32>& v;
     ~ScratchLease() { --w.scratchDepth_; }
   };
+  // Pega um vetor de indices reaproveitado para uma iteracao (um por nivel de aninhamento).
   ScratchLease lease() {
     if (scratchDepth_ == scratch_.size()) scratch_.emplace_back();
     std::vector<u32>& v = scratch_[scratchDepth_++];

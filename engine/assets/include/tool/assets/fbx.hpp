@@ -33,6 +33,7 @@ namespace tool::assets {
 
 namespace fbx_detail {
 
+// Valor de uma propriedade de no FBX. "type" e o codigo de 1 caractere (I, D, S, f, i...); arrays vao em ad/ai.
 struct Prop {
   char type = 0;
   i64 i = 0;
@@ -42,10 +43,12 @@ struct Prop {
   std::vector<i64> ai; // arrays 'i', 'l', 'b'
 };
 
+// No da arvore binaria do FBX: nome, propriedades e filhos.
 struct Node {
   std::string name;
   std::vector<Prop> props;
   std::vector<Node> kids;
+  // Primeiro filho com esse nome, ou nullptr.
   const Node* child(const char* n) const {
     for (auto& k : kids) if (k.name == n) return &k;
     return nullptr;
@@ -57,13 +60,16 @@ inline bool wantsArray(const std::string& n) {
   return n == "Vertices" || n == "PolygonVertexIndex" || n == "Normals" || n == "NormalsIndex" || n == "UV" || n == "UVIndex";
 }
 
+// Leitor da arvore de nos do FBX binario. Confere tamanhos e limites antes de cada leitura.
 class Parser {
 public:
+  // Guarda referencias ao buffer e as opcoes: o buffer precisa ficar vivo durante o parse.
   Parser(const std::vector<u8>& d, const ImportOptions& o) : d_(d), opt_(o) {}
   std::string error;
   size_t nodeCount = 0;
   u32 version = 0;
 
+  // Le os nos de topo e os coloca como filhos de "root". Retorna false e preenche "error" em falha.
   bool parse(Node& root) {
     static const char kMagic[] = "Kaydara FBX Binary  ";
     if (d_.size() < 27 || std::memcmp(d_.data(), kMagic, 20) != 0) { error = "cabecalho FBX binario invalido"; return false; }
@@ -85,7 +91,9 @@ private:
   const std::vector<u8>& d_;
   const ImportOptions& opt_;
 
+  // Verdade se ha n bytes disponiveis a partir de pos.
   bool have(size_t pos, u64 n) const { return pos <= d_.size() && n <= d_.size() - pos; }
+  // Le "bytes" bytes (1 a 8) little-endian a partir de pos, sem checar limites (use have antes).
   u64 rdU(size_t pos, int bytes) const { u64 v = 0; std::memcpy(&v, d_.data() + pos, static_cast<size_t>(bytes)); return v; } // little-endian
 
   // Retorna 0 = no lido, 1 = registro nulo, -1 = erro.
@@ -122,6 +130,7 @@ private:
     return 0;
   }
 
+  // Le uma propriedade (escalar, string ou array) avancando pos. keepArrays = guarda o array inteiro; senao so os pequenos.
   bool parseProp(size_t& pos, size_t limit, Prop& p, bool keepArrays) {
     if (pos >= limit) { error = "FBX: propriedade fora da lista"; return false; }
     p.type = static_cast<char>(d_[pos++]);
@@ -190,12 +199,15 @@ inline const Node* findP(const Node* props70, const char* name) {
     if (k.name == "P" && !k.props.empty() && k.props[0].s == name) return &k;
   return nullptr;
 }
+// No "Properties70" de um no, ou nullptr.
 inline const Node* props70Of(const Node& n) { return n.child("Properties70"); }
+// Le uma propriedade P de Properties70 como Vec3 (valores nas colunas 4 a 6); devolve "def" se ausente.
 inline Vec3 vec3P(const Node* props70, const char* name, Vec3 def) {
   const Node* p = findP(props70, name);
   if (!p || p->props.size() < 7) return def;
   return {static_cast<f32>(p->props[4].d), static_cast<f32>(p->props[5].d), static_cast<f32>(p->props[6].d)};
 }
+// Le uma propriedade P de Properties70 como numero (coluna 4); devolve "def" se ausente.
 inline f64 numP(const Node* props70, const char* name, f64 def) {
   const Node* p = findP(props70, name);
   return (p && p->props.size() > 4) ? p->props[4].d : def;
@@ -213,6 +225,7 @@ inline Mat4 eulerMatrix(Vec3 deg, int order) {
 }
 inline Mat4 transposeRot(const Mat4& r) { Mat4 t; for (int c = 0; c < 3; ++c) for (int row = 0; row < 3; ++row) t.m[c][row] = r.m[row][c]; return t; } // inversa de uma rotacao
 
+// Modelo intermediario lido do FBX: id, pai, transformacao local, geometrias e materiais ligados.
 struct Model {
   i64 id = 0, parent = 0;
   std::string name;
@@ -223,6 +236,7 @@ struct Model {
 
 } // namespace fbx_detail
 
+// Importa um FBX binario em memoria. Aplica escala e eixo "up" se pedido em opt. Devolve erro para ASCII.
 inline ImportResult importFbx(const std::vector<u8>& bytes, const ImportOptions& opt = {}) {
   using namespace fbx_detail;
   if (bytes.size() >= 5 && std::memcmp(bytes.data(), "; FBX", 5) == 0)

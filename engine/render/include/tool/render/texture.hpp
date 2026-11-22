@@ -13,11 +13,13 @@
 
 namespace tool {
 
+// Textura RGBA8 usada como albedo de um material. Os dados ficam na CPU; a copia na GPU e feita pelo GpuRenderer.
 struct Texture {
   u32 w = 0, h = 0;
   u64 id = 0;                 // identificador unico (chave do cache da GPU); 0 = nao carregada
   std::vector<u8> rgba;       // w * h * 4 bytes, linha a linha de cima para baixo
 
+  // true se as dimensoes batem com o tamanho do buffer de pixels.
   bool valid() const { return w > 0 && h > 0 && rgba.size() == static_cast<size_t>(w) * h * 4; }
 
   // Le o texel de (u, v) em RGBA. Vazio se a textura nao for valida (out fica com branco).

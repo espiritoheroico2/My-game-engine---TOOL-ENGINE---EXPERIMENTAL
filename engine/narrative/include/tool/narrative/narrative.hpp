@@ -18,7 +18,9 @@
 
 namespace tool::narr {
 
+// Como um gatilho se comporta depois de disparar: uma vez, uma vez por sessao ou reativavel.
 enum class Mode : u8 { OneShot, Session, Reactivable };
+// Operador de comparacao usado em gatilhos por variavel e em nos de condicao.
 enum class Cmp : u8 { Eq, Ne, Lt, Le, Gt, Ge };
 
 namespace code { // codigos de diagnostico do compilador
@@ -32,12 +34,17 @@ inline constexpr const char* kUnreachable = "TOOL-W201";
 } // namespace code
 
 // ---- IR ----------------------------------------------------------------------------------
+// Opcodes da IR (atribuicao, emit, acao, salto, chamada, espera, save e load).
 enum class Op : u8 { SetVar, AddVar, Emit, Action, JumpIfNot, Call, Ret, Delay, SavePoint, LoadPoint };
+// Uma instrucao da IR: opcode, dois operandos inteiros (a, b) e um valor real (v).
 struct Instr { Op op; i32 a = 0; i32 b = 0; double v = 0; };
 
+// Operacoes da pilha de condicoes (push de variavel ou constante, comparacao, and, or, not).
 enum class ExprOp : u8 { PushVar, PushConst, Cmp, And, Or, Not };
+// Instrucao da pilha de condicoes.
 struct ExprInstr { ExprOp op; i32 a = 0; double v = 0; };
 
+// Ponto de entrada de um grafo: gatilho (evento ou variavel), modo, grupo e pc onde o fluxo comeca.
 struct Entry {
   bool onVar = false;
   std::string event;            // gatilho por evento
@@ -48,6 +55,7 @@ struct Entry {
   std::string id;               // id do no (para o save)
 };
 
+// Grafo compilado: variaveis, strings, codigo da IR, condicoes e gatilhos. E o que o jogo exportado carrega.
 struct Program {
   std::vector<std::string> varNames;
   std::vector<double> varInit;
@@ -62,6 +70,7 @@ struct Program {
 class Compiler {
 public:
   // Retorna false e preenche `error` se o grafo for invalido. Nunca lanca.
+  // Atenção: compile nao limpa nodes_, out_, varIdx_, pcOf_ e stack_ entre chamadas; reutilizar o mesmo Compiler mistura estado antigo (hoje cada chamador cria um Compiler novo).
   bool compile(const Json& g, Program& out, std::string& error) {
     out = {}; g_ = &g; p_ = &out; err_ = &error; error.clear();
     if (!g.isObject() || !g["nodes"].isArray()) return fail(code::kBadGraph, "grafo sem lista de nos");
@@ -113,19 +122,25 @@ public:
   }
 
 private:
+  // Grava o erro (codigo + mensagem) em *err_ e devolve false.
   bool fail(const char* c, const std::string& m) { *err_ = std::string(c) + " " + m; return false; }
+  // Verdade se o tipo do no e um gatilho (trigger, onvar, start, update, create).
   static bool isEntry(const std::string& t) { return t == "trigger" || t == "onvar" || t == "start" || t == "update" || t == "create"; }
+  // Verdade se o tipo do no e um no de condicao (compare, and, or, not).
   static bool isCondition(const std::string& t) { return t == "compare" || t == "and" || t == "or" || t == "not"; }
+  // Resolve o nome de variavel para indice; falha se nao foi declarada.
   bool lookupVar(const std::string& n, i32& idx) {
     auto it = varIdx_.find(n);
     if (it == varIdx_.end()) { fail(code::kUnknownVar, "variavel nao declarada: '" + n + "'"); return false; }
     idx = it->second; return true;
   }
+  // Converte o texto do operador (==, !=, <, ...) em Cmp; false se invalido.
   static bool parseCmp(const std::string& s, Cmp& c) {
     if (s == "==") c = Cmp::Eq; else if (s == "!=") c = Cmp::Ne; else if (s == "<") c = Cmp::Lt;
     else if (s == "<=") c = Cmp::Le; else if (s == ">") c = Cmp::Gt; else if (s == ">=") c = Cmp::Ge; else return false;
     return true;
   }
+  // Indice da string na tabela do programa (adiciona se for nova).
   i32 str(const std::string& s) {
     for (size_t i = 0; i < p_->strings.size(); ++i) if (p_->strings[i] == s) return static_cast<i32>(i);
     p_->strings.push_back(s); return static_cast<i32>(p_->strings.size() - 1);
@@ -143,6 +158,7 @@ private:
     return start;
   }
 
+  // Compila o no "id" e seus sucessores; devolve o pc do bloco ou -1. O resultado fica em pcOf_.
   i32 block(const std::string& id, std::set<std::string>& reached) {
     if (auto it = pcOf_.find(id); it != pcOf_.end()) return it->second;
     for (auto& s : stack_) if (s == id) { fail(code::kFlowCycle, "ciclo no fluxo passando por '" + id + "'"); return -1; }
@@ -198,6 +214,7 @@ private:
     p_->exprs.push_back(std::move(e));
     return static_cast<i32>(p_->exprs.size() - 1);
   }
+  // Emite em pos-fixa a condicao "id" (recursivo, com limite de profundidade).
   void emitCond(const std::string& id, std::vector<ExprInstr>& e, int depth) {
     if (!err_->empty()) return;
     auto it = nodes_.find(id);
@@ -229,25 +246,35 @@ private:
 };
 
 // ---- Runtime ----------------------------------------------------------------------------------
+// Executor do programa: guarda variaveis, fluxos em andamento e gatilhos ja disparados.
 class Runtime {
 public:
   using ActionFn = std::function<void(const std::string& name, const std::string& arg)>;
   using EmitFn = std::function<void(const std::string& event)>;
   using SaveFn = std::function<void(const std::string& slot)>;   // SavePoint: quem hospeda grava o slot (o runtime so guarda nomes validos)
 
+  // Cria a execucao do programa p. p precisa ficar vivo enquanto o runtime existir.
   explicit Runtime(const Program& p) : p_(p), vars_(p.varInit), armed_(p.entries.size(), true) {}
 
+  // Define quem executa as acoes (Action) do grafo.
   void setActionHandler(ActionFn f) { action_ = std::move(f); }
+  // Define quem recebe os eventos emitidos (Emit).
   void setEmitHandler(EmitFn f) { emit_ = std::move(f); }
+  // Define quem grava um slot de save (SavePoint).
   void setSaveHandler(SaveFn f) { saveFn_ = std::move(f); }
   // LoadPoint nao troca o estado no meio da execucao (seguranca): marca o slot e o hospedeiro carrega depois do update.
   std::string takePendingLoad() { std::string s; s.swap(pendingLoad_); return s; }
+  // Nomes das variaveis, na ordem dos indices.
   const std::vector<std::string>& varNames() const { return p_.varNames; }
+  // Valor da variavel de indice i.
   double varAt(size_t i) const { return vars_[i]; }
 
+  // Nova sessao: libera os gatilhos de modo Session.
   void newSession() { for (size_t i = 0; i < p_.entries.size(); ++i) if (p_.entries[i].mode == Mode::Session) fired_.erase(p_.entries[i].id); }
+  // Inicio de quadro: limpa os grupos de exclusao mutua ocupados.
   void beginTick() { busy_.clear(); }
 
+  // Valor da variavel pelo nome (0 se nao existir).
   double var(const std::string& n) const { for (size_t i = 0; i < p_.varNames.size(); ++i) if (p_.varNames[i] == n) return vars_[i]; return 0; }
 
   // Variavel observavel: re-avalia gatilhos por variavel (com histerese).
@@ -268,6 +295,7 @@ public:
   }
 
   // Avanca tempo: retoma fluxos em espera.
+  // Atenção: run(t) guarda referencia para threads_[i]. Se a execucao muda uma variavel observada, observe -> tryStart faz push_back em threads_ e a referencia pode ficar invalida.
   void update(double dt) {
     for (size_t i = 0; i < threads_.size();) {
       Thread& t = threads_[i];
@@ -276,9 +304,11 @@ public:
       if (t.done) threads_.erase(threads_.begin() + static_cast<std::ptrdiff_t>(i)); else ++i;
     }
   }
+  // Quantos fluxos estao em execucao (ativos ou em espera).
   size_t runningFlows() const { return threads_.size(); }
 
   // ---- save nativo (.json) ----
+  // Serializa o estado (variaveis, gatilhos disparados e desarmados, fluxos) em JSON.
   Json save() const {
     Json j = Json::object();
     j.set("version", 1);
@@ -338,6 +368,7 @@ public:
     std::filesystem::rename(tmp, path, ec);
     return !ec;
   }
+  // Le um save do arquivo e aplica com load(). Retorna false se falhar.
   bool loadFromFile(const std::string& path) {
     std::ifstream f(path, std::ios::binary); if (!f) return false;
     std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
@@ -347,10 +378,13 @@ public:
 
 private:
   static constexpr size_t kMaxCall = 64;
+  // Um fluxo em execucao: contador de programa, pilha de retornos, espera restante e se terminou.
   struct Thread { i32 pc = 0; std::vector<i32> stack; double wait = 0; bool done = false; };
 
+  // Registra um save invalido como erro e devolve false.
   bool badSave(const std::string& m) { debug().report(code::kBadSave, Severity::Error, m); return false; }
 
+  // Tenta disparar o gatilho ei respeitando modo, grupo e consumo. Retorna false se estiver bloqueado.
   bool tryStart(size_t ei) {
     const Entry& e = p_.entries[ei];
     if ((e.mode == Mode::OneShot || e.mode == Mode::Session) && fired_.count(e.id)) return false;
@@ -365,12 +399,14 @@ private:
     return true;
   }
 
+  // Aplica o operador c entre a e b.
   static bool cmp(Cmp c, double a, double b) {
     switch (c) { case Cmp::Eq: return a == b; case Cmp::Ne: return a != b; case Cmp::Lt: return a < b;
                  case Cmp::Le: return a <= b; case Cmp::Gt: return a > b; case Cmp::Ge: return a >= b; }
     return false;
   }
 
+  // Re-avalia os gatilhos por variavel ligados a varIdx, com histerese para rearmar.
   void observe(i32 varIdx) {
     for (size_t i = 0; i < p_.entries.size(); ++i) {
       const Entry& e = p_.entries[i];
@@ -391,6 +427,7 @@ private:
     }
   }
 
+  // Executa a pilha de condicoes exprIdx. Verdade se o topo final for diferente de zero.
   bool eval(i32 exprIdx) const {
     std::vector<double> st;
     for (const ExprInstr& x : p_.exprs[static_cast<size_t>(exprIdx)]) {
@@ -406,6 +443,8 @@ private:
     return !st.empty() && st.back() != 0;
   }
 
+  // Executa instrucoes do fluxo t ate ele esperar (Delay), terminar ou estourar o orcamento de 100000 instrucoes.
+  // Atenção: veja a nota em update(): t pode ficar invalido se a execucao disparar outro fluxo em observe.
   void run(Thread& t) {
     int budget = 100000; // limite de instrucoes por fatia: nenhum grafo trava o jogo
     while (!t.done && t.wait <= 0) {

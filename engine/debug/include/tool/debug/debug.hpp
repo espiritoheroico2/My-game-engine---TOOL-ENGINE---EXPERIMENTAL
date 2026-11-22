@@ -20,6 +20,7 @@
 
 namespace tool {
 
+// Gravidade de um diagnostico: Info, Warning (aviso), Error (erro) ou Fatal (aborta, se configurado).
 enum class Severity : u8 { Info, Warning, Error, Fatal };
 
 // Codigos estaveis: E = erro, W = aviso. Documentados em docs/diagnostics.md.
@@ -37,6 +38,7 @@ inline constexpr const char* kEventDup = "TOOL-W104";
 inline constexpr const char* kPoolPressure = "TOOL-W105";
 } // namespace diag
 
+// Diagnostico registrado: codigo estavel, gravidade, mensagem e onde ocorreu (arquivo, linha, quadro).
 struct Diagnostic {
   std::string code;
   Severity severity = Severity::Info;
@@ -46,6 +48,7 @@ struct Diagnostic {
   u64 frame = 0;
 };
 
+// Estatisticas de uma zona de desempenho: chamadas, tempos (ms) e quantas vezes passou do orcamento.
 struct ZoneStats {
   u64 calls = 0;
   double totalMs = 0, maxMs = 0, lastMs = 0;
@@ -53,18 +56,22 @@ struct ZoneStats {
   u64 overBudget = 0;
 };
 
+// Ferramenta de depuracao (singleton): registra diagnosticos, mede zonas e quadros, e roda um watchdog.
 class DebugTool {
 public:
   using Handler = std::function<void(const Diagnostic&)>;
 
+  // Instancia unica da ferramenta.
   static DebugTool& get() {
     static DebugTool inst;
     return inst;
   }
 
+  // Para o watchdog ao destruir a ferramenta.
   ~DebugTool() { stopWatchdog(); }
 
   // --- diagnosticos ---------------------------------------------------------
+  // Registra um diagnostico (historico, contadores, log e handler). Severity::Fatal aborta o programa se setFatalAborts estiver ligado. file/line normalmente vem das macros.
   void report(const char* code, Severity sev, std::string msg, const char* file = "", int line = 0) {
     Diagnostic d{code, sev, std::move(msg), file, line, frame_.load()};
     {
@@ -79,19 +86,25 @@ public:
     if (sev == Severity::Fatal && fatalIsAbort_) std::abort();
   }
 
+  // Define a funcao chamada a cada diagnostico (ex.: para mostrar no editor). Passe vazio para remover.
   void setHandler(Handler h) { handler_ = std::move(h); }
+  // Liga ou desliga o abort em diagnosticos Fatal (ligado por padrao).
   void setFatalAborts(bool v) { fatalIsAbort_ = v; }
+  // Quantidade de diagnosticos registrados com a gravidade s. Atenção: le o contador sem o mutex.
   size_t count(Severity s) const { return counts_[static_cast<int>(s)]; }
+  // Copia do historico recente de diagnosticos (limite de 512).
   std::vector<Diagnostic> history() const {
     std::lock_guard lk(mu_);
     return {history_.begin(), history_.end()};
   }
+  // True se algum diagnostico no historico recente tem o codigo dado.
   bool hasCode(std::string_view code) const {
     std::lock_guard lk(mu_);
     for (auto& d : history_)
       if (d.code == code) return true;
     return false;
   }
+  // Limpa historico, zonas e contadores.
   void reset() {
     std::lock_guard lk(mu_);
     history_.clear();
@@ -100,16 +113,20 @@ public:
   }
 
   // --- quadros e orcamentos ----------------------------------------------------
+  // Orcamento do quadro em ms; 0 desliga o aviso.
   void setFrameBudgetMs(double ms) { frameBudgetMs_ = ms; }
+  // Orcamento em ms da zona com o nome dado; 0 desliga.
   void setZoneBudgetMs(const std::string& zone, double ms) {
     std::lock_guard lk(mu_);
     zones_[zone].budgetMs = ms;
   }
 
+  // Marca o inicio de um quadro (tambem atualiza o heartbeat do watchdog).
   void beginFrame() {
     frameStart_ = Clock::now();
     heartbeat();
   }
+  // Marca o fim do quadro: mede o tempo, avisa se passou do orcamento e incrementa o numero do quadro.
   void endFrame() {
     const double ms = std::chrono::duration<double, std::milli>(Clock::now() - frameStart_).count();
     lastFrameMs_ = ms;
@@ -117,9 +134,12 @@ public:
       report(diag::kBudgetFrame, Severity::Warning, "quadro levou " + std::to_string(ms) + " ms (orcamento " + std::to_string(frameBudgetMs_) + " ms)");
     ++frame_;
   }
+  // Duracao do ultimo quadro, em ms.
   double lastFrameMs() const { return lastFrameMs_; }
+  // Numero do quadro atual.
   u64 frame() const { return frame_.load(); }
 
+  // Registra uma medicao de ms para a zona name e avisa se passou do orcamento.
   void recordZone(const std::string& name, double ms) {
     double budget = 0;
     {
@@ -135,6 +155,7 @@ public:
     if (budget > 0 && ms > budget)
       report(diag::kBudgetZone, Severity::Warning, "zona '" + name + "' levou " + std::to_string(ms) + " ms (orcamento " + std::to_string(budget) + " ms)");
   }
+  // Estatisticas da zona name (copia). Zona inexistente devolve zeros.
   ZoneStats zone(const std::string& name) const {
     std::lock_guard lk(mu_);
     auto it = zones_.find(name);
@@ -142,6 +163,7 @@ public:
   }
 
   // --- watchdog ---------------------------------------------------------------
+  // Marca que o laco principal esta vivo (o watchdog so dispara se isso parar).
   void heartbeat() { lastBeat_.store(Clock::now().time_since_epoch().count()); }
 
   // Dispara TOOL-E005 se o laço principal ficar parado alem de `timeoutMs`.
@@ -166,6 +188,7 @@ public:
       }
     });
   }
+  // Para a thread do watchdog e espera ela terminar.
   void stopWatchdog() {
     {
       std::lock_guard lk(wdMu_);
@@ -197,12 +220,15 @@ private:
   bool stop_ = true;
 };
 
+// Atalho para DebugTool::get().
 inline DebugTool& debug() { return DebugTool::get(); }
 
 // Zona RAII: mede o escopo e confere o orcamento.
 class ZoneScope {
 public:
+  // Inicia a medicao da zona com o nome dado.
   explicit ZoneScope(std::string name) : name_(std::move(name)), t0_(std::chrono::steady_clock::now()) {}
+  // Encerra a medicao e registra o tempo decorrido.
   ~ZoneScope() {
     debug().recordZone(name_, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_).count());
   }

@@ -26,6 +26,7 @@ namespace tool {
 // Tipo de luz da cena (componente LightComp e Global Light). Mesmos valores de antes, para a serializacao continuar lendo.
 enum class LightType : u32 { Directional = 0, Point = 1, Spot = 2 };
 
+// Luz da cena (componente Light ou Global Light). direction e normalizada ao montar o quadro.
 struct Light {
   LightType type = LightType::Point;
   Vec3 position{}, direction{0, -1, 0}, color{1, 1, 1};
@@ -104,6 +105,7 @@ inline LightPrism::QualitySettings makeQuality(const LightingSettings& s) {
   return q;
 }
 
+// Monta a configuracao do LightingSystem: orcamento de luzes e qualidade.
 inline LightPrism::LightingConfig makeLightingConfig(const LightingSettings& s) {
   LightPrism::LightingConfig c;
   c.maxPointLights = s.maxPointLights;
@@ -113,6 +115,7 @@ inline LightPrism::LightingConfig makeLightingConfig(const LightingSettings& s) 
   return c;
 }
 
+// Configuracao do SSAO com os valores limitados (kernel, raio, bias e potencia minimos).
 inline LightPrism::Ssao::SsaoConfig makeSsaoConfig(const LightingSettings& s) {
   LightPrism::Ssao::SsaoConfig c;
   c.kernelSize = std::clamp<u32>(s.ssaoKernel, 1u, LightPrism::Ssao::kMaxKernel);
@@ -122,6 +125,7 @@ inline LightPrism::Ssao::SsaoConfig makeSsaoConfig(const LightingSettings& s) {
   return c;
 }
 
+// Configuracao das cascatas: base da qualidade mais os parametros de LightingSettings.
 inline LightPrism::CsmConfig makeCsmConfig(const LightingSettings& s) {
   const LightPrism::QualitySettings q = makeQuality(s);
   LightPrism::CsmConfig c = LightPrism::MakeCsmConfig(q);
@@ -135,7 +139,9 @@ inline LightPrism::CsmConfig makeCsmConfig(const LightingSettings& s) {
   return c;
 }
 
+// Quantidade maxima de luzes pontuais/spot com sombra por quadro.
 constexpr u32 kMaxPointShadowLights = 4;
+// Faces por luz com sombra (cubo = 6; spot usa 1).
 constexpr u32 kMaxPointShadowFaces = 6;
 
 // Luz pontual ou spot com sombra neste quadro. vp[f] = projecao * view da face f (cubo: 6 faces, eixos +X,-X,+Y,-Y,+Z,-Z;
@@ -169,6 +175,7 @@ struct LightFrame {
 // Ponte entre a cena da engine e a LightPrism. Guarda o LightingSystem (orcamento, clusters, handles) entre quadros.
 class LightRig {
 public:
+  // Cria o sistema com a configuracao padrao.
   LightRig() { rebuild(LightingSettings{}); }
 
   // Aplica as configuracoes. Recria o LightingSystem so quando o orcamento muda (ele fixa o tamanho na criacao).
@@ -178,6 +185,7 @@ public:
     if (budgetChanged) rebuild(s);
     else sys_->SetQuality(makeQuality(s));
   }
+  // Configuracao atualmente aplicada.
   const LightingSettings& settings() const { return cfg_; }
 
   // Monta o quadro: luzes da cena + sol + cascatas + ambiente. Chamar uma vez por quadro.
@@ -280,7 +288,9 @@ public:
     return out_;
   }
 
+  // Ultimo quadro montado por build().
   const LightFrame& frame() const { return out_; }
+  // Acesso ao LightingSystem da Light Prism (usado pelo renderizador para subir os buffers).
   LightPrism::LightingSystem& system() { return *sys_; }
   // FrameLightView do ultimo build(): ponteiros validos ate o proximo build (usado pelos clusters na GPU).
   const LightPrism::FrameLightView& lastView() const { return lastView_; }
@@ -327,6 +337,7 @@ private:
     }
   }
 
+  // Recria o LightingSystem com a nova configuracao e zera handles e caches.
   void rebuild(const LightingSettings& s) {
     cfg_ = s;
     sys_ = std::make_unique<LightPrism::LightingSystem>(makeLightingConfig(s));
@@ -350,15 +361,23 @@ private:
     return h;
   }
 
+  // Configuracao aplicada na ultima chamada de configure() ou rebuild().
   LightingSettings cfg_;
+  // LightingSystem da Light Prism: orcamento, luzes e clusters entre quadros.
   std::unique_ptr<LightPrism::LightingSystem> sys_;
+  // Handles das luzes pontuais e spot registradas, na ordem da lista da cena.
   std::vector<LightPrism::LightHandle> handles_;
+  // Tipo de cada handle, para saber se da para atualizar a luz no lugar.
   std::vector<LightType> handleTypes_;
+  // Quadro montado por build(); os renderizadores leem esta copia.
   LightFrame out_;
+  // View da Light Prism do ultimo build(), usada pelos clusters na GPU.
   LightPrism::FrameLightView lastView_{};
   u64 lightsSig_ = 0; bool lightsValid_ = false;   // lista de luzes registrada na LightPrism (ver build)
+  // Cor ambiente usada no ultimo SH9 calculado; so recalcula quando muda.
   Vec3 ambCache_{};
   f32 ambIntensityCache_ = 0.f;
+  // ambValid_: o cache de ambiente vale. built_: o LightingSystem ja foi criado.
   bool ambValid_ = false, built_ = false;
 };
 

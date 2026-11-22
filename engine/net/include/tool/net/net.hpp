@@ -29,6 +29,8 @@ inline constexpr const char* kRateLimit = "TOOL-W220";
 inline constexpr const char* kTooBig = "TOOL-E222";
 } // namespace code
 
+// CRC-32 (IEEE, polinomio 0xEDB88320) usado para detectar pacotes corrompidos.
+// Atenção: a tabela de CRC e preenchida na primeira chamada sem sincronizacao; chamadas simultaneas em threads diferentes sao uma corrida.
 inline u32 crc32(const u8* d, size_t n) {
   static u32 table[256]; static bool init = false;
   if (!init) { for (u32 i = 0; i < 256; ++i) { u32 c = i; for (int k = 0; k < 8; ++k) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1; table[i] = c; } init = true; }
@@ -40,49 +42,75 @@ inline u32 crc32(const u8* d, size_t n) {
 // Leitor com checagem de limites: qualquer leitura alem do fim marca erro (nunca le fora do buffer).
 class Reader {
 public:
+  // Associa o leitor ao buffer (nao copia).
   Reader(const u8* d, size_t n) : d_(d), n_(n) {}
+  // Falso se alguma leitura passou do fim do buffer.
   bool ok() const { return ok_; }
+  // Bytes ainda nao lidos.
   size_t remaining() const { return n_ - p_; }
+  // Le 1 byte (0 se faltarem dados).
   u8 u8_() { return take(1) ? d_[p_ - 1] : 0; }
+  // Le inteiro de 16 bits little-endian (0 se faltarem dados).
   u16 u16_() { if (!take(2)) return 0; return static_cast<u16>(d_[p_ - 2] | (d_[p_ - 1] << 8)); }
+  // Le inteiro de 32 bits little-endian (0 se faltarem dados).
   u32 u32_() { if (!take(4)) return 0; return static_cast<u32>(d_[p_ - 4]) | (static_cast<u32>(d_[p_ - 3]) << 8) | (static_cast<u32>(d_[p_ - 2]) << 16) | (static_cast<u32>(d_[p_ - 1]) << 24); }
+  // Le n bytes (vazio se faltarem dados).
   Bytes bytes(size_t n) { if (!take(n)) return {}; return Bytes(d_ + p_ - n, d_ + p_); }
 private:
+  // Avanca n bytes se couberem; senao marca erro e nao avanca.
   bool take(size_t n) { if (!ok_ || n > n_ - p_) { ok_ = false; return false; } p_ += n; return true; }
   const u8* d_; size_t n_, p_ = 0; bool ok_ = true;
 };
+// Montagem de pacote em memoria, em little-endian (o inverso do Reader).
 struct Writer {
   Bytes b;
+  // Escreve 1 byte.
   void u8_(u8 v) { b.push_back(v); }
+  // Escreve inteiro de 16 bits little-endian.
   void u16_(u16 v) { b.push_back(static_cast<u8>(v)); b.push_back(static_cast<u8>(v >> 8)); }
+  // Escreve inteiro de 32 bits little-endian.
   void u32_(u32 v) { for (int i = 0; i < 4; ++i) b.push_back(static_cast<u8>(v >> (8 * i))); }
+  // Anexa um bloco de bytes.
   void bytes(const Bytes& v) { b.insert(b.end(), v.begin(), v.end()); }
 };
 
+// Transporte nao confiavel: envia e recebe datagramas (UDP, WebRTC ou o link simulado).
 class ITransport {
 public:
+  // Destrutor virtual: permite apagar pela interface base.
   virtual ~ITransport() = default;
+  // Envia um datagrama (pode ser perdido, duplicado ou chegar fora de ordem).
   virtual void send(const Bytes& datagram) = 0;
+  // Devolve o proximo datagrama recebido, ou nullopt se nao houver nenhum.
   virtual std::optional<Bytes> receive() = 0;
 };
 
 // Link simulado entre dois pontos: perda, duplicacao e reordenacao deterministicas (PRNG fixo).
 class SimLink {
 public:
+  // Parametros do link simulado: probabilidades de perda, duplicacao e reordenacao, e semente do PRNG.
   struct Cfg { double loss = 0, dup = 0, reorder = 0; u32 seed = 1; };
+  // Link sem perdas, duplicacoes nem reordenacao.
   SimLink() : SimLink(Cfg{}) {}
+  // Cria o link com a configuracao dada.
   explicit SimLink(Cfg c) : cfg_(c), rng_(c.seed) {}
+  // Uma das pontas do link: envia para a outra ponta e le a propria fila.
   class End final : public ITransport {
   public:
+    // Ponta "side" (0 ou 1) do link l.
     End(SimLink* l, int side) : l_(l), side_(side) {}
+    // Coloca o datagrama na fila da outra ponta (sujeito a perda e duplicacao).
     void send(const Bytes& d) override { l_->push(1 - side_, d); }
+    // Remove e devolve o proximo datagrama da propria fila.
     std::optional<Bytes> receive() override { auto& q = l_->q_[side_]; if (q.empty()) return std::nullopt; Bytes out = std::move(q.front()); q.pop_front(); return out; }
   private:
     SimLink* l_; int side_;
   };
   End a{this, 0}, b{this, 1};
 private:
+  // Numero pseudoaleatorio em [0, 1) (LCG de 32 bits, deterministico).
   double rnd() { rng_ = rng_ * 1664525u + 1013904223u; return static_cast<double>(rng_ >> 8) / 16777216.0; }
+  // Entrega d a ponta "to" aplicando as regras de perda, reordenacao e duplicacao.
   void push(int to, const Bytes& d) {
     if (rnd() < cfg_.loss) return;
     auto& q = q_[to];
@@ -101,9 +129,11 @@ public:
   static constexpr size_t kMaxPacket = 1200;
   static constexpr size_t kWindow = 256; // msgIds a frente do esperado que aceitamos
 
+  // Liga a conexao a um transporte (nao o possui).
   explicit Connection(ITransport& t) : t_(t) {}
   std::function<void(const Bytes&)> onMessage;
 
+  // Enfileira uma mensagem confiavel (ate kMaxMessage bytes). Retorna false se for grande demais.
   bool send(const Bytes& msg) {
     if (msg.size() > kMaxMessage) { debug().report(code::kTooBig, Severity::Error, "mensagem maior que o limite"); return false; }
     out_.push_back({nextOut_++, msg});
@@ -115,13 +145,18 @@ public:
     while (auto d = t_.receive()) handle(*d);
     flush();
   }
+  // Quantas mensagens ainda aguardam confirmacao.
   size_t unacked() const { return out_.size(); }
+  // Quantos pacotes ou mensagens duplicados foram descartados.
   u32 duplicatesDropped() const { return dups_; }
+  // Quantos pacotes invalidos (CRC, tamanho ou formato) foram descartados.
   u32 badPackets() const { return bad_; }
 
 private:
+  // Mensagem em transito: id sequencial e dados.
   struct Msg { u32 id; Bytes data; };
 
+  // Monta e envia um pacote com as mensagens pendentes e o ack atual. Nao envia nada se nao houver o que dizer.
   void flush() {
     Writer w; w.u16_(kMagic); w.u8_(1); w.u32_(expectIn_);
     const size_t countPos = w.b.size(); w.u8_(0);
@@ -137,6 +172,7 @@ private:
     t_.send(w.b);
   }
 
+  // Valida o pacote (CRC, magic, tamanho), processa os acks, guarda mensagens fora de ordem e entrega em ordem via onMessage.
   void handle(const Bytes& d) {
     if (d.size() < 12 || d.size() > kMaxPacket) { ++bad_; return; }
     Reader tail(d.data() + d.size() - 4, 4);
@@ -178,9 +214,12 @@ private:
 using PeerId = u32;
 using NetId = u32;
 
+// Balde de fichas que limita a taxa de atualizacoes de um peer.
 class TokenBucket {
 public:
+  // perSecond = recarga por segundo; burst = capacidade maxima de fichas.
   TokenBucket(double perSecond, double burst) : rate_(perSecond), cap_(burst), tokens_(burst) {}
+  // Tenta gastar "cost" fichas no instante now (segundos). Retorna false se faltarem.
   bool take(double now, double cost = 1) {
     tokens_ = std::min(cap_, tokens_ + (now - last_) * rate_); last_ = now;
     if (tokens_ < cost) return false;
@@ -190,11 +229,15 @@ private:
   double rate_, cap_, tokens_, last_ = 0;
 };
 
+// Sessao de rede: autoridade do host, dono de cada objeto replicado e limite de taxa por peer.
 class NetSession {
 public:
+  // isHost = este processo e o host (autoridade sobre todos os objetos).
   explicit NetSession(bool isHost) : host_(isHost) {}
 
+  // Cria um objeto replicado com dono "owner" e estado inicial; devolve seu NetId.
   NetId registerObject(PeerId owner, Json state = Json::object()) { const NetId id = ++nextId_; objs_[id] = {owner, std::move(state)}; return id; }
+  // Define a taxa de um peer: perSecond atualizacoes por segundo, com rajada de ate burst.
   void setPeerRate(PeerId p, double perSecond, double burst) { buckets_.erase(p); buckets_.emplace(p, TokenBucket(perSecond, burst)); }
 
   // Atualizacao recebida de `from`. So o dono altera o estado (ou o host, que e a autoridade).
@@ -224,12 +267,15 @@ public:
     }
     return out;
   }
+  // Estado atual do objeto, ou nullptr se nao existir.
   const Json* state(NetId id) const { auto it = objs_.find(id); return it == objs_.end() ? nullptr : &it->second.state; }
+  // Versao do objeto, ou 0 se nao existir.
   u32 version(NetId id) const { auto it = objs_.find(id); return it == objs_.end() ? 0 : it->second.version; }
 
   static constexpr PeerId kHostPeer = 0;
 
 private:
+  // Objeto replicado: dono, estado JSON e versao (incrementa a cada atualizacao aceita).
   struct Obj { PeerId owner; Json state; u32 version = 0; };
   bool host_;
   NetId nextId_ = 0;

@@ -26,6 +26,7 @@ struct BatchItem { std::uint64_t mesh; std::uint64_t texture; };
 // Um comando de desenho: 'count' instancias a partir de 'first' na ordem de 'BatchPlan::order'.
 struct InstanceBatch { std::uint64_t mesh; std::uint64_t texture; std::uint32_t first; std::uint32_t count; };
 
+// Resultado do planejamento: order (permutacao dos itens) e os lotes sobre essa ordem.
 struct BatchPlan {
   std::vector<std::uint32_t> order;   // permutacao dos itens de entrada: order[k] = indice do item na posicao k
   std::vector<InstanceBatch> batches; // lotes em ordem; a soma de count == items.size()
@@ -63,12 +64,14 @@ inline void planInstanceBatches(const std::vector<BatchItem>& items, BatchPlan& 
   }
 }
 
+// Versao que devolve o plano pronto (aloca o resultado).
 inline BatchPlan planInstanceBatches(const std::vector<BatchItem>& items, std::uint32_t maxPerBatch = 0) {
   BatchPlan plan;
   planInstanceBatches(items, plan, maxPerBatch);
   return plan;
 }
 
+// Converte cada elemento da fila em BatchItem com makeBatchItem e depois planeja os lotes.
 template <typename QueueItem, typename BatchItemFn>
 inline void planQueuedBatches(const std::vector<QueueItem>& queue, std::vector<BatchItem>& items,
                               BatchPlan& plan, BatchItemFn makeBatchItem,

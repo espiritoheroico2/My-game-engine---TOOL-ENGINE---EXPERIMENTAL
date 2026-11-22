@@ -9,19 +9,24 @@
 
 namespace tool {
 
+// Estado interno: dispositivo miniaudio e se ele ja foi iniciado.
 struct MiniaudioDevice::Impl {
   ma_device dev{};
   bool started = false;
 };
 
+// Callback da thread de audio: pede ao Mixer `frames` quadros estereo em out.
 static void dataCallback(ma_device* d, void* out, const void*, ma_uint32 frames) {
   auto* mixer = static_cast<Mixer*>(d->pUserData);
   mixer->render(static_cast<f32*>(out), frames);
 }
 
+// Aloca o Impl. O dispositivo ainda nao esta aberto.
 MiniaudioDevice::MiniaudioDevice() : impl_(new Impl) {}
+// Para o dispositivo e libera o Impl.
 MiniaudioDevice::~MiniaudioDevice() { stop(); delete impl_; }
 
+// Configura playback f32 estereo a 48 kHz e inicia. Se o start falhar, desfaz o init. Idempotente.
 bool MiniaudioDevice::start(Mixer& mixer) {
   if (impl_->started) return true;
   ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
@@ -36,6 +41,7 @@ bool MiniaudioDevice::start(Mixer& mixer) {
   return true;
 }
 
+// Fecha o dispositivo, se estiver aberto.
 void MiniaudioDevice::stop() {
   if (!impl_->started) return;
   ma_device_uninit(&impl_->dev);
@@ -43,6 +49,7 @@ void MiniaudioDevice::stop() {
 }
 
 
+// Implementacao de decodeAudioFile (contrato em decode.hpp). Limita o arquivo a 256 MB e o audio a 10 minutos.
 SoundPtr decodeAudioFile(const std::string& path, std::string* err) {
   auto fail = [&](const std::string& m) -> SoundPtr { if (err) *err = m; return nullptr; };
   std::error_code ec;

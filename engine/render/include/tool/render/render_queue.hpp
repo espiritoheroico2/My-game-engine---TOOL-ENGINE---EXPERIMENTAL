@@ -6,6 +6,7 @@
 
 namespace tool::render {
 
+// Flags de um objeto para classificar nas filas de render (opaco, transparente, emissivo, prepasso e sombra).
 struct RenderQueueItem {
   bool opaque = false;
   bool transparent = false;
@@ -14,6 +15,7 @@ struct RenderQueueItem {
   bool castsShadow = false;
 };
 
+// Filas de indices por passe. Cada valor e a posicao do objeto no vetor de entrada.
 struct RenderQueues {
   std::vector<std::uint32_t> opaque;
   std::vector<std::uint32_t> transparent;
@@ -22,6 +24,7 @@ struct RenderQueues {
   std::vector<std::uint32_t> shadowCasters;
 };
 
+// Preenche as filas a partir das flags. Transparente nao entra nas filas opacas; emissivo exige opaco e nao transparente.
 inline void buildRenderQueues(const std::vector<RenderQueueItem>& items, RenderQueues& queues) {
   queues.opaque.clear();
   queues.transparent.clear();

@@ -20,6 +20,7 @@ constexpr SDL_GamepadAxis kAxisMap[] = {SDL_GAMEPAD_AXIS_LEFTX,  SDL_GAMEPAD_AXI
                                         SDL_GAMEPAD_AXIS_RIGHTY, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER};
 } // namespace
 
+// Estado interno (pimpl): janela SDL, gamepads abertos por slot e os ids deles.
 struct SdlWindow::Impl {
   SDL_Window* window = nullptr;
   SDL_Gamepad* pads[kMaxPads] = {};
@@ -27,6 +28,7 @@ struct SdlWindow::Impl {
   bool open = true;
 };
 
+// Inicializa SDL (video e gamepad), cria a janela e marca ok_ se deu certo.
 SdlWindow::SdlWindow(const WindowDesc& d) : impl_(new Impl) {
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
     ok_ = false;
@@ -38,6 +40,8 @@ SdlWindow::SdlWindow(const WindowDesc& d) : impl_(new Impl) {
   ok_ = impl_->window != nullptr;
 }
 
+// Fecha os gamepads, destroi a janela e chama SDL_Quit().
+// Atenção: SDL_Quit() afeta qualquer outra SdlWindow aberta ao mesmo tempo.
 SdlWindow::~SdlWindow() {
   for (auto* p : impl_->pads)
     if (p) SDL_CloseGamepad(p);
@@ -46,6 +50,8 @@ SdlWindow::~SdlWindow() {
   delete impl_;
 }
 
+// Coleta a entrada do quadro: eventos, teclado, mouse e ate kMaxPads gamepads. Eixos em -1..1 e gatilhos em 0..1.
+// Atenção: se SDL_OpenGamepad falhar, o slot fica nulo mas o evento DeviceChanged ainda e disparado.
 bool SdlWindow::pump(RawInput& in) {
   std::memset(in.mouse, 0, sizeof(in.mouse));
   in.mouseDelta = {};
@@ -101,6 +107,7 @@ bool SdlWindow::pump(RawInput& in) {
   return impl_->open;
 }
 
+// Tamanho da janela em pixels. Zero se a janela nao existe.
 void SdlWindow::size(u32& w, u32& h) const {
   int iw = 0, ih = 0;
   if (impl_->window) SDL_GetWindowSize(impl_->window, &iw, &ih);
@@ -108,6 +115,7 @@ void SdlWindow::size(u32& w, u32& h) const {
   h = static_cast<u32>(ih);
 }
 
+// Devolve o SDL_Window* (ver nota em sdl_window.hpp).
 void* SdlWindow::nativeHandle() const { return impl_->window; }
 
 } // namespace tool

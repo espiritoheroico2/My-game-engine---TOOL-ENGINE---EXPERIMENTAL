@@ -11,11 +11,16 @@
 
 namespace tool {
 
+// Pool de threads persistente (singleton) usado pelo parallelFor. Cria no maximo 8 threads no total, contando a thread chamadora.
 class ParallelPool {
 public:
+  // Instancia unica do pool.
   static ParallelPool& get() { static ParallelPool p; return p; }
+  // Numero de threads que trabalham em um parallelFor (workers + thread chamadora).
   size_t threads() const { return workers_.size() + 1; }
 
+  // Divide [0, n) em blocos e executa fn(begin, end) em paralelo. Abaixo de `grain` roda tudo na thread chamadora. Nao chame parallelFor de dentro de fn (deadlock).
+  // Atenção: se fn lancar excecao na thread chamadora, o pool fica inconsistente; em um worker, o programa termina (std::terminate).
   template <class F>
   void run(size_t n, size_t grain, F&& fn) {
     if (n == 0) return;
@@ -32,15 +37,19 @@ public:
     job_ = nullptr; // so aqui: nenhum worker ainda segura o ponteiro (cada bloco e reivindicado e concluido sob o mutex)
   }
 
+  // Pool nao pode ser copiado.
   ParallelPool(const ParallelPool&) = delete; ParallelPool& operator=(const ParallelPool&) = delete;
+  // Encerra os workers e aguarda suas threads terminarem.
   ~ParallelPool() { { std::lock_guard<std::mutex> l(m_); stop_ = true; } cv_.notify_all(); for (auto& t : workers_) t.join(); }
 
 private:
+  // Cria os workers (hardware_concurrency - 1, limitado a 7).
   ParallelPool() {
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
     const unsigned n = std::min(hw, 8u) - 1;
     for (unsigned i = 0; i < n; ++i) workers_.emplace_back([this] { loop(); });
   }
+  // Laco de cada worker: espera um job, executa os blocos reivindicados e avisa quando termina.
   void loop() {
     std::unique_lock<std::mutex> l(m_);
     for (;;) {
@@ -57,6 +66,7 @@ private:
   std::function<void(size_t)>* job_ = nullptr; size_t total_ = 0, next_ = 0, pending_ = 0; bool stop_ = false;
 };
 
+// Atalho: executa fn(begin, end) em paralelo sobre [0, n) usando o ParallelPool global. Mesma semantica de ParallelPool::run.
 template <class F> inline void parallelFor(size_t n, size_t grain, F&& fn) { ParallelPool::get().run(n, grain, std::forward<F>(fn)); }
 
 } // namespace tool

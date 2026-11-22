@@ -11,12 +11,15 @@
 namespace tool::assets {
 
 // Extensoes que o editor aceita (usado no arrastar-e-soltar).
+// Verdade se a extensao (.glb, .gltf, .fbx, sem diferenciar maiusculas) e de um formato aceito.
 inline bool isModelExtension(const std::string& path) {
   std::string e = std::filesystem::path(path).extension().string();
   std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return e == ".glb" || e == ".gltf" || e == ".fbx";
 }
 
+// Importa um modelo ja carregado em memoria, escolhendo o parser pelo conteudo (magic bytes).
+// baseDir = pasta usada para resolver arquivos .bin externos do glTF.
 inline ImportResult importModelMemory(const std::vector<u8>& bytes, const std::string& baseDir, const ImportOptions& opt = {}) {
   if (bytes.size() >= 4 && std::memcmp(bytes.data(), "glTF", 4) == 0) return importGltf(bytes, baseDir, opt);
   if (bytes.size() >= 20 && std::memcmp(bytes.data(), "Kaydara FBX Binary  ", 20) == 0) return importFbx(bytes, opt);
@@ -29,6 +32,7 @@ inline ImportResult importModelMemory(const std::vector<u8>& bytes, const std::s
   return failure("formato de modelo nao reconhecido (suportados: .glb, .gltf, .fbx binario)");
 }
 
+// Le o arquivo do disco (respeitando ImportLimits::maxFileBytes) e importa. Erros voltam em ImportResult::error.
 inline ImportResult importModelFile(const std::string& path, const ImportOptions& opt = {}) {
   std::vector<u8> bytes;
   std::string err;

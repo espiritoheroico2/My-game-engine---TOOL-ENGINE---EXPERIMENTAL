@@ -16,6 +16,7 @@
 
 namespace tool {
 
+// Audio decodificado em PCM float32 intercalado. E o que o Mixer toca.
 struct SoundData {
   u32 sampleRate = 48000;
   u32 channels = 1;         // 1 ou 2
@@ -59,10 +60,13 @@ inline SoundPtr loadWav(const u8* d, size_t n) {
   return nullptr;
 }
 
+// Barramentos de mixagem: Master (ganho geral), Music, Sfx e Voice.
 enum class BusId : u8 { Master, Music, Sfx, Voice, Count };
 
+// Posicao e orientacao do ouvinte para o calculo de som 3D.
 struct Listener { f32 x = 0, y = 0, z = 0; f32 rightX = 1, rightZ = 0; }; // direita do ouvinte no plano XZ
 
+// Parametros de uma reproducao: barramento, volume, pitch, pan, loop, posicao 3D e prioridade.
 struct PlayParams {
   BusId bus = BusId::Sfx;
   f32 volume = 1.f, pitch = 1.f, pan = 0.f; // pan -1..1
@@ -75,14 +79,21 @@ struct PlayParams {
 
 using VoiceId = Handle;
 
+// Mixer em software: vozes, barramentos, 3D simples e limitador. Protegido por mutex.
 class Mixer {
 public:
+  // sampleRate: taxa de saida. maxVoices: limite de vozes simultaneas.
   explicit Mixer(u32 sampleRate = 48000, size_t maxVoices = 64) : rate_(sampleRate), max_(maxVoices) {}
 
+  // Volume do barramento, limitado a 0..2.
   void setBusVolume(BusId b, f32 v) { std::lock_guard lk(mu_); bus_[static_cast<int>(b)].volume = std::clamp(v, 0.f, 2.f); }
+  // Silencia ou reativa um barramento.
   void setBusMuted(BusId b, bool m) { std::lock_guard lk(mu_); bus_[static_cast<int>(b)].muted = m; }
+  // Atualiza a posicao do ouvinte para os sons 3D.
   void setListener(const Listener& l) { std::lock_guard lk(mu_); listener_ = l; }
 
+  // Inicia uma voz e devolve seu id. No limite de vozes, rouba a de menor prioridade, se ela for menos importante.
+  // Senao, ou para som vazio, devolve handle nulo.
   VoiceId play(SoundPtr s, const PlayParams& p = {}) {
     std::lock_guard lk(mu_);
     if (!s || s->frames() == 0) {
@@ -106,13 +117,17 @@ public:
     return voices_.back().id;
   }
 
+  // Para a voz id e libera seu slot.
   void stop(VoiceId id) {
     std::lock_guard lk(mu_);
     for (size_t i = 0; i < voices_.size(); ++i)
       if (voices_[i].id == id) { ids_.destroy(id); voices_.erase(voices_.begin() + static_cast<std::ptrdiff_t>(i)); return; }
   }
+  // Verdadeiro se a voz ainda esta viva (nao terminou nem foi parada).
   bool playing(VoiceId id) const { std::lock_guard lk(mu_); return ids_.alive(id); }
+  // Numero de vozes ativas agora.
   size_t activeVoices() const { std::lock_guard lk(mu_); return voices_.size(); }
+  // Quantas vozes foram roubadas desde a criacao do Mixer.
   size_t stolenVoices() const { return stolen_; }
 
   // Gera `frames` quadros estereo intercalados em `out`.
@@ -166,7 +181,9 @@ public:
   }
 
 private:
+  // Uma voz: som, parametros e posicao de leitura (em frames, fracionaria).
   struct Voice { VoiceId id; SoundPtr s; PlayParams p; f64 pos = 0; };
+  // Volume e estado de mudo de um barramento.
   struct BusState { f32 volume = 1.f; bool muted = false; };
 
   mutable std::mutex mu_; // protege vozes entre a thread do jogo e a de audio
@@ -181,18 +198,26 @@ private:
 // Dispositivo de saida: o backend (miniaudio) chama o callback na thread de audio.
 class IAudioDevice {
 public:
+  // Destrutor virtual.
   virtual ~IAudioDevice() = default;
+  // Inicia a saida que puxa o audio do mixer. Devolve false se falhar.
   virtual bool start(Mixer& mixer) = 0;
+  // Para a saida.
   virtual void stop() = 0;
+  // Nome do backend de audio.
   virtual const char* backendName() const = 0;
 };
 
 // Dispositivo nulo: o teste/servidor puxa os quadros manualmente.
 class NullAudioDevice final : public IAudioDevice {
 public:
+  // So guarda o ponteiro do mixer. Nao cria thread. Sempre true.
   bool start(Mixer& m) override { mixer_ = &m; return true; }
+  // Solta o mixer.
   void stop() override { mixer_ = nullptr; }
+  // Nome do backend: null.
   const char* backendName() const override { return "null"; }
+  // Gera `frames` quadros do mixer em out. Substitui a thread de audio em testes e servidor.
   void pull(f32* out, size_t frames) { if (mixer_) mixer_->render(out, frames); }
 private:
   Mixer* mixer_ = nullptr;

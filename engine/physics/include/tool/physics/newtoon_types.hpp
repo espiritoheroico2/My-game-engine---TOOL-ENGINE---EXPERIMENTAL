@@ -8,12 +8,16 @@
 namespace Newtoon {
 
 using Entity = uint32_t;
+// Valor que indica 'nenhuma entidade'.
 constexpr Entity kNoEntity = 0xFFFFFFFFu;
 
+// Forma do collider usada na deteccao de colisao.
 enum class ShapeType : uint8_t { Box, Sphere, Cylinder, CustomConvex };
 // Cylinder/CustomConvex: ainda sem narrow-phase proprio; sao tratados como a caixa envolvente (extents). Ver docs/PHYSICS.md.
+// Como combinar dois coeficientes de material (atrito ou quique) de corpos que colidem.
 enum class CombineMode : uint8_t { Average, Minimum, Maximum, Multiply };
 
+// Material fisico: atrito e quique (bounciness) e como combina-los com o outro material.
 struct PhysicsMaterial {
   float friction = 0.5f;
   float bounciness = 0.0f;
@@ -21,6 +25,7 @@ struct PhysicsMaterial {
   CombineMode bounceCombine = CombineMode::Maximum;
 };
 
+// Combina dois valores a e b conforme o modo m (media, minimo, maximo ou produto).
 inline float Combine(CombineMode m, float a, float b) {
   switch (m) {
     case CombineMode::Minimum: return a < b ? a : b;
@@ -30,7 +35,9 @@ inline float Combine(CombineMode m, float a, float b) {
   }
 }
 
+// Fase do evento de colisao: inicio (Enter), continuacao (Stay) ou fim (Exit).
 enum class CollisionType : uint8_t { Enter, Stay, Exit };
+// Evento de colisao entre duas entidades, com ponto, normal e impacto do contato.
 struct CollisionEvent {
   Entity entityA = kNoEntity, entityB = kNoEntity;
   Vec3 contactPoint, contactNormal; // normal aponta de A para B
@@ -39,6 +46,7 @@ struct CollisionEvent {
   bool trigger = false;             // um dos colliders e gatilho (sem resposta fisica)
 };
 
+// Resultado de um raycast: se acertou, onde, a normal, a distancia e a entidade atingida.
 struct RaycastHit {
   bool hit = false;
   Vec3 point, normal;
@@ -46,8 +54,10 @@ struct RaycastHit {
   Entity entity = kNoEntity;
 };
 
+// Posicao e rotacao de um objeto, lidas pela fisica.
 struct Transform { Vec3 position; Quat rotation; };
 
+// Componente de corpo rigido: massa, velocidades, forcas acumuladas e configuracoes de movimento.
 struct Rigidbody {
   Vec3 velocity, angularVelocity;
   Vec3 forceAccumulator, torqueAccumulator;
@@ -71,15 +81,23 @@ struct Rigidbody {
   bool grounded = false;               // tocando uma superficie "de chao" (normal.y > 0.7 em relacao ao mundo)
   Vec3 groundNormal{0, 1, 0};
 
+  // Define a massa (0 ou menos = corpo estatico com massa infinita).
   void SetMass(float mass) { inverseMass = (mass <= 0.f) ? 0.f : (1.f / mass); }
+  // True se o corpo nunca se move (massa infinita e nao cinematico).
   bool IsStatic() const { return inverseMass == 0.f && !isKinematic; }
+  // True se o corpo e afetado pela fisica (tem massa e nao e cinematico).
   bool IsDynamic() const { return inverseMass > 0.f && !isKinematic; }
+  // Acorda o corpo da hibernacao e zera o temporizador de sono.
   void WakeUp() { isSleeping = false; sleepTimer = 0.f; }
+  // Acumula a forca f para o proximo passo (a forca e em newtons; acorda o corpo).
   void AddForce(const Vec3& f) { forceAccumulator += f; WakeUp(); }
+  // Aplica um impulso instantaneo j: muda a velocidade de acordo com a massa.
   void AddImpulse(const Vec3& j) { velocity += j * inverseMass; WakeUp(); }          // ex.: pulo = AddImpulse({0, massa*v, 0})
+  // Acumula um torque t para o proximo passo (acorda o corpo).
   void AddTorque(const Vec3& t) { torqueAccumulator += t; WakeUp(); }
 };
 
+// Forma de colisao do objeto (caixa, esfera, etc.), com material, deslocamento e flag de gatilho.
 struct Collider {
   ShapeType type = ShapeType::Box;
   uint16_t materialId = 0;
@@ -92,9 +110,11 @@ struct Collider {
 };
 
 // Calcula massa/inercia a partir da forma (caixa ou esfera solidas). Retorna sem mudar nada se mass <= 0 (corpo estatico).
+// Calcula massa/inercia a partir da forma (caixa ou esfera solidas). Retorna sem mudar nada se mass <= 0 (corpo estatico).
 inline void SetMassFromShape(Rigidbody& rb, const Collider& c, float mass) {
   rb.SetMass(mass);
   if (mass <= 0.f) { rb.inverseInertiaLocal = {0, 0, 0}; return; }
+  // Atenção: raio 0 gera inercia zero e inverso infinito.
   if (c.type == ShapeType::Sphere) { const float i = 0.4f * mass * c.radius * c.radius; rb.inverseInertiaLocal = {1.f / i, 1.f / i, 1.f / i}; return; }
   const Vec3 e = c.extents; const float k = mass / 3.f; // (1/12)*m*(w^2+h^2) com w = 2e  ->  m/3 * (e1^2+e2^2)
   rb.inverseInertiaLocal = {1.f / (k * (e.y * e.y + e.z * e.z)), 1.f / (k * (e.x * e.x + e.z * e.z)), 1.f / (k * (e.x * e.x + e.y * e.y))};
@@ -102,13 +122,16 @@ inline void SetMassFromShape(Rigidbody& rb, const Collider& c, float mass) {
 
 // Juntas (estrutura de dados; solver de juntas esta no roteiro - docs/PHYSICS.md).
 enum class JointType : uint8_t { Fixed, Hinge, BallAndSocket };
+// Junta entre dois corpos: tipo, corpos conectados, pontos de ancoragem e eixo da dobradica. So dados; o solver ainda nao existe.
 struct Joint { JointType type = JointType::Fixed; Entity bodyA = kNoEntity, bodyB = kNoEntity; Vec3 anchorPointA, anchorPointB, hingeAxis; };
 
+// Parametros de suspensao de uma roda de veiculo (mola e amortecedor).
 struct WheelCollider {
   float radius = 0.3f, suspensionRestLength = 0.5f, springStiffness = 30000.f, springDamper = 3000.f;
   bool isGrounded = false; float currentSuspensionLength = 0.f;
 };
 
+// Caixa alinhada aos eixos (AABB), definida pelos cantos minimo e maximo.
 struct AABB { Vec3 min, max; };
 
 } // namespace Newtoon

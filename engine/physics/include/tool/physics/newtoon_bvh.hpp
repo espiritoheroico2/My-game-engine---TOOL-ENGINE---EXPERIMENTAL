@@ -11,6 +11,7 @@
 
 namespace Newtoon {
 
+// No da BVH: caixa envolvente, filhos (ou a entidade, se for folha). Folha quando left < 0.
 struct BVHNode { AABB bounds; int left = -1, right = -1; Entity entity = kNoEntity; bool IsLeaf() const { return left < 0; } };
 
 // AABB utilizavel na arvore: todos os componentes finitos (sem NaN/Inf) e min <= max em cada eixo.
@@ -23,6 +24,7 @@ inline bool IsUsableBox(const AABB& b) {
   return b.min.x <= b.max.x && b.min.y <= b.max.y && b.min.z <= b.max.z;
 }
 
+// True se as duas caixas se tocam (inclusive na borda).
 inline bool Overlaps(const AABB& a, const AABB& b) {
   return a.min.x <= b.max.x && a.max.x >= b.min.x && a.min.y <= b.max.y && a.max.y >= b.min.y && a.min.z <= b.max.z && a.max.z >= b.min.z;
 }
@@ -37,6 +39,7 @@ inline float RayAABB(const Vec3& o, const Vec3& invD, const AABB& b, float maxT)
   return t0;
 }
 
+// Arvore de volumes envolventes para consultas de broad-phase e raycast. Reconstruida a cada passo com Build().
 class BVH {
  public:
   // Entradas da pilha de percurso. Invariante GARANTIDA por Build(), em runtime (nao por assert):
@@ -70,10 +73,12 @@ class BVH {
     nodes.reserve(ids_.size() * 2);
     BuildRange(boxes, 0, ids_.size());
   }
+  // True se a BVH nao tem nos (nenhuma caixa valida na ultima Build).
   bool Empty() const { return nodes.empty(); }
   // Quantas caixas foram descartadas na ultima Build() por NaN/Inf ou min > max.
   size_t RejectedCount() const { return rejected_; }
 
+  // Chama f(entity) para cada entidade cuja caixa toca a caixa q.
   template <class F> // f(entity) para cada folha cuja caixa toca `q`
   void Query(const AABB& q, F&& f) const {
     if (nodes.empty()) return;
@@ -99,6 +104,7 @@ class BVH {
   }
 
  private:
+  // Constroi recursivamente a subarvore com as entidades ids_[b..e) e devolve o indice do no criado.
   int BuildRange(const std::vector<AABB>& boxes, size_t b, size_t e) {
     const int idx = static_cast<int>(nodes.size()); nodes.emplace_back();
     AABB bb = boxes[ids_[b]];

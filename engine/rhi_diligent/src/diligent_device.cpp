@@ -28,6 +28,7 @@ namespace dl = Diligent;
 
 namespace {
 
+// Recebe mensagens do Diligent e repassa so erros e avisos para o log da engine (TOOL-E150/W150).
 void messageCallback(dl::DEBUG_MESSAGE_SEVERITY sev, const char* msg, const char* func, const char*, int) {
   const bool err = sev >= dl::DEBUG_MESSAGE_SEVERITY_ERROR;
   const bool warn = sev == dl::DEBUG_MESSAGE_SEVERITY_WARNING;
@@ -36,6 +37,7 @@ void messageCallback(dl::DEBUG_MESSAGE_SEVERITY sev, const char* msg, const char
                  std::string("[gpu] ") + (func ? std::string(func) + ": " : "") + (msg ? msg : ""));
 }
 
+// Converte o Format do RHI para o formato do Diligent. Formato desconhecido vira TEX_FORMAT_UNKNOWN.
 dl::TEXTURE_FORMAT toDl(Format f) {
   switch (f) {
   case Format::RGBA8: return dl::TEX_FORMAT_RGBA8_UNORM;
@@ -51,6 +53,7 @@ dl::TEXTURE_FORMAT toDl(Format f) {
 
 class DiligentCommands;
 
+// Backend Diligent do RHI: guarda device, contexto imediato e swapchain, e mapeia handles para objetos do Diligent.
 class DiligentDevice final : public IDevice {
 public:
   Backend kind = Backend::Null;
@@ -66,10 +69,14 @@ public:
   dl::Uint64 fenceNext_ = 1;
   std::string adapter;
 
+  // Backend escolhido na criacao.
   Backend backend() const override { return kind; }
+  // Nome do adaptador informado pelo Diligent.
   std::string deviceName() const override { return adapter; }
 
   // ---- recursos ----
+  // Cria o buffer na GPU. Uniform e buffers dinamicos viram USAGE_DYNAMIC. Com data, o buffer e imutavel.
+  // Atenção: data inicial e ignorado para buffers dinamicos e uniform; use updateBuffer.
   BufferId createBuffer(const BufferDesc& d, const void* data) override {
     if (d.size == 0) { debug().report("TOOL-E130", Severity::Error, "buffer de tamanho 0"); return kNullHandle; }
     dl::BufferDesc bd;
@@ -97,6 +104,8 @@ public:
     return h;
   }
 
+  // Cria a textura na GPU. Formato desconhecido cai para RGBA8_UNORM com aviso (TOOL-W200).
+  // Atenção: data inicial so e copiado para RGBA8; os outros formatos ignoram data em silencio.
   TextureId createTexture(const TextureDesc& d, const void* data) override {
     if (d.width == 0 || d.height == 0) { debug().report("TOOL-E131", Severity::Error, "textura com dimensao 0"); return kNullHandle; }
     dl::TextureDesc td;
@@ -125,6 +134,7 @@ public:
     return h;
   }
 
+  // Compila o shader a partir do HLSL (ou GLSL) em d.source. Bytecode pre-compilado ainda nao e suportado.
   ShaderId createShader(const ShaderDesc& d) override {
     if (d.source.empty()) { debug().report("TOOL-E132", Severity::Error, "shader sem codigo-fonte HLSL (bytecode pre-compilado ainda nao suportado)"); return kNullHandle; }
     dl::ShaderCreateInfo ci;
@@ -145,6 +155,7 @@ public:
     return h;
   }
 
+  // Cria o PSO grafico (shaders, estado, layout) e um SRB para os recursos do pipeline.
   PipelineId createPipeline(const PipelineDesc& d) override {
     auto* vs = obj<dl::IShader>(d.vs, Kind::Shader);
     auto* ps = obj<dl::IShader>(d.ps, Kind::Shader);
@@ -197,6 +208,8 @@ public:
     return h;
   }
 
+  // Espera a GPU ficar ociosa e so entao libera o objeto e o handle.
+  // Atenção: destruir o handle do backbuffer nao zera backbufferHandle_.
   void destroy(Handle h) override {
     if (!ids_.alive(h)) { debug().report(diag::kStaleHandle, Severity::Warning, "RHI destroy() com handle obsoleto"); return; }
     ctx->WaitForIdle(); // simples e seguro: o objeto pode estar em uso por comandos em voo
@@ -204,6 +217,7 @@ public:
     ids_.destroy(h);
   }
 
+  // Atualiza o buffer: map e memcpy para dinamicos, UpdateBuffer para default. Imutavel gera erro.
   void updateBuffer(BufferId b, const void* data, size_t size) override {
     auto* buf = obj<dl::IBuffer>(b, Kind::Buffer);
     if (!buf) { debug().report(diag::kStaleHandle, Severity::Error, "updateBuffer em handle invalido"); return; }
@@ -221,13 +235,17 @@ public:
     ++stats_.bufferUploads;
   }
 
+  // Cria uma DiligentCommands para gravar comandos neste dispositivo.
   std::unique_ptr<ICommandList> beginCommands() override;
+  // Envia os comandos gravados: Flush do contexto imediato.
   void submit(ICommandList&) override {
     ++stats_.submitCount;
     ++stats_.flushCount;
     ctx->Flush();
   }
+  // Zera as estatisticas e marca o quadro como ativo.
   void beginFrame() override { stats_ = {}; frameActive_ = true; }
+  // Finaliza o quadro: chama present() e desativa a acumulacao.
   void endFrame() override { present(); frameActive_ = false; }
 
   // Buffer criado fora (LightPrism): o handle guarda uma referencia a mais; destruir o handle nao apaga o buffer original.
@@ -238,7 +256,9 @@ public:
     put(h.index, Kind::Buffer, b, b->GetDesc().Size);
     return h;
   }
+  // IRenderDevice* nativo, usado pela Light Prism.
   void* nativeDevice() const override { return device.RawPtr(); }
+  // IDeviceContext* nativo (imediato), compartilhado com a Light Prism.
   void* nativeContext() const override { return ctx.RawPtr(); }
 
   // Fim de quadro. FinishFrame() e OBRIGATORIO: e ele que devolve a memoria dinamica (buffers uniformes com
@@ -250,15 +270,19 @@ public:
     ctx->FinishFrame();
     last_ = stats_; stats_ = {};
   }
+  // Estatisticas do quadro atual. Fora do quadro, as do ultimo quadro apresentado.
   DrawStats frameStats() const override { return frameActive_ ? stats_ : last_; }
 
+  // Handle do backbuffer da swapchain, criado sob demanda. Nulo se offscreen.
   TextureId backbuffer() override {
     if (!swapchain) return kNullHandle;
     if (backbufferHandle_.isNull()) { backbufferHandle_ = ids_.create(); kinds_[backbufferHandle_.index] = Kind::Backbuffer; }
     return backbufferHandle_;
   }
+  // Redimensiona a swapchain. Devolve false se nao houver swapchain.
   bool resizeSwapchain(u32 w, u32 h) override { if (!swapchain) return false; swapchain->Resize(w, h); return true; }
 
+  // Le a textura ou o backbuffer para a CPU como RGBA8, esperando a GPU. Formatos fora de RGBA8/BGRA8 falham.
   bool readTexture(TextureId t, std::vector<u8>& rgba, u32& w, u32& h) override {
     dl::ITexture* tex = nullptr;
     if (auto* t0 = obj<dl::ITexture>(t, Kind::Texture)) tex = t0;
@@ -347,7 +371,9 @@ public:
   }
 
   // ---- acesso interno aos comandos ----
+  // Tipo do objeto guardado por cada handle, usado para validar o uso.
   enum class Kind : u8 { Buffer, Texture, Shader, Pipeline, Backbuffer };
+  // Objeto Diligent do handle, com o tipo k esperado. Nulo se o handle for invalido ou de outro tipo.
   template <class T> T* obj(Handle h, Kind k) const {
     if (!ids_.alive(h)) return nullptr;
     auto kk = kinds_.find(h.index);
@@ -355,15 +381,21 @@ public:
     auto it = objs_.find(h.index);
     return it == objs_.end() ? nullptr : static_cast<T*>(it->second.RawPtr());
   }
+  // Dados de um pipeline: SRB e nomes dos slots de uniform, textura e storage.
   struct PipelineData { dl::RefCntAutoPtr<dl::IShaderResourceBinding> srb; std::vector<std::string> uniformNames, textureNames, storageNames; };
+  // Dados do pipeline do handle, ou nulo.
   PipelineData* pipelineData(Handle h) { auto it = pipelines_.find(h.index); return it == pipelines_.end() ? nullptr : &it->second; }
+  // Verdadeiro se h e o handle do backbuffer desta swapchain.
   bool isBackbuffer(Handle h) const { return swapchain && h == backbufferHandle_ && !h.isNull(); }
+  // Reporta erro de uso da API (TOOL-E135).
   void err(const char* m) { debug().report("TOOL-E135", Severity::Error, std::string("RHI: ") + m); }
   DrawStats stats_, last_;
   bool frameActive_ = false;
+  // Acesso somente leitura ao alocador de handles.
   const HandleAllocator& ids() const { return ids_; }
 
 private:
+  // Registra o objeto, seu tipo e seu tamanho no indice de handle index.
   void put(u32 index, Kind k, dl::IDeviceObject* o, size_t size) { kinds_[index] = k; objs_[index] = o; sizes_[index] = size; }
 
   HandleAllocator ids_;
@@ -374,9 +406,12 @@ private:
   Handle backbufferHandle_;
 };
 
+// Lista de comandos sobre o contexto imediato do Diligent. Cada comando valida o estado e traduz para o Diligent.
 class DiligentCommands final : public ICommandList {
 public:
+  // Liga a lista ao DiligentDevice que a criou.
   explicit DiligentCommands(DiligentDevice& d) : d_(d) {}
+  // Define alvo de cor e profundidade, viewport e scissor no tamanho do alvo, e limpa cor e profundidade.
   void begin(TextureId target, TextureId depth, f32 r, f32 g, f32 b, f32 a) override {
     if (open_) d_.err("begin() dentro de begin()");
     open_ = true;
@@ -420,6 +455,8 @@ public:
     targetW_ = static_cast<u32>(td.Width); targetH_ = static_cast<u32>(td.Height);
     defineScissorDoAlvo();
   }
+  // Troca o alvo de cor e profundidade sem limpar nada.
+  // Atenção: nao atualiza targetW_/targetH_, viewport nem scissor. Alvos de outro tamanho usam os valores anteriores.
   void setTargets(TextureId target, TextureId depth) override {
     if (!check()) return;
     dl::ITextureView* rtv = nullptr; dl::ITextureView* dsv = nullptr;
@@ -430,11 +467,13 @@ public:
     dl::ITextureView* rtvs[] = {rtv};
     d_.ctx->SetRenderTargets(1, rtvs, dsv, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
   }
+  // Limpa a profundidade do alvo atual, sem tocar na cor.
   void clearDepth(f32 depth) override {
     if (!check()) return;
     if (!dsv_) { d_.err("clearDepth sem alvo de profundidade"); return; }
     d_.ctx->ClearDepthStencil(dsv_, dl::CLEAR_DEPTH_FLAG, depth, 0, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
   }
+  // Liga o PSO e guarda os dados do pipeline (nomes dos slots) para setUniform, setTexture e setStorage.
   void setPipeline(PipelineId p) override {
     if (!check()) return;
     auto* pso = d_.obj<dl::IPipelineState>(p, DiligentDevice::Kind::Pipeline);
@@ -443,6 +482,7 @@ public:
     pipe_ = d_.pipelineData(p);
     ++d_.stats_.pipelineSwitches;
   }
+  // Liga o vertex buffer no slot 0 e marca vb_.
   void setVertexBuffer(BufferId b) override {
     if (!check()) return;
     auto* buf = d_.obj<dl::IBuffer>(b, DiligentDevice::Kind::Buffer);
@@ -451,6 +491,7 @@ public:
     d_.ctx->SetVertexBuffers(0, 1, bufs, off, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION, dl::SET_VERTEX_BUFFERS_FLAG_RESET);
     vb_ = true;
   }
+  // Liga o index buffer (32 bits, offset 0) e marca ib_.
   void setIndexBuffer(BufferId b) override {
     if (!check()) return;
     auto* buf = d_.obj<dl::IBuffer>(b, DiligentDevice::Kind::Buffer);
@@ -458,6 +499,7 @@ public:
     d_.ctx->SetIndexBuffer(buf, 0, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     ib_ = true;
   }
+  // Liga o buffer uniforme ao nome do slot em VS e PS. Exige setPipeline antes.
   void setUniform(u32 slot, BufferId b) override {
     if (!check()) return;
     auto* buf = d_.obj<dl::IBuffer>(b, DiligentDevice::Kind::Buffer);
@@ -466,6 +508,7 @@ public:
     for (auto st : {dl::SHADER_TYPE_VERTEX, dl::SHADER_TYPE_PIXEL})
       if (auto* var = pipe_->srb->GetVariableByName(st, pipe_->uniformNames[slot].c_str())) var->Set(buf);
   }
+  // Liga a textura ao nome do slot no pixel shader. Exige setPipeline antes.
   void setTexture(u32 slot, TextureId t) override {
     if (!check()) return;
     auto* tex = d_.obj<dl::ITexture>(t, DiligentDevice::Kind::Texture);
@@ -473,6 +516,7 @@ public:
     if (!pipe_ || slot >= pipe_->textureNames.size()) { d_.err("setTexture: slot sem nome (defina PipelineDesc::textureNames e chame setPipeline antes)"); return; }
     if (auto* var = pipe_->srb->GetVariableByName(dl::SHADER_TYPE_PIXEL, pipe_->textureNames[slot].c_str())) var->Set(tex->GetDefaultView(dl::TEXTURE_VIEW_SHADER_RESOURCE));
   }
+  // Liga o buffer como SRV de StructuredBuffer ao nome do slot em VS e PS.
   void setStorage(u32 slot, BufferId b) override {
     if (!check()) return;
     auto* buf = d_.obj<dl::IBuffer>(b, DiligentDevice::Kind::Buffer);
@@ -483,6 +527,7 @@ public:
         var->Set(buf->GetDefaultView(dl::BUFFER_VIEW_SHADER_RESOURCE));
     }
   }
+  // Viewport dentro do alvo atual, em pixels. Nao altera o scissor.
   void setViewport(u32 x, u32 y, u32 w, u32 h) override {
     if (!check()) return;
     if (w == 0 || h == 0 || x + w > targetW_ || y + h > targetH_) { d_.err("setViewport fora do alvo"); return; }
@@ -490,6 +535,7 @@ public:
     vp.Width = static_cast<float>(w); vp.Height = static_cast<float>(h); vp.MinDepth = 0.f; vp.MaxDepth = 1.f;
     d_.ctx->SetViewports(1, &vp, targetW_, targetH_); // o viewport nao mexe no scissor: ele continua no alvo inteiro
   }
+  // Confirma os recursos do SRB e desenha n indices com inst instancias.
   void drawIndexed(u32 n, u32 inst) override {
     if (!check()) return;
     if (!pipe_ || !vb_ || !ib_) { d_.err("draw sem pipeline/vertex/index buffer"); return; }
@@ -498,6 +544,7 @@ public:
     d_.ctx->DrawIndexed(da);
     ++d_.stats_.draws; d_.stats_.triangles += (n / 3) * inst;
   }
+  // Scissor em pixels, origem no topo-esquerdo. No GLES a faixa vertical e convertida antes do Diligent.
   void setScissor(u32 x, u32 y, u32 w, u32 h) override {
     if (!check()) return;
     if (w == 0 || h == 0 || x + w > targetW_ || y + h > targetH_) { d_.err("setScissor fora do alvo"); return; }
@@ -516,6 +563,7 @@ public:
     }
     d_.ctx->SetScissorRects(1, &r, targetW_, targetH_);
   }
+  // Como drawIndexed(), a partir do indice first do index buffer.
   void drawIndexedRange(u32 first, u32 n, u32 inst) override {
     if (!check()) return;
     if (!pipe_ || !vb_ || !ib_) { d_.err("draw sem pipeline/vertex/index buffer"); return; }
@@ -526,9 +574,11 @@ public:
     d_.ctx->DrawIndexed(da);
     ++d_.stats_.draws; d_.stats_.triangles += (n / 3) * inst;
   }
+  // Fecha a lista e esquece o alvo de profundidade.
   void end() override { if (!open_) d_.err("end() sem begin()"); open_ = false; dsv_ = nullptr; }
 
 private:
+  // Confirma que a lista esta aberta. Senao gera erro.
   bool check() { if (!open_) d_.err("comando fora de begin()/end()"); return open_; }
   // Define o scissor como o alvo inteiro. Necessario porque ScissorEnable esta ligado em todas as pipelines e o
   // Diligent nao define o scissor em SetViewports: sem isto, no Vulkan e no D3D12 o retangulo fica vazio e nada e
@@ -547,8 +597,10 @@ private:
   DiligentDevice::PipelineData* pipe_ = nullptr;
 };
 
+// Cria a DiligentCommands deste dispositivo.
 std::unique_ptr<ICommandList> DiligentDevice::beginCommands() { return std::make_unique<DiligentCommands>(*this); }
 
+// Preenche o NativeWindow do Diligent com a janela nativa, conforme a plataforma (HWND, ou X11 Window e Display).
 void fillWindow(dl::NativeWindow& w, const DeviceInfo& info) {
 #if defined(_WIN32)
   w.hWnd = info.nativeWindow;
@@ -563,6 +615,7 @@ void fillWindow(dl::NativeWindow& w, const DeviceInfo& info) {
 
 } // namespace
 
+// Lista os backends presentes neste binario, conforme as flags TOOL_HAS_*.
 std::vector<Backend> compiledBackends() {
   std::vector<Backend> v;
 #if TOOL_HAS_D3D12
@@ -580,6 +633,7 @@ std::vector<Backend> compiledBackends() {
   return v;
 }
 
+// Cria o dispositivo do backend pedido: device, contexto e swapchain se houver janela. Em falha, preenche error.
 std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::string* error) {
   auto fail = [&](const std::string& m) { if (error) *error = m; debug().report("TOOL-E154", Severity::Error, m); return std::unique_ptr<IDevice>(); };
   dl::SetDebugMessageCallback(messageCallback);

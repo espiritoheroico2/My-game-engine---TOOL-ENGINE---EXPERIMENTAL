@@ -9,6 +9,7 @@ namespace tool {
 
 using Sha256Digest = std::array<u8, 32>;
 
+// Calcula o SHA-256 de len bytes em data. Retorna o digest de 32 bytes.
 inline Sha256Digest sha256(const u8* data, size_t len) {
   static const u32 K[64] = {
     0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
@@ -48,6 +49,7 @@ inline Sha256Digest sha256(const u8* data, size_t len) {
   return out;
 }
 
+// Converte o digest em string hexadecimal minuscula de 64 caracteres.
 inline std::string toHex(const Sha256Digest& d) {
   static const char* x = "0123456789abcdef"; std::string s;
   for (u8 b : d) { s += x[b >> 4]; s += x[b & 15]; }

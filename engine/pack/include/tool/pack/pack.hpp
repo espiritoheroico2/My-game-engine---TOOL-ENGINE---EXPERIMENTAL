@@ -53,8 +53,10 @@ inline bool isSafePackPath(std::string_view path) {
   }
 }
 
+// Entrada da tabela do pacote: caminho virtual, offset e tamanho dos dados, SHA-256 do arquivo.
 struct Entry { std::string path; u64 offset = 0, size = 0; Sha256Digest hash{}; };
 
+// Monta um pacote a partir de arquivos (caminho -> bytes). A saida e deterministica (ordem alfabetica).
 class Builder {
 public:
   // Caminhos unicos e validados por isSafePackPath (path traversal, absolutos, unidades Windows, NUL...).
@@ -67,9 +69,11 @@ public:
     return true;
   }
 
+  // Resumo da montagem: numero de arquivos, bytes totais, os maiores arquivos e se passou do orcamento.
   struct Report { size_t files = 0; u64 totalBytes = 0; std::vector<std::pair<std::string, u64>> largest; bool overBudget = false; };
 
   // Gera o pacote. Se `budgetBytes` > 0 e for excedido, falha e o relatorio aponta os maiores arquivos.
+  // Gera o pacote em "out". Se budgetBytes > 0 e for excedido, falha e o relatorio aponta os maiores arquivos.
   bool build(std::vector<u8>& out, Report& rep, u64 budgetBytes = 0) const {
     rep = {};
     std::vector<std::pair<std::string, u64>> sizes;
@@ -108,6 +112,7 @@ private:
   std::map<std::string, std::vector<u8>> files_;
 };
 
+// Le um pacote validando tudo antes de entregar dados. Guarda apenas um ponteiro: o buffer precisa ficar vivo enquanto o Reader existir.
 class Reader {
 public:
   // Valida cabecalho, hash da tabela, limites de cada entrada e sobreposicao. Retorna nullopt se algo estiver errado.
@@ -148,7 +153,9 @@ public:
     return r;
   }
 
+  // Entradas do pacote, na ordem da tabela.
   const std::vector<Entry>& entries() const { return entries_; }
+  // Verdade se o caminho existe no pacote.
   bool has(const std::string& path) const { return index_.count(path); }
 
   // Le um arquivo conferindo o SHA-256; devolve nullopt se estiver adulterado.
@@ -162,6 +169,7 @@ public:
   }
 
 private:
+  // Registra o erro de pacote invalido e devolve nullopt.
   static std::nullopt_t fail(const char* m) { debug().report(code::kBadPack, Severity::Error, std::string("pacote invalido: ") + m); return std::nullopt; }
   const u8* d_ = nullptr; size_t n_ = 0, dataStart_ = 0;
   std::vector<Entry> entries_;

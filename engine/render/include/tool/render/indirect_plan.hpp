@@ -11,6 +11,7 @@
 
 namespace tool::render {
 
+// Argumentos de um DrawIndexedIndirect (20 bytes), no layout de D3D12 e Vulkan.
 struct DrawIndexedIndirectArgs {
   std::uint32_t indexCount = 0;
   std::uint32_t instanceCount = 0;
@@ -20,12 +21,14 @@ struct DrawIndexedIndirectArgs {
 };
 static_assert(sizeof(DrawIndexedIndirectArgs) == 20, "layout de DrawIndexedIndirect");
 
+// Faixa de indices e vertice base de uma malha, usada para preencher o argumento.
 struct IndirectMeshRange {
   std::uint32_t indexCount = 0;
   std::uint32_t firstIndex = 0;
   std::int32_t baseVertex = 0;
 };
 
+// Plano de desenho indireto: um argumento por lote. ok = false manda o chamador usar o caminho CPU.
 struct IndirectPlan {
   std::vector<DrawIndexedIndirectArgs> args;  // um por lote (draws nativos)
   std::uint64_t logicalDraws = 0;             // instancias somadas (draws logicos)

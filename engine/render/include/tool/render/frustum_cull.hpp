@@ -9,10 +9,14 @@
 
 namespace tool::render {
 
+// Plano do frustum: normal unitaria n e distancia d, no espaco de mundo.
 struct FrustumPlane { float n[3]; float d; };  // n . p + d >= 0 do lado de dentro, n normalizado
+// Os seis planos do frustum: esquerda, direita, baixo, cima, proximo e distante.
 struct Frustum { FrustumPlane p[6]; };
+// Esfera envolvente de um objeto (centro e raio). valid = false: bounds desconhecidos, nunca culla.
 struct SphereBounds { float center[3] = {}; float radius = 0.f; bool valid = false; };
 
+// Extrai os seis planos de uma matriz view*projecao (m[coluna][linha]). depthZeroToOne conforme a API.
 inline Frustum frustumFromViewProj(const float m[4][4], bool depthZeroToOne) {
   float r[4][4];  // r[i][c] = linha i, coluna c
   for (int i = 0; i < 4; ++i) for (int c = 0; c < 4; ++c) r[i][c] = m[c][i];
@@ -35,6 +39,7 @@ inline Frustum frustumFromViewProj(const float m[4][4], bool depthZeroToOne) {
   return f;
 }
 
+// Leva a esfera local ao mundo: centro transformado e raio escalado pelo maior ganho da matriz. Devolve invalida se houver NaN ou se a matriz nao for afim.
 inline SphereBounds transformSphere(const float world[4][4], const SphereBounds& local) {
   SphereBounds out{};
   if (!local.valid || !std::isfinite(local.radius) || local.radius < 0.f) return out;
@@ -72,6 +77,7 @@ inline SphereBounds transformSphere(const float world[4][4], const SphereBounds&
 
 // Verdadeiro se a esfera (centro e raio no mundo) toca o frustum. Conservador: pode aceitar uma esfera que
 // so encosta de fora, nunca descarta uma que esta visivel.
+// Testa so os primeiros planeCount planos (0 a 6). Plano com valor nao finito e ignorado.
 inline bool sphereInFrustum(const Frustum& f, float x, float y, float z, float radius, int planeCount) {
   if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
       !std::isfinite(radius) || radius < 0.f) return true;
@@ -86,15 +92,18 @@ inline bool sphereInFrustum(const Frustum& f, float x, float y, float z, float r
   return true;
 }
 
+// Testa os seis planos com centro e raio separados.
 inline bool sphereInFrustum(const Frustum& f, float x, float y, float z, float radius) {
   return sphereInFrustum(f, x, y, z, radius, 6);
 }
 
+// Testa uma SphereBounds. Bounds invalidos contam como visiveis.
 inline bool sphereInFrustum(const Frustum& f, const SphereBounds& sphere) {
   if (!sphere.valid) return true;
   return sphereInFrustum(f, sphere.center[0], sphere.center[1], sphere.center[2], sphere.radius);
 }
 
+// Como sphereInFrustum, mas so os quatro planos laterais (ignora proximo e distante).
 inline bool sphereInFrustumSides(const Frustum& f, const SphereBounds& sphere) {
   if (!sphere.valid) return true;
   return sphereInFrustum(f, sphere.center[0], sphere.center[1], sphere.center[2], sphere.radius, 4);

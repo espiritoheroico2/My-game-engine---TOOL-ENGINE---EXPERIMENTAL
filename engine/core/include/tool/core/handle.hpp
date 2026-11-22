@@ -7,20 +7,26 @@
 
 namespace tool {
 
+// Referencia segura a um objeto: indice do slot + geracao. Use kNullHandle para 'sem objeto'.
 struct Handle {
   u32 index = kInvalidIndex;
   u32 generation = 0;
 
+  // True se o handle e o nulo (indice invalido).
   constexpr bool isNull() const { return index == kInvalidIndex; }
+  // Dois handles sao iguais se apontam para o mesmo slot na mesma geracao.
   friend constexpr bool operator==(Handle a, Handle b) { return a.index == b.index && a.generation == b.generation; }
+  // Negacao de operator==.
   friend constexpr bool operator!=(Handle a, Handle b) { return !(a == b); }
 };
 
+// Handle nulo padrao (indice kInvalidIndex, geracao 0).
 inline constexpr Handle kNullHandle{};
 
 // Aloca indices reutilizaveis; cada destruicao incrementa a geracao do slot.
 class HandleAllocator {
 public:
+  // Cria um objeto: reaproveita um slot livre (com a geracao atual) ou cresce o vetor.
   Handle create() {
     if (!free_.empty()) {
       const u32 i = free_.back();
@@ -35,8 +41,10 @@ public:
     return {static_cast<u32>(gen_.size() - 1), 0};
   }
 
+  // True se o handle ainda e valido: slot vivo e geracao igual a do handle.
   bool alive(Handle h) const { return h.index < gen_.size() && alive_[h.index] && gen_[h.index] == h.generation; }
 
+  // Libera o objeto do handle e incrementa a geracao do slot. False se o handle ja nao estava vivo.
   bool destroy(Handle h) {
     if (!alive(h)) return false;
     alive_[h.index] = false;
@@ -53,10 +61,14 @@ public:
     return {h.index, gen_[h.index]};
   }
 
+  // True se o slot de indice i esta ocupado (sem checar geracao).
   bool aliveIndex(u32 i) const { return i < gen_.size() && alive_[i]; }
+  // Geracao atual do slot i. Pre-condicao: i < capacity().
   u32 generationOf(u32 i) const { return gen_[i]; }
 
+  // Quantidade de objetos vivos.
   size_t liveCount() const { return liveCount_; }
+  // Quantidade de slots ja alocados (vivos e livres).
   size_t capacity() const { return gen_.size(); }
 
 private:

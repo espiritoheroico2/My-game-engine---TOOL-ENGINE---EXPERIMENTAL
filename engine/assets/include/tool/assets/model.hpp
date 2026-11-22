@@ -42,6 +42,7 @@ struct ImportLimits {
   size_t maxDepth = 64;               // profundidade da hierarquia (evita recursao infinita)
 };
 
+// Opcoes do importador: limites de seguranca e ajustes de unidade e eixo (FBX).
 struct ImportOptions {
   ImportLimits limits;
   // FBX: aplicar UnitScaleFactor (cm -> m) e eixo "up" do arquivo (Z-up -> Y-up). Desligue para receber
@@ -50,6 +51,7 @@ struct ImportOptions {
   bool applyUpAxis = true;
 };
 
+// Parte desenhavel: malha + material, presa a um no da hierarquia pelo indice "node".
 struct ModelPart {
   std::string name;
   Mesh mesh;             // no espaco local do no dono
@@ -65,6 +67,7 @@ struct ModelNode {
   std::vector<int> parts; // indices em ModelData::parts desenhados por este no
 };
 
+// Resultado de um import: partes, hierarquia de nos, formato de origem e avisos de recursos ignorados.
 struct ModelData {
   std::string format;                 // "glTF", "GLB", "FBX"
   std::vector<ModelPart> parts;
@@ -81,7 +84,9 @@ struct ModelData {
     return w;
   }
 
+  // Total de vertices de todas as partes (conferido contra ImportLimits::maxVertices).
   size_t vertexCount() const { size_t n = 0; for (auto& p : parts) n += p.mesh.pos.size(); return n; }
+  // Total de triangulos de todas as partes.
   size_t triangleCount() const { size_t n = 0; for (auto& p : parts) n += p.mesh.idx.size() / 3; return n; }
   // Caixa envolvente de todas as partes, em coordenadas de mundo (para enquadrar a camera / escalar).
   bool bounds(Vec3& mn, Vec3& mx) const {
@@ -100,12 +105,14 @@ struct ModelData {
   }
 };
 
+// Saida de um importador: ok = true quando o modelo esta valido; senao "error" descreve a falha.
 struct ImportResult {
   bool ok = false;
   std::string error; // preenchido quando ok == false
   ModelData model;
 };
 
+// Registra o erro no sistema de diagnostico e devolve um ImportResult com ok = false.
 inline ImportResult failure(std::string msg, const char* diagCode = code::kImportFail) {
   debug().report(diagCode, Severity::Error, "importacao: " + msg);
   ImportResult r;

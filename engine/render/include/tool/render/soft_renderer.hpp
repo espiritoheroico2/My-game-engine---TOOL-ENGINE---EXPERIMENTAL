@@ -35,6 +35,7 @@ struct Mesh {
   // sombra usam a revisao para detectar mudancas mesmo quando o tamanho e o endereco dos vetores nao mudaram.
   u32 revision = 0;
 
+  // Quad no plano XZ (y = 0), de lado 2 * half, com normal para cima e UV de 0 a 1.
   static Mesh plane(f32 half = 5.f) {
     Mesh m;
     m.pos = {{-half, 0, -half}, {half, 0, -half}, {half, 0, half}, {-half, 0, half}};
@@ -43,6 +44,7 @@ struct Mesh {
     m.uv = {0, 0, 1, 0, 1, 1, 0, 1};
     return m;
   }
+  // Cubo de lado 2 * h, com normais e UV por face.
   static Mesh cube(f32 h = 0.5f) {
     Mesh m;
     struct Face { Vec3 n, u, v; };
@@ -55,6 +57,7 @@ struct Mesh {
     }
     return m;
   }
+  // Esfera de raio r, com seg meridianos e rings paralelos.
   static Mesh sphere(f32 r = 0.5f, int seg = 24, int rings = 12) {
     Mesh m;
     for (int y = 0; y <= rings; ++y)
@@ -74,10 +77,12 @@ struct Mesh {
   // ---- Formas extras (cilindro, cone, capsula, roda, prisma triangular e hexagonal) -------------------------------
   // Todas sao gravadas com a face de fora virada para fora: addTri() inverte a ordem de um triangulo se ele apontar
   // para dentro da normal do vertice. Assim as formas nao dependem de uma convencao de enrolamento.
+  // Adiciona um vertice (UV zerado) e devolve o indice dele.
   u32 addVtx(Vec3 p, Vec3 n) {
     pos.push_back(p); normal.push_back(n); uv.push_back(0.f); uv.push_back(0.f);
     return static_cast<u32>(pos.size() - 1);
   }
+  // Adiciona um triangulo; inverte a ordem se ele apontar contra a normal do vertice a.
   void addTri(u32 a, u32 b, u32 c) {
     const Vec3 pa = pos[a], pb = pos[b], pc = pos[c], n = normal[a];
     const f32 ux = pb.x - pa.x, uy = pb.y - pa.y, uz = pb.z - pa.z, vx = pc.x - pa.x, vy = pc.y - pa.y, vz = pc.z - pa.z;
@@ -192,6 +197,7 @@ struct Mesh {
 struct Material { Vec3 albedo{0.8f, 0.8f, 0.8f}; f32 roughness = 0.5f; f32 metallic = 0.f; bool castShadow = true, receiveShadow = true; const Texture* albedoMap = nullptr; Vec3 emissive{0.f, 0.f, 0.f}; f32 opacity = 1.f; /* <1: passe transparente (mistura) */
   Vec3 fogColor{0.6f, 0.65f, 0.7f}; f32 fogStart = 5.f, fogEnd = 50.f, fogAmount = 0.f; /* neblina por distancia; 0 = sem */ };
 
+// Camera: posicao, alvo, FOV vertical em radianos e planos de corte. Ortografica usa orthoHeight.
 struct Camera {
   Vec3 eye{0, 2, 6}, target{0, 0.5f, 0}, up{0, 1, 0};
   f32 fovY = 0.9f, nearZ = 0.1f, farZ = 100.f;
@@ -206,10 +212,13 @@ struct Camera {
   }
 };
 
+// Rasterizador em CPU: desenha triangulos, sombras, AO e transparencia em uma imagem RGBA8. Ordem de uso: begin, setLighting, draw e pixels.
 class SoftRenderer {
 public:
+  // Cria o renderizador com a resolucao inicial (320 x 180 por padrao).
   SoftRenderer(u32 w = 320, u32 h = 180) { resize(w, h); }
 
+  // Redimensiona e zera todos os buffers por pixel.
   void resize(u32 w, u32 h) {
     w_ = std::max(1u, w); h_ = std::max(1u, h);
     const size_t n = static_cast<size_t>(w_) * h_;
@@ -219,14 +228,18 @@ public:
     depthV_.assign(n, 0.f); nrmV_.assign(n, LightPrism::Vec3{}); ao_.assign(n, 1.f);
     posW_.assign(n, LightPrism::Vec3{}); nrmW_.assign(n, LightPrism::Vec3{});
   }
+  // Largura da imagem, em pixels.
   u32 width() const { return w_; }
+  // Altura da imagem, em pixels.
   u32 height() const { return h_; }
   const u8* pixels() const { flush(); return color_.data(); } // RGBA8 (conclui o desenho pendente)
   // Mesmo buffer de pixels, mas gravavel: usado pelo pos-processamento (postfx.hpp) que altera a imagem ja pronta.
   u8* pixelsMutable() { flush(); return color_.data(); }
   // Brilho linear por pixel (RGB float, w x h x 3): so a emissao dos materiais com emissao ligada. Base do bloom.
   const f32* glowLinear() const { flush(); return glow_.data(); }
+  // Triangulos que passaram do culling no quadro.
   u64 trianglesDrawn() const { return tris_; }
+  // Pixels sombreados no quadro (conclui o desenho pendente).
   u64 pixelsShaded() const { flush(); return shaded_; }
 
   // clearAlpha 0 marca o fundo como "sem geometria" (o editor preenche o ceu depois, pelo canal alfa).
@@ -298,8 +311,11 @@ public:
   bool pointShadowPassSkipped() const { return pointSkip_; }
   // Luzes pontuais/spot com sombra neste quadro (ShadowLight) e quantas faces tem cada uma.
   size_t pointShadowLights() const { return lf_.shadowLights.size(); }
+  // true se o passe de sombra do sol foi reaproveitado neste quadro.
   bool shadowPassSkipped() const { return shadowSkip_; }
+  // true se o quadro tem sombras do sol ligadas.
   bool shadowsActive() const { return shadowOn_; }
+  // Quantidade de triangulos de sombra pendentes, somando as cascatas.
   u64 shadowTriangles() const { u64 n = 0; for (const auto& t : shadowTris_) n += t.size(); return n; }
 
   // draw() so PREPARA os triangulos (transforma vertices, descarta fora da tela/costas); o desenho dos pixels
@@ -418,7 +434,9 @@ public:
     }
   }
 
+  // Converte sRGB para linear (curva exata).
   static f32 srgbDecode(f32 v) { return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); }
+  // Converte linear para sRGB, com clamp em 0..1.
   static f32 srgbEncode(f32 v) { v = std::clamp(v, 0.f, 1.f); return v <= 0.0031308f ? 12.92f * v : 1.055f * std::pow(v, 1.f / 2.4f) - 0.055f; }
   // Mistura as camadas transparentes sobre a cor final do opaco (no espaco sRGB, como o resto do tonemap: aproximacao).
   void resolveTransparent() const {
@@ -574,6 +592,7 @@ public:
     shadowValid_ = true;
   }
 
+  // View-projection da camera do quadro.
   const Mat4& viewProj() const { return viewProj_; }
 
   // Projeta um ponto do mundo para pixels (para picking/gizmos). Retorna false se estiver atras da camera.
@@ -585,10 +604,14 @@ public:
   }
 
 private:
+  // Triangulo de tela pronto para rasterizar: vertices em pixels, 1/w e z/w, bounding box e material.
   struct Tri { f32 x[3], y[3], zw[3], iw[3]; f32 area; Vec3 wp[3], n[3]; f32 uv[3][2]; int x0, x1, y0, y1; u32 mat; };
+  // Triangulo de sombra do sol em texels, com profundidade da luz (0..1) por vertice.
   struct ShadowTri { f32 x[3], y[3], z[3]; f32 area; int x0, x1, y0, y1; };
+  // Triangulo de face de luz pontual/spot: vertices em texels e 1/w por vertice.
   struct FaceTri { f32 x[3], y[3], iw[3]; f32 area; int x0, x1, y0, y1; };
 
+  // Rasteriza as linhas ya..yb do triangulo, com teste de profundidade e sombreamento por pixel. count recebe a quantidade de pixels.
   void rasterize(const Tri& t, int ya, int yb, u64& count, bool transparent = false) const {
     const Material& mat = mats_[t.mat];
     const f32 ax = t.x[0], ay = t.y[0], bx = t.x[1], by = t.y[1], cx = t.x[2], cy = t.y[2];
@@ -672,6 +695,7 @@ private:
     if (!transparent) { store(i, c, wp, n); return; }
     tDirect_[i] = c.direct; tAmb_[i] = c.amb; tAlpha_[i] = alpha; tCovered_[i] = 1;
   }
+  // Grava o pixel vencedor (luz, emissao, profundidade e normal de view) para o AO e o resolve.
   void store(size_t i, Lit c, Vec3 wp, Vec3 n) const {
     direct_[i] = c.direct; amb_[i] = c.amb; emit_[i] = c.emit; covered_[i] = 1; glowDirty_ = true;
     posW_[i] = {wp.x, wp.y, wp.z}; nrmW_[i] = {n.x, n.y, n.z};
@@ -685,6 +709,7 @@ private:
   // Usa o pool persistente (tool::parallelFor): nao cria threads a cada quadro.
   template <class F> static void parallelRange(size_t n, F&& fn) { tool::parallelFor(n, 4096, std::forward<F>(fn)); }
 
+  // Calcula o AO (BVH ou SSAO) e grava a cor final de cada pixel coberto.
   void resolve() const {
     const size_t n = static_cast<size_t>(w_) * h_;
     if (rtBvh_) {
@@ -715,42 +740,64 @@ private:
     u8* px = &color_[i * 4];
     px[0] = toByte(o.x); px[1] = toByte(o.y); px[2] = toByte(o.z); px[3] = 255;
   }
+  // Converte float 0..1 em byte 0..255, com clamp.
   static u8 toByte(f32 v) { return static_cast<u8>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f); }
   static Mat4 toTool(const LightPrism::Mat4& m) { Mat4 r; for (int c = 0; c < 4; ++c) for (int k = 0; k < 4; ++k) r.m[c][k] = m.m[k][c]; return r; } // linha -> coluna (ver LightRig::toLp)
 
+  // Tamanho da imagem, em pixels.
   u32 w_ = 1, h_ = 1;
+  // Imagem final RGBA8, preenchida por flush e resolve.
   mutable std::vector<u8> color_;
+  // Profundidade opaca por pixel (z/w, 1 = fundo).
   mutable std::vector<f32> depth_;
   mutable std::vector<Tri> pending_, pendingT_;  // pendingT_: triangulos transparentes (passe depois do opaco)
+  // Camada transparente: profundidade e alfa por pixel.
   mutable std::vector<f32> tdepth_, tAlpha_;
+  // Luz direta e ambiente da camada transparente, por pixel.
   mutable std::vector<Vec3> tDirect_, tAmb_;
+  // 1 = pixel tem geometria transparente neste quadro.
   mutable std::vector<u8> tCovered_;
+  // Materiais do quadro; cada Tri guarda o indice do seu material.
   std::vector<Material> mats_;
+  // Camera do quadro e as matrizes de view e view-projection.
   Camera cam_; Mat4 view_, viewProj_;
+  // Copia do quadro de iluminacao usado neste quadro.
   LightFrame lf_;
+  // Triangulos que passaram do culling no quadro.
   u64 tris_ = 0;
   mutable u64 shaded_ = 0;
   // sombras do sol: uma profundidade (e uma lista de triangulos) por cascata da LightPrism
   bool shadowOn_ = false, shadowSkip_ = false; mutable bool shadowValid_ = false; int shadowRes_ = 1024; u32 shadowCount_ = 0;
   Mat4 cascadeVp_[LightPrism::kMaxCsmCascades];
+  // Mapa de profundidade do sol por cascata, em z da luz (0..1).
   mutable std::vector<f32> shadowMap_[LightPrism::kMaxCsmCascades];
+  // Triangulos de sombra por cascata, pendentes de rasterizacao.
   mutable std::vector<ShadowTri> shadowTris_[LightPrism::kMaxCsmCascades];
   // Buffers do pixel vencedor (ver store/resolve): luz direta e ambiente em linear, profundidade e normal de view.
   mutable std::vector<Vec3> direct_, amb_, emit_;
   mutable std::vector<f32> glow_;                  // emissao do pixel vencedor, RGB linear (ver glowLinear)
   mutable bool glowDirty_ = false;
+  // 1 = pixel tem geometria opaca neste quadro.
   mutable std::vector<u8> covered_;
+  // Profundidade de view (0 = sem geometria) e AO por pixel.
   mutable std::vector<f32> depthV_, ao_;
   mutable std::vector<LightPrism::Vec3> posW_, nrmW_; // posicao e normal de mundo do pixel vencedor (para o RT)
+  // BVH de triangulos para o AO por raios (nullptr = usar SSAO). Nao e dono.
   const LightPrism::Rt::Bvh* rtBvh_ = nullptr; LightPrism::Rt::RtAoConfig rtAo_{};
+  // Normal de view do pixel vencedor, para o SSAO.
   mutable std::vector<LightPrism::Vec3> nrmV_;
+  // Elementos [0][0] e [1][1] da projecao, usados pelo SSAO.
   f32 proj00_ = 1.f, proj11_ = 1.f;
   // sombras de luzes pontuais/spot: slot = luz * 6 + face (ver setLighting)
+  // Luzes pontuais/spot com sombra neste quadro, e a resolucao de cada face.
   bool pointOn_ = false; int pointRes_ = 512;
   bool pointSkip_ = false;                 // este quadro reaproveita os mapas de face
   mutable bool pointValid_ = false;        // os mapas de face ja foram rasterizados para a configuracao atual
+  // Resolucao e quantidade de luzes dos mapas atuais; detecta quando precisam ser refeitos.
   int pointResBuilt_ = 0; size_t pointLightsBuilt_ = 0;
+  // Mapas de profundidade das faces (metros a partir da luz). slot = luz * 6 + face.
   mutable std::vector<f32> faceMap_[kMaxPointShadowLights * kMaxPointShadowFaces];
+  // Triangulos de face pendentes de rasterizacao, por slot.
   mutable std::vector<FaceTri> faceTris_[kMaxPointShadowLights * kMaxPointShadowFaces];
 };
 

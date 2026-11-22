@@ -7,13 +7,17 @@
 
 namespace Newtoon {
 
+// Ponto de osso no solver Verlet: posicao atual, anterior, massa e influencia do vento.
 struct DynamicBone { Vec3 position, previousPosition; float mass = 1.f, windInfluence = 0.f; };
+// Restricao de distancia entre dois ossos (indices no vetor de ossos).
 struct BoneConstraint { Entity boneA = 0, boneB = 0; float restLength = 1.f, stiffness = 1.f; };
 
+// Solver Verlet para ossos e tecidos (cabelo, cauda). Integra a gravidade e o vento e corrige as distancias das restricoes.
 class SkeletalPhysicsSolver {
  public:
   Vec3 gravity{0, -9.81f, 0};
   int iterations = 3;
+  // Avanca um passo de tamanho dt: integra os ossos e depois corrige as restricoes em 'iterations' rodadas.
   void Step(std::vector<DynamicBone>& bones, const std::vector<BoneConstraint>& cs, const Vec3& wind, float dt) const {
     for (auto& b : bones) {
       if (b.mass <= 0.f) continue;                                    // massa 0 = osso fixo
@@ -34,6 +38,7 @@ class SkeletalPhysicsSolver {
   }
 };
 
+// Suspensao de veiculo: cada roda faz um raycast para o chao e aplica forca de mola e amortecedor no chassi.
 class VehicleSolver {
  public:
   // Uma roda: raio para baixo a partir da roda; mola de Hooke + amortecedor empurram o chassi.
@@ -47,10 +52,13 @@ class VehicleSolver {
   }
 };
 
+// Controla um ragdoll: liga/desliga as partes do corpo entre fisica total e corpo fixo.
 class RagdollController {
  public:
   std::vector<Entity> parts; bool active = false; float partMass = 15.f;
+  // Ativa o ragdoll: define a massa das partes e as acorda.
   void Enable(std::vector<Rigidbody>& bodies) { active = true; for (Entity e : parts) if (e < bodies.size()) { bodies[e].SetMass(partMass); bodies[e].WakeUp(); } }
+  // Desativa o ragdoll: torna as partes estaticas (massa infinita) e as coloca para dormir.
   void Disable(std::vector<Rigidbody>& bodies) { active = false; for (Entity e : parts) if (e < bodies.size()) { bodies[e].inverseMass = 0.f; bodies[e].isSleeping = true; } }
 };
 

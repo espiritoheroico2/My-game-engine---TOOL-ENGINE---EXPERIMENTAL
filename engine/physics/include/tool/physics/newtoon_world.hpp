@@ -18,6 +18,7 @@
 
 namespace Newtoon {
 
+// Mundo de fisica 3D: guarda configuracoes, estatisticas e o estado interno (formas, BVH, contatos). A engine chama Simulate a cada quadro.
 class PhysicsWorld {
  public:
   Vec3 gravity{0, -9.81f, 0};
@@ -30,9 +31,12 @@ class PhysicsWorld {
   // estatisticas do ultimo Simulate (para o Profiler)
   struct Stats { int bodies = 0, awake = 0, pairs = 0, contacts = 0, steps = 0, idleSteps = 0, broadphaseBuilds = 0; } stats;
 
+  // Eventos de colisao (Enter/Stay/Exit) geradas desde o ultimo ClearEvents().
   const std::vector<CollisionEvent>& GetCollisionEvents() const { return events_; }
+  // Descarta os eventos acumulados. Chame depois de processar os eventos.
   void ClearEvents() { events_.clear(); }
 
+  // Avanca a simulacao com tempo dt (em segundos). Usa passos fixos de fixedDt e no maximo maxStepsPerFrame por chamada. Os arrays tf e rb sao atualizados in-place (col e so leitura).
   void Simulate(std::vector<Transform>& tf, std::vector<Rigidbody>& rb, const std::vector<Collider>& col, float dt) {
     const size_t n = std::min({tf.size(), rb.size(), col.size()});
     stats = Stats{}; stats.bodies = static_cast<int>(n);
@@ -49,6 +53,7 @@ class PhysicsWorld {
     Prepare(tf, rb, col, std::min({tf.size(), rb.size(), col.size()}));
   }
 
+  // Raycast no mundo: devolve o acerto mais proximo ate maxDistance a partir de origin na direcao dirIn (normalizada). `ignore` e a entidade a desconsiderar.
   RaycastHit Raycast(const Vec3& origin, const Vec3& dirIn, float maxDistance, Entity ignore = kNoEntity) const {
     RaycastHit best; const Vec3 d = Normalized(dirIn); if (d.SqrMagnitude() < 0.5f) return best;
     float maxT = maxDistance;
@@ -59,15 +64,20 @@ class PhysicsWorld {
     });
     return best;
   }
+  // Numero de corpos (formas) na ultima preparacao.
   size_t BodyCount() const { return cache_.size(); }
 
  private:
   // ------------------------------------------------------------------ formas no mundo
+  // Forma no mundo: centro, orientacao, meia-medidas, caixa envolvente e flag de esfera.
   struct Shape { Vec3 c; Mat3 R; Vec3 e; float r = 0; bool sphere = false; AABB box; bool valid = false; };
+  // Copia dos dados de entrada usados para saber se a forma mudou desde a ultima preparacao.
   struct ShapeInput { Transform transform; ShapeType type; Vec3 extents, offset, inverseInertia; float radius; bool dynamic; };
+  // Ponto de contato entre dois corpos, com normal, penetracao, coeficientes e impulsos acumulados do solver.
   struct Contact { Entity a, b; Vec3 p, n; float depth; float e, mu; Vec3 ra, rb; float normalMass = 0, tangentMass = 0, tangentMass2 = 0, bias = 0, jn = 0, jt1 = 0, jt2 = 0; Vec3 t1, t2; };
   std::vector<ShapeInput> shapeInputs_;
 
+  // Monta a forma de um corpo a partir do transform e do collider. active = false marca a forma como invalida.
   static Shape MakeShape(const Transform& t, const Collider& c, const Rigidbody& r, bool active) {
     Shape s; s.valid = active;
     if (c.type == ShapeType::Sphere) {
@@ -89,7 +99,9 @@ class PhysicsWorld {
     return s;
   }
 
+  // True se os dois vetores tem as mesmas componentes (comparacao exata).
   static bool SameVec(const Vec3& a, const Vec3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+  // True se a entrada guardada ainda corresponde ao transform, collider e corpo atuais.
   static bool SameShapeInput(const ShapeInput& a, const Transform& t, const Rigidbody& r, const Collider& c) {
     return SameVec(a.transform.position, t.position) &&
         a.transform.rotation.x == t.rotation.x && a.transform.rotation.y == t.rotation.y &&
@@ -97,6 +109,7 @@ class PhysicsWorld {
         a.type == c.type && SameVec(a.extents, c.extents) && SameVec(a.offset, c.offset) &&
         a.radius == c.radius && SameVec(a.inverseInertia, r.inverseInertiaLocal) && a.dynamic == r.IsDynamic();
   }
+  // True se nenhuma das n entradas mudou desde a ultima preparacao (permite pular a reconstrucao da BVH).
   bool ShapeInputsUnchanged(const std::vector<Transform>& tf, const std::vector<Rigidbody>& rb,
                             const std::vector<Collider>& col, size_t n) const {
     if (shapeInputs_.size() != n) return false;
@@ -104,6 +117,7 @@ class PhysicsWorld {
     return true;
   }
 
+  // Recalcula formas no mundo para os n corpos e reconstroi a BVH.
   void Prepare(const std::vector<Transform>& tf, const std::vector<Rigidbody>& rb, const std::vector<Collider>& col, size_t n) {
     cache_.resize(n); boxes_.resize(n); valid_.assign(n, 1); shapeInputs_.resize(n);
     JobSystem::Get().ParallelFor(n, 512, [&](size_t b, size_t e) { for (size_t i = b; i < e; ++i) {
@@ -114,6 +128,7 @@ class PhysicsWorld {
   }
 
   // ------------------------------------------------------------------ passo fixo
+  // Executa um passo fixo de dt: velocidades, broad-phase, narrow-phase, solver, CCD, posicoes, sono e eventos.
   void Step(std::vector<Transform>& tf, std::vector<Rigidbody>& rb, const std::vector<Collider>& col, size_t n, float dt) {
     auto active = [&](size_t i) { return (rb[i].IsDynamic() && !rb[i].isSleeping) || (rb[i].isKinematic && rb[i].velocity.SqrMagnitude() > 1e-8f); };
     bool hasActiveBody = false;
@@ -235,9 +250,13 @@ class PhysicsWorld {
     TrimEvents();
   }
 
+  // Componente vertical de uma normal (usada para detectar chao).
   static float c0Up(const Vec3& n) { return n.y; }
+  // Chave unica e simetrica para o par de entidades (a, b).
   static uint64_t Key(Entity a, Entity b) { if (a > b) std::swap(a, b); return (static_cast<uint64_t>(a) << 32) | b; }
+  // Material de id, ou o material padrao se o id nao existir.
   const PhysicsMaterial& Mat(uint16_t id) const { return materials[id < materials.size() ? id : 0]; }
+  // Limita a fila de eventos: passando de 20000 apaga os 10000 mais antigos. Atenção: a perda e silenciosa; chame ClearEvents() a cada quadro.
   void TrimEvents() {
     if (events_.size() > 20000) events_.erase(events_.begin(), events_.begin() + 10000);
   }
@@ -252,7 +271,9 @@ class PhysicsWorld {
   }
 
   // ------------------------------------------------------------------ narrow-phase
+  // Ponto de contato temporario: posicao, normal e penetracao.
   struct Pt { Vec3 p, n; float depth; };
+  // Testa colisao entre duas formas e acrescenta os pontos de contato em out. Normal de A para B.
   bool Collide(const Shape& A, const Shape& B, std::vector<Pt>& out) const {
     if (A.sphere && B.sphere) return SphereSphere(A, B, out);
     if (A.sphere) return SphereBox(A, B, out);
@@ -264,6 +285,7 @@ class PhysicsWorld {
     }
     return BoxBox(A, B, out);
   }
+  // Colisao esfera x esfera.
   static bool SphereSphere(const Shape& A, const Shape& B, std::vector<Pt>& out) {
     const Vec3 d = B.c - A.c; const float dist = d.Magnitude(), rr = A.r + B.r;
     if (dist >= rr) return false;
@@ -287,6 +309,7 @@ class PhysicsWorld {
     out.push_back({X.c + X.R * q, -nBoxToSphere, depth}); // normal de S para X
     return true;
   }
+  // Colisao caixa x caixa (SAT): testa os eixos e gera ate 8 pontos de contato.
   static bool BoxBox(const Shape& A, const Shape& B, std::vector<Pt>& out) {
     const Vec3 Aax[3] = {A.R.Col(0), A.R.Col(1), A.R.Col(2)}, Bax[3] = {B.R.Col(0), B.R.Col(1), B.R.Col(2)};
     const float ae[3] = {A.e.x, A.e.y, A.e.z}, be[3] = {B.e.x, B.e.y, B.e.z};
@@ -331,6 +354,7 @@ class PhysicsWorld {
   }
 
   // ------------------------------------------------------------------ raio x forma
+  // Raio x forma: True se o raio (o, d) acerta a forma antes de maxT. Devolve o tempo em tOut e a normal em nOut.
   static bool RayShape(const Shape& S, const Vec3& o, const Vec3& d, float maxT, float& tOut, Vec3& nOut) {
     if (S.sphere) {
       const Vec3 oc = o - S.c; const float b = Dot(oc, d), c = Dot(oc, oc) - S.r * S.r, disc = b * b - c; if (disc < 0.f) return false;
@@ -351,6 +375,7 @@ class PhysicsWorld {
   }
 
   // ------------------------------------------------------------------ solver
+  // Prepara os contatos para o solver: massas efetivas, bias de penetracao, restituicao e tangentes.
   void PreSolve(const std::vector<Transform>& tf, std::vector<Rigidbody>& rb, float dt) {
     for (auto& c : contacts_) {
       const Rigidbody& A = rb[c.a]; const Rigidbody& B = rb[c.b];
@@ -368,6 +393,7 @@ class PhysicsWorld {
       c.jn = c.jt1 = c.jt2 = 0.f;
     }
   }
+  // Uma iteracao do solver de impulsos: impulso normal e de atrito (cone de Coulomb) em cada contato.
   void SolveContacts(std::vector<Rigidbody>& rb) {
     for (auto& c : contacts_) {
       Rigidbody& A = rb[c.a]; Rigidbody& B = rb[c.b];
@@ -381,6 +407,7 @@ class PhysicsWorld {
       { const float vt = Dot(vrel(), c.t2); float dj = -c.tangentMass2 * vt; const float old = c.jt2; c.jt2 = std::clamp(old + dj, -maxF, maxF); dj = c.jt2 - old; apply(c.t2 * dj); }
     }
   }
+  // Estado de um par de corpos no passo atual (usado para gerar eventos Enter/Stay/Exit).
   struct PairInfo { Entity a = kNoEntity, b = kNoEntity; Vec3 p, n; float depth = 0, impulse = 0; bool trigger = false; };
   std::vector<Mat3> invIw_;
   std::vector<char> invIwReady_;

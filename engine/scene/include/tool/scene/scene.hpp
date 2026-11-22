@@ -21,20 +21,25 @@ namespace tool {
 // Receita de criacao de um objeto. A assinatura identifica "objetos identicos".
 class Blueprint {
 public:
+  // Adiciona a tag t a receita.
   Blueprint& tag(TagId t) {
     mask_.set(t);
     return *this;
   }
+  // Adiciona um componente T (com os argumentos dados) a receita. Os argumentos sao copiados.
   template <class T, class... Args> Blueprint& with(Args... args) {
     steps_.push_back({componentId<T>(), [=](World& w, Entity e) { w.add<T>(e, args...); }});
     return *this;
   }
 
+  // Um passo da receita: id do componente e a funcao que o cria na entidade.
   struct Step {
     ComponentId id;
     std::function<void(World&, Entity)> apply;
   };
+  // Passos da receita, na ordem em que foram definidos.
   const std::vector<Step>& steps() const { return steps_; }
+  // Mascara de tags da receita.
   const TagMask& mask() const { return mask_; }
 
   // Assinatura estavel: componentes ordenados + mascara de tags.
@@ -52,12 +57,14 @@ private:
   TagMask mask_;
 };
 
+// Politica do pool de dormentes: tempo maximo ocioso, limite por assinatura e limite total.
 struct PoolPolicy {
   double maxIdleSeconds = 30.0;  // dormente sem uso por tanto tempo e apagado
   size_t maxPerSignature = 256;  // limite por assinatura
   size_t maxTotal = 4096;        // limite global
 };
 
+// Contadores do pool: dormentes atuais, reaproveitados e liberados.
 struct PoolStats {
   size_t dormant = 0, reused = 0, freed = 0;
 };
@@ -69,19 +76,32 @@ class Scene;
 // (valid() = false). Quem quer a limpeza completa (assinatura e pool) deve usar Scene::destroy.
 class ToolObject {
 public:
+  // Cria um ToolObject vazio (invalido).
   ToolObject() = default;
+  // Cria o objeto que aponta para a entidade e na cena dada.
   ToolObject(Scene* s, Entity e) : scene_(s), e_(e) {}
 
+  // True se a cena existe, a entidade esta viva e nao esta dormente.
   bool valid() const;
+  // Handle ECS da entidade.
   Entity entity() const { return e_; }
+  // Ponteiro para o componente T, ou nullptr se o objeto for invalido ou nao tiver T.
   template <class T> T* get() const;
+  // True se o objeto e valido e tem componente T.
   template <class T> bool has() const;
+  // Adiciona um componente T ao objeto. Devolve ponteiro ao componente, ou nullptr se o objeto for invalido.
   template <class T, class... Args> T* add(Args&&... args) const;
+  // Igual a add (nao lanca excecao).
   template <class T, class... Args> T* tryAdd(Args&&... args) const;
+  // Remove o componente T. True se ele existia.
   template <class T> bool remove() const;
+  // Ponteiro para o componente T (igual a get).
   template <class T> T* component() const;
+  // Atalho de component<T>() para sistemas de modulo.
   template <class T> T* module() const { return component<T>(); }
+  // Liga a tag t no objeto (se valido).
   void addTag(TagId t) const;
+  // True se o objeto e valido e tem a tag t.
   bool hasTag(TagId t) const;
   void destroy();          // apaga de verdade
   void recycle();          // some agora, fica no pool para reuso
@@ -93,23 +113,33 @@ private:
   Entity e_;
 };
 
+// Cena: dona do mundo ECS, das tags, do barramento de eventos e do pool de objetos dormentes (DeleteAndReuse).
 class Scene {
 public:
+  // Mundo ECS da cena.
   World& world() { return world_; }
+  // Registro de nomes de tags da cena.
   TagRegistry& tags() { return tags_; }
+  // Barramento de eventos da cena.
   EventBus& events() { return events_; }
+  // Contadores atuais do pool.
   PoolStats stats() const { return stats_; }
+  // Devolve o ToolObject da entidade, ou um objeto invalido se o handle ja nao estiver vivo.
   [[nodiscard]] ToolObject object(Entity entity) {
     return world_.alive(entity) ? ToolObject{this, entity} : ToolObject{};
   }
+  // Troca a politica do pool de dormentes.
   void setPoolPolicy(PoolPolicy p) { policy_ = p; }
   // Relogio da cena (segundos), atualizado pelo laco principal.
   double clock() const { return clock_; }
+  // Atualiza o relogio da cena (em segundos).
   void setClock(double t) { clock_ = t; }
 
+  // Id da tag com o nome dado (criada se necessario).
   TagId tag(std::string_view name) { return tags_.intern(name); }
 
   // Cria um objeto; reaproveita um dormente identico se existir.
+  // Atenção: ao reaproveitar, o estado de simulacao (setSimulating) do objeto nao e reiniciado.
   ToolObject spawn(const Blueprint& bp, double now = 0) {
     const std::string sig = bp.signature();
     auto it = pool_.find(sig);
@@ -139,6 +169,7 @@ public:
     return {this, e};
   }
 
+  // Manda o objeto para o pool de dormentes, com o instante now para a expiracao. Objetos sem receita sao destruidos. Handles antigos ficam invalidos.
   void recycle(ToolObject o, double now) {
     if (!o.valid()) {
       debug().report(diag::kStaleHandle, Severity::Warning, "recycle() com handle obsoleto");
@@ -159,6 +190,7 @@ public:
     ++stats_.dormant;
   }
 
+  // Alias de recycle (nome canonico).
   void deleteAndReuse(ToolObject o, double now) { recycle(o, now); }
 
   // F-13: ponto UNICO de destruicao real de um objeto vivo. Apaga a entidade (nao vai ao pool) e
@@ -245,14 +277,17 @@ public:
     }
   }
 
+  // Quantidade de objetos dormentes no pool.
   size_t dormantCount() const { return dormantCount_; }
 
 private:
+  // Entrada do pool: entidade dormente e o instante em que foi reciclada.
   struct Dormant {
     Entity entity;
     double since;
   };
 
+  // Destroi de vez um dormente do pool (libera a entidade e a assinatura).
   void freeDormant(const Dormant& d) {
     signatureByEntity_.erase(d.entity.index);
     world_.setDormant(d.entity, false);
@@ -272,37 +307,50 @@ private:
   double clock_ = 0;
 };
 
+// True se o objeto aponta para uma cena, a entidade esta viva e nao esta dormente.
 inline bool ToolObject::valid() const { return scene_ && scene_->world().alive(e_) && !scene_->world().isDormant(e_); }
+// Ponteiro para o componente T, ou nullptr se o objeto for invalido.
 template <class T> T* ToolObject::get() const { return valid() ? scene_->world().get<T>(e_) : nullptr; }
+// True se o objeto e valido e tem componente T.
 template <class T> bool ToolObject::has() const { return valid() && scene_->world().has<T>(e_); }
+// Adiciona um componente T (argumentos repassados). Devolve nullptr se o objeto for invalido.
 template <class T, class... Args> T* ToolObject::add(Args&&... args) const {
   return valid() ? scene_->world().tryAdd<T>(e_, std::forward<Args>(args)...) : nullptr;
 }
+// Igual a add (nao lanca excecao).
 template <class T, class... Args> T* ToolObject::tryAdd(Args&&... args) const {
   return valid() ? scene_->world().tryAdd<T>(e_, std::forward<Args>(args)...) : nullptr;
 }
+// Remove o componente T do objeto. True se ele existia.
 template <class T> bool ToolObject::remove() const {
   if (!valid()) return false;
   if (!scene_->world().has<T>(e_)) return false;
   scene_->world().remove<T>(e_);
   return true;
 }
+// Ponteiro para o componente T (igual a get).
 template <class T> T* ToolObject::component() const { return get<T>(); }
+// Liga a tag t no objeto (se valido).
 inline void ToolObject::addTag(TagId t) const {
   if (valid()) scene_->world().addTag(e_, t);
 }
+// True se o objeto e valido e tem a tag t.
 inline bool ToolObject::hasTag(TagId t) const { return valid() && scene_->world().hasTag(e_, t); }
+// Destroi a entidade de verdade, via a cena (limpa assinatura e nao vai ao pool).
 inline void ToolObject::destroy() {
   if (scene_) scene_->destroy(*this);
 }
+// Manda o objeto para o pool usando o relogio da cena.
 inline void ToolObject::recycle() {
   if (scene_) scene_->recycle(*this, scene_->clock());
 }
 
+// Alias de recycle (nome canonico).
 inline void ToolObject::deleteAndReuse() {
   recycle();
 }
 
+// Alias legado de recycle (mantido por compatibilidade).
 inline void ToolObject::DeleteAndReuse() {
   recycle();
 }

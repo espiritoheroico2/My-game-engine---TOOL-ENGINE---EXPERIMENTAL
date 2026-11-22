@@ -18,6 +18,7 @@ using i64 = std::int64_t;
 using f32 = float;
 using f64 = double;
 
+// Indice sentinela que marca 'sem slot' (usado por Handle e TagId).
 inline constexpr u32 kInvalidIndex = 0xFFFFFFFFu;
 
 } // namespace tool

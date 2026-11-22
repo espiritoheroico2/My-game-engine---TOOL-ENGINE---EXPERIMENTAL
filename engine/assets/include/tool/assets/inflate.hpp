@@ -44,10 +44,14 @@ inline int buildHuffman(Huffman& h, const u16* lengths, int n) {
   return left;
 }
 
+// Leitor de bits (LSB primeiro) sobre um buffer. ok() vira false ao tentar ler alem do fim.
 class BitReader {
 public:
+  // Associa o leitor ao buffer d de n bytes (nao copia).
   BitReader(const u8* d, size_t n) : d_(d), n_(n) {}
+  // Falso se alguma leitura anterior falhou.
   bool ok() const { return ok_; }
+  // Marca o leitor como invalido.
   void fail() { ok_ = false; }
   // Le `need` bits (LSB primeiro, como o DEFLATE exige).
   u32 bits(int need) {
@@ -63,9 +67,13 @@ public:
   }
   // Descarta os bits restantes do byte atual (blocos "stored" comecam alinhados).
   void alignByte() { bitbuf_ = 0; bitcnt_ = 0; }
+  // Ponteiro para o proximo byte ainda nao consumido (usado pelos blocos stored).
   const u8* cursor() const { return d_ + pos_; }
+  // Quantos bytes ainda restam no buffer.
   size_t remaining() const { return n_ - pos_; }
+  // Avanca k bytes sem ler. Nao checa limite: o chamador confere antes.
   void skip(size_t k) { pos_ += k; }
+  // Posicao atual em bytes (informa quantos bytes do fluxo foram consumidos).
   size_t position() const { return pos_; }
 
 private:
@@ -122,6 +130,7 @@ inline bool inflateCodes(BitReader& br, std::vector<u8>& out, size_t maxOut, con
 } // namespace detail
 
 // DEFLATE cru (sem cabecalho zlib). Retorna false em qualquer erro; `out` fica com o que foi produzido.
+// Atenção: as tabelas de Huffman fixas sao preenchidas na primeira chamada sem sincronizacao; chamadas simultaneas em threads diferentes sao uma corrida.
 inline bool inflateRaw(const u8* in, size_t n, std::vector<u8>& out, size_t maxOut, size_t* consumed = nullptr) {
   using namespace detail;
   BitReader br(in, n);
@@ -205,6 +214,7 @@ inline bool inflateRaw(const u8* in, size_t n, std::vector<u8>& out, size_t maxO
   return true;
 }
 
+// Checksum Adler-32 (RFC 1950), usado para validar o trailer do zlib.
 inline u32 adler32(const u8* d, size_t n) {
   u32 a = 1, b = 0;
   for (size_t i = 0; i < n; ++i) {

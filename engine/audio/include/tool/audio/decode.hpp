@@ -11,6 +11,7 @@
 namespace tool {
 
 // Extensoes aceitas pelo editor.
+// Atenção: usa std::tolower sem incluir <cctype>.
 inline bool isAudioExtension(const std::string& ext) {
   std::string e = ext;
   for (auto& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

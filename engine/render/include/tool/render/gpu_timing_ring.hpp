@@ -8,8 +8,10 @@
 
 namespace tool::render {
 
+// Anel de tempos de GPU: guarda o tempo de cada quadro ate ele poder ser lido sem bloquear a CPU.
 class GpuTimingRing {
  public:
+  // latency = quantos quadros esperar antes de ler um tempo (3 por padrao; 0 vira 1).
   explicit GpuTimingRing(std::size_t latency = 3) : slots_(latency == 0 ? 1 : latency) {}
 
   // Guarda o tempo do quadro. NaN, infinito ou negativo sao ignorados.
@@ -32,11 +34,13 @@ class GpuTimingRing {
   }
 
  private:
+  // Um quadro guardado: id, tempo em ms e se o dado e valido.
   struct Slot {
     std::uint64_t frame = 0;
     float ms = 0.f;
     bool valid = false;
   };
+  // Anel de slots, indexado por frameId % tamanho.
   std::vector<Slot> slots_;
 };
 

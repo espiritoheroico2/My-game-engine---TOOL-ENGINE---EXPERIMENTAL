@@ -16,6 +16,7 @@
 
 namespace tool {
 
+// Configuracao das sombras do sol, vinda das opcoes de Graphics.
 struct ShadowSettings {
   bool enabled = true;
   int resolution = 1024;      // lado do mapa em texels (512/1024/2048/4096)
@@ -26,6 +27,7 @@ struct ShadowSettings {
   float strength = 0.85f;     // 0 = sombra invisivel; 1 = totalmente escura (o ambiente ainda ilumina)
 };
 
+// Matriz de luz do sol e tamanho de um texel. valid = false: sem sombra.
 struct ShadowFrustum {
   Mat4 viewProj;      // espaco do mundo -> clip da luz (ortografico, z em 0..1)
   float texelWorld = 0.f; // tamanho de um texel em metros (para o normal bias)

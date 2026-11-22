@@ -7,6 +7,7 @@
 
 namespace tool::rhi {
 
+// Cria o dispositivo da Light Prism sobre o device e o contexto Diligent de dev. Nulo se dev nao for Diligent.
 std::unique_ptr<LightPrism::IGraphicsDevice> createLightPrismDevice(IDevice& dev) {
   auto* device = static_cast<Diligent::IRenderDevice*>(dev.nativeDevice());
   auto* context = static_cast<Diligent::IDeviceContext*>(dev.nativeContext());

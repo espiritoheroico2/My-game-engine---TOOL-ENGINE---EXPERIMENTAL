@@ -15,8 +15,10 @@
 
 namespace tool::mod {
 
+// Nivel de confianca de um mod. Limita as permissoes que ele pode pedir.
 enum class Trust : u8 { Untrusted, Community, Verified, Core };
 
+// Permissoes que um mod pode pedir, em bits (combinaveis com |).
 enum Perm : u32 {
   kPermNone = 0, kPermReadWorld = 1, kPermWriteWorld = 2, kPermSpawn = 4, kPermAudio = 8,
   kPermNetwork = 16, kPermFileRead = 32, kPermScript = 64
@@ -43,23 +45,27 @@ inline constexpr const char* kPriorityTie = "TOOL-W210";
 inline constexpr const char* kSlow = "TOOL-W211";
 } // namespace code
 
+// Manifesto de um mod: id, nome, versao, versao da API e permissoes pedidas.
 struct Manifest {
   std::string id, name, version;
   u32 apiVersion = 1;
   u32 permissions = 0;
 };
 
+// Id valido: de 1 a 64 caracteres minusculos, digitos, "_", "-" ou ".".
 inline bool validId(const std::string& s) {
   if (s.empty() || s.size() > 64) return false;
   for (char c : s) if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')) return false;
   return true;
 }
+// Versao no formato X.Y.Z, so com digitos e pontos (ate 20 caracteres).
 inline bool validSemver(const std::string& v) {
   int dots = 0; bool digit = false;
   for (char c : v) { if (c == '.') { if (!digit) return false; ++dots; digit = false; } else if (c >= '0' && c <= '9') digit = true; else return false; }
   return dots == 2 && digit && v.size() <= 20;
 }
 
+// Converte o nome da permissao (ex.: "audio") no bit correspondente. 0xFFFFFFFF se desconhecida.
 inline u32 parsePerm(const std::string& s) {
   static const std::map<std::string, u32> m = {{"read_world", kPermReadWorld}, {"write_world", kPermWriteWorld}, {"spawn", kPermSpawn},
       {"audio", kPermAudio}, {"network", kPermNetwork}, {"file_read", kPermFileRead}, {"script", kPermScript}};
@@ -80,19 +86,25 @@ using ToolHandler = std::function<void(Json& ctx)>;
 using FunctionImpl = std::function<Json(const Args&)>;
 using ModFunctionImpl = std::function<Json(const Args&, const FunctionImpl& next)>; // next = original/proximo mod
 
+// Sistema de mods: registra tags e funcoes substituiveis, carrega mods e executa as sobrescritas isolando falhas.
 class ModTool {
 public:
   static constexpr int kMaxFaults = 3;
   static constexpr u32 kEngineApi = 1;
 
+  // Orcamento de tempo por chamada de mod, em ms (0 = sem limite).
   void setCallBudgetMs(double ms) { budgetMs_ = ms; }
 
   // ---- host define o que existe e o que pode ser modificado ----
+  // Declara uma tag com comportamento base. moddable = false impede overrides (igual a sealTag).
   void defineTool(const std::string& tag, ToolHandler base, bool moddable = true) { tools_[tag].base = std::move(base); tools_[tag].moddable = moddable; }
+  // Declara uma funcao com implementacao base. moddable = false impede modFunction.
   void defineFunction(const std::string& name, FunctionImpl impl, bool moddable = true) { funcs_[name].base = std::move(impl); funcs_[name].moddable = moddable; }
+  // Sela a tag: nenhum mod podera sobrescreve-la.
   void sealTag(const std::string& tag) { tools_[tag].moddable = false; }
 
   // ---- carregamento ----
+  // Valida o JSON do manifesto (id, versao, api, permissoes) e preenche "out". Recusa permissoes acima do nivel de confianca.
   bool parseManifest(const Json& j, Trust trust, Manifest& out) {
     if (!j.isObject() || !validId(j["id"].asString()) || !validSemver(j["version"].asString())) return bad("manifesto: id/versao invalidos");
     out = {};
@@ -111,6 +123,7 @@ public:
     return true;
   }
 
+  // Registra um mod ja validado. Retorna false se o id ja estiver carregado.
   bool load(const Manifest& m, Trust trust) {
     if (mods_.count(m.id)) return bad("mod ja carregado: " + m.id);
     ModInfo mi; mi.manifest = m; mi.trust = trust; mi.loadOrder = nextOrder_++;
@@ -118,16 +131,21 @@ public:
     return true;
   }
 
+  // Remove o mod e todas as sobrescritas e funcoes que ele registrou.
   void unload(const std::string& modId) {
     mods_.erase(modId);
     for (auto& [t, e] : tools_) std::erase_if(e.overrides, [&](const Override& o) { return o.mod == modId; });
     for (auto& [n, f] : funcs_) std::erase_if(f.mods, [&](const FnMod& o) { return o.mod == modId; });
   }
 
+  // Verdade se um mod com esse id esta carregado.
   bool has(const std::string& modId) const { return mods_.count(modId); }
+  // Verdade se o mod esta carregado e ligado (nao desligado por falhas).
   bool enabled(const std::string& modId) const { auto it = mods_.find(modId); return it != mods_.end() && it->second.enabled; }
+  // Numero de falhas registradas para o mod.
   int faults(const std::string& modId) const { auto it = mods_.find(modId); return it == mods_.end() ? 0 : it->second.faults; }
 
+  // Verdade se o mod esta ligado e tem todos os bits de p.
   bool hasPermission(const std::string& modId, Perm p) const {
     auto it = mods_.find(modId);
     return it != mods_.end() && it->second.enabled && (it->second.manifest.permissions & p) == p;
@@ -174,6 +192,7 @@ public:
   }
 
   // ---- modFunction: funcoes substituiveis em cadeia ----
+  // Registra um mod que envolve a funcao "name". "next" chama o proximo elo. Exige permissao script.
   bool modFunction(const std::string& modId, const std::string& name, ModFunctionImpl impl, int priority = 0) {
     if (!require(modId, kPermScript)) return false;
     auto it = funcs_.find(name);
@@ -183,6 +202,8 @@ public:
     return true;
   }
 
+  // Chama a funcao "name" pela cadeia de mods ligados, do maior para o menor priority. Devolve Json nulo se a funcao nao existir.
+  // Atenção: a cadeia guarda ponteiros para o vetor de mods; um modFunction chamado durante a execucao de um mod pode invalidar esses ponteiros.
   Json call(const std::string& name, const Args& args) {
     auto it = funcs_.find(name);
     if (it == funcs_.end()) { bad("funcao inexistente: " + name); return Json(); }
@@ -193,13 +214,19 @@ public:
   }
 
 private:
+  // Sobrescrita de uma tag: mod dono, handler, prioridade e ordem de carga.
   struct Override { std::string mod; ToolHandler handler; int priority; size_t order; };
+  // Elo de uma funcao modificada: mod dono, implementacao, prioridade e ordem de carga.
   struct FnMod { std::string mod; ModFunctionImpl impl; int priority; size_t order; };
+  // Tag registrada: comportamento base, se pode ser sobrescrita e a lista de overrides.
   struct Entry { ToolHandler base; bool moddable = true; std::vector<Override> overrides; };
+  // Funcao registrada: implementacao base, se pode ser modificada e a cadeia de mods.
   struct Func { FunctionImpl base; bool moddable = true; std::vector<FnMod> mods; };
 
+  // Registra um erro de manifesto ou de uso e devolve false.
   bool bad(const std::string& m) { debug().report(code::kBadManifest, Severity::Error, m); return false; }
 
+  // Executa o elo i da cadeia. Se o mod falhar, passa para o proximo elo (ou para a base).
   Json invoke(Func& f, const std::vector<const FnMod*>& chain, size_t i, const Args& args) {
     if (i >= chain.size()) return f.base ? f.base(args) : Json();
     const FnMod* m = chain[i];
@@ -210,6 +237,7 @@ private:
   }
 
   // Executa codigo de mod com captura de excecao e medicao de tempo. 3 falhas => mod desligado.
+  // Atenção: se o mod estoura o orcamento de tempo, ele recebe falha mas seus efeitos NAO sao desfeitos, ao contrario do que diz o cabecalho do arquivo.
   template <class F> bool guarded(const std::string& modId, F&& fn) {
     const auto t0 = std::chrono::steady_clock::now();
     bool ok = true;
@@ -218,6 +246,7 @@ private:
     if (ok && budgetMs_ > 0 && ms > budgetMs_) { fault(modId, "estourou o orcamento de tempo (" + std::to_string(ms) + " ms)"); debug().report(code::kSlow, Severity::Warning, "mod '" + modId + "' lento"); }
     return ok;
   }
+  // Conta uma falha do mod. Ao atingir kMaxFaults, desliga o mod.
   void fault(const std::string& modId, const std::string& why) {
     auto it = mods_.find(modId);
     if (it == mods_.end()) return;

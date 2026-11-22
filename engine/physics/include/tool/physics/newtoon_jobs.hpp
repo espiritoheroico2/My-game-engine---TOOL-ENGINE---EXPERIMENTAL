@@ -21,6 +21,7 @@ namespace detail {
 // assim os blocos enfileirados nunca usam referencias que ja morreram.
 class ParallelBatch {
  public:
+  // Cria o lote que espera `pending` blocos.
   explicit ParallelBatch(size_t pending) : remaining_(pending) {}
 
   // Um bloco terminou (com ou sem excecao). Acorda o chamador quando o ultimo termina.
@@ -68,9 +69,12 @@ struct BatchDoneGuard {
 
 } // namespace detail
 
+// Sistema de jobs da fisica: ParallelFor reparte um laco entre o pool persistente de threads.
 class JobSystem {
  public:
+  // Instancia unica do sistema de jobs (singleton).
   static JobSystem& Get() { static JobSystem js; return js; }
+  // Numero de threads de trabalho criadas (sem contar o chamador).
   size_t WorkerCount() const { return workers_.size(); }
 
   // fn(begin, end) e chamada para blocos disjuntos. Retorna quando TODOS terminarem.
@@ -80,6 +84,7 @@ class JobSystem {
   //   - se fn lancar, em QUALQUER bloco (inclusive o do thread chamador), ParallelFor espera todos
   //     os blocos terminarem e so entao relanca a PRIMEIRA excecao. Nunca retorna antes disso, para
   //     que as referencias capturadas pelos blocos continuem validas.
+  // Atenção: chamar ParallelFor de dentro de fn pode travar (o worker fica esperando blocos sem thread livre).
   template <class F>
   void ParallelFor(size_t n, size_t grain, F&& fn) {
     if (n == 0) return;
@@ -118,16 +123,21 @@ class JobSystem {
     batch.RethrowFirst();  // so entao propaga a primeira excecao
   }
 
+  // Nao pode ser copiado.
   JobSystem(const JobSystem&) = delete; JobSystem& operator=(const JobSystem&) = delete;
 
  private:
+  // Cria os workers: hardware_concurrency - 1, no maximo 7. Sem workers, tudo roda no chamador.
   JobSystem() {
     const unsigned hc = std::thread::hardware_concurrency();
     const unsigned n = hc > 1 ? std::min(hc - 1, 7u) : 0u; // no maximo 7 trabalhadores: fisica nao precisa de mais
     for (unsigned i = 0; i < n; ++i) workers_.emplace_back([this] { Loop(); });
   }
+  // Encerra os workers, esperando as threads terminarem.
   ~JobSystem() { { std::lock_guard<std::mutex> l(m_); stop_ = true; } cv_.notify_all(); for (auto& t : workers_) t.join(); }
+  // Enfileira uma tarefa e acorda um worker.
   void Push(std::function<void()> f) { { std::lock_guard<std::mutex> l(m_); q_.push(std::move(f)); } cv_.notify_one(); }
+  // Laco de cada worker: pega tarefas da fila e as executa ate o encerramento.
   void Loop() {
     for (;;) {
       std::function<void()> f;

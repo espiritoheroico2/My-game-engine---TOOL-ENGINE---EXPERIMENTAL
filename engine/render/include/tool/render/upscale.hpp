@@ -22,10 +22,12 @@
 
 namespace tool {
 
+// Filtros de reamostragem: Bilinear (2x2), Bicubic e Lanczos2 (4x4).
 enum class UpscaleFilter : int { Bilinear = 0, Bicubic = 1, Lanczos2 = 2 };
 
 namespace upscale_detail {
 
+// Limita o indice a [0, n - 1] (clamp de borda).
 inline int clampi(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
 
 inline float catmullRom(float x) {          // a = -0.5
@@ -34,7 +36,9 @@ inline float catmullRom(float x) {          // a = -0.5
   if (x < 2.f) return (((-0.5f * x + 2.5f) * x - 4.f) * x + 2.f);
   return 0.f;
 }
+// sen(pi x) / (pi x), com valor 1 em x = 0.
 inline float sinc(float x) { if (std::fabs(x) < 1e-6f) return 1.f; const float p = 3.14159265f * x; return std::sin(p) / p; }
+// Nucleo Lanczos de 2 lobos: sinc(x) * sinc(x / 2) dentro de |x| < 2, zero fora.
 inline float lanczos2(float x) { x = std::fabs(x); return x < 2.f ? sinc(x) * sinc(x * 0.5f) : 0.f; }
 
 // Pesos de uma dimensao: para cada destino, 4 indices de origem JA com clamp (borda) e 4 pesos normalizados.
@@ -61,6 +65,7 @@ inline Axis makeAxis(int srcN, int dstN, UpscaleFilter f) {
   return ax;
 }
 
+// Luma de um pixel RGBA (0..255), com pesos Rec.601.
 inline float lumaOf(const uint8_t* p) { return 0.299f * p[0] + 0.587f * p[1] + 0.114f * p[2]; }
 
 } // namespace upscale_detail
