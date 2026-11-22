@@ -18,6 +18,7 @@ struct ElementVisual {
     std::uint32_t textureSlice = Rendering::WhiteTextureSlice;
     std::uint32_t materialIndex = 0;
     std::uint32_t flags = 0;
+    float cornerRadius = 0.0f;
     std::int32_t layer = 0;     // camada (UILayer): camada alta fica sempre por cima
     float zOrder = 0.0f;
     bool clipOverflow = false;

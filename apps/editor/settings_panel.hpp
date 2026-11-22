@@ -21,6 +21,7 @@
 #include "settings_changes.hpp"
 #include "settings_model.hpp"
 #include "sui_panel.hpp"
+#include "ui_style.hpp"
 
 #include "SpriteUi/Core/DrawOrder.hpp"
 #include "SpriteUi/Elements/Checkbox.hpp"
@@ -51,7 +52,7 @@ namespace W = SU::Widgets;
 namespace SR = SU::Rendering;
 namespace ST = SU::Text;
 
-inline constexpr int kGraphicsTab = 1;   // indice da aba Settings em kTabNames
+inline constexpr int kGraphicsTab = 1;   // indice da secao API/Graphics em kTabNames
 inline constexpr std::size_t kAppearanceTab = 0;   // indice da secao Appearance em kTabNames
 
 // Valores que a janela mostra. O main.cpp copia do Editor a cada quadro.
@@ -165,6 +166,10 @@ class SettingsPanel {
             open_[static_cast<std::size_t>(v.tab)] = true;
         }
         refreshColors();
+        strip_.setFontScale(editor::ui_style::textScale());
+        canvas_.setFontScale(editor::ui_style::textScale());
+        overlay_.setFontScale(editor::ui_style::textScale());
+        dropdownStyle_.cornerRadius = editor::ui_style::buttonRadius();
         // Mede o conteudo, prende o deslocamento ao tamanho real e refaz o layout uma vez com ele.
         layoutSections(v);
         syncScroll();
@@ -318,7 +323,7 @@ class SettingsPanel {
     }
 
     void drawHeader(std::size_t i, float y, float w) {
-        canvas_.addSolid(Metrics::kPad, y, w, Metrics::kHeaderH, theme_.surface, 0.2f);
+        canvas_.addSolid(Metrics::kPad, y, w, Metrics::kHeaderH, theme_.surface, 0.2f, editor::ui_style::buttonRadius());
         canvas_.addText(Metrics::kPad + 10.f, y + 7.f, std::string(T(sm::kTabNames[i])), Metrics::kFont + 1.f, theme_.text,
                         w - 40.f);
         const float cx = Metrics::kPad + w - 18.f, cy = y + Metrics::kHeaderH * 0.5f;
@@ -345,7 +350,7 @@ class SettingsPanel {
             paletteRows_[k] = sui::Box{Metrics::kPad, y, textWidth(), Metrics::kRowH};
             const bool selected = static_cast<int>(k) == v.palette;
             canvas_.addSolid(paletteRows_[k].x, y, paletteRows_[k].w, Metrics::kRowH,
-                             selected ? theme_.accent : theme_.surface, 0.2f);
+                             selected ? theme_.accent : theme_.surface, 0.2f, editor::ui_style::buttonRadius());
             canvas_.addText(Metrics::kPad + 10.f, y + 5.f, std::string(T(presets[k].name)), Metrics::kFont, theme_.text,
                             textWidth() - 20.f);
             y += Metrics::kRowH + Metrics::kGap;
@@ -484,8 +489,8 @@ class SettingsPanel {
         steps_.push_back({field, {minusX, y, Metrics::kStepW, Metrics::kRowH}, {plusX, y, Metrics::kStepW, Metrics::kRowH}, value,
                           minValue, maxValue});
         const Stepper& s = steps_.back();
-        canvas_.addSolid(s.minus.x, s.minus.y, s.minus.w, s.minus.h, btnColor_, 0.2f);
-        canvas_.addSolid(s.plus.x, s.plus.y, s.plus.w, s.plus.h, btnColor_, 0.2f);
+        canvas_.addSolid(s.minus.x, s.minus.y, s.minus.w, s.minus.h, btnColor_, 0.2f, editor::ui_style::buttonRadius());
+        canvas_.addSolid(s.plus.x, s.plus.y, s.plus.w, s.plus.h, btnColor_, 0.2f, editor::ui_style::buttonRadius());
         text(s.minus.x + 9.f, s.minus.y + 6.f, "-", Metrics::kFont, 12.f);
         text(s.plus.x + 8.f, s.plus.y + 6.f, "+", Metrics::kFont, 12.f);
     }
@@ -794,7 +799,7 @@ class SettingsPanel {
     sui::Theme theme_;
     std::array<bool, sm::kTabCount> open_ = [] {
         std::array<bool, sm::kTabCount> a{};
-        a[kGraphicsTab] = true;   // Settings abre aberta
+        a[kGraphicsTab] = true;   // API/Graphics abre aberta
         return a;
     }();
     std::array<sui::Box, sm::kTabCount> headers_{};                      // cabecalhos (coordenadas locais)

@@ -12,6 +12,7 @@
 
 #include "sui_palette.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
+#include "SpriteUi/Rendering/RenderFlags.hpp"
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
@@ -65,7 +66,11 @@ class Canvas {
  public:
   explicit Canvas(const TextAtlasSet& text) : text_{text} {}
   // Slice do atlas deste tamanho de texto (o campo de texto da biblioteca precisa dele ao desenhar).
-  std::uint32_t sliceFor(float size) const { return text_.sliceFor(size); }
+  std::uint32_t sliceFor(float size) const { return text_.sliceFor(size * fontScale_); }
+  void setFontScale(float scale) {
+    fontScale_ = std::clamp(scale, 0.5f, 2.f);
+    lineHeightValid_ = false;
+  }
 
   void clear() {
     prims_.clear();
@@ -73,6 +78,7 @@ class Canvas {
   }
 
   [[nodiscard]] ST::TextLayoutResult layout(const std::string& utf8, float fontSize) const {
+    fontSize *= fontScale_;
     const ST::TruetypeAtlas& atlas = text_.atlasFor(fontSize);
     ST::TextLayoutConfig cfg;
     cfg.fontSize = fontSize;
@@ -94,12 +100,13 @@ class Canvas {
     if (text.empty() || maxWidth <= 0.f) return 0.f;
     ST::TextLayoutResult lay = layout(fit(text, fontSize, maxWidth), fontSize);
     const float w = lay.size.x;
-    pushText(alignRight ? x - w : x, y, std::move(lay), color, text_.sliceFor(fontSize));
+    pushText(alignRight ? x - w : x, y, std::move(lay), color, text_.sliceFor(fontSize * fontScale_));
     return w;
   }
 
   // Paragrafo quebrado por palavras dentro de `width`. Retorna a altura ocupada.
   float addParagraph(float x, float y, const std::string& text, float fontSize, SU::Vec4 color, float width) {
+    fontSize *= fontScale_;
     const ST::TruetypeAtlas& atlas = text_.atlasFor(fontSize);
     ST::TextLayoutConfig cfg;
     cfg.fontSize = fontSize;
@@ -115,7 +122,7 @@ class Canvas {
   // Z dos textos deste canvas (padrao 0.9). Um canvas de menu aberto usa um Z maior, por cima dos outros.
   void setTextZ(float z) { textZ_ = z; }
 
-  void addSolid(float x, float y, float w, float h, SU::Vec4 color, float z = 0.2f) {
+  void addSolid(float x, float y, float w, float h, SU::Vec4 color, float z = 0.2f, float cornerRadius = 0.f) {
     if (w <= 0.f || h <= 0.f) return;
     Prim p;
     p.x = x;
@@ -124,6 +131,7 @@ class Canvas {
     p.h = h;
     p.color = color;
     p.z = z;
+    p.cornerRadius = cornerRadius;
     prims_.push_back(p);
   }
 
@@ -135,7 +143,12 @@ class Canvas {
       const float sy = originY + p.y - scrollY;
       if (sy + p.h < viewTop || sy > viewBottom) continue;
       if (p.kind == Prim::Kind::Solid) {
-        out.push_back(solidItem(originX + p.x, sy, p.w, p.h, p.color, p.z, owner, clip, paint++));
+        SR::UIRenderItem item = solidItem(originX + p.x, sy, p.w, p.h, p.color, p.z, owner, clip, paint++);
+        if (p.cornerRadius > 0.f) {
+          item.flags |= SR::FlagRoundedPanel;
+          item.cornerRadius = p.cornerRadius;
+        }
+        out.push_back(item);
         continue;
       }
       SU::UILayoutRect box;
@@ -168,6 +181,7 @@ class Canvas {
     float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
     SU::Vec4 color{};
     float z = 0.f;
+    float cornerRadius = 0.f;
     std::uint32_t text = 0;   // Text: indice em texts_
     std::uint32_t slice = 1;  // Text: slice de textura do tamanho (TextAtlasSet)
   };
@@ -203,6 +217,7 @@ class Canvas {
 
   const TextAtlasSet& text_;
   float textZ_ = 0.9f;
+  float fontScale_ = 1.f;
   mutable float lineHeightSize_ = -1.f;
   mutable float lineHeight_ = 0.f;
   mutable bool lineHeightValid_ = false;

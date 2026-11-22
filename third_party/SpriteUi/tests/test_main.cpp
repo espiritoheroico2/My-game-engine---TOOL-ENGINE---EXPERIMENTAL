@@ -1322,6 +1322,8 @@ static void TestLayoutSceneBridge() {
 
     ElementVisual childVis;
     childVis.tintPremultipliedLinear = {0.8f, 0.2f, 0.2f, 1.0f};
+    childVis.flags = Rendering::FlagRoundedPanel;
+    childVis.cornerRadius = 7.f;
     bridge.SetVisual(child, childVis);
 
     auto result = bridge.Extract(tree);
@@ -1329,6 +1331,8 @@ static void TestLayoutSceneBridge() {
     CHECK(result.hitTargets.size() == 2);
     CHECK(result.clipHierarchy.valid);
     CHECK(result.clipHierarchy.effectiveRects.size() == 1);
+    CHECK(result.renderItems[1].flags == Rendering::FlagRoundedPanel);
+    CHECK(Near(result.renderItems[1].cornerRadius, 7.f));
     // Child should inherit clip index from container
     CHECK(result.renderItems[1].clipIndex == 0);
     CHECK(result.hitTargets[1].clipEnabled);

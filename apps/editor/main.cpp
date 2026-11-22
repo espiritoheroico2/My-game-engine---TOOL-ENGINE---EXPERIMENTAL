@@ -2734,7 +2734,6 @@ static int runEditorMain(int argc, char** argv) {
     };
     spriteTextCursor = SDL_CreateCursor(iBeamData, iBeamMask, 16, 16, 7, 7);
   }
-  bool spriteTextCursorActive = false;
   bool cursorWarningLogged = false;
   if (uiReady && !spriteTextCursor) tool::logWarn(std::string("Could not create text cursor: ") + SDL_GetError());
   std::unique_ptr<editor::hierarchy_panel::HierarchyPanel> hierPanel;
@@ -3161,21 +3160,23 @@ static int runEditorMain(int argc, char** argv) {
 #ifdef TOOL_WITH_SPRITEUI
     float mouseX = 0.f, mouseY = 0.f;
     SDL_GetMouseState(&mouseX, &mouseY);
-    const bool textFieldHovered =
+    const bool textFieldHovered = SDL_GetMouseFocus() == window && (
         (hierPanel && ed.showHierarchy && hierPanel->wantsTextCursor(mouseX, mouseY)) ||
         (consolePanel && ed.showConsole && consolePanel->wantsTextCursor(mouseX, mouseY)) ||
         (inspPanel && ed.showInspector && gInspectorFrame && inspPanel->wantsTextCursor(mouseX, mouseY)) ||
         (codingPanel && ed.showCoding && codingPanel->wantsTextCursor(mouseX, mouseY)) ||
-        (helpPanel && editor::helpState().open && helpPanel->wantsTextCursor(mouseX, mouseY));
+        (helpPanel && editor::helpState().open && helpPanel->wantsTextCursor(mouseX, mouseY)));
     if (textFieldHovered && spriteTextCursor) {
-      if (!SDL_SetCursor(spriteTextCursor) && !cursorWarningLogged) {
+      if (SDL_GetCursor() != spriteTextCursor && !SDL_SetCursor(spriteTextCursor) && !cursorWarningLogged) {
         tool::logWarn(std::string("Could not activate text cursor: ") + SDL_GetError());
         cursorWarningLogged = true;
       }
-      spriteTextCursorActive = true;
-    } else if (spriteTextCursorActive) {
-      SDL_SetCursor(SDL_GetDefaultCursor());
-      spriteTextCursorActive = false;
+    } else {
+      SDL_Cursor* defaultCursor = SDL_GetDefaultCursor();
+      if (SDL_GetCursor() != defaultCursor && !SDL_SetCursor(defaultCursor) && !cursorWarningLogged) {
+        tool::logWarn(std::string("Could not restore default cursor: ") + SDL_GetError());
+        cursorWarningLogged = true;
+      }
     }
 #endif
 #ifdef TOOL_WITH_SPRITEUI

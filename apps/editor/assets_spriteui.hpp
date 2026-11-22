@@ -19,6 +19,7 @@
 #include "SpriteUi/Layout/LayoutBridge.hpp"
 #include "SpriteUi/Layout/LayoutTree.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
+#include "SpriteUi/Rendering/RenderFlags.hpp"
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Widgets/DockInteraction.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
@@ -199,6 +200,8 @@ class View {
       if (const auto* visual = bridge_.GetVisual(item.handle)) {
         item.tintPremultipliedLinear = visual->tintPremultipliedLinear;
         item.zOrder = visual->zOrder;
+        item.flags = visual->flags;
+        item.cornerRadius = visual->cornerRadius;
       }
     }
 
@@ -545,6 +548,7 @@ class View {
   Shaped shape(const std::string& utf8, float size) const {
     Shaped s;
     s.utf8 = utf8;
+    size = editor::ui_style::uiFont(size);
     const ST::TruetypeAtlas& atlas = text_.atlasFor(size);
     s.slice = text_.sliceFor(size);
     s.glyphs = ST::ShapeTruetype(utf8, atlas);
@@ -575,6 +579,8 @@ class View {
     SU::ElementVisual v;
     v.interactable = enabled;
     v.clipOverflow = false;
+    v.flags = SR::FlagRoundedPanel;
+    v.cornerRadius = editor::ui_style::buttonRadius();
     v.zOrder = 0.f;
     v.tintPremultipliedLinear = !enabled ? colors_.disabled : (hovered_ == h ? colors_.buttonHover : base);
     bridge_.SetVisual(h, v);

@@ -2,6 +2,27 @@
 
 Atualizado em 2026-11-21. Branch de trabalho: `main`.
 
+## Estado da rodada (2026-11-21)
+
+- [x] Appearance: os sliders foram observados em uso; raio dos botoes `6 px`, raio das janelas `14 px`
+      e texto `80%`. Apos reabrir o editor, `editor_settings.json` continha os mesmos tres valores.
+- [~] Coding: a captura em execucao mostrou a lista a esquerda, editor a direita, tamanho `12` e o botao
+      `Hide list`. Nenhum arquivo estava aberto, entao os numeros de linha ainda precisam de verificacao visual.
+- [x] O tamanho do texto agora escala Settings, Scenes, Assets e Inspector SpriteUI.
+- [x] O raio dos botoes agora chega aos botoes de Settings, Scenes e Assets.
+- [x] A secao antes chamada `Settings` passou a se chamar `API/Graphics`.
+- [~] Hierarchy agora recebe a escala global do texto; falta conferir visualmente com o slider em mais de um valor.
+- [~] Cursor: o I-beam fica restrito aos campos editaveis/selecionaveis da janela em foco e a seta e restaurada fora deles.
+      Os handlers de selecao continuam iniciando no evento do botao esquerdo; falta conferir arraste em execucao.
+- [~] Inspector: a moldura opaca estava sendo desenhada por cima do conteudo SpriteUI. O corpo da moldura ficou
+      transparente; teste cobre a preparacao dos campos Nome e Transform. Falta confirmar visualmente ao reabrir.
+- [ ] Lighting, Physics, Game, Optimizing e Language ainda precisam ser portados para controles SpriteUI;
+      as implementacoes ImGui existentes nao foram removidas nesta rodada.
+- [ ] Nenhuma janela foi removida do ImGui nesta rodada: cada remocao continua condicionada a aprovacao
+      visual propria.
+- [ ] A mensagem de `1763d6c` continua incorreta: `git show --stat 1763d6c` nao lista arquivos em `docs/`.
+      O historico nao foi reescrito; aguarda confirmacao antes de qualquer alteracao em `main`.
+
 ## 1. Configurações (SpriteUI)
 
 Sintoma: na janela Settings só as seções Appearance e Settings têm conteúdo. Game, Lighting, Optimizing e
@@ -34,8 +55,8 @@ Ordem (cada janela só sai do ImGui depois da aprovação visual):
 
 1. [x] Código morto da Scene, Game e Hierarchy (`3d688ef`).
 2. [x] Janela de script em SpriteUI (`0b18486`). Falta verificar teclado, mouse e roda em execução real.
-3. [ ] **Coding**: o corpo (`coding_panel.hpp`) ainda desenha pelo draw list do ImGui. Reusar o editor da janela
-       de script.
+3. [~] **Coding**: o corpo em `coding_panel.hpp` ja usa SpriteUI, sem chamadas ImGui; falta a aprovacao visual
+       do editor com um arquivo aberto e os numeros de linha visiveis.
 4. [ ] Diálogo de projeto (`project_dialog.hpp`, 41 chamadas).
 5. [ ] Exportar (`export_ui.hpp`, 41 chamadas).
 6. [ ] Narrative Controller (`narrative_panel.hpp`, 55 chamadas).

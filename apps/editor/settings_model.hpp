@@ -15,7 +15,7 @@ inline constexpr int kTabCount = 6;
 
 // Nomes das abas, na ordem da barra (a chave e a mesma usada pela traducao, T(...)).
 inline constexpr const char* kTabNames[kTabCount] = {
-    "Appearance", "Settings", "Game", "Lighting", "Optimizing", "Language"};
+    "Appearance", "API/Graphics", "Game", "Lighting", "Optimizing", "Language"};
 
 // Limites da aba Optimizing. A escala da interface usa a mesma faixa do tema (70% a 200%);
 // o cache de malhas evita crescer sem limite e o modo ocioso reduz o trabalho entre interacoes.

@@ -27,6 +27,7 @@
 #include "i18n.hpp"
 #include "image_io.hpp"
 #include "sui_panel.hpp"
+#include "ui_style.hpp"
 #include "window_frame.hpp"
 #include "window_help_icon.hpp"
 
@@ -206,6 +207,11 @@ class HierarchyPanel {
     // Desenha a janela (moldura SpriteUI, barra, lista e menu). Os pedidos saem em `out`.
     bool draw(SDL_Renderer* renderer, SDL_Window* window, bool visible, Source src, Requests& out) {
       theme_ = sui::Theme{};   // cores da paleta em uso (Configuracoes > Appearance)
+        const float textScale = editor::ui_style::textScale();
+        toolbar_.setFontScale(textScale);
+        list_.setFontScale(textScale);
+        overlay_.setFontScale(textScale);
+        chrome_.setFontScale(textScale);
         visible_ = visible;
         window_ = window;
         if (!visible) return true;

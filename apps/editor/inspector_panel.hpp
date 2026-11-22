@@ -7,8 +7,8 @@
 //
 // Secoes em SpriteUI: nome, ativo e travado; Transform; Mesh Renderer (com as partes de modelo importado); Light
 // source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; Voxel; Game UI; Particles; ToolObject Script
-// e Tags. Recursos e o rodape (Add Component, Collapse All, Open All) continuam em ImGui
-// logo abaixo deste bloco (main.cpp: drawInspector).
+// e Tags. Recursos (Add / Remove) entram neste painel; o rodape (Add Component, Collapse All, Open All) ainda fica
+// no host ImGui logo abaixo do bloco (main.cpp: drawInspector).
 //
 // Exemplo: a Luz do sol tem cor, intensidade e sombra. Clicar na amostra da cor abre o seletor; arrastar a area
 // de saturacao muda a cor do objeto na hora. Digitar "2,5" na intensidade grava 2.5 quando o numero e valido.
@@ -36,6 +36,7 @@
 #include "inspector_model.hpp"
 #include "project.hpp"
 #include "sui_panel.hpp"
+#include "ui_style.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -173,6 +174,7 @@ class InspectorPanel {
   public:
     InspectorPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : canvas_{text}, overlay_{text}, sdl_{sdl}, chrome_{text, sdl} {
         overlay_.setTextZ(Metrics::kZPopupText);
+        chrome_.setBodyFill(false);   // o corpo e renderizado pelo painel por cima do fundo do ImGui
     }
     InspectorPanel(const InspectorPanel&) = delete;
     // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e o bloco ImGui posicionado sobre ela.
@@ -184,6 +186,8 @@ class InspectorPanel {
     float prepare(const Context& ctx, const Hooks& hooks, float width) {
         ctx_ = ctx;             // copia: os ponteiros dentro dele valem neste quadro, e o painel os usa em draw e eventos
         hooks_ = hooks;
+        canvas_.setFontScale(editor::ui_style::textScale());
+        overlay_.setFontScale(editor::ui_style::textScale());
         width_ = std::max(140.f, width);
         controls_.clear();
         frames_.clear();
@@ -1300,7 +1304,7 @@ class InspectorPanel {
         style.caret = theme_.text;
         style.paddingX = 6.f;
         style.height = box.size.y;
-        style.fontSize = Metrics::kFont;
+        style.fontSize = editor::ui_style::uiFont(Metrics::kFont);
         const ST::TextLayoutResult layout = canvas_.layout(field_.Edit().Text(), Metrics::kFont);
         const SU::Rect screen = toScreen(box);   // Build trabalha em coordenadas da tela (e o recorte tambem)
         std::vector<SR::UIRenderItem> built = field_.Build(screen, layout, style, target, clips);
@@ -1387,7 +1391,7 @@ class InspectorPanel {
             style.caret = theme_.text;
             style.paddingX = 6.f;
             style.height = layout.hexField.size.y;
-            style.fontSize = Metrics::kFont;
+            style.fontSize = editor::ui_style::uiFont(Metrics::kFont);
             const ST::TextLayoutResult lay = canvas_.layout(field_.Edit().Text(), Metrics::kFont);
             std::vector<SR::UIRenderItem> built = field_.Build(toScreen(layout.hexField), lay, style, target, clips);
             paint += built.size() + 1;
@@ -1584,7 +1588,7 @@ class InspectorPanel {
         style.caret = theme_.text;
         style.paddingX = 6.f;
         style.height = box.size.y;
-        style.fontSize = Metrics::kFont;
+        style.fontSize = editor::ui_style::uiFont(Metrics::kFont);
         return style;
     }
 

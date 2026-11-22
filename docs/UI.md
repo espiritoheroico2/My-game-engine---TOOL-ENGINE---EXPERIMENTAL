@@ -1,12 +1,12 @@
 # Editor: idiomas e temas (v0.2.1)
 
 ## Configurações (Arquivo ▸ Configurações, ou menu Opções)
-Janela ancorável com abas **Aparência**, **Idioma** e **Gráficos** (a antiga janela de API gráfica agora é uma aba).
+Janela ancorável com as seções **Aparência**, **API/Graphics**, **Game**, **Lighting**, **Optimizing** e **Language**.
 
 ### Aparência
 - Temas prontos: Escuro, Claro, Meia-noite, Floresta, Brasa, Alto contraste.
 - 5 cores-base (fundo, superfície, texto, destaque, borda) geram a paleta inteira; "Cores avançadas" edita cada uma das ~55 cores do ImGui, com filtro.
-- Arredondamento e escala da UI.
+- Raio dos botões e das janelas, além do tamanho do texto nos painéis SpriteUI e nos nomes de objetos da Hierarchy.
 - "Salvar tema" grava `assets/themes/<nome>.json`; qualquer JSON nessa pasta aparece em "Temas do usuário". A escolha atual persiste em `editor_theme.json`.
 
 ### Idioma
@@ -27,7 +27,8 @@ Estilo com mais respiro e cantos arredondados, barra de status (API, FPS, entida
 - A barra flutuante da Scene pode ser movida pela alça de três traços. O slider de snap recebe o mouse antes da seleção de objetos na imagem.
 - Os painéis Hierarchy, Inspector, Settings, Scene, Game, Console, Help e Profiler usam margem interna comum de 14 px. O Profiler desenha linhas-guia nos gráficos.
 - A troca de API invalida buffers de readback e mapas de sombra específicos da GPU. A CPU continua exibindo a vista enquanto o novo backend prepara seu primeiro readback.
-- O Console SpriteUI é renderizado na área de conteúdo de uma janela ImGui hospedeira, então participa do docking e redimensionamento padrão. Filtro e comando permitem posicionar o caret pelo clique, selecionar por arraste e usar atalhos de seleção/cópia/recorte/colagem; a busca do Help também suporta seleção por arraste. O cursor I-beam aparece sobre esses campos e sobre o renomear da Hierarchy.
+- O Console SpriteUI é renderizado na área de conteúdo de uma janela ImGui hospedeira, então participa do docking e redimensionamento padrão. Filtro e comando permitem posicionar o caret pelo clique, selecionar por arraste e usar atalhos de seleção/cópia/recorte/colagem; a busca do Help também suporta seleção por arraste. O cursor I-beam aparece apenas sobre campos editáveis/selecionáveis da janela em foco; fora deles, volta à seta. A seleção por arraste começa no clique esquerdo.
+- No Inspector, as propriedades do objeto selecionado incluem nome, estado, Transform e as seções de componentes com ações para adicionar/remover e editar valores. A moldura deixa o corpo transparente para não cobrir os controles SpriteUI.
 - O renderer 2D do SDL tenta os backends disponíveis, exceto Vulkan, e usa software como fallback; isso evita uma segunda instância Vulkan junto com o backend Diligent configurado em Settings.
 - A fonte ImGui usa 18 px com oversampling horizontal 3x e vertical 2x; os atlas SpriteUI são rasterizados conforme o DPI.
 

@@ -148,6 +148,7 @@ SceneExtractionResult LayoutSceneBridge::Extract(const LayoutTree& tree) const {
             item.materialIndex = visual->materialIndex;
             item.clipIndex = effectiveClip;
             item.flags = visual->flags;
+            item.cornerRadius = visual->cornerRadius;
             item.layer = visual->layer;
             item.zOrder = visual->zOrder;
             item.paintOrder = currentPaint;

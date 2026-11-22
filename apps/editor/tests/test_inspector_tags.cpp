@@ -42,6 +42,16 @@ int main() {
   IP::InspectorPanel noTags(text, renderer);
   const float hEmpty = noTags.prepare(base, hooks, 300.f);
 
+  editor::Name objectName{};
+  std::snprintf(objectName.text, sizeof objectName.text, "%s", "Selected object");
+  editor::Transform transform{};
+  IP::Context selected = base;
+  selected.name = &objectName;
+  selected.transform = &transform;
+  IP::InspectorPanel selectedPanel(text, renderer);
+  const float hSelected = selectedPanel.prepare(selected, hooks, 300.f);
+  Check(hSelected > hEmpty, "objeto selecionado mostra Nome e Transform editaveis");
+
   // 2. Com tags: uma tag atribuida (com Remove) e outra existente na lista. A altura cresce.
   IP::Context withTags = base;
   withTags.tagNames = {"Player", "Enemy", "Boss"};

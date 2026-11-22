@@ -25,7 +25,7 @@ void Check(bool ok, const char* expr, int line) {
 void TestTabNamesMatchTheBar() {
   CHECK(kTabCount == 6);
   CHECK(std::strcmp(kTabNames[0], "Appearance") == 0);
-  CHECK(std::strcmp(kTabNames[1], "Settings") == 0);
+  CHECK(std::strcmp(kTabNames[1], "API/Graphics") == 0);
   CHECK(std::strcmp(kTabNames[4], "Optimizing") == 0);
   CHECK(std::strcmp(kTabNames[5], "Language") == 0);
 }
