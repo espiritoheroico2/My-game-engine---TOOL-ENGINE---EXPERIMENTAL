@@ -113,5 +113,5 @@ WHAT YOU GET
   tests/, fuzz/, tools/, docs/                development extras (not built by
                                               the editor preset)
   The sandbox demo and unit tests are OFF by default; presets "dev"/"test"
-  turn them on for development (see docs/BUILD.md).
+  turn them on for development (see docs/referencia/COMPILAR.md).
 ==============================================================================

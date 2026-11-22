@@ -6,7 +6,7 @@
 // So regras e geometria, sem SDL nem desenho. O painel (console_panel.hpp) desenha a moldura e repassa os
 // cliques para ca. Testado sem janela em tests/test_window_frame.cpp (Editor.ConsoleFrame).
 //
-// Padrao de moldura (docs/trocarjanelas.md, secao 1.1), da esquerda para a direita no cabecalho: grip (so ele
+// Padrao de moldura (docs/planos/05_REMOVER_IMGUI.md, secao 1.1), da esquerda para a direita no cabecalho: grip (so ele
 // arrasta), icone "?" (abre a Help na secao da janela), titulo, minimizar e X. O minimizar recolhe a janela ao
 // cabecalho; a altura volta quando clicar de novo.
 #include "SpriteUi/Widgets/DockInteraction.hpp"

@@ -136,7 +136,7 @@ TEST(render_queues_select_pass_items_by_index) {
   CHECK(queues.shadowCasters.size() == 1 && queues.shadowCasters[0] == 0);
 }
 
-// Invariantes do plano de lotes (udc.md 7.2), com entradas pseudoaleatorias deterministicas:
+// Invariantes do plano de lotes (docs/planos/02_RENDER_DRAW_CALLS.md 7.2), com entradas pseudoaleatorias deterministicas:
 // - order e uma permutacao completa; - lotes contiguos (first de cada um = fim do anterior); - soma de count = n;
 // - nenhum lote acima de maxPerBatch; - malha e textura uniformes dentro de cada lote.
 namespace {

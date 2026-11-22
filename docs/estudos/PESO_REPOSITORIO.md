@@ -28,7 +28,7 @@ Nao ha binarios de build (.exe, .dll, .lib, .obj, .pdb, .o) rastreados. Os unico
 
 | Item | Tamanho | Por que e ambiguo | Prova |
 |---|---|---|---|
-| `docs/ui_default_en.png`, `docs/ui_en_language.png`, `docs/ui_theme_ember_es.png` | 128 + 116 + 116 KB | Sao capturas de tela. Nenhum texto as referencia, mas podem ser usadas em release ou no README externo. | `git grep -nI 'ui_default\|ui_en_language\|ui_theme_ember'` sem resultados. |
+| `docs/imagens/ui_tema_padrao_en.png`, `docs/imagens/ui_idioma_en.png`, `docs/imagens/ui_tema_ember_es.png` | 128 + 116 + 116 KB | Sao capturas de tela. Nenhum texto as referencia, mas podem ser usadas em release ou no README externo. | `git grep -nI 'ui_default\|ui_en_language\|ui_theme_ember'` sem resultados. |
 | `git add.txt` | 4 KB | Parece uma anotacao pessoal (uma linha: `third_party/LightPrism/`). Nao e referenciado. | `git grep -nI 'git add'` sem uso no build. |
 | `third_party/quickjs-ng/tests`, `third_party/quickjs-ng/.github` | 612 + 60 KB | Testes JS e CI de terceiros. Nenhum alvo do CMake do quickjs les esses diretorios. `LEIA-ME-THIRDPARTY.txt` diz "pasta completa", entao a copia integral foi uma escolha. | `grep -n 'tests/\|\.github' third_party/quickjs-ng/CMakeLists.txt` sem resultados. |
 | `third_party/LightPrism/tests` | 192 KB | Testes de terceiros, nao usados pelo CMake raiz (`add_subdirectory(third_party/LightPrism)` so). | `git grep -n 'LightPrism.*tests'` sem resultados. |

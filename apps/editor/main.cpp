@@ -1025,7 +1025,7 @@ void drawProfilerFrame(Editor& ed) {
 #endif
 
 // LEGADO (nao chamado desde a migracao do Console para a moldura SpriteUI). Remover na etapa 7 do
-// docs/trocarjanelas.md, so depois da aprovacao visual do usuario.
+// docs/planos/05_REMOVER_IMGUI.md, so depois da aprovacao visual do usuario.
 #ifdef TOOL_WITH_SPRITEUI
 bool gConsoleFrame = false;
 editor::sui::Box gConsoleRect;

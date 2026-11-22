@@ -179,7 +179,7 @@ class ProfilerModel {
       cell(r, tr("delay max ms"), num(st.max), 2, 7);
       cell(r, tr("jitter ms"), num(st.jitter), 2, 7);
     }
-    text(tr("GPU % is not measured yet: it needs GPU timestamp queries in the RHI (see docs/ROADMAP.md, item 7)."));
+    text(tr("GPU % is not measured yet: it needs GPU timestamp queries in the RHI (see docs/planos/00_ROADMAP.md, item 7)."));
     // ---- Frames
     heading(tr("Frames"));
     {

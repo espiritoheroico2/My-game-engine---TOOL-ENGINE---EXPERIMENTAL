@@ -1,9 +1,9 @@
 # Checklist do ToolEngine
 
 > Lista detalhada por versão. Para prioridade atual e critérios de conclusão consolidados, veja
-> [`ROADMAP.md`](ROADMAP.md). Não trate itens antigos como bloqueadores atuais sem conferir o roteiro.
+> [`00_ROADMAP.md`](00_ROADMAP.md). Não trate itens antigos como bloqueadores atuais sem conferir o roteiro.
 
-Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.md`.
+Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `../referencia/CHANGELOG.md`.
 
 ### SpriteUI (migracao incremental em andamento)
 - [x] Painel experimental de diagnostico em `Window > SpriteUI diagnostics` (layout, input e extracao de FramePacket)
@@ -135,7 +135,7 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 - [x] Profiler: VRAM do processo (DXGI no Windows, amdgpu no Linux) ou motivo
 - [x] Profiler: tamanhos de cache (L1, L2, L3)
 - [x] Help: "Casts shadows" em luz pontual corrigido (nao existe)
-- [x] Revisao da iluminacao em docs/LIGHTING_REVIEW.md
+- [x] Revisao da iluminacao em ../estudos/REVISAO_ILUMINACAO.md
 - [x] Selftest do editor: 172 checks, 0 falhas
 - [~] Caminho Windows do Profiler (DXGI, NtQuerySystemInformation): nao compilado nesta maquina
 - [ ] Taxa de acerto do cache (exige contadores de hardware)
@@ -154,7 +154,7 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 - [x] Aviso para objeto inexistente (S005) e valor invalido no Transform (S006)
 - [x] debug.warn e debug.error; snippet ttry
 - [x] Console: filtros por nivel e texto, Copy, clique seleciona o objeto
-- [x] Help: secao Erros e try/catch (EN e PT); docs/SCRIPT_ERRORS.md
+- [x] Help: secao Erros e try/catch (EN e PT); ../referencia/ERROS_SCRIPT.md
 - [x] Help: tutoriais de FPS e de portas com E (EN e PT), codigo testado no selftest
 - [x] Selftest do editor: 166 checks, 0 falhas
 - [~] Lista de problemas no Inspector e filtros do Console: nao verificados visualmente
@@ -176,14 +176,14 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 - [~] Verificacao visual (icones, barra flutuante, escala 125%, console): nao feita neste ambiente
 - [~] Ganho de desempenho do editor: nao medido (usar Profiler, zona "Panels")
 - [ ] Propriedades de shader expostas aos scripts
-- [ ] Biblioteca SpriteUi (plano em `docs/UI_SPRITE_PLAN.md`; implementacao com o usuario)
+- [ ] Biblioteca SpriteUi (plano em `06_SPRITEUI.md`; implementacao com o usuario)
 
 ### Etapa 1 (0.7.1-beta)
 - [x] Partículas com teste de profundidade (ficam atrás de objetos da frente, continuam emitindo)
 - [x] Economia de GPU com o editor ocioso (renderiza só quando há mudança)
 - [x] Console com comandos (`help`, `clear`, `test ECS: N`)
 - [x] Teste de eficiência do ECS (`test ECS: N`, até 1 000 000 esferas com Newtoon)
-- [x] Documentação do ECS (`docs/ECS.md`)
+- [x] Documentação do ECS (`../referencia/ECS.md`)
 
 ### Etapa 2 (0.7.2-beta)
 - [x] Upscaling por software: Bilinear, Bicubic (Catmull-Rom), Lanczos2 (Settings → Graphics)
@@ -195,7 +195,7 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 - [x] Cache de malhas da GPU corrigido (validação, eviction, malhas dinâmicas)
 - [x] Limite de `meshBounds` e limpeza ao abrir cena
 - [x] ASan + UBSan: selftest sem erros de memória nem de UB; uso após liberação corrigido
-- [x] Documentação: `PARTICLES.md`, `PERFORMANCE_AUDIT.md`, `RENDER_SCALING.md`
+- [x] Documentação: `08_PARTICULAS.md`, `../estudos/AUDITORIA_DESEMPENHO.md`, `../estudos/ESCALONAMENTO_RENDER.md`
 
 ### Etapa 3 (0.7.3-beta)
 - [x] Janela de início: nome do projeto, autor e pasta onde salvar
@@ -234,7 +234,7 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `docs/CHANGELOG.m
 ## Pendente
 
 ### Renderização
-- [ ] Readback assíncrono com anel de staging (principal custo que sobrou; ver docs/PERFORMANCE_PLAN.md, etapa 2)
+- [ ] Readback assíncrono com anel de staging (principal custo que sobrou; ver 03_DESEMPENHO_EDITOR.md, etapa 2)
 - [ ] Apresentação sem cópia para a CPU (zero-copy, etapa 3 do plano)
 - [ ] FXAA e nitidez na GPU (etapa 4 do plano)
 - [ ] Opção de validação em Settings > Graphics (hoje só variável de ambiente)

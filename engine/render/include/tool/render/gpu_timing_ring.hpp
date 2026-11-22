@@ -1,5 +1,5 @@
 #pragma once
-// Anel de tempos de GPU por quadro (udc.md 5.4 e 5.5). Puro: o backend grava o tempo (em ms) quando as queries
+// Anel de tempos de GPU por quadro (docs/planos/02_RENDER_DRAW_CALLS.md 5.4 e 5.5). Puro: o backend grava o tempo (em ms) quando as queries
 // resolvem. Um quadro so e lido depois de `latency` quadros, para nao bloquear a CPU. Tempo invalido nao entra.
 #include <cmath>
 #include <cstddef>

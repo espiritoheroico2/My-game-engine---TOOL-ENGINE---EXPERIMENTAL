@@ -53,11 +53,11 @@ Leitura honesta:
 
 ## 5. Por que não GPU agora (e FSR depois)
 
-Os filtros acima rodam na CPU porque a imagem final já é lida da GPU para a CPU (readback, ver `docs/PERFORMANCE_AUDIT.md` A8). Fazer o upscaling na GPU (shader) só é vantajoso depois de eliminar esse readback; caso contrário, a imagem sobe e desce de novo.
+Os filtros acima rodam na CPU porque a imagem final já é lida da GPU para a CPU (readback, ver `AUDITORIA_DESEMPENHO.md` A8). Fazer o upscaling na GPU (shader) só é vantajoso depois de eliminar esse readback; caso contrário, a imagem sobe e desce de novo.
 
 **FSR** (AMD FidelityFX Super Resolution) e outras técnicas (TAA, DLSS, XeSS) são o próximo passo planejado. Elas exigem:
 1. Shader de computação ou de pixel no RHI (hoje o RHI não tem compute).
 2. Entradas de movimento e profundidade (vetores de movimento por objeto).
 3. Apresentação sem readback.
 
-Por isso o FSR fica para uma etapa posterior; não foi implementado nesta etapa. A análise de FSR (versões, licenças, o que faz sentido aqui) está em `docs/FSR.md`; o desempenho consolidado está em `docs/PERFORMANCE_PLAN.md` e `docs/PERFORMANCE_AUDIT.md`.
+Por isso o FSR fica para uma etapa posterior; não foi implementado nesta etapa. A análise de FSR (versões, licenças, o que faz sentido aqui) está em `AMD_FSR.md`; o desempenho consolidado está em `../planos/03_DESEMPENHO_EDITOR.md` e `AUDITORIA_DESEMPENHO.md`.

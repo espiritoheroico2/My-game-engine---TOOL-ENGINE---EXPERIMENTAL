@@ -1,5 +1,5 @@
 #pragma once
-// Planejador puro de argumentos de desenho indireto (udc.md 8 e 10.2). Converte lotes em DrawIndexedIndirect,
+// Planejador puro de argumentos de desenho indireto (docs/planos/02_RENDER_DRAW_CALLS.md 8 e 10.2). Converte lotes em DrawIndexedIndirect,
 // sem RHI. Se a capacidade do buffer nao couber, ou um contador estourar 32 bits, o plano falha (ok = false) e o
 // chamador usa o caminho CPU (um draw por lote). Layout igual ao de D3D12/Vulkan: 5 uint32, 20 bytes por argumento.
 #include <cstddef>

@@ -1188,7 +1188,7 @@ class InspectorPanel {
     }
 
     // Tags do objeto: uma linha por tag atribuida (Remove), campo para criar e o botao Add tag, e a lista das
-    // tags existentes que o objeto ainda nao tem. Renomear com duplo clique ainda nao existe (ver trocarjanelas.md).
+    // tags existentes que o objeto ainda nao tem. Renomear com duplo clique ainda nao existe (ver docs/planos/05_REMOVER_IMGUI.md).
     void tags() {
         if (!beginSection(im::Section::Tags, T("Tags"))) return;
         for (std::size_t i = 0; i < ctx_.tagNames.size() && i < ctx_.tagOn.size(); ++i) {

@@ -16,6 +16,6 @@ se der erro, copie a mensagem do Console (ela aparece em *Settings > Graphics*) 
 ## Ray tracing com DXR — viabilidade
 - O DiligentCore (que usamos por baixo do RHI) já expõe a API de ray tracing: BLAS/TLAS (`IBottomLevelAS`/`ITopLevelAS`), `IShaderBindingTable` e `TraceRays`, em D3D12 (DXR) e Vulkan (VK_KHR_ray_tracing).
 - Para usar na engine seria preciso: (1) estender o nosso RHI com construção de BLAS/TLAS e `TraceRays`; (2) shaders HLSL de ray tracing compilados com DXC (hoje só VS/PS);
-  (3) detectar suporte em tempo de execução (GPU RTX/RDNA2+); (4) caminho de apresentação direto na GPU (Fase B do `ROADMAP.md`) — hoje cada quadro volta para a CPU, o que desperdiça o ganho.
+  (3) detectar suporte em tempo de execução (GPU RTX/RDNA2+); (4) caminho de apresentação direto na GPU (Fase B do `../../planos/00_ROADMAP.md`) — hoje cada quadro volta para a CPU, o que desperdiça o ganho.
 - **Primeiro alvo realista:** sombras (e depois reflexos) por ray tracing de 1 raio por pixel, ligadas por opção e só quando a GPU suportar. Isso **substitui** o cubemap de sombra de point light com qualidade melhor.
 - Estimativa: média/grande. Recomendação: fazer depois de (a) apresentar direto na GPU e (b) pós-processamento na GPU.

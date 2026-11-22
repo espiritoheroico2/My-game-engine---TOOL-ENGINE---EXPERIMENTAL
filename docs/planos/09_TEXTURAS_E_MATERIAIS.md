@@ -11,7 +11,7 @@ Tiling/Offset por material · Mipmaps + filtragem anisotrópica · Sprite/atlas 
 2. **TextureLibrary** (já existe `lib` para malhas/sons): carrega PNG/JPG (stb_image), gera mipmaps, cache por caminho, formato sRGB p/ albedo e linear p/ normal/ORM.
 3. **GPU primeiro:** texturas entram no `pbr.hlsl` (+ `.glsl` mantido à mão): `Texture2D` albedo/normal/orm; normal map via TBN (a malha precisa de tangentes — importer calcula com MikkTSpace-like).
 4. **CPU (SoftRenderer):** amostragem bilinear opcional, normal map no sombreamento. Mantém o fallback funcionando.
-5. **Compressão:** BC7/BC5 offline (basisu/ktx2) no export; o botão "Compress as NTC" (NVIDIA) fica para depois (`NTC.md`: viável, mas só em GPUs com Tensor Cores).
+5. **Compressão:** BC7/BC5 offline (basisu/ktx2) no export; o botão "Compress as NTC" (NVIDIA) fica para depois (`../estudos/NVIDIA_NTC.md`: viável, mas só em GPUs com Tensor Cores).
 6. **Shader por objeto:** campo `shader` no `.tmat` aponta para um par HLSL/GLSL customizado (validado/compilado pelo Diligent); vazio = PBR padrão.
 
 ## Ordem de implementação sugerida

@@ -357,7 +357,7 @@ Memory 16 MB for all scripts, stack 256 KB, 5 ms per call. An error stops only t
 - Catch an error in your code: try { setPosition("Camera", "abc", 0, 0); } catch (e) { debug.warn("camera not moved: " + e.message); }
 - debug.console(message) writes an info line; debug.warn(message) a warning and debug.error(message) an error. The script keeps running.
 - Names are checked: a command to an object that is not in the scene shows a warning (TOOL-S005) and does nothing.
-- While you type (Inspector > ToolObject Script) the editor checks the script and lists syntax errors and common mistakes with their line. Console > Check scripts checks every object. Codes: docs/SCRIPT_ERRORS.md.
+- While you type (Inspector > ToolObject Script) the editor checks the script and lists syntax errors and common mistakes with their line. Console > Check scripts checks every object. Codes: docs/referencia/ERROS_SCRIPT.md.
 # Not available yet
 this.position, Input.axis, Scene.find, Physics.raycast, onCollisionEnter, import of script libraries, custom shader parameters. Use the Tools (Inspector > Add Tool) for physics, collisions and the native versions of these actions.)H",
 R"H(Scripts sao funcoes JavaScript simples (QuickJS). Nao ha classes nem `this` nos scripts. Cada objeto com script tem o seu proprio contexto, e as variaveis dele sao privadas.
@@ -390,14 +390,14 @@ Memoria de 16 MB para todos os scripts, pilha de 256 KB, 5 ms por chamada. Um er
 - Trate um erro no seu codigo: try { setPosition("Camera", "abc", 0, 0); } catch (e) { debug.warn("camera nao movida: " + e.message); }
 - debug.console(mensagem) escreve uma linha de info; debug.warn(mensagem) um aviso e debug.error(mensagem) um erro. O script continua rodando.
 - Nomes sao conferidos: um comando para um objeto que nao esta na cena mostra um aviso (TOOL-S005) e nao faz nada.
-- Enquanto voce digita (Inspector > ToolObject Script) o editor verifica o script e lista erros de sintaxe e erros comuns com a linha. Console > Check scripts verifica todos os objetos. Codigos: docs/SCRIPT_ERRORS.md.
+- Enquanto voce digita (Inspector > ToolObject Script) o editor verifica o script e lista erros de sintaxe e erros comuns com a linha. Console > Check scripts verifica todos os objetos. Codigos: docs/referencia/ERROS_SCRIPT.md.
 # Ainda nao disponivel
 this.position, Input.axis, Scene.find, Physics.raycast, onCollisionEnter, import de bibliotecas de script, parametros de shader. Para fisica, colisoes e as versoes nativas dessas acoes, use os Tools (Inspector > Add Tool).)H"},
   // ------------------------------------------------------------------------------------------------ RENDER
   {"lighting", "Rendering", "Lighting, shadows and post-processing", "Iluminacao, sombras e pos-processamento",
 R"H(# Lights
 - Global Light = the sun (color, direction, day/night cycle). Only the first one is used.
-- Light source (Point/Spot) lights nearby objects. They do NOT cast shadows yet: only the Global Light (sun) does. Point and spot shadows are planned (see docs/LIGHTING_REVIEW.md).
+- Light source (Point/Spot) lights nearby objects. They do NOT cast shadows yet: only the Global Light (sun) does. Point and spot shadows are planned (see docs/estudos/REVISAO_ILUMINACAO.md).
 # Shadows
 Each object decides: "Cast shadow" (throws a shadow) and "Receive shadow" (gets shadows). A ground usually only receives; a tree trunk usually only casts.
 Settings > Lighting: resolution, distance, bias, soft edges (PCF), strength. Fewer casters = faster: zero cost if nobody casts.
@@ -405,7 +405,7 @@ Settings > Lighting: resolution, distance, bias, soft edges (PCF), strength. Few
 Global (Settings > Lighting) and per camera (Inspector > Camera): exposure, contrast, saturation, tint, vignette, sharpen. Camera values add to or replace the global ones.)H",
 R"H(# Luzes
 - Global Light = o sol (cor, direcao, ciclo dia/noite). So a primeira e usada.
-- Light source (Point/Spot) ilumina objetos proximos. Ainda NAO projetam sombras: so a luz global (sol) projeta. Sombras de luzes pontuais e de spot estao planejadas (veja docs/LIGHTING_REVIEW.md).
+- Light source (Point/Spot) ilumina objetos proximos. Ainda NAO projetam sombras: so a luz global (sol) projeta. Sombras de luzes pontuais e de spot estao planejadas (veja docs/estudos/REVISAO_ILUMINACAO.md).
 # Sombras
 Cada objeto decide: "Cast shadow" (projeta sombra) e "Receive shadow" (recebe sombra). O chao normalmente so recebe; o tronco de uma arvore normalmente so projeta.
 Settings > Lighting: resolucao, distancia, bias, bordas suaves (PCF), forca. Menos projetores = mais rapido: custo zero se ninguem projeta.

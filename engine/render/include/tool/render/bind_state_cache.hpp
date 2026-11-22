@@ -1,5 +1,5 @@
 #pragma once
-// Cache de estado de bind por slot (udc.md 3.8 e 9.2). Puro, sem RHI: o backend decide o que fazer com a resposta.
+// Cache de estado de bind por slot (docs/planos/02_RENDER_DRAW_CALLS.md 3.8 e 9.2). Puro, sem RHI: o backend decide o que fazer com a resposta.
 // Regras: mesmo id no mesmo slot = sem bind repetido; id novo = bind; slot fora do cache = sempre bind (nunca erra);
 // invalidar (troca de contexto, operacao externa, reset do passe) forca o proximo bind de cada slot.
 #include <cstddef>

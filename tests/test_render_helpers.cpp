@@ -1,4 +1,4 @@
-// Helpers puros de render (udc.md 14.1): cache de bind, argumentos indiretos e anel de timestamps de GPU.
+// Helpers puros de render (docs/planos/02_RENDER_DRAW_CALLS.md 14.1): cache de bind, argumentos indiretos e anel de timestamps de GPU.
 #include <cmath>
 #include <limits>
 

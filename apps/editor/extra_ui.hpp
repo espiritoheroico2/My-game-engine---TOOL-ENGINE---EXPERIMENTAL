@@ -342,7 +342,7 @@ inline void addResourceUi(Editor& ed) {
   ImGui::MenuItem(T("Textures / Normal map")); ImGui::MenuItem(T("Material (.tmat) and custom shader")); ImGui::MenuItem(T("Point light shadows"));
   ImGui::MenuItem(T("Compress as NTC")); ImGui::MenuItem(T("Ray tracing (DXR)"));
   ImGui::EndDisabled();
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", T("Planned: see docs/TEXTURES.md, docs/RENDER_PERF.md, docs/DX12_DXR.md"));
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", T("Planned: see docs/planos/09_TEXTURAS_E_MATERIAIS.md, docs/RENDER_PERF.md, docs/estudos/DIRECTX12_DXR.md"));
   ImGui::EndPopup();
 }
 

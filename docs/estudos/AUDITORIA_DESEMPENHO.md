@@ -23,7 +23,7 @@ Escopo desta etapa: núcleo (ECS, GPU, paralelismo), editor (cena e jogo), siste
 | A10 | Hierarquia percorre todas as entidades a cada quadro | Médio com milhares de filhos | **Pendente** (medir com `test ECS: 100000` e o Profiler) |
 | A11 | `eachTagged` percorre até o maior índice usado | Baixo/médio | **Pendente**: índice por tag |
 | A12 | Upscaling por software: custo por quadro na CPU | Médio (só quando ativo) | **Implementado** com paralelismo por linha; "Off (SDL linear)" é o padrão do caminho rápido |
-| A13 | Contexto QuickJS por objeto com script | Alto com muitos objetos com script | **Pendente**: um contexto por arquivo + tabela de estado (ver `docs/ECS.md` §6) |
+| A13 | Contexto QuickJS por objeto com script | Alto com muitos objetos com script | **Pendente**: um contexto por arquivo + tabela de estado (ver `../referencia/ECS.md` §6) |
 | A14 | Física reconstroi formas/BVH e prepara matrizes de inercia sem trabalho util | Alto em cenas grandes/ociosas | **Otimizado parcialmente**: passo ocioso pula formas/BVH quando os dados nao mudam; alteracoes externas invalidam o cache. Buffers e calculos de inercia/rotacao evitam trabalho desnecessario. O ganho nao foi confirmado por comparacao controlada; crash interativo do `test ecs:500` continua sem reproducao |
 
 ## 3. Memória: sanitizadores
@@ -52,7 +52,7 @@ Medicao adicional limitada da fisica: `--ecs 500 --bench-frames 60 --play --proj
 
 Para repetir no seu sistema, use `test ECS: N` (Console) com N = 10 000, 50 000 e 100 000, e leia as zonas **Physics**, **Update** e **Scene render** no Profiler.
 
-Medição de upscaling (`/home/claude/scratch/bench_up.cpp`, `-O2`, 2 threads): ver `docs/RENDER_SCALING.md`.
+Medição de upscaling (`/home/claude/scratch/bench_up.cpp`, `-O2`, 2 threads): ver `ESCALONAMENTO_RENDER.md`.
 
 ## 6. Próximos passos, por custo/benefício
 
