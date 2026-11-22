@@ -25,6 +25,7 @@
 #include "selftest.hpp"
 #include "viewport_tools.hpp"
 #include "script_window.hpp"
+editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (SpriteUI); dono: main
 #include "mainmenu_model.hpp"
 #ifdef TOOL_WITH_SPRITEUI
 #include "mainmenu_panel.hpp"
@@ -201,7 +202,7 @@ void scriptUi(Editor& ed) {
   ImGui::TextDisabled("%s", sc->path[0] ? sc->path : T("(no file)"));
   if (sc->path[0]) { ImGui::SameLine(); if (ImGui::SmallButton(T("Edit external"))) editor::openInExternalEditor(ed, sc->path); if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Opens the file in your code editor (Settings > Project).")); }
   // A edicao fica numa janela propria (autocomplete, snippets e verificador): este botao so a abre.
-  if (ImGui::Button(T("Edit script"))) ed_::openScriptWindow(ed);
+  if (ImGui::Button(T("Edit script")) && gScriptPanel) gScriptPanel->open(ed);
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Opens the script in its own window (autocomplete, snippets and checks)."));
   // Estado do script durante o Play (QuickJS). Fora do Play, o script so e guardado e editado.
   if (ed.playing) {
@@ -800,7 +801,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   h.openScriptHelp = [] { editor::openHelp("script_examples"); };   // mesmas acoes do scriptUi (ImGui)
   h.addScript = [&ed] { ed.attachScript(ed.selected); };
   h.openScriptExternal = [&ed](const std::string& rel) { editor::openInExternalEditor(ed, rel); };
-  h.openScriptWindow = [&ed] { ed_::openScriptWindow(ed); };
+  h.openScriptWindow = [&ed] { if (gScriptPanel) gScriptPanel->open(ed); };
   h.reloadScripts = [&ed] { ed.startScripts(); };
   h.removePhysics = [&ed] { ed.scene.world().remove<ed_::PhysicsComp>(ed.selected); };
   h.actionNames = [&ed](int player, int kind) {   // mesma lista do combo de acao do ImGui (scheme do jogador)
@@ -2512,6 +2513,8 @@ static int runEditorMain(int argc, char** argv) {
   bool useImGuiStart = false;   // --imgui-start: dialogo de inicio antigo (ImGui); padrao: tela SpriteUI
   for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--imgui-start") == 0) useImGuiStart = true; if (std::strcmp(argv[i], "--test-map") == 0) ed_::openTestMap(); }   // --test-map: captura de tela
   for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--play") == 0) startPlaying = true; if (std::strcmp(argv[i], "--selftest") == 0) selfTest = true; if (std::strcmp(argv[i], "--player") == 0) playerMode = true; }
+  bool openScriptAtStart = false;   // --edit-script: abre a janela de script do objeto selecionado (capturas)
+  for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--edit-script") == 0) openScriptAtStart = true;
   std::string startLang, startTheme, startScene, focusWin, selectName; int startTab = -1; bool showInputMapAtStart = false; std::string narrativeFile;
   for (int i = 1; i + 1 < argc; ++i) {
     if (std::strcmp(argv[i], "--lang") == 0) startLang = argv[i + 1];
@@ -2729,6 +2732,14 @@ static int runEditorMain(int argc, char** argv) {
   if (uiReady) inspPanel = std::make_unique<editor::inspector_panel::InspectorPanel>(uiText, uiRenderer);
   std::unique_ptr<editor::coding::Panel> codingPanel;
   if (uiReady) codingPanel = std::make_unique<editor::coding::Panel>(uiText, uiRenderer);
+  std::unique_ptr<editor::script_window::Panel> scriptPanel;
+  if (uiReady) scriptPanel = std::make_unique<editor::script_window::Panel>(uiText, uiRenderer);
+  gScriptPanel = scriptPanel.get();
+  if (openScriptAtStart && gScriptPanel) {   // so para captura: anexa um script ja existente ao objeto (em memoria)
+    auto& w = ed.scene.world();
+    if (!w.has<editor::ScriptComp>(ed.selected)) { editor::ScriptComp sc; editor::ser::copyStr(sc.path, sizeof sc.path, "Assets/Scripts/Scenes/Main.scene.tool.js"); w.add<editor::ScriptComp>(ed.selected, sc); }
+    gScriptPanel->open(ed);
+  }
   gInspectorPanel = inspPanel.get();
   std::unique_ptr<editor::scenesui::Panel> scenesPanel;
   if (uiReady) scenesPanel = std::make_unique<editor::scenesui::Panel>(uiText, uiRenderer);
@@ -2836,13 +2847,14 @@ static int runEditorMain(int argc, char** argv) {
       const bool settingsMayReceive = !pointerEvt || gPanelRouter.mayReceive(editor::panel_router::kSettingsHandle, ptrX, ptrY);
       const bool setHandled = !dockHandled && settingsPanel && dockShown(editor::dock_host::Kind::Settings, ed.showSettings) && settingsMayReceive && settingsPanel->handleEvent(e);
       const bool inspHandled = !dockHandled && inspPanel && dockShown(editor::dock_host::Kind::Inspector, ed.showInspector) && inspPanel->handleEvent(e);
+      const bool scrHandled = !dockHandled && gScriptPanel && gScriptPanel->handleEvent(e, ed);
       const bool codHandled = !dockHandled && codingPanel && dockShown(editor::dock_host::Kind::Coding, ed.showCoding) && codingPanel->chrome().handleEvent(e);
       const bool scnHandled = !dockHandled && scenesPanel && scenesPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Scenes, ed.showScenes));
       const bool asstHandled = !dockHandled && assetsPanel && assetsPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Assets, ed.showAssets));
       const bool sceneFrameHandled = !dockHandled && forwardViewEvent(e, dockShown(editor::dock_host::Kind::Scene, ed.showScene), dockShown(editor::dock_host::Kind::Game, ed.showGame));   // Scene e Jogo veem o evento; a moldura da Scene consome o clique
       // ImGui so recebe o ponteiro se nenhum painel SpriteUI registrado cobre o ponto: senao as janelas ImGui de tras reagiriam.
       const bool ownedBySui = pointerEvt && gPanelRouter.coveredBySui(ptrX, ptrY);
-      if (!dockHandled && !spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !codHandled && !scnHandled && !asstHandled && !sceneFrameHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
+      if (!dockHandled && !spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !codHandled && !scrHandled && !scnHandled && !asstHandled && !sceneFrameHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
 #else
       ImGui_ImplSDL3_ProcessEvent(&e);
 #endif
@@ -2935,7 +2947,6 @@ static int runEditorMain(int argc, char** argv) {
 #else
       if (ed.showInspector) drawInspector(ed);
 #endif
-      ed_::scriptWindowUi(ed); // janela de edicao de script (fora do Inspector)
       if (focusTabs) ImGui::SetNextWindowFocus();
 #ifdef TOOL_WITH_SPRITEUI
       if (dockShown(editor::dock_host::Kind::Scene, ed.showScene)) drawSceneWindow(ed, renderer);
@@ -3147,6 +3158,7 @@ static int runEditorMain(int argc, char** argv) {
 #endif
 #ifdef TOOL_WITH_SPRITEUI
     if (gDock && !playerMode) gDock->overlay(renderer);   // faixas de abas e guias do arraste: por cima de tudo
+    if (gScriptPanel && !gScriptPanel->render(renderer, window, ed, SDL_GetTicks() / 1000.0)) tool::logError(std::string("Script render failed: ") + SDL_GetError());   // janela flutuante: por cima das docadas
 #endif
     if (!screenshotPath.empty() && maxFrames > 0 && frame + 1 >= maxFrames) {
       if (SDL_Surface* shot = SDL_RenderReadPixels(renderer, nullptr)) {
