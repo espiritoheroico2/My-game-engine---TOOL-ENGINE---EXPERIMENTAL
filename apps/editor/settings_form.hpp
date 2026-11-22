@@ -5,6 +5,8 @@
 // quando o usuario mexe, devolve um pedido Field::Form com o id da linha. O main.cpp grava o valor no Editor.
 // Sem SDL e sem ImGui: os tipos ficam fora do painel para poderem ser usados nos testes.
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -41,5 +43,14 @@ struct Row {
 };
 
 using Rows = std::vector<Row>;
+
+// Valor de um deslizante de linha: NaN vira o minimo; com isInt, arredonda para inteiro; depois prende em [lo, hi].
+// Se hi for menor que lo, devolve lo. Regra pura, sem SDL, para o teste cobrir.
+[[nodiscard]] inline float ClampSliderValue(float value, float lo, float hi, bool isInt) noexcept {
+    if (std::isnan(value)) value = lo;
+    if (hi < lo) return lo;
+    if (isInt) value = std::round(value);
+    return std::clamp(value, lo, hi);
+}
 
 } // namespace editor::settings_form

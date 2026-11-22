@@ -13,7 +13,9 @@
 // Como funciona:
 //   draw:        monta a faixa de abas e, na aba Graficos, os controles de cima para baixo com a rolagem atual;
 //                sincroniza cada elemento com Values e desenha. Fora da aba Graficos, o ImGui desenha o conteudo.
-//   handleEvent: clique, arrasto da barra e roda. Clique num combo aberto fecha os outros. Pedidos vao para pending_.
+//                As linhas genericas (Values::form) de cada secao aberta vem depois do conteudo fixo.
+//   handleEvent: clique, arrasto da barra e roda. Clique num combo aberto fecha os outros. Texto e teclas vao ao
+//                campo de texto com foco. Pedidos vao para pending_.
 
 #include "i18n.hpp"
 #include "framed_window.hpp"
@@ -25,12 +27,14 @@
 #include "ui_style.hpp"
 
 #include "SpriteUi/Core/DrawOrder.hpp"
+#include "SpriteUi/Elements/Button.hpp"
 #include "SpriteUi/Elements/Checkbox.hpp"
 #include "SpriteUi/Elements/Dropdown.hpp"
 #include "SpriteUi/Elements/RadioButton.hpp"
 #include "SpriteUi/Elements/Slider.hpp"
 #include "SpriteUi/Elements/TabBar.hpp"
 #include "SpriteUi/Widgets/ScrollBar.hpp"
+#include "SpriteUi/Widgets/TextEdit.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -39,6 +43,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -130,14 +135,24 @@ class SettingsPanel {
     framed::Chrome& chrome() { return chrome_; }
     SettingsPanel& operator=(const SettingsPanel&) = delete;
 
-    // true quando o evento foi da janela (faixa de abas ou, na aba Graficos, o conteudo).
+    // true quando o evento foi da janela (faixa de abas ou, na aba Graficos, o conteudo). Texto e teclas vao so ao
+    // campo de texto com foco (linhas Text de settings_form.hpp).
     bool handleEvent(const SDL_Event& e) {
         if (chrome_.handleEvent(e)) return true;
         if (!visible_) return false;
         switch (e.type) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (e.button.button != SDL_BUTTON_LEFT) return inside(e.button.x, e.button.y);
+                window_ = SDL_GetWindowFromID(e.button.windowID);   // janela do clique: liga e desliga o texto do SDL
                 return pointer(Elm::PointerPhase::Down, e.button.x, e.button.y);
+            case SDL_EVENT_TEXT_INPUT:
+                if (FormSlot* s = focusedSlot()) {
+                    if (e.text.text) s->edit.InsertText(e.text.text);
+                    return true;
+                }
+                return false;
+            case SDL_EVENT_KEY_DOWN:
+                return textKey(e.key.key);
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 if (bar_.Dragging()) {
                     bar_.PointerUp();
@@ -162,7 +177,6 @@ class SettingsPanel {
         if (!visible) return true;
         out.insert(out.end(), pending_.begin(), pending_.end());
         pending_.clear();
-        tab_ = v.tab;
         strip_.clear();
         canvas_.clear();
         overlay_.clear();
@@ -202,8 +216,9 @@ class SettingsPanel {
         canvas_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y + Metrics::kStripH, bottom, owner, kContentClip, paint);
         if (open_[kGraphicsTab]) appendControls(items, paint);
         if (open_[kAppearanceTab]) appendAppearance(items, paint);
+        appendForm(items, paint);
         overlay_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, bottom, owner, kWindowClip, paint);
-        if (open_[kGraphicsTab]) appendPopups(items, paint);
+        appendPopups(items, paint);
 
         packet_ = extractor_.Build(++frameId_, items, nullptr, clips);
         if (!SR::IsFramePacketValid(packet_)) return true;
@@ -321,11 +336,12 @@ class SettingsPanel {
                 y = layoutGraphicsBody(v, y);
             } else if (i == kAppearanceTab) {
                 y = layoutAppearance(v, y);
-            } else {
+            } else if (v.form[i].empty()) {
                 canvas_.addText(Metrics::kPad, y, std::string(T("Not available in this version yet")), Metrics::kFont,
                                 theme_.textDim, headerW);
                 y += Metrics::kTextH;
             }
+            y = layoutForm(i, v.form[i], y);   // linhas genericas da secao, depois do conteudo fixo
             y += 2.f * Metrics::kGap;
         }
         contentH_ = (y - top) + 2.f * Metrics::kPad;
@@ -560,13 +576,18 @@ class SettingsPanel {
 
     // Textos das opcoes dos combos abertos, em overlay (por cima dos controles).
     void dropdownPopupTexts() {
-        for (const Elm::Dropdown* dd : allDropdowns()) {
-            if (!dd->control.open) continue;
-            for (std::size_t i = 0; i < dd->control.options.size(); ++i) {
-                const SU::Rect r = Elm::DropdownRowRect(*dd, i);
-                overlay_.addText(r.position.x + 8.f, r.position.y + 6.f, dd->control.options[i], Metrics::kFont, theme_.text,
-                                 r.size.x - 16.f);
-            }
+        for (const Elm::Dropdown* dd : allDropdowns()) popupTexts(*dd);
+        forEachFormSlot([&](FormSlot& s) {
+            if (s.kind == settings_form::RowKind::Dropdown) popupTexts(s.dropdown);
+        });
+    }
+
+    void popupTexts(const Elm::Dropdown& dd) {
+        if (!dd.control.open) return;
+        for (std::size_t i = 0; i < dd.control.options.size(); ++i) {
+            const SU::Rect r = Elm::DropdownRowRect(dd, i);
+            overlay_.addText(r.position.x + 8.f, r.position.y + 6.f, dd.control.options[i], Metrics::kFont, theme_.text,
+                             r.size.x - 16.f);
         }
     }
 
@@ -579,7 +600,10 @@ class SettingsPanel {
 
     void layoutDropdowns() {
         for (Elm::Dropdown* dd : allDropdownsMutable()) dd->Layout(windowRect());
-        if (open_[kGraphicsTab]) dropdownPopupTexts();
+        forEachFormSlot([&](FormSlot& s) {
+            if (s.kind == settings_form::RowKind::Dropdown) s.dropdown.Layout(windowRect());
+        });
+        dropdownPopupTexts();
     }
 
     // ---------- Sincronia dos elementos com os valores (ponte) ----------
@@ -615,6 +639,344 @@ class SettingsPanel {
                 "2560 x 1440 (QHD)", T("Custom")};
     }
 
+    // ---------- Linhas genericas (settings_form.hpp) ----------
+    // Cada secao tem um pool de controles, um por linha, criado de novo quando o numero de linhas muda. Os controles
+    // guardam estado entre quadros (arraste, combo aberto, foco do texto). O tipo da linha escolhe o controle usado.
+    struct FormSlot {
+        settings_form::RowKind kind = settings_form::RowKind::Gap;
+        int id = 0;                  // id da linha, copiado para o pedido
+        Elm::Slider slider;
+        Elm::Checkbox check;
+        Elm::Dropdown dropdown;
+        Elm::RadioGroup radio;
+        Elm::Button button;
+        W::TextEditState edit;       // Text: edicao (texto e caret). Sem foco, espelha o valor da janela
+        std::string known;           // Text: ultimo valor recebido; o pedido so sai se o texto mudou
+        SU::Rect box;                // Text: o campo; Check: a linha inteira (hover e clique)
+    };
+
+    // Linhas de uma secao, depois do conteudo fixo. Devolve o y final.
+    float layoutForm(std::size_t i, const settings_form::Rows& rows, float y) {
+        syncFormPool(i, rows);
+        for (std::size_t k = 0; k < rows.size(); ++k) y = layoutFormRow(i, k, rows[k], y);
+        return y;
+    }
+
+    // Pool da secao: recriado quando o numero de linhas muda (o foco do texto dessa secao se perde).
+    void syncFormPool(std::size_t i, const settings_form::Rows& rows) {
+        auto& pool = formPool_[i];
+        if (pool.size() == rows.size()) return;
+        if (focusSection_ == i) dropFocus();
+        pool.clear();
+        for (std::size_t k = 0; k < rows.size(); ++k) pool.push_back(std::make_unique<FormSlot>());
+    }
+
+    // Controle da linha k. Se o tipo da linha mudou, o controle e trocado por um novo do tipo certo.
+    FormSlot& slotFor(std::size_t i, std::size_t k, settings_form::RowKind kind) {
+        std::unique_ptr<FormSlot>& p = formPool_[i][k];
+        if (p->kind != kind) {
+            if (isFocused(i, k)) dropFocus();
+            p = std::make_unique<FormSlot>();
+            p->kind = kind;
+        }
+        return *p;
+    }
+
+    float layoutFormRow(std::size_t i, std::size_t k, const settings_form::Row& row, float y) {
+        using settings_form::RowKind;
+        FormSlot& s = slotFor(i, k, row.kind);
+        s.id = row.id;
+        const float x = Metrics::kPad + labelW_;
+        const SU::Vec4 ink = row.enabled ? theme_.text : theme_.textDim;
+        switch (row.kind) {
+            case RowKind::Heading:   // o titulo usa a cor e o tamanho dos titulos (a fonte nao tem negrito)
+                canvas_.addText(Metrics::kPad, y + 4.f, row.label, Metrics::kFont + 1.f, headingColor_, textWidth());
+                return y + Metrics::kHeadingH;
+            case RowKind::Note: {
+                if (!row.label.empty()) y += canvas_.addParagraph(Metrics::kPad, y, row.label, Metrics::kFont, ink, textWidth()) + Metrics::kGap;
+                if (!row.note.empty()) y += canvas_.addParagraph(Metrics::kPad, y, row.note, Metrics::kSmallFont, theme_.textDim, textWidth()) + Metrics::kGap;
+                return y;
+            }
+            case RowKind::Gap:
+                return y + Metrics::kRowH * 0.5f;
+            case RowKind::Button: {
+                s.button.states.disabled = !row.enabled;
+                s.button.cornerRadius = editor::ui_style::buttonRadius();
+                s.button.border = rectOf(x, y, controlW_, Metrics::kRowH);
+                const float tw = canvas_.layout(row.label, Metrics::kFont).size.x;
+                canvas_.addText(x + (controlW_ - tw) * 0.5f, y + 6.f, row.label, Metrics::kFont, ink, controlW_);
+                return y + Metrics::kRowH + Metrics::kGap;
+            }
+            case RowKind::Text: {
+                const bool focused = isFocused(i, k);
+                s.box = rectOf(x, y, controlW_, Metrics::kRowH);
+                // Sem foco, o campo mostra o valor da janela. So recarrega quando ele mudou la (row.text diferente do
+                // ultimo recebido), para o texto confirmado nao voltar ao valor antigo enquanto o pedido ainda vai.
+                if (!focused && row.text != s.known) s.edit = W::TextEditState(row.text);
+                s.known = row.text;
+                const std::string& shown = s.edit.Text();
+                canvas_.addText(Metrics::kPad, y + 6.f, row.label, Metrics::kFont, ink, labelW_ - 6.f);
+                canvas_.addSolid(s.box.position.x, s.box.position.y, s.box.size.x, s.box.size.y, focused ? theme_.surface : btnColor_,
+                                 0.2f, editor::ui_style::buttonRadius());
+                canvas_.addText(s.box.position.x + 8.f, y + 6.f, shown, Metrics::kFont, ink, s.box.size.x - 16.f);
+                if (focused) {   // caret no fim do texto ate o caret (medido com a fonte do canvas)
+                    const float cx = s.box.position.x + 8.f + canvas_.layout(shown.substr(0, s.edit.Caret()), Metrics::kFont).size.x;
+                    canvas_.addSolid(cx, y + 4.f, 1.5f, Metrics::kRowH - 8.f, theme_.text, 0.25f);
+                }
+                return y + Metrics::kRowH + Metrics::kGap;
+            }
+            case RowKind::Slider: {
+                const bool asInt = row.isInt;
+                s.slider.range = Elm::SliderRange{row.lo, row.hi, asInt ? 1.f : 0.f, asInt};
+                s.slider.SetValue(settings_form::ClampSliderValue(row.value, row.lo, row.hi, asInt));
+                s.slider.states.disabled = !row.enabled;
+                s.slider.border = rectOf(x, y, controlW_ - Metrics::kValueW, Metrics::kRowH);
+                canvas_.addText(Metrics::kPad, y + 5.f, row.label, Metrics::kFont, ink, labelW_ - 8.f);
+                const std::string shown = row.note.empty() ? Elm::SliderValueText(s.slider) : row.note;
+                canvas_.addText(x + controlW_ - Metrics::kValueW + 6.f, y + 5.f, shown, Metrics::kFont, theme_.textDim,
+                                Metrics::kValueW - 6.f);
+                return y + Metrics::kRowH + Metrics::kGap;
+            }
+            case RowKind::Check: {
+                s.check.checked = row.on;
+                s.check.states.disabled = !row.enabled;
+                s.box = rectOf(Metrics::kPad, y, textWidth(), Metrics::kRowH);
+                s.check.border = rectOf(x, y, controlW_, Metrics::kRowH);
+                if (row.enabled && contains(s.box, hover_)) {   // hover: a linha inteira pinta com o destaque do tema
+                    canvas_.addSolid(s.box.position.x, s.box.position.y, s.box.size.x, s.box.size.y, theme_.accent, 0.2f,
+                                     editor::ui_style::buttonRadius());
+                }
+                canvas_.addText(Metrics::kPad, y + 6.f, row.label, Metrics::kFont, ink, labelW_ - 6.f);
+                return y + Metrics::kRowH + Metrics::kGap;
+            }
+            case RowKind::Dropdown: {
+                sb::SyncDropdown(s.dropdown, row.options, row.index);
+                s.dropdown.control.disabled = !row.enabled;
+                s.dropdown.states.disabled = !row.enabled;
+                s.dropdown.border = rectOf(x, y, controlW_, Metrics::kRowH);
+                canvas_.addText(Metrics::kPad, y + 6.f, row.label, Metrics::kFont, ink, labelW_ - 6.f);
+                dropdownValue(s.dropdown);
+                return y + Metrics::kRowH + Metrics::kGap;
+            }
+            case RowKind::Radio: {
+                Elm::RadioGroup& g = s.radio;
+                g.rowHeight = Metrics::kRadioRowH;
+                g.states.disabled = !row.enabled;
+                g.options.clear();
+                for (std::size_t j = 0; j < row.options.size(); ++j) {
+                    (void)g.AddOption(static_cast<Elm::RadioOptionId>(j), row.options[j]);
+                }
+                const bool asked = row.index >= 0 && row.index < static_cast<int>(row.options.size());
+                g.selectedId = asked ? static_cast<Elm::RadioOptionId>(row.index) : Elm::NoRadioOption;
+                const float h = static_cast<float>(row.options.size()) * Metrics::kRadioRowH;
+                g.border = rectOf(x, y, controlW_, h);
+                canvas_.addText(Metrics::kPad, y + 2.f, row.label, Metrics::kFont, ink, labelW_ - 6.f);
+                for (std::size_t j = 0; j < g.options.size(); ++j) {
+                    const SU::Rect r = Elm::RadioLabelRect(g, radioStyle_, j);
+                    canvas_.addText(r.position.x, r.position.y + 2.f, g.options[j].label, Metrics::kFont, ink, r.size.x);
+                }
+                return y + h + Metrics::kGap;
+            }
+        }
+        return y;
+    }
+
+    [[nodiscard]] bool isFocused(std::size_t i, std::size_t k) const { return focusSection_ == i && focusIndex_ == k; }
+
+    // Campo de texto com foco, ou nullptr.
+    [[nodiscard]] FormSlot* focusedSlot() {
+        if (focusSection_ == npos || focusIndex_ >= formPool_[focusSection_].size()) return nullptr;
+        return formPool_[focusSection_][focusIndex_].get();
+    }
+
+    // Foco no campo de texto: o caret vai para o fim e o SDL passa a mandar o texto digitado.
+    void focusText(std::size_t i, std::size_t k, FormSlot& s) {
+        if (isFocused(i, k)) return;
+        commitText();   // outro campo com foco: confirma antes de trocar
+        focusSection_ = i;
+        focusIndex_ = k;
+        s.edit.MoveEnd();
+        if (window_) SDL_StartTextInput(window_);
+    }
+
+    // Solta o foco sem confirmar. O texto volta ao valor da janela na proxima sincronia.
+    void dropFocus() {
+        if (focusSection_ == npos) return;
+        focusSection_ = npos;
+        focusIndex_ = npos;
+        if (window_) SDL_StopTextInput(window_);
+    }
+
+    // Confirma o texto em edicao: manda o pedido so se o valor mudou, e solta o foco.
+    void commitText() {
+        FormSlot* s = focusedSlot();
+        if (!s) return;
+        if (s->edit.Text() != s->known) pending_.push_back(formChange(s->id, 0.f, false, 0, std::string(s->edit.Text())));
+        dropFocus();
+    }
+
+    // Clique fora do campo com foco confirma o texto.
+    void blurOutside(const SU::Vec2& p) {
+        const FormSlot* s = focusedSlot();
+        if (s && !contains(s->box, p)) commitText();
+    }
+
+    // Tecla com foco no campo de texto: Enter confirma, Esc desfaz, as setas e apagar editam. Sem foco, nao consome.
+    bool textKey(SDL_Keycode key) {
+        FormSlot* s = focusedSlot();
+        if (!s) return false;
+        switch (key) {
+            case SDLK_RETURN:
+            case SDLK_KP_ENTER: commitText(); break;
+            case SDLK_ESCAPE:   // desfaz a edicao: volta ao ultimo valor recebido
+                s->edit = W::TextEditState(s->known);
+                dropFocus();
+                break;
+            case SDLK_BACKSPACE: (void)s->edit.Backspace(); break;
+            case SDLK_DELETE: (void)s->edit.Delete(); break;
+            case SDLK_LEFT: s->edit.MoveLeft(); break;
+            case SDLK_RIGHT: s->edit.MoveRight(); break;
+            case SDLK_HOME: s->edit.MoveHome(); break;
+            case SDLK_END: s->edit.MoveEnd(); break;
+            default: break;
+        }
+        return true;
+    }
+
+    // Pedido de uma linha generica: o id da linha e o campo do tipo (value, on, index ou text).
+    [[nodiscard]] static sc::Change formChange(int id, float value, bool on, int index, std::string text) {
+        return sc::Change{sc::Field::Form, index, value, on, id, std::move(text)};
+    }
+
+    template <class F>
+    void forEachFormSlot(F&& f) {
+        for (auto& pool : formPool_) {
+            for (auto& s : pool) f(*s);
+        }
+    }
+
+    [[nodiscard]] bool graphicsDropdownOpen() const {
+        for (const Elm::Dropdown* dd : allDropdowns()) {
+            if (dd->control.open) return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] FormSlot* openFormDropdown() {
+        for (std::size_t i = 0; i < sm::kTabCount; ++i) {
+            if (!open_[i]) continue;
+            for (auto& s : formPool_[i]) {
+                if (s->kind == settings_form::RowKind::Dropdown && s->dropdown.control.open) return s.get();
+            }
+        }
+        return nullptr;
+    }
+
+    // Combo de linha: mesma regra dos combos da aba Graficos. Devolve true se o evento foi dele.
+    bool formDropdownPointer(FormSlot& s, Elm::PointerPhase phase, const SU::Vec2& p) {
+        const Elm::DropdownEvents ev = dropdownEvents(s.dropdown, phase, p);
+        if (ev.opened) closeOthers(&s.dropdown);
+        if (ev.valueChanged) {
+            pending_.push_back(formChange(s.id, 0.f, false, static_cast<int>(s.dropdown.control.selectedIndex), ""));
+        }
+        return ev.opened || ev.closed || ev.valueChanged;
+    }
+
+    // Ponteiro nas linhas genericas das secoes abertas. Devolve true se um controle consumiu o evento; movimento sem
+    // controle ativo devolve false, para um arraste da aba Graficos continuar recebendo o ponteiro.
+    bool formPointer(Elm::PointerPhase phase, const SU::Vec2& p) {
+        if (graphicsDropdownOpen()) return false;   // a lista da aba Graficos cobre o resto (contentPointer)
+        if (FormSlot* open = openFormDropdown()) {  // lista aberta de combo de linha: so ela recebe o ponteiro
+            formDropdownPointer(*open, phase, p);
+            return true;
+        }
+        bool used = false;
+        for (std::size_t i = 0; i < sm::kTabCount; ++i) {
+            if (!open_[i]) continue;
+            for (std::size_t k = 0; k < formPool_[i].size(); ++k) {
+                used = formSlotPointer(i, k, *formPool_[i][k], phase, p) || used;
+            }
+        }
+        return used;
+    }
+
+    bool formSlotPointer(std::size_t i, std::size_t k, FormSlot& s, Elm::PointerPhase phase, const SU::Vec2& p) {
+        using settings_form::RowKind;
+        switch (s.kind) {
+            case RowKind::Slider: {
+                const Elm::SliderEvents ev = s.slider.OnPointer(event(phase, p, s.slider.border));
+                if (ev.valueChanged) pending_.push_back(formChange(s.id, s.slider.Value(), false, 0, ""));
+                return ev.pressStarted || ev.valueChanged || ev.pressEnded;
+            }
+            case RowKind::Check: {
+                const Elm::CheckboxEvents ev = s.check.OnPointer(event(phase, p, s.check.border));
+                if (ev.valueChanged) pending_.push_back(formChange(s.id, 0.f, s.check.checked, 0, ""));
+                return ev.pressStarted || ev.valueChanged || ev.pressEnded || ev.clicked;
+            }
+            case RowKind::Dropdown:
+                return formDropdownPointer(s, phase, p);
+            case RowKind::Radio: {
+                const Elm::RadioEvents ev = s.radio.OnPointer(event(phase, p, s.radio.border));
+                if (ev.valueChanged) pending_.push_back(formChange(s.id, 0.f, false, static_cast<int>(s.radio.selectedId), ""));
+                return ev.pressStarted || ev.valueChanged || ev.pressEnded || ev.clicked;
+            }
+            case RowKind::Button: {
+                const Elm::ButtonEvents ev = s.button.OnPointer(event(phase, p, s.button.border));
+                if (ev.clicked) pending_.push_back(formChange(s.id, 0.f, false, 0, ""));
+                return ev.pressStarted || ev.pressEnded || ev.clicked;
+            }
+            case RowKind::Text:
+                if (phase == Elm::PointerPhase::Down && contains(s.box, p)) {
+                    focusText(i, k, s);
+                    return true;
+                }
+                return false;
+            case RowKind::Heading:
+            case RowKind::Note:
+            case RowKind::Gap:
+                return false;
+        }
+        return false;
+    }
+
+    // Itens dos controles de linha das secoes abertas (o texto sai pelo canvas, em layoutFormRow).
+    void appendForm(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint) {
+        using settings_form::RowKind;
+        constexpr float z = Metrics::kControlZ;
+        for (std::size_t i = 0; i < sm::kTabCount; ++i) {
+            if (!open_[i]) continue;
+            for (auto& sp : formPool_[i]) {
+                FormSlot& s = *sp;
+                switch (s.kind) {
+                    case RowKind::Slider:
+                        append(items, paint, Elm::BuildSliderItems(s.slider, sliderStyle_, z, paint), kContentClip);
+                        break;
+                    case RowKind::Check:
+                        append(items, paint, Elm::BuildCheckboxItems(s.check, checkStyle_, z, paint), kContentClip);
+                        break;
+                    case RowKind::Dropdown: {
+                        Elm::DropdownStyle style = dropdownStyle_;
+                        if (contains(s.dropdown.border, hover_) && !s.dropdown.control.disabled) style.button = theme_.accent;
+                        append(items, paint, Elm::BuildDropdownButtonItems(s.dropdown, style, z, paint), kContentClip);
+                        break;
+                    }
+                    case RowKind::Radio:
+                        append(items, paint, Elm::BuildRadioGroupItems(s.radio, radioStyle_, z, paint), kContentClip);
+                        break;
+                    case RowKind::Button: {
+                        Elm::ButtonStyle style = buttonStyle_;
+                        const bool hot = !s.button.states.disabled && contains(s.button.border, hover_);
+                        style.background = hot ? theme_.accent : btnColor_;
+                        append(items, paint, Elm::BuildButtonBackground(s.button, style, z, paint), kContentClip);
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+        }
+    }
+
     // ---------- Itens de desenho ----------
     void appendControls(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint) {
         constexpr float z = Metrics::kControlZ;
@@ -639,6 +1001,12 @@ class SettingsPanel {
                 append(items, paint, Elm::BuildDropdownPopupItems(*dd, dropdownStyle_, kWindowClip, Metrics::kPopupZ, paint), kWindowClip);
             }
         }
+        forEachFormSlot([&](FormSlot& s) {
+            if (s.kind == settings_form::RowKind::Dropdown && s.dropdown.control.open) {
+                append(items, paint, Elm::BuildDropdownPopupItems(s.dropdown, dropdownStyle_, kWindowClip, Metrics::kPopupZ, paint),
+                       kWindowClip);
+            }
+        });
     }
 
     // Os builders devolvem posicoes locais da janela, usam o dono do elemento (que so existe numa ElementTree) e
@@ -663,14 +1031,19 @@ class SettingsPanel {
     bool pointer(Elm::PointerPhase phase, float x, float y) {
         if (phase == Elm::PointerPhase::Move) hover_ = {x - rect_.x, y - rect_.y};   // hover: cabecalhos, combos, opcoes
         if (!inside(x, y)) {
-            if (phase == Elm::PointerPhase::Down) closeAllDropdowns();
+            if (phase == Elm::PointerPhase::Down) {
+                closeAllDropdowns();
+                commitText();
+            }
             return false;
         }
         const SU::Vec2 p{x - rect_.x, y - rect_.y};
+        if (phase == Elm::PointerPhase::Down) blurOutside(p);   // clique fora do campo de texto confirma o texto
         if (phase == Elm::PointerPhase::Up && sectionPointer(p)) return true;
         if (phase == Elm::PointerPhase::Up && paletteRowPointer(p)) return true;
         if (appearanceSliderPointer(phase, p)) return true;
         if (phase == Elm::PointerPhase::Down && scrollbarPointer(p)) return true;
+        if (formPointer(phase, p)) return true;
         if (!open_[kGraphicsTab]) return true;
         if (phase == Elm::PointerPhase::Down && stepperClick(p)) return true;
         contentPointer(phase, p);
@@ -681,7 +1054,7 @@ class SettingsPanel {
         for (std::size_t i = 0; i < sm::kTabCount; ++i) {
             if (headers_[i].contains(p.x, p.y)) {
                 open_[i] = !open_[i];
-                if (i == kGraphicsTab && !open_[i]) closeAllDropdowns();   // lista aberta nao sobrevive ao recolher
+                if (!open_[i]) closeAllDropdowns();   // lista aberta nao sobrevive ao recolher
                 return true;
             }
         }
@@ -714,8 +1087,8 @@ class SettingsPanel {
         return true;
     }
 
-    // Roda sobre a faixa rola as abas; sobre o conteudo da aba Graficos rola o conteudo. Fora disso, o ImGui fica
-    // com a roda (false).
+    // Roda sobre a faixa rola as abas; sobre o conteudo rola o conteudo (todas as secoes ficam na mesma lista
+    // rolavel). Fora da janela, o ImGui fica com a roda (false).
     bool wheel(float x, float y, float dy) {
         if (!inside(x, y)) return false;
         const float delta = -dy * Metrics::kWheelStep;
@@ -724,7 +1097,6 @@ class SettingsPanel {
             clampStrip();
             return true;
         }
-        if (tab_ != kGraphicsTab) return false;
         (void)bar_.Wheel(delta, scroll_);
         return true;
     }
@@ -764,15 +1136,23 @@ class SettingsPanel {
         applyDropdown(shadowQuality_, phase, p, sc::Field::ShadowQuality);
     }
 
-    // Botao: OnPointer abre ou fecha. Lista aberta: o soltar numa linha escolhe a opcao (ChooseAt).
-    void applyDropdown(Elm::Dropdown& dd, Elm::PointerPhase phase, const SU::Vec2& p, sc::Field field) {
+    // Botao: OnPointer abre ou fecha. Lista aberta: o soltar numa linha escolhe a opcao (ChooseAt). Clique fora do
+    // botao e da lista fecha a lista sem escolher.
+    [[nodiscard]] Elm::DropdownEvents dropdownEvents(Elm::Dropdown& dd, Elm::PointerPhase phase, const SU::Vec2& p) {
         const bool onList = dd.control.open && contains(dd.Popup(), p);
         Elm::DropdownEvents ev;
         if (onList) {
             if (phase == Elm::PointerPhase::Up) ev = dd.ChooseAt(p, windowRect());
+        } else if (dd.control.open && phase == Elm::PointerPhase::Down && !contains(dd.border, p)) {
+            ev = dd.CloseOutside();
         } else {
             ev = dd.OnPointer(event(phase, p, dd.border), windowRect());
         }
+        return ev;
+    }
+
+    void applyDropdown(Elm::Dropdown& dd, Elm::PointerPhase phase, const SU::Vec2& p, sc::Field field) {
+        const Elm::DropdownEvents ev = dropdownEvents(dd, phase, p);
         if (ev.opened) closeOthers(&dd);
         if (ev.valueChanged) pending_.push_back({field, static_cast<int>(dd.control.selectedIndex), 0.f, false});
     }
@@ -809,6 +1189,9 @@ class SettingsPanel {
         for (const DropdownSlot& slot : dropdownSlots()) {
             if (slot.dd != keep) slot.dd->control.Close();
         }
+        forEachFormSlot([&](FormSlot& s) {
+            if (s.kind == settings_form::RowKind::Dropdown && &s.dropdown != keep) s.dropdown.control.Close();
+        });
     }
 
     [[nodiscard]] std::array<DropdownSlot, 5> dropdownSlots() {
@@ -845,7 +1228,6 @@ class SettingsPanel {
 
     sui::Box rect_;
     bool visible_ = false;
-    int tab_ = kGraphicsTab;
     int revealedTab_ = -1;
     bool scaleEnabled_ = true;
     bool rayTracingEnabled_ = true;
@@ -854,6 +1236,10 @@ class SettingsPanel {
     float contentH_ = 0.f;                // altura do conteudo da aba Graficos (do ultimo layout)
     std::vector<Stepper> steps_;
     sc::Requests pending_;
+    std::array<std::vector<std::unique_ptr<FormSlot>>, sm::kTabCount> formPool_{};   // controles das linhas, por secao
+    std::size_t focusSection_ = npos;   // campo de texto com foco (secao e linha); npos = nenhum
+    std::size_t focusIndex_ = npos;
+    SDL_Window* window_ = nullptr;      // janela do ultimo clique: liga e desliga o texto do SDL
 
     W::UIScrollViewComponent scroll_;
     W::ScrollBarControl bar_;
@@ -879,6 +1265,7 @@ class SettingsPanel {
     Elm::DropdownStyle dropdownStyle_;
     Elm::SliderStyle sliderStyle_;
     Elm::CheckboxStyle checkStyle_;
+    Elm::ButtonStyle buttonStyle_;
 };
 
 }  // namespace editor::settings_panel

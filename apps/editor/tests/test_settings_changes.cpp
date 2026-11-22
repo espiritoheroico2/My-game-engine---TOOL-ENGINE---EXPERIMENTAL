@@ -1,13 +1,17 @@
 // Teste da regra que grava os pedidos da janela Configuracoes no Editor (settings_changes.hpp). Usa um alvo falso
 // que guarda o que foi chamado. Exemplo: pedido de API 2 com a API atual 0 chama applyApi(2) uma vez.
 #include "settings_changes.hpp"
+#include "settings_form.hpp"
 
+#include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace {
 
 using namespace editor::settings_changes;
+using editor::settings_form::ClampSliderValue;
 
 int run = 0;
 int failed = 0;
@@ -35,6 +39,11 @@ struct RecordingTarget {
   float interfaceScale = -1.f;
   float buttonRadius = -1.f, windowRadius = -1.f, textScale = -1.f;
   bool idleRendering = false;
+  int formId = -1;          // ultimo pedido de linha generica
+  float formValue = -1.f;
+  bool formOn = false;
+  int formIndex = -1;
+  std::string formText;
   int calls = 0;
 
   int apiRequested() const { return api; }
@@ -59,6 +68,14 @@ struct RecordingTarget {
   void setTextScale(float v) { textScale = v; ++calls; }
   void setIdleRendering(bool on) { idleRendering = on; ++calls; }
   void setPalette(int) { ++calls; }
+  void setForm(int id, float value, bool on, int index, const std::string& text) {
+    formId = id;
+    formValue = value;
+    formOn = on;
+    formIndex = index;
+    formText = text;
+    ++calls;
+  }
 };
 
 void TestApiChangeCallsApplyWithRequestedValue() {
@@ -100,6 +117,45 @@ void TestOptimizingRequestsPassValues() {
   CHECK(t.idleRendering);
 }
 
+// Linha generica: o pedido leva o id da linha e so o campo do seu tipo (aqui um deslizante: value).
+void TestFormSliderPassesIdAndValue() {
+  RecordingTarget t;
+  ApplyChanges(t, Requests{Change{Field::Form, 0, 0.75f, false, 42, ""}});
+  CHECK(t.formId == 42);
+  CHECK(t.formValue == 0.75f);
+  CHECK(t.calls == 1);
+}
+
+// Caixa de selecao (on) e combo (index) chegam pelos seus campos.
+void TestFormCheckAndDropdownPassFields() {
+  RecordingTarget t;
+  ApplyChanges(t, Requests{Change{Field::Form, 0, 0.f, true, 7, ""}});
+  CHECK(t.formId == 7 && t.formOn);
+  ApplyChanges(t, Requests{Change{Field::Form, 3, 0.f, false, 8, ""}});
+  CHECK(t.formId == 8 && t.formIndex == 3);
+}
+
+// Campo de texto: o texto vai no pedido; um botao manda so o id (texto vazio).
+void TestFormTextAndButtonPassText() {
+  RecordingTarget t;
+  ApplyChanges(t, Requests{Change{Field::Form, 0, 0.f, false, 9, "Vulkan"}});
+  CHECK(t.formId == 9);
+  CHECK(t.formText == "Vulkan");
+  ApplyChanges(t, Requests{Change{Field::Form, 0, 0.f, false, 10, ""}});
+  CHECK(t.formId == 10 && t.formText.empty());
+}
+
+// Deslizante de linha: arredonda para inteiro quando isInt, prende em [lo, hi] e trata NaN e faixa invertida.
+void TestClampSliderValue() {
+  CHECK(ClampSliderValue(2.4f, 0.f, 5.f, true) == 2.f);
+  CHECK(ClampSliderValue(2.6f, 0.f, 5.f, true) == 3.f);
+  CHECK(ClampSliderValue(7.f, 0.f, 5.f, false) == 5.f);
+  CHECK(ClampSliderValue(-1.f, 0.f, 5.f, false) == 0.f);
+  CHECK(ClampSliderValue(1.5f, 0.f, 5.f, false) == 1.5f);
+  CHECK(ClampSliderValue(std::nanf(""), 1.f, 5.f, false) == 1.f);
+  CHECK(ClampSliderValue(3.f, 4.f, 2.f, false) == 4.f);
+}
+
 void TestEmptyRequestsDoNothing() {
   RecordingTarget t;
   ApplyChanges(t, Requests{});
@@ -114,6 +170,10 @@ int main() {
   TestTabAndShadowQualityPassIndex();
   TestRenderScaleAndShadowsPassValues();
   TestOptimizingRequestsPassValues();
+  TestFormSliderPassesIdAndValue();
+  TestFormCheckAndDropdownPassFields();
+  TestFormTextAndButtonPassText();
+  TestClampSliderValue();
   TestEmptyRequestsDoNothing();
   std::printf("settings changes: %d/%d checks passed\n", run - failed, run);
   return failed == 0 ? 0 : 1;

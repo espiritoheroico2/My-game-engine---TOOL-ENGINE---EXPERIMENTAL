@@ -2032,6 +2032,620 @@ std::array<bool, editor::settings_bridge::kApiCount> settingsApiBuilt() {
   return built;
 }
 
+// ====================================================================================================== LINHAS DAS SECOES
+// Secoes Game, Physics, Optimizing, Language, Lighting, Tags e Project da janela Configuracoes em SpriteUI. Cada
+// controle do ImGui antigo (drawGameTab, drawLightingTab, drawTagsTab...) virou uma linha de settings_form.hpp: os
+// construtores buildXRows leem o Editor, e applyFormRequest (chamado por SettingsEditorTarget::setForm) grava o pedido
+// com a mesma regra que o ImGui usava. Inventario (controle: tipo, faixa, efeito). Nenhum controle ficou de fora.
+//  Game (drawGameTab):
+//    Grid and gizmos: 3 caixas (grade da Scene, grade do Game, gizmos) e nota da grade.
+//    Split screen: combo de 2 opcoes (splitVertical); caixa Fill each half (splitFill); duas notas.
+//    Skybox: caixa (sky.enabled); com ela ligada, 6 combos de imagem (um por lado; "(none)" = cor solida),
+//      cor solida em 3 deslizantes R/G/B (0 a 1, no lugar do seletor de cor) e nota.
+//    Audio: nota com o estado da saida de audio.
+//  Optimizing (drawSettingsTabBody, aba 4): combo Frame rate limit (fpsMode); deslizante Mesh chunk cache (256 a
+//    32768, inteiro); deslizante UI scale (0,70 a 2,00); caixa Idle rendering.
+//  Language (drawLanguageTab): radio dos pacotes; notas de traducao e da pasta; botoes Reload packs e Export
+//    template; nota de status.
+//  Physics (drawPhysicsTab, extra_ui.hpp): caixa Physics enabled; gravidade X/Y/Z (-1000 a 1000, no lugar do
+//    DragFloat3); 7 botoes de gravidade pronta; Solver iterations (1 a 30); Steps per second (15 a 240); caixa Draw
+//    colliders; Simulation radius (0 a 1000); notas; no Play, o bloco Live com 2 notas de estatisticas.
+//  Lighting (drawLightingTab): Frustum culling, Occlusion culling e Draw distance (com as dicas); Sun: cor (3
+//    deslizantes), Intensity, Direction, Height, Ambient (3), Sun casts shadows; Light Prism: Quality preset,
+//    Custom values e, com custom, Shadow cascades, Shadow map resolution, Edge softness, Max lights per cluster,
+//    Light indices per cluster, Auto radius cutoff (o resto fica apagado sem custom); Light budget (2); Shadows:
+//    Enable shadows e 7 controles dele; Point and spot shadow lights e resolucao; SSAO (caixa e 4 deslizantes);
+//    Ray tracing (caixa, dica), RT AO (caixa, dica, rays, raio); Bloom (caixa, dica, forca); Ambient intensity;
+//    Pre-exposure; Global post-processing: Enable, Exposure, Contrast, Saturation, Tint (3), Tint strength,
+//    Vignette, Vignette size (so com vinheta), Sharpen e Reset effect.
+//  Tags (drawTagsTab): lista de tags internas (notas); ligacoes (uma nota e um botao Remove link cada); campo da tag,
+//    combo do alvo e botao Link; tags do projeto com contagem, botao Rename (campo New name e cancel, so ao renomear);
+//    mensagem de erro; nota final.
+//  Project (drawProjectTab): campo Editor command (texto, com dica); notas de exemplos e de exportacao.
+// Nao portado como controle: o arrastar de asset do painel Assets para o combo da skybox (o combo ja escolhe o arquivo).
+// Cores: o seletor (ColorEdit) virou 3 deslizantes; o DragFloat virou deslizante com a mesma faixa.
+
+namespace formrow {
+using editor::settings_form::Row;
+using editor::settings_form::RowKind;
+using editor::settings_form::Rows;
+
+// Subtitulo (SeparatorText).
+inline Row Head(std::string text) { Row r; r.kind = RowKind::Heading; r.label = std::move(text); return r; }
+// Texto normal (TextWrapped).
+inline Row Note(std::string text) { Row r; r.kind = RowKind::Note; r.label = std::move(text); return r; }
+// Texto apagado (TextDisabled): fica em `note`, em tom menor e apagado.
+inline Row Dim(std::string text) { Row r; r.kind = RowKind::Note; r.note = std::move(text); return r; }
+// Deslizante: `note` vazio mostra o valor; com texto, mostra esse texto (ex.: "30 deg").
+inline Row Slide(int id, std::string label, float value, float lo, float hi, bool asInt = false, std::string note = {}, bool enabled = true) {
+  Row r; r.kind = RowKind::Slider; r.id = id; r.label = std::move(label); r.value = value; r.lo = lo; r.hi = hi;
+  r.isInt = asInt; r.note = std::move(note); r.enabled = enabled; return r;
+}
+inline Row Check(int id, std::string label, bool on, bool enabled = true) {
+  Row r; r.kind = RowKind::Check; r.id = id; r.label = std::move(label); r.on = on; r.enabled = enabled; return r;
+}
+inline Row Drop(int id, std::string label, std::vector<std::string> options, int index, bool enabled = true) {
+  Row r; r.kind = RowKind::Dropdown; r.id = id; r.label = std::move(label); r.options = std::move(options); r.index = index;
+  r.enabled = enabled; return r;
+}
+inline Row Radio(int id, std::string label, std::vector<std::string> options, int index) {
+  Row r; r.kind = RowKind::Radio; r.id = id; r.label = std::move(label); r.options = std::move(options); r.index = index; return r;
+}
+inline Row Btn(int id, std::string label, bool enabled = true) {
+  Row r; r.kind = RowKind::Button; r.id = id; r.label = std::move(label); r.enabled = enabled; return r;
+}
+inline Row Txt(int id, std::string label, std::string text) {
+  Row r; r.kind = RowKind::Text; r.id = id; r.label = std::move(label); r.text = std::move(text); return r;
+}
+// "Rotulo (R)" para cada canal de uma cor.
+inline std::string channel(const char* key, const char* c) { return std::string(T(key)) + " (" + c + ")"; }
+} // namespace formrow
+
+// Ids das linhas genericas (settings_form.hpp). Cada campo editavel e cada botao tem um id; as faixas de cada secao
+// ficam juntas. Os ids de Tags com varios itens (Remove link, Rename) somam o indice da ligacao ou da tag.
+enum FormId : int {
+    // Game (100)
+    kGameGridScene = 100, kGameGridGame, kGameGizmos, kGameSplit, kGameSplitFill, kGameSkyEnabled,
+    kGameSkyFace0 = 110,                       // 110 a 115: um combo por lado do cubo
+    kGameSkyRed = 120, kGameSkyGreen, kGameSkyBlue,
+    // Physics (200)
+    kPhysEnabled = 200, kPhysGravX, kPhysGravY, kPhysGravZ,
+    kPhysPreset0 = 210,                        // 210 a 216: gravidades prontas
+    kPhysIterations = 220, kPhysStepHz, kPhysColliders, kPhysSimRadius,
+    // Optimizing (300)
+    kOptFps = 300, kOptChunkCache, kOptUiScale, kOptIdle,
+    // Language (400)
+    kLangPack = 400, kLangReload, kLangExport,
+    // Tags (500)
+    kTagTarget = 500, kTagAlias, kTagLink, kTagRenameText, kTagRenameCancel,
+    kTagRemoveBase = 1000,                     // 1000 + indice da ligacao: Remove link
+    kTagRenameBase = 2000,                     // 2000 + indice da tag: Rename
+    // Project (600)
+    kProjEditor = 600,
+    // Lighting (700)
+    kLitFrustum = 700, kLitOcclusion, kLitDrawDistance,
+    kLitSunR, kLitSunG, kLitSunB, kLitSunIntensity, kLitSunAzimuth, kLitSunElevation,
+    kLitAmbR, kLitAmbG, kLitAmbB, kLitSunShadow,
+    kLitTier = 720, kLitCustom, kLitCascades, kLitShadowRes, kLitPcf, kLitMaxLightsCluster, kLitIndicesCluster, kLitAutoRadius,
+    kLitMaxPoint = 730, kLitMaxSpot,
+    kLitShadows = 740, kLitShadowDistance, kLitSplitLambda, kLitBlend, kLitCasterExt, kLitDepthBias, kLitNormalBias, kLitSnap,
+    kLitPointShadowLights = 750, kLitPointShadowRes,
+    kLitSsao = 760, kLitSsaoKernel, kLitSsaoRadius, kLitSsaoBias, kLitSsaoPower,
+    kLitRayTracing = 770, kLitRtAo, kLitRtAoRays, kLitRtAoRadius,
+    kLitBloom = 780, kLitBloomStrength,
+    kLitAmbient = 790, kLitPreExposure,
+    kLitPostEnabled = 800, kLitPostExposure, kLitPostContrast, kLitPostSaturation, kLitPostTintR, kLitPostTintG,
+    kLitPostTintB, kLitPostTintStrength, kLitPostVignette, kLitPostVignetteSize, kLitPostSharpen, kLitPostReset,
+};
+
+// Estado que o ImGui guardava em variaveis static na aba Tags (alias digitado, alvo, renomeacao, mensagem).
+struct TagsFormState {
+    std::string msg;
+    std::string alias;
+    int target = 1;              // indice em ed_::kBuiltinTags
+    int renaming = -1;           // indice da tag em renomeacao, ou -1
+    std::string renameBuf;
+};
+TagsFormState gTagsForm;
+
+// Caminho do Sol (Global Light) desta cena, ou nullptr. Mesma busca do ImGui: a primeira entidade com o componente.
+ed_::GlobalLight* settingsSunLight(Editor& ed) {
+    tool::Entity sun;
+    ed.scene.world().each<ed_::GlobalLight>([&](tool::Entity e, ed_::GlobalLight&) { if (!ed.scene.world().alive(sun)) sun = e; });
+    return ed.scene.world().alive(sun) ? ed.scene.world().get<ed_::GlobalLight>(sun) : nullptr;
+}
+
+// Opcoes do combo de imagem de um lado da skybox: "(none)" e os arquivos de imagem de Assets. Se o arquivo atual nao
+// estiver na pasta, entra no fim para o combo continuar mostrando o que a cena usa.
+std::vector<std::string> skyFaceOptions(Editor& ed, int face) {
+    std::vector<std::string> opts{std::string(T("(none)"))};
+    const std::string cur = ed.sceneInfo.sky.face[face];
+    const std::vector<std::string> list = assetsOfKind(ed, ed_::AssetKind::Image);
+    opts.insert(opts.end(), list.begin(), list.end());
+    if (!cur.empty() && std::find(list.begin(), list.end(), cur) == list.end()) opts.push_back(cur);
+    return opts;
+}
+
+// Linhas da secao Game (drawGameTab). O ImGui marcava settingsDirty em quase tudo.
+void addGameRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
+    rows.push_back(Head(T("Grid and gizmos")));
+    rows.push_back(Check(kGameGridScene, T("Show grid in the Scene window"), ed.showGridScene));
+    rows.push_back(Check(kGameGridGame, T("Show grid in the Game window"), ed.showGridGame));
+    rows.push_back(Check(kGameGizmos, T("Show gizmos (cameras, lights, sounds)"), ed.showGizmos));
+    rows.push_back(Dim(T("The grid is an editor aid: it only appears in the Game window if you turn it on here.")));
+    rows.push_back(Head(T("Split screen")));
+    rows.push_back(Drop(kGameSplit, T("Split screen"),
+                        {std::string(T("Vertical split (side by side)")), std::string(T("Horizontal split (top / bottom)"))},
+                        ::editor::settings_model::SplitIndex(ed.sceneInfo.splitVertical)));
+    rows.push_back(Dim(T("Used when two cameras have the 'Principal' tag. Saved with the scene.")));
+    rows.push_back(Check(kGameSplitFill, T("Fill each half (no black bars)"), ed.sceneInfo.splitFill));
+    rows.push_back(Dim(T("Each camera renders into its whole half, so a 16:9 resolution no longer leaves black bars. The camera keeps its vertical field of view; the sides are cropped.")));
+    rows.push_back(Dim(T("Off: the whole camera image fits the half, with black bars when the proportions differ.")));
+    rows.push_back(Head(T("Skybox")));
+    rows.push_back(Check(kGameSkyEnabled, T("Skybox (6 images)"), ed.sceneInfo.sky.enabled));
+    if (ed.sceneInfo.sky.enabled) {
+        for (int i = 0; i < 6; ++i) {   // um combo por lado do cubo; "(none)" = cor solida
+            const auto opts = skyFaceOptions(ed, i);
+            const std::string cur = ed.sceneInfo.sky.face[i];
+            int idx = 0;
+            for (std::size_t k = 1; k < opts.size(); ++k) if (opts[k] == cur) { idx = static_cast<int>(k); break; }
+            rows.push_back(Drop(kGameSkyFace0 + i, T(editor::kSkyFaceNames[static_cast<size_t>(i)]), opts, idx));
+        }
+        rows.push_back(Slide(kGameSkyRed, channel("Solid color (sides without image)", "R"), ed.sceneInfo.sky.solid[0], 0.f, 1.f));
+        rows.push_back(Slide(kGameSkyGreen, channel("Solid color (sides without image)", "G"), ed.sceneInfo.sky.solid[1], 0.f, 1.f));
+        rows.push_back(Slide(kGameSkyBlue, channel("Solid color (sides without image)", "B"), ed.sceneInfo.sky.solid[2], 0.f, 1.f));
+        rows.push_back(Dim(T("Each side shows its image in the direction you look at. Used by the Scene and Game views; 2D cameras have no skybox.")));
+    }
+    rows.push_back(Head(T("Audio")));
+    rows.push_back(Note(F("Audio output: %s", ed.audioTried ? (ed.audioOk ? "ready" : "not available") : "starts on Play")));
+}
+
+// Linhas da secao Optimizing (aba 4 do drawSettingsTabBody).
+void addOptimizingRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
+    rows.push_back(Head(T("Frame and cache")));
+    rows.push_back(Drop(kOptFps, T("Frame rate limit"), {"VSync", "30 FPS", "60 FPS", "120 FPS", "Unlimited"}, ed.fpsMode));
+    rows.push_back(Slide(kOptChunkCache, T("Mesh chunk cache"), static_cast<float>(ed.chunkCacheMax),
+                         static_cast<float>(::editor::settings_model::kChunkCacheMin), static_cast<float>(::editor::settings_model::kChunkCacheMax), true));
+    rows.push_back(Head(T("Interface")));
+    rows.push_back(Slide(kOptUiScale, T("UI scale"), ed.theme.scale, ::editor::settings_model::kInterfaceScaleMin, ::editor::settings_model::kInterfaceScaleMax));
+    rows.push_back(Check(kOptIdle, T("Idle rendering"), ed.idleRendering));
+}
+
+// Linhas da secao Language (drawLanguageTab).
+void addLanguageRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
+    auto& i18n = editor::I18n::get();
+    rows.push_back(Head(T("Language packs")));
+    std::vector<std::string> names;
+    int current = -1;
+    for (std::size_t k = 0; k < i18n.packs().size(); ++k) {
+        const auto& p = i18n.packs()[k];
+        names.push_back(p.name + "  [" + p.code + "]");
+        if (i18n.code() == p.code) current = static_cast<int>(k);
+    }
+    rows.push_back(Radio(kLangPack, T("Language"), names, current));
+    if (i18n.code() != "en") rows.push_back(Dim(F("%zu of %zu phrases seen so far are translated in this language.", i18n.translatedCount(), i18n.phraseCount())));
+    else rows.push_back(Dim(T("Base language (English): nothing to translate.")));
+    rows.push_back(Head(T("Create or edit a pack")));
+    rows.push_back(Note(F("Packs are JSON files in the '%s' folder. Untranslated phrases appear in English.", i18n.dir().c_str())));
+    rows.push_back(Btn(kLangReload, T("Reload packs")));
+    rows.push_back(Btn(kLangExport, T("Export template")));
+    if (!ed.langStatus.empty()) rows.push_back(Dim(ed.langStatus));
+}
+
+// Linhas da secao Physics (drawPhysicsTab, extra_ui.hpp). Como o ImGui, nao marca nada como sujo.
+void addPhysicsRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
+    const auto& ps = ed.sceneInfo.physics;
+    rows.push_back(Note(T("World physics of this scene (saved with the scene). Objects with 'Vector physics' ignore the world gravity.")));
+    rows.push_back(Check(kPhysEnabled, T("Physics enabled"), ps.enabled));
+    rows.push_back(Head(T("World gravity (m/s2) - any axis")));
+    rows.push_back(Slide(kPhysGravX, T("Gravity X"), ps.gravity[0], -1000.f, 1000.f));
+    rows.push_back(Slide(kPhysGravY, T("Gravity Y"), ps.gravity[1], -1000.f, 1000.f));
+    rows.push_back(Slide(kPhysGravZ, T("Gravity Z"), ps.gravity[2], -1000.f, 1000.f));
+    static const char* kPresets[7] = {"Earth", "Moon", "Mars", "Zero-G", "Sideways (+X)", "Toward -Z", "Upside down"};
+    for (int i = 0; i < 7; ++i) rows.push_back(Btn(kPhysPreset0 + i, T(kPresets[i])));
+    rows.push_back(Head(T("Simulation")));
+    rows.push_back(Slide(kPhysIterations, T("Solver iterations"), static_cast<float>(ps.solverIterations), 1.f, 30.f, true));
+    rows.push_back(Slide(kPhysStepHz, T("Steps per second"), static_cast<float>(ps.stepHz), 15.f, 240.f, true));
+    rows.push_back(Dim(T("More iterations stack better; more steps per second is more precise. Both cost CPU.")));
+    rows.push_back(Check(kPhysColliders, T("Draw colliders in the Scene view"), ps.drawColliders));
+    rows.push_back(Slide(kPhysSimRadius, T("Simulation radius (0 = everything)"), ps.simRadius, 0.f, 1000.f));
+    rows.push_back(Dim(T("Bodies outside the radius around the camera stop moving until the camera gets closer. Saves CPU in large scenes.")));
+    if (ed.playing && ed.play.built) {
+        const auto& s = ed.play.world.stats;
+        rows.push_back(Head(T("Live")));
+        rows.push_back(Note(F("bodies %d   awake %d   pairs %d   contacts %d   steps/frame %d", s.bodies, s.awake, s.pairs, s.contacts, s.steps)));
+        rows.push_back(Note(F("%s: %d   %s: %d", T("Bodies simulated"), static_cast<int>(s.bodies - ed.play.culledCount),
+                              T("Bodies outside the simulation radius"), static_cast<int>(ed.play.culledCount))));
+    }
+}
+
+// Linhas da secao Lighting (drawLightingTab). A ordem e a mesma do ImGui; o que ficava dentro de BeginDisabled vira
+// enabled = false (mostrado apagado, sem interacao).
+void addLightingRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
+    auto& r = ed.sceneInfo.render;
+    auto& L = r.lighting;
+    auto u32f = [](tool::u32 v) { return static_cast<float>(v); };
+    rows.push_back(Dim(F("These settings belong to the scene '%s' and are saved with it.", ed.sceneInfo.name.c_str())));
+    rows.push_back(Check(kLitFrustum, T("Frustum culling (skip objects outside the camera view)"), r.frustumCull));
+    rows.push_back(Check(kLitOcclusion, T("Occlusion culling (skip objects hidden behind big objects)"), r.occlusionCull));
+    rows.push_back(Dim(T("Objects completely behind a large object from the camera are not drawn. Works with perspective cameras. Objects that cast shadows are always drawn.")));
+    rows.push_back(Slide(kLitDrawDistance, T("Draw distance (0 = each camera's Far)"), r.drawDistance, 0.f, 20000.f));
+    rows.push_back(Dim(T("Objects farther than this are not drawn in the Scene and Game views. 0 = use the Far value of each camera. Very large values make distant objects flicker (depth precision).")));
+
+    // Sol (Global Light): so existe se a cena tiver um GlobalLight.
+    rows.push_back(Head(T("Sun (Global Light)")));
+    if (const ed_::GlobalLight* g = settingsSunLight(ed)) {
+        rows.push_back(Slide(kLitSunR, channel("Light color", "R"), g->color[0], 0.f, 1.f));
+        rows.push_back(Slide(kLitSunG, channel("Light color", "G"), g->color[1], 0.f, 1.f));
+        rows.push_back(Slide(kLitSunB, channel("Light color", "B"), g->color[2], 0.f, 1.f));
+        rows.push_back(Slide(kLitSunIntensity, T("Intensity"), g->intensity, 0.f, 20.f));
+        rows.push_back(Slide(kLitSunAzimuth, T("Direction (azimuth)"), g->azimuth, 0.f, 360.f, false, F("%.0f deg", g->azimuth)));
+        rows.push_back(Slide(kLitSunElevation, T("Height (elevation)"), g->elevation, -10.f, 90.f, false, F("%.0f deg", g->elevation)));
+        rows.push_back(Slide(kLitAmbR, channel("Ambient light", "R"), g->ambient[0], 0.f, 1.f));
+        rows.push_back(Slide(kLitAmbG, channel("Ambient light", "G"), g->ambient[1], 0.f, 1.f));
+        rows.push_back(Slide(kLitAmbB, channel("Ambient light", "B"), g->ambient[2], 0.f, 1.f));
+        rows.push_back(Check(kLitSunShadow, T("Sun casts shadows"), g->castShadow));
+    } else rows.push_back(Dim(T("No Global Light in this scene (Hierarchy > + Create > Global Light).")));
+
+    // Light Prism: qualidade (preset ou custom).
+    rows.push_back(Head(T("Light Prism: quality")));
+    rows.push_back(Dim(T("The lighting of the engine (lights, clusters, shadows and ambient) is computed by the Light Prism library, on the CPU and on the GPU.")));
+    rows.push_back(Drop(kLitTier, T("Quality preset"), {std::string(T("Mobile")), std::string(T("Low")), std::string(T("Medium")), std::string(T("High"))}, L.tier));
+    rows.push_back(Check(kLitCustom, T("Custom values (override the preset)"), L.custom));
+    if (!L.custom) {
+        const auto q = tool::makeQuality(L);
+        rows.push_back(Dim(F("Preset: %u shadow cascades, %u px per cascade, %u PCF taps, %u lights per cluster",
+                             static_cast<unsigned>(q.csmCascades), static_cast<unsigned>(q.shadowMapResolution),
+                             static_cast<unsigned>(q.pcfTaps), static_cast<unsigned>(q.maxLightsPerCluster))));
+    }
+    rows.push_back(Slide(kLitCascades, T("Shadow cascades"), u32f(L.csmCascades), 1.f, 4.f, true, {}, L.custom));
+    {
+        const int qi = L.shadowMapResolution <= 512 ? 0 : L.shadowMapResolution <= 1024 ? 1 : L.shadowMapResolution <= 2048 ? 2 : 3;
+        rows.push_back(Drop(kLitShadowRes, T("Shadow map resolution (per cascade)"),
+                            {std::string(T("Low (512)")), std::string(T("Medium (1024)")), std::string(T("High (2048)")), std::string(T("Ultra (4096)"))},
+                            qi, L.custom));
+    }
+    {
+        const int pi = L.pcfTaps <= 1 ? 0 : (L.pcfTaps <= 4 ? 1 : 2);
+        rows.push_back(Drop(kLitPcf, T("Edge softness (PCF)"),
+                            {std::string(T("Hard edges (1 tap)")), std::string(T("Soft 2x2 (4 taps)")), std::string(T("Softer 3x3 (9 taps)"))},
+                            pi, L.custom));
+    }
+    rows.push_back(Slide(kLitMaxLightsCluster, T("Max lights per cluster"), u32f(L.maxLightsPerCluster), 1.f, 256.f, true, {}, L.custom));
+    rows.push_back(Slide(kLitIndicesCluster, T("Light indices per cluster"), u32f(L.indicesPerCluster), 1.f, 64.f, true, {}, L.custom));
+    rows.push_back(Slide(kLitAutoRadius, T("Auto radius cutoff"), L.autoRadiusCutoff, 0.f, 0.2f, false, {}, L.custom));
+
+    // Orcamento de luzes (sempre editavel).
+    rows.push_back(Head(T("Light budget")));
+    rows.push_back(Slide(kLitMaxPoint, T("Max point lights"), u32f(L.maxPointLights), 1.f, 16384.f, true));
+    rows.push_back(Slide(kLitMaxSpot, T("Max spot lights"), u32f(L.maxSpotLights), 1.f, 4096.f, true));
+    rows.push_back(Dim(T("Lights beyond the budget are dropped (the scene reports how many in Profiler > Rendering).")));
+
+    // Sombras do sol (cascatas).
+    rows.push_back(Head(T("Shadows (sun cascades)")));
+    rows.push_back(Check(kLitShadows, T("Enable shadows"), L.shadows));
+    rows.push_back(Slide(kLitShadowDistance, T("Max shadow distance (m, 0 = camera far)"), L.shadowDistance, 0.f, 500.f, false, {}, L.shadows));
+    rows.push_back(Slide(kLitSplitLambda, T("Cascade split (0 uniform - 1 logarithmic)"), L.splitLambda, 0.f, 1.f, false, {}, L.shadows));
+    rows.push_back(Slide(kLitBlend, T("Cascade blend"), L.blendFraction, 0.f, 0.5f, false, {}, L.shadows));
+    rows.push_back(Slide(kLitCasterExt, T("Caster extension (m)"), L.casterExtension, 0.f, 200.f, false, {}, L.shadows));
+    rows.push_back(Slide(kLitDepthBias, T("Depth bias (m)"), L.depthBias, 0.f, 0.5f, false, {}, L.shadows));
+    rows.push_back(Slide(kLitNormalBias, T("Normal bias (texels)"), L.normalBias, 0.f, 4.f, false, {}, L.shadows));
+    rows.push_back(Check(kLitSnap, T("Snap to texels (stable shadows, no shimmer)"), L.snapToTexels, L.shadows));
+    // Sombras de luzes pontuais/spot: feitas pela engine (a Light Prism so tem CSM do sol).
+    rows.push_back(Slide(kLitPointShadowLights, T("Point and spot shadow lights"), u32f(L.pointShadowLights), 0.f, 4.f, true));
+    {
+        const int pi = L.pointShadowResolution <= 128 ? 0 : L.pointShadowResolution <= 256 ? 1 : L.pointShadowResolution <= 512 ? 2 : 3;
+        rows.push_back(Drop(kLitPointShadowRes, T("Point/spot shadow resolution (per face)"),
+                            {"128", "256", "512", "1024"}, pi));
+    }
+    rows.push_back(Dim(T("Point and spot shadows: CPU and GPU (Vulkan, D3D12). OpenGL uses the CPU renderer.")));
+    // SSAO (Light Prism Post/Ssao).
+    rows.push_back(Check(kLitSsao, T("Ambient occlusion (SSAO)"), L.ssao));
+    rows.push_back(Slide(kLitSsaoKernel, T("AO kernel samples"), u32f(L.ssaoKernel), 1.f, 32.f, true, {}, L.ssao));
+    rows.push_back(Slide(kLitSsaoRadius, T("AO radius (m)"), L.ssaoRadius, 0.05f, 3.f, false, {}, L.ssao));
+    rows.push_back(Slide(kLitSsaoBias, T("AO bias (m)"), L.ssaoBias, 0.f, 0.2f, false, {}, L.ssao));
+    rows.push_back(Slide(kLitSsaoPower, T("AO power (contrast)"), L.ssaoPower, 0.1f, 4.f, false, {}, L.ssao));
+    // Ray tracing (CPU).
+    rows.push_back(Check(kLitRayTracing, T("Enable ray tracing"), L.rayTracing));
+    rows.push_back(Dim(T("Master switch for CPU ray tracing. Disabling it skips BVH construction and ray-traced effects.")));
+    rows.push_back(Check(kLitRtAo, T("Ray-traced ambient occlusion (CPU)"), L.rtAo, L.rayTracing));
+    rows.push_back(Dim(T("Casts real rays from each visible surface to find occluders. Replaces the SSAO above. Software renderer only (the GPU keeps the SSAO); sun shadows and voxels are not ray traced yet.")));
+    rows.push_back(Slide(kLitRtAoRays, T("RT AO rays per pixel"), u32f(L.rtAoRays), 1.f, 64.f, true, {}, L.rayTracing && L.rtAo));
+    rows.push_back(Slide(kLitRtAoRadius, T("RT AO radius (m)"), L.rtAoRadius, 0.05f, 5.f, false, {}, L.rayTracing && L.rtAo));
+    // Bloom.
+    rows.push_back(Check(kLitBloom, T("Bloom (glow of emissive objects)"), L.bloom));
+    rows.push_back(Dim(T("Only objects with Enable emission glow (Inspector > Emission). Other bright surfaces do not bloom. GPU and software renderer.")));
+    rows.push_back(Slide(kLitBloomStrength, T("Bloom strength"), L.bloomStrength, 0.f, 4.f, false, {}, L.bloom));
+    // Ambiente e exposicao.
+    rows.push_back(Head(T("Ambient and exposure")));
+    rows.push_back(Slide(kLitAmbient, T("Ambient intensity"), L.ambientIntensity, 0.f, 4.f));
+    rows.push_back(Slide(kLitPreExposure, T("Pre-exposure"), L.preExposure, 0.1f, 4.f));
+    rows.push_back(Dim(T("Each object chooses Cast shadow / Receive shadow in the Inspector. The sun and the nearest point/spot lights that have Cast shadow on cast shadows. Lower quality = more FPS.")));
+    // Pos-processamento global (postFxUi): so mostra os controles com o efeito ligado.
+    rows.push_back(Head(T("Global post-processing")));
+    const tool::PostFx& p = r.post;
+    rows.push_back(Check(kLitPostEnabled, T("Enable post-processing"), p.enabled));
+    if (p.enabled) {
+        rows.push_back(Slide(kLitPostExposure, T("Exposure (EV)"), p.exposure, -3.f, 3.f));
+        rows.push_back(Slide(kLitPostContrast, T("Contrast"), p.contrast, 0.5f, 1.8f));
+        rows.push_back(Slide(kLitPostSaturation, T("Saturation"), p.saturation, 0.f, 2.f));
+        rows.push_back(Slide(kLitPostTintR, channel("Tint color", "R"), p.tint[0], 0.f, 1.f));
+        rows.push_back(Slide(kLitPostTintG, channel("Tint color", "G"), p.tint[1], 0.f, 1.f));
+        rows.push_back(Slide(kLitPostTintB, channel("Tint color", "B"), p.tint[2], 0.f, 1.f));
+        rows.push_back(Slide(kLitPostTintStrength, T("Tint strength"), p.tintStrength, 0.f, 1.f));
+        rows.push_back(Slide(kLitPostVignette, T("Vignette"), p.vignette, 0.f, 1.f));
+        if (p.vignette > 0.f) rows.push_back(Slide(kLitPostVignetteSize, T("Vignette size"), p.vignetteSize, 0.2f, 1.4f));
+        rows.push_back(Slide(kLitPostSharpen, T("Sharpen"), p.sharpen, 0.f, 1.f));
+        rows.push_back(Btn(kLitPostReset, T("Reset effect")));
+    }
+    rows.push_back(Dim(T("Applies to every camera. A camera can add to it or replace it (Inspector > Camera).")));
+}
+
+// Linhas da secao Tags (drawTagsTab). Tags internas, ligacoes, criar ligacao, tags do projeto e renomeacao.
+void addTagsRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
+    rows.push_back(Head(T("Built-in tags (used by the engine)")));
+    for (auto& b : ed_::kBuiltinTags) rows.push_back(Note(std::string(b.name) + "  -  " + T(b.meaning)));
+    rows.push_back(Dim(T("Built-in tags cannot be renamed. To use your own name, link it below.")));
+    rows.push_back(Head(T("Links (your tag -> built-in tag)")));
+    for (std::size_t i = 0; i < ed.projSettings.links.size(); ++i) {
+        const auto& l = ed.projSettings.links[i];
+        rows.push_back(Note("\"" + l.alias + "\"  ->  \"" + l.target + "\""));
+        rows.push_back(Btn(kTagRemoveBase + static_cast<int>(i), T("Remove link")));
+    }
+    rows.push_back(Txt(kTagAlias, T("your tag (e.g. jogador)"), gTagsForm.alias));
+    {
+        std::vector<std::string> names;
+        for (auto& b : ed_::kBuiltinTags) names.push_back(b.name);
+        rows.push_back(Drop(kTagTarget, T("Link to"), names, gTagsForm.target));
+    }
+    rows.push_back(Btn(kTagLink, T("Link")));
+    rows.push_back(Head(T("All tags in this project")));
+    for (tool::TagId i = 0; i < ed.scene.tags().size(); ++i) {
+        const std::string name(ed.scene.tags().name(i));
+        const bool builtin = ed_::isBuiltinTag(name);
+        size_t users = 0;
+        ed.scene.world().eachEntity([&](tool::Entity e) { if (ed.scene.world().tagMask(e).test(i)) ++users; });
+        Row line = Note(name + (builtin ? "  [built-in]" : ""));
+        line.note = std::to_string(users) + (users == 1 ? " object" : " objects");
+        rows.push_back(line);
+        if (gTagsForm.renaming == static_cast<int>(i)) {
+            rows.push_back(Txt(kTagRenameText, T("New name"), gTagsForm.renameBuf));
+            rows.push_back(Btn(kTagRenameCancel, T("cancel")));
+        } else if (!builtin) {
+            rows.push_back(Btn(kTagRenameBase + static_cast<int>(i), T("Rename")));
+        }
+    }
+    if (!gTagsForm.msg.empty()) rows.push_back(Note(gTagsForm.msg));
+    rows.push_back(Dim(T("Renaming a tag changes it in every object and in the other scene files.")));
+}
+
+// Linhas da secao Project (drawProjectTab).
+void addProjectRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
+    rows.push_back(Head(T("External code editor")));
+    rows.push_back(Txt(kProjEditor, T("Editor command"), ed.projSettings.externalEditor));
+    rows.push_back(Dim(T("empty = system default (Notepad on Windows)")));
+    rows.push_back(Dim(T("Examples: code   |   notepad++.exe   |   C:\\Program Files\\Notepad++\\notepad++.exe. Run directly, never through a shell.")));
+    rows.push_back(Head(T("Export")));
+    rows.push_back(Dim(T("Fill in File > Editor info, then use File > Export game.")));
+}
+
+// Aplica um pedido de linha (settings_form.hpp) no Editor: grava o que o ImGui gravava no mesmo controle.
+// Slider usa value; Check usa on; Dropdown e Radio usam index; Text usa text; Button ignora os outros campos.
+void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const std::string& text) {
+    auto& r = ed.sceneInfo.render;
+    auto& L = r.lighting;
+    auto u32v = [](float v) { return static_cast<tool::u32>(v < 0.f ? 0.f : v + 0.5f); };
+    switch (id) {
+        // Game
+        case kGameGridScene: ed.showGridScene = on; ed.settingsDirty = true; break;
+        case kGameGridGame: ed.showGridGame = on; ed.settingsDirty = true; break;
+        case kGameGizmos: ed.showGizmos = on; ed.settingsDirty = true; break;
+        case kGameSplit:
+            ed.sceneInfo.splitVertical = ::editor::settings_model::SplitIsVertical(index);
+            ed.settingsDirty = true;
+            break;
+        case kGameSplitFill: ed.sceneInfo.splitFill = on; ed.settingsDirty = true; break;
+        case kGameSkyEnabled: ed.sceneInfo.sky.enabled = on; ed.settingsDirty = true; break;
+        case kGameSkyRed: ed.sceneInfo.sky.solid[0] = value; ed.settingsDirty = true; break;
+        case kGameSkyGreen: ed.sceneInfo.sky.solid[1] = value; ed.settingsDirty = true; break;
+        case kGameSkyBlue: ed.sceneInfo.sky.solid[2] = value; ed.settingsDirty = true; break;
+        // Physics (sem marca de sujo, como o ImGui)
+        case kPhysEnabled: ed.sceneInfo.physics.enabled = on; break;
+        case kPhysGravX: ed.sceneInfo.physics.gravity[0] = value; break;
+        case kPhysGravY: ed.sceneInfo.physics.gravity[1] = value; break;
+        case kPhysGravZ: ed.sceneInfo.physics.gravity[2] = value; break;
+        case kPhysIterations: ed.sceneInfo.physics.solverIterations = static_cast<int>(value + 0.5f); break;
+        case kPhysStepHz: ed.sceneInfo.physics.stepHz = static_cast<int>(value + 0.5f); break;
+        case kPhysColliders: ed.sceneInfo.physics.drawColliders = on; break;
+        case kPhysSimRadius: ed.sceneInfo.physics.simRadius = value; break;
+        // Optimizing
+        case kOptFps: ed.fpsMode = index; ed.fpsDirty = true; ed.settingsDirty = true; break;
+        case kOptChunkCache:
+            ed.chunkCacheMax = static_cast<size_t>(::editor::settings_model::ClampChunkCacheSize(static_cast<int>(value + 0.5f)));
+            ed.settingsDirty = true;
+            break;
+        case kOptUiScale:
+            ed.theme.scale = ::editor::settings_model::ClampInterfaceScale(value);
+            ed.theme.applyMetrics();
+            ed.settingsDirty = true;
+            break;
+        case kOptIdle: ed.idleRendering = on; ed.settingsDirty = true; break;
+        // Language
+        case kLangPack: {
+            auto& i18n = editor::I18n::get();
+            if (index < 0 || index >= static_cast<int>(i18n.packs().size())) break;
+            const std::string code = i18n.packs()[static_cast<std::size_t>(index)].code;
+            if (i18n.select(code)) ed.langDirty = true;
+            break;
+        }
+        case kLangReload: {
+            auto& i18n = editor::I18n::get();
+            const std::string cur = i18n.code();
+            i18n.scan(i18n.dir());
+            i18n.select(cur);
+            break;
+        }
+        case kLangExport: {
+            auto& i18n = editor::I18n::get();
+            ed.langStatus = i18n.exportTemplate(i18n.dir() + "/modelo.json") ? F("template written to %s/modelo.json", i18n.dir().c_str()) : std::string(T("failed to save"));
+            break;
+        }
+        // Project
+        case kProjEditor:
+            ed_::ser::copyStr(ed.projSettings.externalEditor, sizeof ed.projSettings.externalEditor, text);
+            ed.projSettings.save(ed.project);
+            break;
+        // Tags
+        case kTagTarget: gTagsForm.target = ::editor::settings_model::ClampChoice(index, static_cast<int>(ed_::kBuiltinTags.size())); break;
+        case kTagAlias: gTagsForm.alias = text; break;
+        case kTagLink:
+            if (gTagsForm.alias.empty()) break;
+            {
+                const std::string alias = gTagsForm.alias.substr(0, 47);   // o ImGui tinha um campo de 48 bytes
+                const int target = ::editor::settings_model::ClampChoice(gTagsForm.target, static_cast<int>(ed_::kBuiltinTags.size()));
+                if (ed.projSettings.link(alias, ed_::kBuiltinTags[static_cast<size_t>(target)].name)) {
+                    ed.scene.tag(alias);
+                    ed.projSettings.save(ed.project);
+                    gTagsForm.msg.clear();
+                    gTagsForm.alias.clear();
+                } else {
+                    gTagsForm.msg = T("Could not link: the name is empty, too long, or is itself a built-in tag.");
+                }
+            }
+            break;
+        case kTagRenameText:
+            if (gTagsForm.renaming >= 0) {
+                gTagsForm.msg = ed.renameTag(static_cast<tool::TagId>(gTagsForm.renaming), text) ? "" : T("Could not rename: the name is empty, too long, already used, or a built-in tag.");
+                gTagsForm.renaming = -1;
+            }
+            break;
+        case kTagRenameCancel: gTagsForm.renaming = -1; break;
+        // Lighting: cena
+        case kLitFrustum: r.frustumCull = on; ed.settingsDirty = true; break;
+        case kLitOcclusion: r.occlusionCull = on; ed.settingsDirty = true; break;
+        case kLitDrawDistance: r.drawDistance = value; ed.settingsDirty = true; break;
+        // Lighting: sol (so existe com um GlobalLight na cena)
+        case kLitSunR: case kLitSunG: case kLitSunB: case kLitSunIntensity: case kLitSunAzimuth: case kLitSunElevation:
+        case kLitAmbR: case kLitAmbG: case kLitAmbB: case kLitSunShadow: {
+            ed_::GlobalLight* g = settingsSunLight(ed);
+            if (!g) break;
+            switch (id) {
+                case kLitSunR: g->color[0] = value; break;
+                case kLitSunG: g->color[1] = value; break;
+                case kLitSunB: g->color[2] = value; break;
+                case kLitSunIntensity: g->intensity = value; break;
+                case kLitSunAzimuth: g->azimuth = value; break;
+                case kLitSunElevation: g->elevation = value; break;
+                case kLitAmbR: g->ambient[0] = value; break;
+                case kLitAmbG: g->ambient[1] = value; break;
+                case kLitAmbB: g->ambient[2] = value; break;
+                default: g->castShadow = on; break;   // kLitSunShadow
+            }
+            ed.settingsDirty = true;
+            break;
+        }
+        // Lighting: qualidade
+        case kLitTier: L.tier = index; ed.settingsDirty = true; break;
+        case kLitCustom: L.custom = on; ed.settingsDirty = true; break;
+        case kLitCascades: L.csmCascades = u32v(value); ed.settingsDirty = true; break;
+        case kLitShadowRes: L.shadowMapResolution = 512u << ::editor::settings_model::ClampChoice(index, 4); ed.settingsDirty = true; break;
+        case kLitPcf: L.pcfTaps = index == 0 ? 1u : (index == 1 ? 4u : 9u); ed.settingsDirty = true; break;
+        case kLitMaxLightsCluster: L.maxLightsPerCluster = u32v(value); ed.settingsDirty = true; break;
+        case kLitIndicesCluster: L.indicesPerCluster = u32v(value); ed.settingsDirty = true; break;
+        case kLitAutoRadius: L.autoRadiusCutoff = value; ed.settingsDirty = true; break;
+        // Lighting: orcamento
+        case kLitMaxPoint: L.maxPointLights = u32v(value); ed.settingsDirty = true; break;
+        case kLitMaxSpot: L.maxSpotLights = u32v(value); ed.settingsDirty = true; break;
+        // Lighting: sombras do sol
+        case kLitShadows: L.shadows = on; ed.settingsDirty = true; break;
+        case kLitShadowDistance: L.shadowDistance = value; ed.settingsDirty = true; break;
+        case kLitSplitLambda: L.splitLambda = value; ed.settingsDirty = true; break;
+        case kLitBlend: L.blendFraction = value; ed.settingsDirty = true; break;
+        case kLitCasterExt: L.casterExtension = value; ed.settingsDirty = true; break;
+        case kLitDepthBias: L.depthBias = value; ed.settingsDirty = true; break;
+        case kLitNormalBias: L.normalBias = value; ed.settingsDirty = true; break;
+        case kLitSnap: L.snapToTexels = on; ed.settingsDirty = true; break;
+        case kLitPointShadowLights: L.pointShadowLights = u32v(value); ed.settingsDirty = true; break;
+        case kLitPointShadowRes: L.pointShadowResolution = 128u << ::editor::settings_model::ClampChoice(index, 4); ed.settingsDirty = true; break;
+        // Lighting: SSAO, ray tracing, bloom, ambiente
+        case kLitSsao: L.ssao = on; ed.settingsDirty = true; break;
+        case kLitSsaoKernel: L.ssaoKernel = u32v(value); ed.settingsDirty = true; break;
+        case kLitSsaoRadius: L.ssaoRadius = value; ed.settingsDirty = true; break;
+        case kLitSsaoBias: L.ssaoBias = value; ed.settingsDirty = true; break;
+        case kLitSsaoPower: L.ssaoPower = value; ed.settingsDirty = true; break;
+        case kLitRayTracing: L.rayTracing = on; ed.settingsDirty = true; break;
+        case kLitRtAo: L.rtAo = on; ed.settingsDirty = true; break;
+        case kLitRtAoRays: L.rtAoRays = u32v(value); ed.settingsDirty = true; break;
+        case kLitRtAoRadius: L.rtAoRadius = value; ed.settingsDirty = true; break;
+        case kLitBloom: L.bloom = on; ed.settingsDirty = true; break;
+        case kLitBloomStrength: L.bloomStrength = value; ed.settingsDirty = true; break;
+        case kLitAmbient: L.ambientIntensity = value; ed.settingsDirty = true; break;
+        case kLitPreExposure: L.preExposure = value; ed.settingsDirty = true; break;
+        // Lighting: pos-processamento global
+        case kLitPostEnabled: r.post.enabled = on; ed.settingsDirty = true; break;
+        case kLitPostExposure: r.post.exposure = value; ed.settingsDirty = true; break;
+        case kLitPostContrast: r.post.contrast = value; ed.settingsDirty = true; break;
+        case kLitPostSaturation: r.post.saturation = value; ed.settingsDirty = true; break;
+        case kLitPostTintR: r.post.tint[0] = value; ed.settingsDirty = true; break;
+        case kLitPostTintG: r.post.tint[1] = value; ed.settingsDirty = true; break;
+        case kLitPostTintB: r.post.tint[2] = value; ed.settingsDirty = true; break;
+        case kLitPostTintStrength: r.post.tintStrength = value; ed.settingsDirty = true; break;
+        case kLitPostVignette: r.post.vignette = value; ed.settingsDirty = true; break;
+        case kLitPostVignetteSize: r.post.vignetteSize = value; ed.settingsDirty = true; break;
+        case kLitPostSharpen: r.post.sharpen = value; ed.settingsDirty = true; break;
+        case kLitPostReset: {
+            const bool add = r.post.additive;
+            r.post = tool::PostFx{};
+            r.post.enabled = true;
+            r.post.additive = add;
+            ed.settingsDirty = true;
+            break;
+        }
+        default:
+            // Ids com faixa de itens (Remove link, Rename, sombra de cor do sol etc.) tratados abaixo.
+            if (id >= kTagRemoveBase && id < kTagRemoveBase + 1000) {
+                const std::size_t i = static_cast<std::size_t>(id - kTagRemoveBase);
+                if (i < ed.projSettings.links.size()) {
+                    const std::string alias = ed.projSettings.links[i].alias;
+                    ed.projSettings.unlink(alias);
+                    ed.projSettings.save(ed.project);
+                }
+            } else if (id >= kTagRenameBase && id < kTagRenameBase + 1000) {
+                const std::size_t i = static_cast<std::size_t>(id - kTagRenameBase);
+                if (i < ed.scene.tags().size()) {
+                    gTagsForm.renaming = static_cast<int>(i);
+                    gTagsForm.renameBuf = std::string(ed.scene.tags().name(static_cast<tool::TagId>(i)));
+                }
+            } else if (id >= kGameSkyFace0 && id < kGameSkyFace0 + 6) {
+                const int face = id - kGameSkyFace0;
+                const auto opts = skyFaceOptions(ed, face);
+                if (index < 0 || index >= static_cast<int>(opts.size())) break;
+                const std::string before = ed.sceneInfo.sky.face[face];
+                if (index == 0) {
+                    ed.sceneInfo.sky.face[face][0] = 0;
+                } else {
+                    ed_::ser::copyStr(ed.sceneInfo.sky.face[face], sizeof ed.sceneInfo.sky.face[face], opts[static_cast<std::size_t>(index)]);
+                    ed.assignAsset(opts[static_cast<std::size_t>(index)]);
+                }
+                ed.lib.invalidate(before);
+                ed.lib.invalidate(ed.sceneInfo.sky.face[face]);
+                ed.settingsDirty = true;
+            } else if (id >= kPhysPreset0 && id < kPhysPreset0 + 7) {
+                static const float kPresetG[7][3] = {{0, -9.81f, 0}, {0, -1.62f, 0}, {0, -3.71f, 0}, {0, 0, 0}, {9.81f, 0, 0}, {0, 0, -9.81f}, {0, 9.81f, 0}};
+                const int k = id - kPhysPreset0;
+                for (int a = 0; a < 3; ++a) ed.sceneInfo.physics.gravity[a] = kPresetG[k][a];
+            }
+            break;
+    }
+}
+
 editor::settings_panel::Values settingsValues(Editor& ed) {
   editor::settings_panel::Values v;
   auto& L = ed.sceneInfo.render.lighting;
@@ -2043,6 +2657,17 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   v.api = ed.apiRequested;
   v.apiBuilt = settingsApiBuilt();
   v.apiStatus = F("Active API: %s", ed.apiStatus.c_str());
+  // Secoes sem conteudo fixo: as linhas genericas. Physics, Tags e Project aparecem depois de API/Graphics.
+  v.form[2] = [&] { editor::settings_form::Rows rows; addGameRows(ed, rows); return rows; }();
+  v.form[3] = [&] { editor::settings_form::Rows rows; addLightingRows(ed, rows); return rows; }();
+  v.form[4] = [&] { editor::settings_form::Rows rows; addOptimizingRows(ed, rows); return rows; }();
+  v.form[5] = [&] { editor::settings_form::Rows rows; addLanguageRows(ed, rows); return rows; }();
+  {
+    editor::settings_form::Rows& g = v.form[editor::settings_panel::kGraphicsTab];
+    addPhysicsRows(ed, g);
+    addTagsRows(ed, g);
+    addProjectRows(ed, g);
+  }
   v.resMode = ed.resMode;
   v.customW = ed.customW;
   v.customH = ed.customH;
@@ -2108,8 +2733,8 @@ struct SettingsEditorTarget {
     editor::ui_style::windowRadius() = ::editor::settings_model::ClampWindowRadius(value);
     ed.settingsDirty = true;
   }
-  // Linhas genericas (settings_form.hpp). Stub ate a secao ser portada: ver settingsForm().
-  void setForm(int, float, bool, int, const std::string&) {}
+  // Linhas genericas (settings_form.hpp): Game, Physics, Optimizing, Language, Lighting, Tags e Project.
+  void setForm(int id, float value, bool on, int index, const std::string& text) { applyFormRequest(ed, id, value, on, index, text); }
   void setTextScale(float value) {
     editor::ui_style::textScale() = ::editor::settings_model::ClampTextScale(value);
     ed.settingsDirty = true;
@@ -2180,14 +2805,7 @@ void drawSettings(Editor& ed) {
     gSettingsFrame = true;
     gSettingsRect = {origin.x, origin.y, avail.x, avail.y};
     ImGui::Dummy({avail.x, editor::settings_panel::Metrics::kStripH});
-    const int tab = ed.settingsTab < 0 ? 1 : ed.settingsTab;
-    if (tab != editor::settings_panel::kGraphicsTab) {
-      ImGui::BeginChild("tabbody");
-      ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
-      drawSettingsTabBody(ed, tab);
-      ImGui::PopItemWidth();
-      ImGui::EndChild();
-    }
+    // Todas as secoes sao SpriteUI (settingsPanel desenha o conteudo); a janela ImGui fica so como moldura.
     ImGui::End();
     return;
   }
@@ -2881,7 +3499,11 @@ static int runEditorMain(int argc, char** argv) {
       const float ptrX = pointerEvt ? pointerX(e) : 0.f;
       const float ptrY = pointerEvt ? pointerY(e) : 0.f;
       const bool settingsMayReceive = !pointerEvt || gPanelRouter.mayReceive(editor::panel_router::kSettingsHandle, ptrX, ptrY);
-      const bool setHandled = !dockHandled && settingsPanel && dockShown(editor::dock_host::Kind::Settings, ed.showSettings) && settingsMayReceive && settingsPanel->handleEvent(e);
+      // Teclas com Ctrl, Alt ou Gui (atalhos) nunca vao ao campo de texto da janela: o painel consome toda tecla com o
+      // campo em foco, e o atalho precisa chegar ao ImGui e aos outros paineis. Texto digitado (TEXT_INPUT) passa
+      // sempre: sem campo em foco, o painel devolve false e o ImGui recebe.
+      const bool shortcutKey = e.type == SDL_EVENT_KEY_DOWN && (e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0;
+      const bool setHandled = !dockHandled && settingsPanel && dockShown(editor::dock_host::Kind::Settings, ed.showSettings) && settingsMayReceive && !shortcutKey && settingsPanel->handleEvent(e);
       const bool inspHandled = !dockHandled && inspPanel && dockShown(editor::dock_host::Kind::Inspector, ed.showInspector) && inspPanel->handleEvent(e);
       const bool scrHandled = !dockHandled && gScriptPanel && gScriptPanel->handleEvent(e, ed);
       const bool codHandled = !dockHandled && codingPanel && dockShown(editor::dock_host::Kind::Coding, ed.showCoding) && codingPanel->handleEvent(e);
