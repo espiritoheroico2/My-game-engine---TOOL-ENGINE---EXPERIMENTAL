@@ -441,14 +441,14 @@ inline ImportResult importFbx(const std::vector<u8>& bytes, const ImportOptions&
           }
         }
       if (bySlot.empty()) md.warnings.push_back("'" + m.name + "': malha vazia ignorada");
-      for (auto& [slot, sub] : bySlot) {
-        const std::string partName = bySlot.size() > 1 ? m.name + "." + std::to_string(slot) : m.name;
+      for (auto& [slotKey, sub] : bySlot) {
+        const std::string partName = bySlot.size() > 1 ? m.name + "." + std::to_string(slotKey) : m.name;
         if (!finalizeMesh(sub, md.warnings, partName, /*smooth=*/false)) { md.warnings.push_back("'" + partName + "': malha vazia ignorada"); continue; }
         // A malha fica no espaco local do no (a hierarquia aplica a transformacao).
         ModelPart part;
         part.name = partName;
         part.mesh = std::move(sub);
-        part.material = slotMaterial(slot);
+        part.material = slotMaterial(slotKey);
         part.node = node;
         md.nodes[static_cast<size_t>(node)].parts.push_back(static_cast<int>(md.parts.size()));
         md.parts.push_back(std::move(part));

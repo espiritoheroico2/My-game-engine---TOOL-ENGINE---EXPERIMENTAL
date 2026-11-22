@@ -32,10 +32,10 @@ inline void applyBloomRgba8(std::uint8_t* rgba, unsigned w, unsigned h, float th
         for (unsigned dx = 0; dx < 2; ++dx) {
           const unsigned sx = std::min(x * 2 + dx, w - 1), sy = std::min(y * 2 + dy, h - 1);
           const std::size_t p = (static_cast<std::size_t>(sy) * w + sx) * 4;
-          const float r = toLinear[rgba[p]], g = toLinear[rgba[p + 1]], b = toLinear[rgba[p + 2]];
-          const float l = lum(r, g, b);
+          const float r = toLinear[rgba[p]], g = toLinear[rgba[p + 1]], bl = toLinear[rgba[p + 2]];
+          const float l = lum(r, g, bl);
           const float k = std::max(l - threshold, 0.f) / std::max(l, 1e-4f);
-          sr += r * k; sg += g * k; sb += b * k;
+          sr += r * k; sg += g * k; sb += bl * k;
         }
       const std::size_t q = (static_cast<std::size_t>(y) * hw + x) * 3;
       a[q] = sr * 0.25f; a[q + 1] = sg * 0.25f; a[q + 2] = sb * 0.25f;

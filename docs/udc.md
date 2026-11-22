@@ -3,7 +3,7 @@
 ### Engenharia de software, pipeline gráfico, otimização de Draw Calls e arquitetura multiplataforma
 
 **Projeto:** TOOL ENGINE  
-**Repositório de referência:** https://github.com/espiritoheroico2/TOOLGAMEENGINE  
+**Repositório de referência:** https://github.com/espiritoheroico2/toolgameengine  
 **Base técnica:** arquitetura C++ da engine, RHI próprio, integração com Diligent Engine, Light Prism e renderizador multipasse.  
 **Objetivo:** reduzir submissões redundantes e o custo total de CPU/GPU sem reescrever integralmente o renderizador nem comprometer a portabilidade.  
 **Escopo:** renderização 3D, batching, instancing, Multi-Draw, iluminação, sombras, culling, SSAO, emissão/Bloom, transparência, RHI, sincronização, Profiler e backends gráficos.  
@@ -1314,7 +1314,7 @@ Arquivos que devem continuar sendo revisados durante a implementação:
 - `docs/CHANGELOG.md`
 
 Repositório de referência:
-https://github.com/espiritoheroico2/TOOLGAMEENGINE
+https://github.com/espiritoheroico2/toolgameengine
 
 A versão da Diligent, os backends realmente habilitados e as APIs efetivamente compiladas devem ser confirmados no estado atual do repositório antes de implementar capacidades específicas.
 

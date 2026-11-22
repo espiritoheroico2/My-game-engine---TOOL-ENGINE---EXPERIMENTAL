@@ -286,8 +286,8 @@ public:
       const size_t pn = static_cast<size_t>(pointRes_) * static_cast<size_t>(pointRes_);
       pointValid_ = false;
       for (size_t i = 0; i < lf_.shadowLights.size(); ++i)
-        for (u32 f = 0; f < lf_.shadowLights[i].faces; ++f) {
-          const size_t slot = i * kMaxPointShadowFaces + f;
+        for (u32 fc = 0; fc < lf_.shadowLights[i].faces; ++fc) {
+          const size_t slot = i * kMaxPointShadowFaces + fc;
           faceMap_[slot].assign(pn, 1e30f); // profundidade em metros: "infinito" = nada na frente (1.0 seria 1 m)
           faceTris_[slot].clear();
         }

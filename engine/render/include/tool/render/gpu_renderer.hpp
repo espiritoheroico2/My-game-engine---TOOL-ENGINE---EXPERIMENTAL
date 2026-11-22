@@ -840,6 +840,7 @@ private:
 
   void buildShadowQueue(ShadowQueue& queue, const render::Frustum& frustum, bool csm,
                        const std::vector<const Draw*>& casters, bool appendInstances = true) {
+    (void)csm; // mantido na assinatura; a regra de culling nao depende mais dele
     shadowItemsScratch_.clear();
     shadowDrawsScratch_.clear();
     queue.orderedDraws.clear();
@@ -848,8 +849,9 @@ private:
     queue.instanceBase = 0;
     for (const Draw* d : casters) {
       const render::SphereBounds worldBounds = render::transformSphere(d->world.m, d->mesh->bounds);
-      const bool visible = csm ? render::sphereInFrustumSides(frustum, worldBounds)
-                               : render::sphereInFrustum(frustum, worldBounds);
+      // Casters fora do frustum da camera mas entre a luz e o near plane ainda projetam sombra:
+      // por isso usa sempre os 4 planos laterais (como CSM), nunca os 6 planos.
+      const bool visible = render::sphereInFrustumSides(frustum, worldBounds);
       if (!visible) continue;
       shadowDrawsScratch_.push_back(d);
     }

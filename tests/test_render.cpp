@@ -396,7 +396,7 @@ TEST(upscale_bilinear_linear_ramp_is_exact) {
 
 TEST(upscale_lanczos_and_bicubic_keep_edges_monotonic_bounds) {
   // degrau preto->branco: os filtros de 4 taps nao passam de 0..255 (clamp) e continuam crescendo
-  const int sw = 6, sh = 1, dw = 18;
+  const int sw = 6, dw = 18;
   std::vector<uint8_t> src(sw * 4, 0);
   for (int x = 3; x < sw; ++x) for (int c = 0; c < 4; ++c) src[static_cast<size_t>(x) * 4 + c] = 255;
   for (auto f : {tool::UpscaleFilter::Bicubic, tool::UpscaleFilter::Lanczos2}) {

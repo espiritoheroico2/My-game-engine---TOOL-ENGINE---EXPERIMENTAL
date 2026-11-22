@@ -19,3 +19,6 @@ Projeto Final/Export/
 
 # Log gerado pelos scripts build_editor (nao versionar)
 build_log.txt
+
+# Log de build (saida grande, nao versionar)
+build.log

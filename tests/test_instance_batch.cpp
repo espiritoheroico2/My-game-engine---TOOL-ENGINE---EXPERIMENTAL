@@ -135,3 +135,69 @@ TEST(render_queues_select_pass_items_by_index) {
   CHECK(queues.prepass.size() == 1 && queues.prepass[0] == 0);
   CHECK(queues.shadowCasters.size() == 1 && queues.shadowCasters[0] == 0);
 }
+
+// Invariantes do plano de lotes (udc.md 7.2), com entradas pseudoaleatorias deterministicas:
+// - order e uma permutacao completa; - lotes contiguos (first de cada um = fim do anterior); - soma de count = n;
+// - nenhum lote acima de maxPerBatch; - malha e textura uniformes dentro de cada lote.
+namespace {
+void checkPlanInvariants(const std::vector<BatchItem>& items, const BatchPlan& plan, std::uint32_t maxPerBatch) {
+  const std::size_t n = items.size();
+  CHECK(plan.order.size() == n);
+  std::vector<int> seen(n, 0);
+  for (std::uint32_t idx : plan.order) {
+    CHECK(idx < n);
+    if (idx < n) ++seen[idx];
+  }
+  for (int c : seen) CHECK(c == 1);
+  std::uint32_t expectFirst = 0;
+  for (const InstanceBatch& b : plan.batches) {
+    CHECK(b.first == expectFirst);
+    CHECK(b.count > 0);
+    if (maxPerBatch != 0) CHECK(b.count <= maxPerBatch);
+    for (std::uint32_t k = b.first; k < b.first + b.count && k < plan.order.size(); ++k) {
+      const BatchItem& it = items[plan.order[k]];
+      CHECK(it.mesh == b.mesh);
+      CHECK(it.texture == b.texture);
+    }
+    expectFirst += b.count;
+  }
+  CHECK(expectFirst == n);
+  CHECK(total(plan) == n);
+}
+
+std::vector<BatchItem> pseudoRandomItems(std::uint32_t seed, std::size_t n) {
+  std::vector<BatchItem> out;
+  std::uint32_t s = seed * 2654435761u + 1u;
+  for (std::size_t i = 0; i < n; ++i) {
+    s = s * 1664525u + 1013904223u;
+    const std::uint64_t mesh = (s >> 8) % 5u;
+    s = s * 1664525u + 1013904223u;
+    const std::uint64_t tex = (s >> 8) % 3u;
+    out.push_back({mesh, tex});
+  }
+  return out;
+}
+}  // namespace
+
+TEST(instance_plan_invariants_hold_for_random_inputs) {
+  for (std::uint32_t seed = 1; seed <= 40; ++seed) {
+    const std::size_t n = (seed * 37u) % 200u;
+    const auto items = pseudoRandomItems(seed, n);
+    for (std::uint32_t maxPer : {0u, 1u, 7u, 64u}) {
+      BatchPlan plan;
+      planInstanceBatches(items, plan, maxPer);
+      checkPlanInvariants(items, plan, maxPer);
+    }
+  }
+}
+
+TEST(adjacent_plan_keeps_original_order_and_invariants) {
+  for (std::uint32_t seed = 1; seed <= 40; ++seed) {
+    const auto items = pseudoRandomItems(seed + 1000u, (seed * 53u) % 180u);
+    BatchPlan plan;
+    planAdjacentInstanceBatches(items, plan, 16);
+    // Transparencia: a ordem de desenho nao pode mudar, so o agrupamento de vizinhos.
+    for (std::size_t k = 0; k < plan.order.size(); ++k) CHECK(plan.order[k] == k);
+    checkPlanInvariants(items, plan, 16);
+  }
+}
