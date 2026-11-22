@@ -179,8 +179,11 @@ class SettingsPanel {
         layoutSections(v);
         syncElements(v);
         layoutDropdowns();
-        dropdownTexts();
-        radioTexts();
+        // Textos dos controles so existem com a secao aberta: recolhida, os rotulos antigos sobrariam por cima.
+        if (open_[kGraphicsTab]) {
+            dropdownTexts();
+            radioTexts();
+        }
         drawScrollbar();
 
         const std::vector<SR::ClipRectGPU> clips{
@@ -567,7 +570,7 @@ class SettingsPanel {
 
     void layoutDropdowns() {
         for (Elm::Dropdown* dd : allDropdownsMutable()) dd->Layout(windowRect());
-        dropdownPopupTexts();
+        if (open_[kGraphicsTab]) dropdownPopupTexts();
     }
 
     // ---------- Sincronia dos elementos com os valores (ponte) ----------
@@ -665,6 +668,7 @@ class SettingsPanel {
         for (std::size_t i = 0; i < sm::kTabCount; ++i) {
             if (headers_[i].contains(p.x, p.y)) {
                 open_[i] = !open_[i];
+                if (i == kGraphicsTab && !open_[i]) closeAllDropdowns();   // lista aberta nao sobrevive ao recolher
                 return true;
             }
         }
