@@ -6,6 +6,7 @@
 // Padrao: "Azul escuro" (tom das referencias em docs/referencias/ui). A troca pelo usuario vai na aba
 // Configuracoes > Appearance (ligada: as molduras e os paineis SpriteUI leem palette::active() a cada quadro).
 #include <array>
+#include <cmath>
 #include <cstddef>
 
 namespace editor::palette {
@@ -47,6 +48,24 @@ inline constexpr std::array<Palette, kCount> kPresets{{
      {0.020f, 0.022f, 0.030f}, {0.050f, 0.055f, 0.072f}, {0.890f, 0.900f, 0.920f}, {0.560f, 0.580f, 0.640f},
      {0.350f, 0.560f, 1.000f}, {0.350f, 0.560f, 1.000f}, {0.120f, 0.130f, 0.165f}, {1.000f, 0.450f, 0.400f}},
 }};
+
+// Luminancia relativa e razao de contraste WCAG 2.x (sRGB linearizado). Usadas para escolher o texto sobre um preenchimento.
+inline double RelativeLuminance(const Rgb& c) {
+  auto lin = [](double v) { return v <= 0.03928 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4); };
+  return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+}
+inline double ContrastRatio(const Rgb& a, const Rgb& b) {
+  const double la = RelativeLuminance(a), lb = RelativeLuminance(b);
+  const double hi = la > lb ? la : lb, lo = la > lb ? lb : la;
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+// Cor do rotulo sobre um preenchimento forte (botao ou linha marcada): branco ou preto, o que tiver mais contraste.
+// Evita o texto claro da paleta sobre o acento claro, que ficava abaixo de 4.5:1 em alguns temas.
+inline Rgb LabelOn(const Rgb& fill) {
+  const Rgb white{1.f, 1.f, 1.f, 1.f}, black{0.f, 0.f, 0.f, 1.f};
+  return ContrastRatio(white, fill) >= ContrastRatio(black, fill) ? white : black;
+}
 
 // Indice da paleta em uso. Padrao 0 (Azul escuro).
 inline std::size_t& activeIndex() {

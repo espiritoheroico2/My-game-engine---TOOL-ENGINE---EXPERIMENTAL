@@ -353,7 +353,9 @@ class SettingsPanel {
             const bool selected = static_cast<int>(k) == v.palette;
             canvas_.addSolid(paletteRows_[k].x, y, paletteRows_[k].w, Metrics::kRowH,
                              selected ? theme_.accent : theme_.surface, 0.2f, editor::ui_style::buttonRadius());
-            canvas_.addText(Metrics::kPad + 10.f, y + 5.f, std::string(T(presets[k].name)), Metrics::kFont, theme_.text,
+            // Linha marcada: rotulo preto ou branco, o de maior contraste sobre o acento (texto claro dava 4.08:1 no Azul escuro).
+            const SU::Vec4 label = selected ? sui::PaletteColor(editor::palette::LabelOn(presets[k].accent)) : theme_.text;
+            canvas_.addText(Metrics::kPad + 10.f, y + 5.f, std::string(T(presets[k].name)), Metrics::kFont, label,
                             textWidth() - 20.f);
             y += Metrics::kRowH + Metrics::kGap;
         }

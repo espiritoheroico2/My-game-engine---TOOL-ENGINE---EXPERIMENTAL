@@ -1,5 +1,5 @@
 // Testes da paleta da SpriteUI (sui_palette.hpp): padrao, fallback de indice e contraste do texto.
-// Contraste pela formula WCAG 2.x: texto principal >= 4.5:1 sobre fundo e superficie; texto de rotulo >= 3:1.
+// Contraste pela formula WCAG 2.x: texto principal e rotulo (textDim) >= 4.5:1 sobre fundo e superficie; rotulo sobre o acento >= 4.5:1.
 #include "sui_palette.hpp"
 
 #include <cmath>
@@ -59,8 +59,16 @@ int main() {
     const P::Palette& p = P::kPresets[i];
     const std::string label = std::string("contraste do texto principal >= 4.5 em ") + p.name;
     Check(Contrast(p.text, p.panel) >= 4.5 && Contrast(p.text, p.surface) >= 4.5, label.c_str());
-    const std::string dim = std::string("contraste do rotulo >= 3 em ") + p.name;
-    Check(Contrast(p.textDim, p.panel) >= 3.0 && Contrast(p.textDim, p.surface) >= 3.0, dim.c_str());
+    const std::string dim = std::string("contraste do rotulo (textDim) >= 4.5 em ") + p.name;
+    Check(Contrast(p.textDim, p.panel) >= 4.5 && Contrast(p.textDim, p.surface) >= 4.5, dim.c_str());
+  }
+
+  // 4. Rotulo sobre o acento (linha marcada e botao forte): LabelOn escolhe branco ou preto com >= 4.5:1.
+  for (std::size_t i = 0; i < P::kCount; ++i) {
+    const P::Palette& p = P::kPresets[i];
+    const P::Rgb label = P::LabelOn(p.accent);
+    const std::string what = std::string("rotulo sobre o acento >= 4.5 em ") + p.name;
+    Check(Contrast(label, p.accent) >= 4.5, what.c_str());
   }
 
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
