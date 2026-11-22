@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -34,12 +35,19 @@ public:
     return inst;
   }
   // Define o destino das mensagens (ex.: console do editor ou arquivo). Passe vazio para voltar a imprimir na tela.
-  void setSink(Sink s) { sink_ = std::move(s); }
+  void setSink(Sink s) {
+    std::lock_guard lk(mu_);
+    sink_ = std::move(s);
+  }
   // Mensagens abaixo deste nivel sao descartadas. Padrao: Info.
-  void setMinLevel(LogLevel l) { min_ = l; }
+  void setMinLevel(LogLevel l) {
+    std::lock_guard lk(mu_);
+    min_ = l;
+  }
 
-  // Envia uma mensagem ao sink ou ao console. Atenção: nao ha mutex; chamadas concorrentes (ex.: de jobs do parallelFor) podem intercalar linhas ou correr com setSink.
+  // Envia uma mensagem ao sink ou ao console de forma segura entre threads.
   void log(LogLevel l, std::string_view msg) {
+    std::lock_guard lk(mu_);
     if (l < min_) return;
     if (sink_) {
       sink_(l, msg);
@@ -50,6 +58,7 @@ public:
   }
 
 private:
+  mutable std::mutex mu_;
   Sink sink_;
   LogLevel min_ = LogLevel::Info;
 };

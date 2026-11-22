@@ -139,7 +139,7 @@ public:
   TagId tag(std::string_view name) { return tags_.intern(name); }
 
   // Cria um objeto; reaproveita um dormente identico se existir.
-  // Atenção: ao reaproveitar, o estado de simulacao (setSimulating) do objeto nao e reiniciado.
+  // Ao reaproveitar, o estado de simulacao e restaurado para ativo.
   ToolObject spawn(const Blueprint& bp, double now = 0) {
     const std::string sig = bp.signature();
     auto it = pool_.find(sig);
@@ -155,6 +155,7 @@ public:
       world_.resetTo(e, keep, bp.mask());            // remove extras e restaura tags
       for (const auto& step : bp.steps()) step.apply(world_, e);
       world_.setDormant(e, false);
+      world_.setSimulating(e, true);
       ++stats_.reused;
       signatureByEntity_[e.index] = sig;
       (void)now;

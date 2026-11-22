@@ -15,12 +15,12 @@ inline constexpr u32 kMaxTags = 128;
 // Mascara de bits de 128 posicoes, uma por tag: marca quais tags um objeto possui.
 struct TagMask {
   u64 lo = 0, hi = 0;
-  // Liga o bit da tag t. Atenção: ids >= 128 nao sao validados e cairiam na mascara; use so ids devolvidos por intern().
-  void set(TagId t) { (t < 64 ? lo : hi) |= 1ull << (t & 63); }
-  // Desliga o bit da tag t.
-  void clear(TagId t) { (t < 64 ? lo : hi) &= ~(1ull << (t & 63)); }
+  // Liga o bit da tag t (valida limites < 128).
+  void set(TagId t) { if (t < kMaxTags) (t < 64 ? lo : hi) |= 1ull << (t & 63); }
+  // Desliga o bit da tag t (valida limites < 128).
+  void clear(TagId t) { if (t < kMaxTags) (t < 64 ? lo : hi) &= ~(1ull << (t & 63)); }
   // True se o bit da tag t esta ligado.
-  bool test(TagId t) const { return ((t < 64 ? lo : hi) >> (t & 63)) & 1ull; }
+  bool test(TagId t) const { return t < kMaxTags ? (((t < 64 ? lo : hi) >> (t & 63)) & 1ull) : false; }
   // True se todas as tags de 'o' tambem estao presentes nesta mascara.
   bool containsAll(const TagMask& o) const { return (lo & o.lo) == o.lo && (hi & o.hi) == o.hi; }
   // True se pelo menos uma tag esta ligada.

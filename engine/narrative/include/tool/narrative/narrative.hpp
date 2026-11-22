@@ -70,9 +70,10 @@ struct Program {
 class Compiler {
 public:
   // Retorna false e preenche `error` se o grafo for invalido. Nunca lanca.
-  // Atenção: compile nao limpa nodes_, out_, varIdx_, pcOf_ e stack_ entre chamadas; reutilizar o mesmo Compiler mistura estado antigo (hoje cada chamador cria um Compiler novo).
+  // Limpa o estado interno no inicio para suportar multiplas chamadas no mesmo Compiler.
   bool compile(const Json& g, Program& out, std::string& error) {
     out = {}; g_ = &g; p_ = &out; err_ = &error; error.clear();
+    nodes_.clear(); out_.clear(); varIdx_.clear(); pcOf_.clear(); stack_.clear();
     if (!g.isObject() || !g["nodes"].isArray()) return fail(code::kBadGraph, "grafo sem lista de nos");
     for (auto& [name, v] : g["variables"].members()) {
       varIdx_[name] = static_cast<i32>(p_->varNames.size());

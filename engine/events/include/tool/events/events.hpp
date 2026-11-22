@@ -43,9 +43,9 @@ public:
   // Reinicia regras one-shot (ex.: nova sessao/reativavel).
   void resetOneShot(EventId id) { consumed_.erase(id); }
 
-  // Pede para disparar o evento id no instante now. Devolve o veredito. Se messageId != 0, descarta repeticoes no mesmo tick. Atenção: o messageId fica marcado como visto mesmo se o evento for recusado depois.
+  // Pede para disparar o evento id no instante now. Devolve o veredito. Se messageId != 0, descarta repeticoes no mesmo tick. O messageId so e marcado como visto se o evento for aceito.
   Verdict tryFire(EventId id, double now, u64 messageId = 0) {
-    if (messageId != 0 && !seenMessages_.insert(messageId).second) {
+    if (messageId != 0 && seenMessages_.count(messageId)) {
       debug().report(diag::kEventDup, Severity::Warning, "evento duplicado ignorado (msg " + std::to_string(messageId) + ")");
       return Verdict::Duplicate;
     }
@@ -69,6 +69,7 @@ public:
       return Verdict::GroupBusy;
     }
     // Aprovado: consome atomicamente.
+    if (messageId != 0) seenMessages_.insert(messageId);
     if (r.oneShot) consumed_.insert(id);
     if (r.group != 0) busyGroups_.insert(r.group);
     if (r.cooldown > 0) lastFire_[id] = now;
@@ -119,18 +120,22 @@ public:
   EventArbiter& arbiter() { return arbiter_; }
 
   // Dispara imediatamente passando pelo arbitro. Handlers podem emitir (cadeia de causa).
-  // Atenção: se um handler lancar excecao, a cadeia de causa nao e desempilhada e fica inconsistente nas proximas chamadas.
+  // Cadeia de causa e protegida por RAII contra excecoes em handlers.
   Verdict emit(EventId id, double now, std::any payload = {}, u64 messageId = 0) {
     const Verdict verdict = arbiter_.tryFire(id, now, messageId);
     if (verdict != Verdict::Allowed) return verdict;
 
+    struct CauseScope {
+      EventArbiter& a;
+      ~CauseScope() { a.pop(); }
+    };
     arbiter_.push(id);
+    CauseScope scope{arbiter_};
     const auto handlersIt = handlers_.find(id);
     if (handlersIt != handlers_.end() && !handlersIt->second.empty()) {
       const auto snapshot = handlersIt->second;
       for (const auto& handler : snapshot) handler(payload);
     }
-    arbiter_.pop();
     return verdict;
   }
 

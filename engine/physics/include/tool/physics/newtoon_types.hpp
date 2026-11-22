@@ -114,9 +114,15 @@ struct Collider {
 inline void SetMassFromShape(Rigidbody& rb, const Collider& c, float mass) {
   rb.SetMass(mass);
   if (mass <= 0.f) { rb.inverseInertiaLocal = {0, 0, 0}; return; }
-  // Atenção: raio 0 gera inercia zero e inverso infinito.
-  if (c.type == ShapeType::Sphere) { const float i = 0.4f * mass * c.radius * c.radius; rb.inverseInertiaLocal = {1.f / i, 1.f / i, 1.f / i}; return; }
-  const Vec3 e = c.extents; const float k = mass / 3.f; // (1/12)*m*(w^2+h^2) com w = 2e  ->  m/3 * (e1^2+e2^2)
+  // Limita dimensoes minimas para evitar divisao por zero e inercia infinita.
+  if (c.type == ShapeType::Sphere) {
+    const float r = std::max(c.radius, 1e-4f);
+    const float i = 0.4f * mass * r * r;
+    rb.inverseInertiaLocal = {1.f / i, 1.f / i, 1.f / i};
+    return;
+  }
+  const Vec3 e = {std::max(c.extents.x, 1e-4f), std::max(c.extents.y, 1e-4f), std::max(c.extents.z, 1e-4f)};
+  const float k = mass / 3.f; // (1/12)*m*(w^2+h^2) com w = 2e  ->  m/3 * (e1^2+e2^2)
   rb.inverseInertiaLocal = {1.f / (k * (e.y * e.y + e.z * e.z)), 1.f / (k * (e.x * e.x + e.z * e.z)), 1.f / (k * (e.x * e.x + e.y * e.y))};
 }
 

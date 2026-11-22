@@ -90,8 +90,11 @@ public:
   void setHandler(Handler h) { handler_ = std::move(h); }
   // Liga ou desliga o abort em diagnosticos Fatal (ligado por padrao).
   void setFatalAborts(bool v) { fatalIsAbort_ = v; }
-  // Quantidade de diagnosticos registrados com a gravidade s. Atenção: le o contador sem o mutex.
-  size_t count(Severity s) const { return counts_[static_cast<int>(s)]; }
+  // Quantidade de diagnosticos registrados com a gravidade s.
+  size_t count(Severity s) const {
+    std::lock_guard lk(mu_);
+    return counts_[static_cast<int>(s)];
+  }
   // Copia do historico recente de diagnosticos (limite de 512).
   std::vector<Diagnostic> history() const {
     std::lock_guard lk(mu_);

@@ -5,6 +5,7 @@
 #include "tool/core/json.hpp"
 #include "tool/debug/debug.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <functional>

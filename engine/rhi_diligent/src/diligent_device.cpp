@@ -209,10 +209,11 @@ public:
   }
 
   // Espera a GPU ficar ociosa e so entao libera o objeto e o handle.
-  // Atenção: destruir o handle do backbuffer nao zera backbufferHandle_.
+  // Destruir o handle do backbuffer zera backbufferHandle_.
   void destroy(Handle h) override {
     if (!ids_.alive(h)) { debug().report(diag::kStaleHandle, Severity::Warning, "RHI destroy() com handle obsoleto"); return; }
     ctx->WaitForIdle(); // simples e seguro: o objeto pode estar em uso por comandos em voo
+    if (h == backbufferHandle_) backbufferHandle_ = kNullHandle;
     objs_.erase(h.index); pipelines_.erase(h.index); sizes_.erase(h.index); kinds_.erase(h.index);
     ids_.destroy(h);
   }
@@ -456,7 +457,7 @@ public:
     defineScissorDoAlvo();
   }
   // Troca o alvo de cor e profundidade sem limpar nada.
-  // Atenção: nao atualiza targetW_/targetH_, viewport nem scissor. Alvos de outro tamanho usam os valores anteriores.
+  // Atualiza targetW_/targetH_, viewport e scissor correspondentes ao novo alvo.
   void setTargets(TextureId target, TextureId depth) override {
     if (!check()) return;
     dl::ITextureView* rtv = nullptr; dl::ITextureView* dsv = nullptr;
@@ -466,6 +467,11 @@ public:
     dsv_ = dsv;
     dl::ITextureView* rtvs[] = {rtv};
     d_.ctx->SetRenderTargets(1, rtvs, dsv, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    const auto& td = rtv->GetTexture()->GetDesc();
+    dl::Viewport vp; vp.Width = static_cast<float>(td.Width); vp.Height = static_cast<float>(td.Height);
+    d_.ctx->SetViewports(1, &vp, td.Width, td.Height);
+    targetW_ = static_cast<u32>(td.Width); targetH_ = static_cast<u32>(td.Height);
+    defineScissorDoAlvo();
   }
   // Limpa a profundidade do alvo atual, sem tocar na cor.
   void clearDepth(f32 depth) override {

@@ -146,13 +146,13 @@ private:
   struct Vec2Names { std::string left, right, up, down; };
 
   // Le o valor bruto de uma vinculacao, multiplicado pela escala.
-  // Atenção: o caso PadButton nao confere b.code com PadButton::Count; buttons[] tem 15 posicoes.
+  // PadButton confere limites contra PadButton::Count (15 botoes).
   f32 read(const Binding& b) const {
     switch (b.kind) {
     case DeviceKind::Key: return b.code < kMaxKeys && raw_.keys[b.code] ? b.scale : 0.f;
     case DeviceKind::Mouse: return b.code < 5 && raw_.mouse[b.code] ? b.scale : 0.f;
     case DeviceKind::PadButton:
-      return b.pad < kMaxPads && raw_.pads[b.pad].connected && raw_.pads[b.pad].buttons[b.code] ? b.scale : 0.f;
+      return b.pad < kMaxPads && raw_.pads[b.pad].connected && b.code < static_cast<u32>(PadButton::Count) && raw_.pads[b.pad].buttons[b.code] ? b.scale : 0.f;
     case DeviceKind::PadAxisPositive:
     case DeviceKind::PadAxisNegative: {
       if (b.pad >= kMaxPads || !raw_.pads[b.pad].connected || b.code >= 6) return 0.f;
