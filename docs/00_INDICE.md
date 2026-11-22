@@ -28,6 +28,7 @@ Regra: nomes em maiúsculas com `_`, sem hífen e sem acento. Um documento fica 
 | 08 | `planos/08_PARTICULAS.md` | **Baixa** | Sistema de partículas. | 02 |
 | 09 | `planos/09_TEXTURAS_E_MATERIAIS.md` | **Baixa** | Texturas e materiais no renderer (hoje só cor). | 02 |
 | 10 | `planos/10_FISICA.md` | **Baixa** | Física Newtoon: a parte de editor está pronta, o resto está fora desta versão. | Nada |
+| 11 | `planos/11_USABILIDADE_SPRITEUI.md` | **Alta** | Análise de usabilidade do SpriteUI: Scenes sem ação, +/- pequenos, combos, hover e tema lento. | 06 |
 
 Painéis de acompanhamento: `planos/00_ROADMAP.md` (visão geral) e `planos/00_CHECKLIST.md` (estado de cada item).
 

@@ -76,6 +76,13 @@ class Panel {
   // Aplica a digitacao do quadro, monta a view e desenha. `actions` recebe o que foi clicado neste quadro.
   // Devolve false se o SDL falhou ao desenhar.
   bool draw(SDL_Renderer* renderer, float windowW, float windowH, std::vector<View::Action>& actions) {
+    // O SDL so envia SDL_EVENT_TEXT_INPUT com a entrada de texto ligada. Liga quando o campo de nome ganha foco
+    // (criar ou renomear) e desliga quando perde; sem isso, nada que se digita entra no nome.
+    if (SDL_Window* win = renderer ? SDL_GetRenderWindow(renderer) : nullptr; win && model_.nameFocus != textInputOn_) {
+      if (model_.nameFocus) SDL_StartTextInput(win);
+      else SDL_StopTextInput(win);
+      textInputOn_ = model_.nameFocus;
+    }
     for (const std::string& t : texts_) view_.TypeText(t);
     for (int i = 0; i < backspaces_; ++i) view_.Backspace();
     texts_.clear();
@@ -108,6 +115,7 @@ class Panel {
   float x_ = 0.f, y_ = 0.f;
   bool pressed_ = false, released_ = false, down_ = false, owned_ = false;
   int backspaces_ = 0;
+  bool textInputOn_ = false;   // estado atual de SDL_StartTextInput/SDL_StopTextInput da janela
   std::vector<std::string> texts_;
   std::uint64_t frame_ = 0;
 };

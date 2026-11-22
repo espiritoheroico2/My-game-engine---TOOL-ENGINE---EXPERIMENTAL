@@ -171,7 +171,7 @@ class SettingsPanel {
         strip_.setFontScale(editor::ui_style::textScale());
         canvas_.setFontScale(editor::ui_style::textScale());
         overlay_.setFontScale(editor::ui_style::textScale());
-        dropdownStyle_.cornerRadius = editor::ui_style::buttonRadius();
+        dropdownStyle_.cornerRadius = Metrics::kRowH * 0.5f;   // campos de selecao sao redondos (pilula), como o resto da UI
         // Mede o conteudo, prende o deslocamento ao tamanho real e refaz o layout uma vez com ele.
         layoutSections(v);
         syncScroll();
@@ -328,12 +328,17 @@ class SettingsPanel {
     }
 
     void drawHeader(std::size_t i, float y, float w) {
-        canvas_.addSolid(Metrics::kPad, y, w, Metrics::kHeaderH, theme_.surface, 0.2f, editor::ui_style::buttonRadius());
+        const bool hot = headers_[i].contains(hover_.x, hover_.y);
+        canvas_.addSolid(Metrics::kPad, y, w, Metrics::kHeaderH, hot ? theme_.accent : theme_.surface, 0.2f,
+                         editor::ui_style::buttonRadius());
         canvas_.addText(Metrics::kPad + 10.f, y + 7.f, std::string(T(sm::kTabNames[i])), Metrics::kFont + 1.f, theme_.text,
-                        w - 40.f);
-        const float cx = Metrics::kPad + w - 18.f, cy = y + Metrics::kHeaderH * 0.5f;
-        canvas_.addSolid(cx - 6.f, cy - 1.f, 12.f, 2.f, theme_.scroll, 0.25f);                      // "-"
-        if (!open_[i]) canvas_.addSolid(cx - 1.f, cy - 6.f, 2.f, 12.f, theme_.scroll, 0.25f);      // "+" quando fechada
+                        w - 56.f);
+        // Botao redondo de 22 px com o sinal de recolher (-) ou expandir (+): visivel e facil de acertar.
+        const float cx = Metrics::kPad + w - 17.f, cy = y + Metrics::kHeaderH * 0.5f;
+        canvas_.addSolid(cx - 11.f, cy - 11.f, 22.f, 22.f, hot ? theme_.text : theme_.surface, 0.24f, 11.f);
+        const SU::Vec4 sign = hot ? theme_.surface : theme_.text;
+        canvas_.addSolid(cx - 6.f, cy - 1.5f, 12.f, 3.f, sign, 0.25f);                              // "-"
+        if (!open_[i]) canvas_.addSolid(cx - 1.5f, cy - 6.f, 3.f, 12.f, sign, 0.25f);             // "+" quando fechada
     }
 
     // Corpo da secao Settings (graficos), a partir de y. Devolve o y final.
@@ -611,7 +616,10 @@ class SettingsPanel {
         constexpr float z = Metrics::kControlZ;
         append(items, paint, Elm::BuildRadioGroupItems(apis_, radioStyle_, z, paint), kContentClip);
         for (const Elm::Dropdown* dd : allDropdowns()) {
-            append(items, paint, Elm::BuildDropdownButtonItems(*dd, dropdownStyle_, z, paint), kContentClip);
+            // Hover: o combo sob o ponteiro pinta com a cor de destaque do tema (amarelo no tema Ember, por exemplo).
+            Elm::DropdownStyle style = dropdownStyle_;
+            if (dd->border.Contains(hover_) && !dd->control.disabled) style.button = theme_.accent;
+            append(items, paint, Elm::BuildDropdownButtonItems(*dd, style, z, paint), kContentClip);
         }
         append(items, paint, Elm::BuildSliderItems(scale_, sliderStyle_, z, paint), kContentClip);
         append(items, paint, Elm::BuildCheckboxItems(pixel_, checkStyle_, z, paint), kContentClip);
@@ -649,6 +657,7 @@ class SettingsPanel {
     }
 
     bool pointer(Elm::PointerPhase phase, float x, float y) {
+        if (phase == Elm::PointerPhase::Move) hover_ = {x - rect_.x, y - rect_.y};   // hover: cabecalhos, combos, opcoes
         if (!inside(x, y)) {
             if (phase == Elm::PointerPhase::Down) closeAllDropdowns();
             return false;
@@ -861,6 +870,7 @@ class SettingsPanel {
     Elm::Checkbox rtAo_;
 
     Elm::TabBarStyle tabStyle_;
+    SU::Vec2 hover_{-1.f, -1.f};   // ultima posicao do ponteiro (coordenadas da janela), para o hover
     Elm::RadioStyle radioStyle_;
     Elm::DropdownStyle dropdownStyle_;
     Elm::SliderStyle sliderStyle_;
