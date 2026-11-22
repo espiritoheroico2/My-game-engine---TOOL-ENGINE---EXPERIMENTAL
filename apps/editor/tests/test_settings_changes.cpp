@@ -29,6 +29,8 @@ struct RecordingTarget {
   int shadowQuality = -1;
   float renderScale = -1.f;
   bool shadows = false;
+  bool rayTracing = true;
+  bool rtAo = false;
   int chunkCacheMax = -1;
   float interfaceScale = -1.f;
   float buttonRadius = -1.f, windowRadius = -1.f, textScale = -1.f;
@@ -47,6 +49,8 @@ struct RecordingTarget {
   void setPixelFilter(bool) { ++calls; }
   void setFps(int) { ++calls; }
   void setShadows(bool on) { shadows = on; ++calls; }
+  void setRayTracing(bool on) { rayTracing = on; ++calls; }
+  void setRtAo(bool on) { rtAo = on; ++calls; }
   void setShadowQuality(int i) { shadowQuality = i; ++calls; }
   void setChunkCacheMax(int i) { chunkCacheMax = i; ++calls; }
   void setInterfaceScale(float s) { interfaceScale = s; ++calls; }

@@ -15,7 +15,7 @@ namespace editor::settings_changes {
 // Campo que o usuario mexeu.
 enum class Field : std::uint8_t {
     Tab, Api, ResMode, CustomW, CustomH, RenderScale, Upscale, Aa, PixelFilter, Fps,
-    Shadows, ShadowQuality, ChunkCacheMax, InterfaceScale, IdleRendering, Palette,
+    Shadows, ShadowQuality, RayTracing, RtAo, ChunkCacheMax, InterfaceScale, IdleRendering, Palette,
     ButtonRadius, WindowRadius, TextScale
 };
 
@@ -48,6 +48,8 @@ void ApplyChanges(Target& target, const Requests& requests) {
             case Field::Fps: target.setFps(c.index); break;
             case Field::Shadows: target.setShadows(c.on); break;
             case Field::ShadowQuality: target.setShadowQuality(c.index); break;
+            case Field::RayTracing: target.setRayTracing(c.on); break;
+            case Field::RtAo: target.setRtAo(c.on); break;
             case Field::ChunkCacheMax: target.setChunkCacheMax(c.index); break;
             case Field::InterfaceScale: target.setInterfaceScale(c.value); break;
             case Field::IdleRendering: target.setIdleRendering(c.on); break;

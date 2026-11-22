@@ -78,6 +78,8 @@ struct Values {
     float textScale = 1.f;    // escala do texto da interface (1 = 100%)
     bool shadows = false;
     int shadowQuality = 0;   // indice (0 a 3), ja convertido pelo main.cpp
+    bool rayTracing = true;
+    bool rtAo = false;
     std::string adapter;
     std::string pixelsLine;
     std::string gpuErrorLine;
@@ -458,6 +460,10 @@ class SettingsPanel {
         checkRow(shadows_, y, T("Enable shadows"));
         y += Metrics::kRowH + Metrics::kGap;
         controlRow(shadowQuality_, y, T("Shadow quality"));
+        y += Metrics::kRowH + Metrics::kGap;
+        checkRow(rayTracing_, y, T("Enable ray tracing"));
+        y += Metrics::kRowH + Metrics::kGap;
+        checkRow(rtAo_, y, T("Ray-traced ambient occlusion (CPU)"));
         y += Metrics::kRowH + Metrics::kGap + 4.f;
         for (const std::string* line : {&v.adapter, &v.pixelsLine, &v.gpuErrorLine, &v.gpuStatsLine}) {
             text(Metrics::kPad, y, *line, Metrics::kFont, textWidth());
@@ -586,6 +592,9 @@ class SettingsPanel {
         sb::SyncRenderScale(scale_, v.renderScale);
         sb::SyncCheckbox(pixel_, v.pixelFilter);
         sb::SyncCheckbox(shadows_, v.shadows);
+        sb::SyncCheckbox(rayTracing_, v.rayTracing);
+        sb::SyncCheckbox(rtAo_, v.rayTracing && v.rtAo);
+        rayTracingEnabled_ = v.rayTracing;
         scaleEnabled_ = v.resMode == 0;   // a escala so vale com a resolucao de janela (igual ao ImGui)
     }
 
@@ -604,6 +613,8 @@ class SettingsPanel {
         append(items, paint, Elm::BuildSliderItems(scale_, sliderStyle_, z, paint), kContentClip);
         append(items, paint, Elm::BuildCheckboxItems(pixel_, checkStyle_, z, paint), kContentClip);
         append(items, paint, Elm::BuildCheckboxItems(shadows_, checkStyle_, z, paint), kContentClip);
+        append(items, paint, Elm::BuildCheckboxItems(rayTracing_, checkStyle_, z, paint), kContentClip);
+        append(items, paint, Elm::BuildCheckboxItems(rtAo_, checkStyle_, z, paint), kContentClip);
     }
 
     // Lista aberta de um combo: fundo e linhas com z acima dos controles. Os textos vem de overlay_.
@@ -731,6 +742,8 @@ class SettingsPanel {
         applyCheck(pixel_, phase, p, sc::Field::PixelFilter);
         applyDropdown(fps_, phase, p, sc::Field::Fps);
         applyCheck(shadows_, phase, p, sc::Field::Shadows);
+        applyCheck(rayTracing_, phase, p, sc::Field::RayTracing);
+        if (rayTracingEnabled_) applyCheck(rtAo_, phase, p, sc::Field::RtAo);
         applyDropdown(shadowQuality_, phase, p, sc::Field::ShadowQuality);
     }
 
@@ -818,6 +831,7 @@ class SettingsPanel {
     int tab_ = kGraphicsTab;
     int revealedTab_ = -1;
     bool scaleEnabled_ = true;
+    bool rayTracingEnabled_ = true;
     float labelW_ = Metrics::kLabelW;     // largura da coluna de rotulos (cabe na janela)
     float controlW_ = Metrics::kControlW; // largura da coluna de controles
     float contentH_ = 0.f;                // altura do conteudo da aba Graficos (do ultimo layout)
@@ -839,6 +853,8 @@ class SettingsPanel {
     Elm::Dropdown fps_;
     Elm::Checkbox shadows_;
     Elm::Dropdown shadowQuality_;
+    Elm::Checkbox rayTracing_;
+    Elm::Checkbox rtAo_;
 
     Elm::TabBarStyle tabStyle_;
     Elm::RadioStyle radioStyle_;
