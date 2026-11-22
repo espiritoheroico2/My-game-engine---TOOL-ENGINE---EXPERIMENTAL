@@ -1,6 +1,8 @@
 # ToolEngine (nome de trabalho)
 
 Engine 3D leve, multi-API, em C++20. Estrutura pensada para o **Visual Studio Code**.
+Criado por: João Vitor Dias da Silva
+
 
 ## Como abrir
 1. Instale: VS Code, CMake >= 3.25, um compilador (GCC/Clang/MSVC).
