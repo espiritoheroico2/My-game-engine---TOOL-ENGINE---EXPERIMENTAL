@@ -16,7 +16,7 @@
 #include "assets_panel.hpp"
 #include <cctype>
 #include "editor_state.hpp"
-#include "export_ui.hpp"
+#include "export_panel.hpp"
 #include "extra_ui.hpp"
 #include "fx.hpp"
 #include "i18n.hpp"
@@ -3213,7 +3213,7 @@ static int runEditorMain(int argc, char** argv) {
   for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--play") == 0) startPlaying = true; if (std::strcmp(argv[i], "--selftest") == 0) selfTest = true; if (std::strcmp(argv[i], "--player") == 0) playerMode = true; }
   bool openScriptAtStart = false;   // --edit-script: abre a janela de script do objeto selecionado (capturas)
   for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--edit-script") == 0) openScriptAtStart = true;
-  std::string startLang, startTheme, startScene, focusWin, selectName; int startTab = -1; bool showInputMapAtStart = false; std::string narrativeFile;
+  std::string startLang, startTheme, startScene, focusWin, selectName; int startTab = -1; bool showInputMapAtStart = false; bool showExportAtStart = false; std::string narrativeFile;
   for (int i = 1; i + 1 < argc; ++i) {
     if (std::strcmp(argv[i], "--lang") == 0) startLang = argv[i + 1];
     if (std::strcmp(argv[i], "--theme") == 0) startTheme = argv[i + 1];
@@ -3224,6 +3224,7 @@ static int runEditorMain(int argc, char** argv) {
     if (std::strcmp(argv[i], "--select") == 0) selectName = argv[i + 1]; // seleciona um objeto pelo nome
     if (std::strcmp(argv[i], "--help-topic") == 0) editor::openHelp(argv[i + 1]); // capturas de tela: abre a janela Help neste topico
     if (std::strcmp(argv[i], "--show-inputmap") == 0) showInputMapAtStart = true;
+    if (std::strcmp(argv[i], "--show-export") == 0) showExportAtStart = true;   // captura: abre Export game
     if (std::strcmp(argv[i], "--narrative") == 0) narrativeFile = argv[i + 1];   // abre um grafo no Narrative Controller (capturas de tela)
   }
   if (selfTest && !std::getenv("SDL_VIDEODRIVER")) SDL_setenv_unsafe("SDL_VIDEODRIVER", "dummy", 1);
@@ -3349,6 +3350,7 @@ static int runEditorMain(int argc, char** argv) {
     else { ed.sceneInfo.name = "Main"; ed.createDefaultContent(); ed.saveScene(); ed.undoReset(); }
   }
   if (showInputMapAtStart) ed.showInputMap = true;
+  if (showExportAtStart) ed.showExport = true;
   if (!narrativeFile.empty()) ed.narrative.open(narrativeFile);
   if (startPlaying) ed.startPlay();
   // --ecs N: benchmark sem vsync. Cria N esferas (como "test ECS: N"), mede o tempo de cada quadro depois do nascimento
@@ -3398,7 +3400,10 @@ static int runEditorMain(int argc, char** argv) {
   if (uiReady) helpPanel = std::make_unique<editor::help::HelpPanel>(uiText, uiRenderer);
   std::unique_ptr<editor::testmap::TestMapPanel> testMapPanel;
   if (uiReady) testMapPanel = std::make_unique<editor::testmap::TestMapPanel>(uiText, uiRenderer);
+  std::unique_ptr<editor::exportui::Panel> exportPanel;   // Export game em SpriteUI (exportacao em export_panel.hpp)
+  if (uiReady) exportPanel = std::make_unique<editor::exportui::Panel>(uiText, uiRenderer);
   bool testMapGenerate = false;   // o botao "Generate map" so marca; o mapa e gerado depois do quadro
+  bool exportRequested = false;   // o botao "Export game" so marca; a exportacao roda depois do quadro
   std::unique_ptr<editor::console_panel::ConsolePanel> consolePanel;
   if (uiReady) consolePanel = std::make_unique<editor::console_panel::ConsolePanel>(uiText, uiRenderer);
   SDL_Cursor* spriteTextCursor = uiReady ? SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT) : nullptr;
@@ -3548,6 +3553,9 @@ static int runEditorMain(int argc, char** argv) {
       const bool helpHandled = helpPanel && helpPanel->handleEvent(e, window, editor::helpState().open);   // janela Help SpriteUI
       const editor::testmap::Action testMapAction = testMapPanel ? testMapPanel->handleEvent(e, editor::testMapState().open, editor::testMapState().side) : editor::testmap::Action::None;
       if (testMapAction == editor::testmap::Action::Generate) testMapGenerate = true;
+      const editor::exportui::Action exportAction = exportPanel ? exportPanel->handleEvent(e, ed.showExport, ed.projSettings.exportPreset.platform) : editor::exportui::Action::None;
+      if (exportAction == editor::exportui::Action::Platform) ed.projSettings.save(ed.project);   // a escolha de plataforma vai para o projeto
+      if (exportAction == editor::exportui::Action::Export) exportRequested = true;
       const bool menuHandled = menuPanel && menuPanel->handleEvent(e);
       const bool consoleHandled = !dockHandled && consolePanel && consolePanel->handleEvent(e, dockShown(editor::dock_host::Kind::Console, ed.showConsole));
       const bool hierHandled = !dockHandled && hierPanel && dockShown(editor::dock_host::Kind::Hierarchy, ed.showHierarchy) && hierPanel->handleEvent(e);
@@ -3689,7 +3697,6 @@ static int runEditorMain(int argc, char** argv) {
       if (ed.showSettings) drawSettings(ed);
 #endif
       if (ed.showInputMap) editor::drawInputMap(ed, &ed.showInputMap);
-      if (ed.showExport) editor::drawExport(ed, &ed.showExport);
     }
     { // "Panels" = tempo dos paineis SEM as renderizacoes 3D (essas ja foram contadas nas suas proprias zonas)
       const float total = std::chrono::duration<float, std::milli>(editor::FrameProfiler::Clock::now() - panelsStart).count();
@@ -3862,6 +3869,19 @@ static int runEditorMain(int argc, char** argv) {
       if (!requests.help.empty()) editor::openHelp(requests.help);   // ? da moldura SpriteUI
       applyConsoleRequests(ed, requests);
     }
+    if (exportPanel) {   // Export game (SpriteUI): plataforma indisponivel volta para a primeira disponivel
+      auto& ex = ed.projSettings.exportPreset;
+      if (!editor::platformAvailable(ex.platform)) {
+        for (int i = 0; i < static_cast<int>(editor::kExportPlatforms.size()); ++i) if (editor::platformAvailable(i)) { ex.platform = i; break; }
+      }
+      if (!exportPanel->draw(renderer, window, ed.showExport, ex.platform, ed.projSettings.missingInfo(), editor::I18n::get().code())) {
+        tool::logError(std::string("Export SpriteUI render failed: ") + SDL_GetError());
+        exportPanel.reset();
+      } else if (exportRequested) {
+        exportPanel->setResult(editor::exportui::runExport(ed));
+      }
+    }
+    exportRequested = false;
     if (statusPanel) {   // por ultimo: a barra fica por cima do Profiler e da Ajuda (mesmo renderer, depois do RenderDrawData)
       const ImVec2 viewport = ImGui::GetMainViewport()->Size;
       if (!statusPanel->draw(renderer, statusBarInfo(ed), [](const char* s) { return T(s); }, nowSec, viewport.x, viewport.y, ImGui::GetFrameHeight())) {

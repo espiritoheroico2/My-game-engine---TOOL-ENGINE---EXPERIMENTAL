@@ -191,7 +191,7 @@
 //   assets_panel.hpp      Painel de Assets: pastas, arquivos, arrastar, dialogos de criar/renomear/apagar.
 //   narrative_panel.hpp   Janela do Narrative Controller em SpriteUI (grafo proprio, sem ImNodes); dados em narrative_model.hpp.
 //   project_dialog.hpp    Dialogo de criar/abrir projeto (tabela de projetos recentes).
-//   export_ui.hpp         Janelas Editor info e Export (formulario e botao de exportar).
+//   export_panel.hpp      Janela Export game (SpriteUI; antes export_ui.hpp, ImGui).
 //   fx.hpp                Overlays desenhados com ImDrawList: particulas, UI do jogo, botoes.
 //   viewport_tools.hpp    Selecao por raio e ferramentas do viewport (mouse).
 //   editor_scripts.hpp    Teclas de movimento no Play (IsKeyDown).
