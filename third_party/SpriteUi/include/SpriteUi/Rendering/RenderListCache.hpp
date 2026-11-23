@@ -7,6 +7,7 @@
 
 #include "SpriteUi/Rendering/DrawList.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <vector>
@@ -38,8 +39,12 @@ public:
                 scratch_.clear();
                 build(node, scratch_);
                 const auto first = items_.begin() + static_cast<std::ptrdiff_t>(offset);
-                items_.erase(first, first + static_cast<std::ptrdiff_t>(segment.count));
-                items_.insert(items_.begin() + static_cast<std::ptrdiff_t>(offset), scratch_.begin(), scratch_.end());
+                if (scratch_.size() == segment.count) {
+                    std::copy(scratch_.begin(), scratch_.end(), first);
+                } else {
+                    items_.erase(first, first + static_cast<std::ptrdiff_t>(segment.count));
+                    items_.insert(items_.begin() + static_cast<std::ptrdiff_t>(offset), scratch_.begin(), scratch_.end());
+                }
                 segment.count = scratch_.size();
                 segment.dirty = false;
                 ++lastRebuildCount_;

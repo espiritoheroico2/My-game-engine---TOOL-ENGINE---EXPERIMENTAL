@@ -6,6 +6,7 @@
 #include "SpriteUi/Rendering/RenderListCache.hpp"
 #include "SpriteUi/Rendering/Sprite.hpp"
 
+#include <array>
 #include <cstdio>
 #include <vector>
 
@@ -100,6 +101,33 @@ void TestCacheRebuildsOnlyDirtyNode() {
     CHECK(items[2].tintPremultipliedLinear.x == 0.5f);
 }
 
+void TestCacheUpdatesSameSizeInPlace() {
+    R::RenderListCache cache;
+    cache.Reset(4);
+    std::array<float, 4> tints{0.1f, 0.2f, 0.3f, 0.4f};
+    const auto builder = [&](std::size_t node, std::vector<R::UIRenderItem>& out) {
+        out = NodeItems(node, tints[node]);
+    };
+
+    cache.Update(builder);
+    const auto& initial = cache.Update(builder);
+    const auto* stableItem = &initial[2];
+
+    tints[0] = 0.8f;
+    tints[2] = 0.9f;
+    cache.MarkDirty(0);
+    cache.MarkDirty(2);
+    const auto& updated = cache.Update(builder);
+
+    CHECK(&updated[2] == stableItem);
+    CHECK(cache.LastRebuildCount() == 2);
+    CHECK(updated.size() == 4);
+    CHECK(updated[0].tintPremultipliedLinear.x == 0.8f);
+    CHECK(updated[1].tintPremultipliedLinear.x == 0.2f);
+    CHECK(updated[2].tintPremultipliedLinear.x == 0.9f);
+    CHECK(updated[3].tintPremultipliedLinear.x == 0.4f);
+}
+
 void TestCacheHandlesNodeSizeChange() {
     R::RenderListCache cache;
     cache.Reset(2);
@@ -129,6 +157,7 @@ int main() {
     TestTextureSwitchBreaksBatch();
     TestCacheWithoutChangeRebuildsNothing();
     TestCacheRebuildsOnlyDirtyNode();
+    TestCacheUpdatesSameSizeInPlace();
     TestCacheHandlesNodeSizeChange();
 
     std::printf("RenderList: %d checks, %d falhas\n", run, failed);
