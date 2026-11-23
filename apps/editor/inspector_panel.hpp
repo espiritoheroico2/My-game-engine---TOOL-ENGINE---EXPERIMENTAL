@@ -635,7 +635,7 @@ class InspectorPanel {
     void partTextureRow(int part, char* texture) {
         std::vector<std::string> options{T("(none)")};
         std::size_t selected = 0;
-        if (hooks_.assets) for (const std::string& rel : hooks_.assets(editor::AssetKind::Texture)) {
+        if (hooks_.assets) for (const std::string& rel : hooks_.assets(editor::AssetKind::Image)) {
             if (rel == texture) selected = options.size();
             options.push_back(rel);
         }
