@@ -7,8 +7,9 @@
 //
 // Limites desta versao (de proposito):
 //  - Um unico atlas de glifos/recursos, em alfa 8 bits (RGB = 1, A = cobertura). O slice 0 (WhiteTextureSlice)
-//    e o retangulo branco; qualquer outro slice amostra o atlas. FlagBitmapText e FlagMsdfText valem como texto
-//    de cobertura alfa; SDF/MSDF real fica para depois.
+//    e o retangulo branco; o slice 1 referencia o atlas. Outros slices e materiais ainda nao sao suportados e
+//    causam erro explicito. FlagBitmapText e FlagMsdfText valem como texto de cobertura alfa; SDF/MSDF real fica
+//    para depois.
 //  - O pixel (0,0) do atlas e reservado como branco solido: o atlas deve deixar essa celula vazia (padding >= 1).
 //  - Cantos arredondados (FlagRoundedPanel) usam o mesmo SDF de caixa do SpriteUI, com 1 px de anti-aliasing.
 //  - Coordenadas do FramePacket sao pixels do alvo (DPI 1). O alvo e definido com setTarget().
@@ -131,6 +132,7 @@ public:
     if (!initialized_) { fail("backend nao inicializado (chame init)"); return false; }
     if (target_.isNull()) { fail("sem alvo (chame setTarget)"); return false; }
     if (atlas_.isNull()) { fail("sem atlas (chame uploadAtlas)"); return false; }
+    if (!ValidateResources(packet)) return false;
 
     BuildVertices(packet);
     if (vertices_.empty()) { ++stats_.frames; return true; }
@@ -150,16 +152,15 @@ public:
     cl->setUniform(0, params_);
     cl->setTexture(0, atlas_);
 
-    // Trechos contiguos com o mesmo recorte viram uma chamada de desenho.
-    std::uint32_t runStart = 0;
-    while (runStart < packet.instances.size()) {
-      const std::uint32_t clip = packet.instances[runStart].resourceIds[2];
-      std::uint32_t runEnd = runStart + 1;
-      while (runEnd < packet.instances.size() && packet.instances[runEnd].resourceIds[2] == clip) ++runEnd;
-      if (!ApplyClip(*cl, clip, packet.clipRects)) { ++stats_.emptyClips; runStart = runEnd; continue; }
-      cl->drawIndexedRange(runStart * 6u, (runEnd - runStart) * 6u, 1);
+    // O packet ja contem a chave de compatibilidade e a ordem de pintura. Nunca reagrupamos
+    // instancias aqui: isso faria A-B-A virar um unico lote e poderia quebrar alpha blending.
+    for (const R::DrawBatch& batch : packet.batches) {
+      if (!ApplyClip(*cl, batch.clipIndex, packet.clipRects)) {
+        ++stats_.emptyClips;
+        continue;
+      }
+      cl->drawIndexedRange(batch.firstInstance * 6u, batch.instanceCount * 6u, 1);
       ++stats_.draws;
-      runStart = runEnd;
     }
     cl->end();
     dev_.submit(*cl);
@@ -209,6 +210,24 @@ private:
       d.lang = rhi::ShaderLang::HLSL;
     }
     return dev_.createShader(d);
+  }
+
+  bool ValidateResources(const R::FramePacket& packet) {
+    for (const R::DrawBatch& batch : packet.batches) {
+      if (batch.textureSlice > 1u) {
+        fail("textureSlice nao suportado pelo backend: " + std::to_string(batch.textureSlice));
+        return false;
+      }
+      if (batch.materialIndex != 0u) {
+        fail("materialIndex nao suportado pelo backend: " + std::to_string(batch.materialIndex));
+        return false;
+      }
+      if ((batch.flags & ~(R::FlagMsdfText | R::FlagRoundedPanel | R::FlagBitmapText)) != 0u) {
+        fail("flags de material nao suportadas pelo backend");
+        return false;
+      }
+    }
+    return true;
   }
 
   // Gera quatro vertices por instancia, na ordem do pacote. Mesma geometria do rasterizador de referencia:

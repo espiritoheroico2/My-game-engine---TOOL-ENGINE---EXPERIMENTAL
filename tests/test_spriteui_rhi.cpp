@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #ifndef TOOL_SHADERS_DIR
@@ -66,6 +67,48 @@ TEST(spriteui_rhi_draws_batches_and_clips_on_null_device) {
   CHECK(backend.stats().clippedRuns == 1);
   CHECK(backend.stats().emptyClips == 0);
   CHECK(backend.lastError().empty());
+}
+
+TEST(spriteui_rhi_consumes_packet_batches_in_order) {
+  Fixture f;
+  ToolEngine::SpriteUi::Adapters::SpriteUiRhiBackend backend(*f.dev, TOOL_SHADERS_DIR);
+  CHECK(backend.init());
+  const std::vector<std::uint8_t> atlas(8 * 8, 255);
+  CHECK(backend.uploadAtlas(atlas.data(), 8, 8));
+  CHECK(backend.setTarget(f.target, 64, 64));
+
+  R::FramePacket p;
+  p.instances = {Rect(0, 0, R::NoClipIndex), Rect(20, 0, R::NoClipIndex), Rect(40, 0, R::NoClipIndex)};
+  p.instances[1].resourceIds[0] = 1; // o atlas, entre dois quads brancos
+  p.batches = {
+    R::DrawBatch{0, 1, R::WhiteTextureSlice, 0, R::NoClipIndex, 0},
+    R::DrawBatch{1, 1, 1, 0, R::NoClipIndex, 0},
+    R::DrawBatch{2, 1, R::WhiteTextureSlice, 0, R::NoClipIndex, 0},
+  };
+  CHECK(backend.Submit(p));
+  CHECK(backend.stats().draws == 3);
+}
+
+TEST(spriteui_rhi_rejects_unsupported_resources) {
+  Fixture f;
+  ToolEngine::SpriteUi::Adapters::SpriteUiRhiBackend backend(*f.dev, TOOL_SHADERS_DIR);
+  CHECK(backend.init());
+  const std::vector<std::uint8_t> atlas(8 * 8, 255);
+  CHECK(backend.uploadAtlas(atlas.data(), 8, 8));
+  CHECK(backend.setTarget(f.target, 64, 64));
+
+  R::FramePacket p;
+  p.instances = {Rect(0, 0, R::NoClipIndex)};
+  p.instances[0].resourceIds[1] = 3;
+  p.batches = {R::DrawBatch{0, 1, R::WhiteTextureSlice, 3, R::NoClipIndex, 0}};
+  CHECK(!backend.Submit(p));
+  CHECK(backend.lastError().find("materialIndex") != std::string::npos);
+
+  p.instances[0].resourceIds[1] = 0;
+  p.instances[0].resourceIds[0] = 2;
+  p.batches = {R::DrawBatch{0, 1, 2, 0, R::NoClipIndex, 0}};
+  CHECK(!backend.Submit(p));
+  CHECK(backend.lastError().find("textureSlice") != std::string::npos);
 }
 
 TEST(spriteui_rhi_skips_zero_area_clip) {
