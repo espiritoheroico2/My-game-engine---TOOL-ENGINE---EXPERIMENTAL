@@ -28,6 +28,19 @@ inline constexpr float kInterfaceScaleMax = 2.0f;
     return std::clamp(value, kChunkCacheMin, kChunkCacheMax);
 }
 
+// Simplificacao de malhas distantes: distancia em metros (da camera ate o objeto) e fracao de faces removida.
+inline constexpr float kSimplifyDistanceMin = 10.f;
+inline constexpr float kSimplifyDistanceMax = 500.f;
+inline constexpr float kSimplifyAmountMax = 0.9f;
+[[nodiscard]] inline float ClampSimplifyDistance(float value) noexcept {
+    if (std::isnan(value)) return 60.f;
+    return std::clamp(value, kSimplifyDistanceMin, kSimplifyDistanceMax);
+}
+[[nodiscard]] inline float ClampSimplifyAmount(float value) noexcept {
+    if (std::isnan(value)) return 0.5f;
+    return std::clamp(value, 0.f, kSimplifyAmountMax);
+}
+
 // Estilo da interface (Configuracoes > Appearance): raio dos botoes, raio das janelas e escala do texto.
 inline constexpr float kButtonRadiusMax = 12.f;
 inline constexpr float kWindowRadiusMax = 16.f;

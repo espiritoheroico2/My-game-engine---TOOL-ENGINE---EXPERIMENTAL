@@ -67,6 +67,11 @@ if(TOOL_WITH_SPRITEUI)
   target_include_directories(sui_palette_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME Editor.SuiPalette COMMAND sui_palette_tests)
 
+  # Simplificacao de malha (faces removidas sem buracos, bordas e quinas preservadas).
+  add_executable(mesh_simplify_tests tests/test_mesh_simplify.cpp)
+  target_link_libraries(mesh_simplify_tests PRIVATE tool::render)
+  add_test(NAME Editor.MeshSimplify COMMAND mesh_simplify_tests)
+
   # Moldura do Console (console_frame.hpp): posicao, X, arraste pelo grip e limites. Sem janela.
   add_executable(editor_window_frame_tests tests/test_window_frame.cpp)
   target_include_directories(editor_window_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

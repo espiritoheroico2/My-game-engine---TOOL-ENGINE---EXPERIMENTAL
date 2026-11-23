@@ -900,6 +900,9 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(!back.lighting.rayTracing && back.lighting.rtAo && back.lighting.rtAoRays == 24 && std::fabs(back.lighting.rtAoRadius - 1.25f) < 1e-4f, "render settings: ray tracing master and RT AO survive save and load");
     const RenderSettings def = loadRenderSettings(saveRenderSettings(RenderSettings{}));
     check(def.occlusionCull && def.lighting.rayTracing && !def.lighting.rtAo, "render settings: occlusion on, ray tracing master on and RT AO off by default");
+    check(::editor::settings_model::ClampSimplifyAmount(2.f) == ::editor::settings_model::kSimplifyAmountMax &&
+          ::editor::settings_model::ClampSimplifyAmount(-1.f) == 0.f && ::editor::settings_model::ClampSimplifyDistance(1.f) == ::editor::settings_model::kSimplifyDistanceMin,
+          "simplify settings: amount and distance are clamped to their ranges");
   }
 
   fs::remove_all(tmp, ec);

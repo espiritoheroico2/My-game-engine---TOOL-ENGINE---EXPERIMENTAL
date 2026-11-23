@@ -78,10 +78,11 @@ class Chrome {
     if (!visible_) return false;
     switch (e.type) {
       case SDL_EVENT_MOUSE_MOTION:
-        if (frame_.dragging()) {
+        if (frame_.dragging() || frame_.resizing()) {
           frame_.pointerMove({e.motion.x, e.motion.y});
           return true;
         }
+        setEdgeCursor(frame_.edgeAt({e.motion.x, e.motion.y}));   // so muda o cursor; nao consome o evento
         return false;
       case SDL_EVENT_MOUSE_BUTTON_DOWN: {
         if (e.button.button != SDL_BUTTON_LEFT) return false;
@@ -95,6 +96,19 @@ class Chrome {
         return false;
       default: return false;
     }
+  }
+
+  // Cursor de redimensionar sobre as bordas (horizontal, vertical ou diagonal). Mascara 0 volta ao normal.
+  static void setEdgeCursor(int mask) {
+    static int shown = 0;
+    if (mask == shown) return;
+    shown = mask;
+    static SDL_Cursor* cursors[5] = {};   // 0 normal, 1 horizontal, 2 vertical, 3 diagonal \, 4 diagonal /
+    const int kind = mask == 0 ? 0 : (mask == 1 || mask == 2 || mask == 3) ? 1 : (mask == 4 || mask == 8 || mask == 12) ? 2 : (mask == 5 || mask == 10) ? 3 : 4;
+    const SDL_SystemCursor sys[5] = {SDL_SYSTEM_CURSOR_DEFAULT, SDL_SYSTEM_CURSOR_EW_RESIZE, SDL_SYSTEM_CURSOR_NS_RESIZE,
+                                     SDL_SYSTEM_CURSOR_NWSE_RESIZE, SDL_SYSTEM_CURSOR_NESW_RESIZE};
+    if (!cursors[kind]) cursors[kind] = SDL_CreateSystemCursor(sys[kind]);
+    if (cursors[kind]) SDL_SetCursor(cursors[kind]);
   }
 
   // Pedidos da moldura: o X fecha, o "?" abre a ajuda. Cada pedido vale uma vez.

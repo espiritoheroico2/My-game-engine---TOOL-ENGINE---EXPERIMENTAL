@@ -157,6 +157,42 @@ int main() {
     Check(!f.docked() && f.rect().position.x == 100.f, "sem dock: sai do dock na posicao em que estava");
   }
 
+  {
+    // Redimensionar pela borda: arrastar a direita aumenta, arrastar a esquerda move e encolhe, minimo e limites da janela.
+    using editor::window_frame::Event;
+    editor::window_frame::Frame f;
+    f.place(1280.f, 800.f, 400.f, 300.f, 100.f);
+    const ToolEngine::SpriteUi::Rect r0 = f.rect();
+    const SU_Vec2 rightEdge{r0.position.x + r0.size.x - 2.f, r0.position.y + r0.size.y * 0.5f};
+    Check(f.edgeAt(rightEdge) == 2, "borda direita sob o ponteiro");
+    Check(f.pointerDown(rightEdge) == Event::Resize && f.resizing(), "pressionar a borda inicia o redimensionamento");
+    f.pointerMove({rightEdge.x + 120.f, rightEdge.y});
+    Check(std::fabs(f.rect().size.x - (r0.size.x + 120.f)) < 0.5f, "arrastar a direita aumenta a largura");
+    f.pointerUp();
+    f.place(1280.f, 800.f, 400.f, 300.f, 100.f);   // o painel pede 400 de novo: vale o tamanho do usuario
+    Check(std::fabs(f.rect().size.x - (r0.size.x + 120.f)) < 0.5f, "o tamanho do usuario prevalece sobre o pedido do painel");
+
+    const ToolEngine::SpriteUi::Rect r1 = f.rect();
+    const SU_Vec2 leftEdge{r1.position.x + 2.f, r1.position.y + r1.size.y * 0.5f};
+    f.pointerDown(leftEdge);
+    f.pointerMove({leftEdge.x - 40.f, leftEdge.y});
+    Check(std::fabs(f.rect().position.x - (r1.position.x - 40.f)) < 0.5f && std::fabs(f.rect().size.x - (r1.size.x + 40.f)) < 0.5f,
+          "arrastar a esquerda move a borda e aumenta");
+    f.pointerUp();
+
+    f.pointerDown({f.rect().position.x + f.rect().size.x - 2.f, f.rect().position.y + f.rect().size.y * 0.5f});
+    f.pointerMove({-5000.f, 0.f});
+    Check(f.rect().size.x >= editor::window_frame::Metrics::kMinWidth - 0.5f, "a largura nunca fica abaixo do minimo");
+    f.pointerUp();
+
+    const ToolEngine::SpriteUi::Rect r2 = f.rect();
+    f.pointerDown({r2.position.x + r2.size.x - 2.f, r2.position.y + r2.size.y * 0.5f});
+    f.pointerMove({5000.f, 0.f});
+    Check(f.rect().position.x + f.rect().size.x <= 1280.f + 0.5f, "a janela nao sai da area do editor");
+    f.pointerUp();
+
+  }
+
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;
 }

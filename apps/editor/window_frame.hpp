@@ -30,9 +30,11 @@ struct Metrics {
   static constexpr float kBottomGap = 40.f;  // primeira posicao: a janela fica acima da barra de status
   static constexpr float kHelpSize = 18.f;   // diametro do circulo do "?"
   static constexpr float kHelpGap = 4.f;     // espaco entre o grip e o circulo, e entre o circulo e o titulo
+  static constexpr float kResizeBand = 6.f;  // faixa (px) em volta da moldura que redimensiona
+  static constexpr float kMinWidth = 220.f;  // menor largura ao redimensionar
 };
 
-enum class Event : unsigned char { None, Close, DragStart, Help, Minimize };
+enum class Event : unsigned char { None, Close, DragStart, Help, Minimize, Resize };
 
 class Frame {
  public:
@@ -40,8 +42,12 @@ class Frame {
   // usuario arrastou. A janela nunca sai da area visivel: a posicao e prendida a cada quadro.
   // width: largura pedida (a janela encolhe se a tela for menor).
   void place(float windowW, float windowH, float width = Metrics::kWidth, float height = Metrics::kHeight, float firstX = -1.f) {
-    const float w = std::min(width, std::max(1.f, windowW - 2.f * Metrics::kMargin));
-    const float h = std::min(height, std::max(1.f, windowH - 2.f * Metrics::kMargin));
+    lastWinW_ = windowW;
+    lastWinH_ = windowH;
+    // Tamanho que o usuario arrastou tem prioridade sobre o pedido pelo painel.
+    const float reqW = userSized_ ? userSize_.x : width, reqH = userSized_ ? userSize_.y : height;
+    const float w = std::min(reqW, std::max(1.f, windowW - 2.f * Metrics::kMargin));
+    const float h = std::min(reqH, std::max(1.f, windowH - 2.f * Metrics::kMargin));
     const float shown = minimized_ ? std::min(metrics_.headerHeight, h) : h;   // minimizada: so o cabecalho
     fullHeight_ = h;
     if (!placed_) {
@@ -118,18 +124,65 @@ class Frame {
       grab_ = {p.x - pos_.x, p.y - pos_.y};
       return Event::DragStart;
     }
+    const int edge = edgeAt(p);
+    if (edge != 0) {
+      resizing_ = true;
+      resizeMask_ = edge;
+      startRect_ = frame_;
+      startPointer_ = p;
+      return Event::Resize;
+    }
     return Event::None;
   }
 
-  // Movimento com o botao preso: a janela segue o ponteiro. Sem arraste, nada muda.
+  // Redimensionar: mascara das bordas sob o ponteiro (1 esquerda, 2 direita, 4 topo, 8 base); 0 = nenhuma.
+  // Acoplada e minimizada nao redimensionam: o tamanho vem do dock ou do cabecalho.
+  [[nodiscard]] int edgeAt(SU::Vec2 p) const {
+    if (!placed_ || docked_ || minimized_) return 0;
+    const float b = Metrics::kResizeBand;
+    const SU::Rect outer{{frame_.position.x - b, frame_.position.y - b}, {frame_.size.x + 2.f * b, frame_.size.y + 2.f * b}};
+    if (!inside(outer, p)) return 0;
+    int m = 0;
+    if (p.x < frame_.position.x + b) m |= 1;
+    if (p.x >= frame_.position.x + frame_.size.x - b) m |= 2;
+    if (p.y < frame_.position.y + b) m |= 4;
+    if (p.y >= frame_.position.y + frame_.size.y - b) m |= 8;
+    return m;
+  }
+  [[nodiscard]] bool resizing() const { return resizing_; }
+
+  // Movimento com o botao preso: a janela segue o ponteiro (arraste) ou muda de tamanho (borda).
   void pointerMove(SU::Vec2 p) {
     if (dragging_) pos_ = {p.x - grab_.x, p.y - grab_.y};
+    if (!resizing_) return;
+    const float dx = p.x - startPointer_.x, dy = p.y - startPointer_.y;
+    float x = startRect_.position.x, y = startRect_.position.y, w = startRect_.size.x, h = startRect_.size.y;
+    const float minW = std::min(Metrics::kMinWidth, lastWinW_), minH = std::min(metrics_.headerHeight + 60.f, lastWinH_);
+    if (resizeMask_ & 1) { const float nx = std::min(x + dx, x + w - minW); w = x + w - nx; x = nx; }
+    if (resizeMask_ & 2) w = std::max(minW, w + dx);
+    if (resizeMask_ & 4) { const float ny = std::min(y + dy, y + h - minH); h = y + h - ny; y = ny; }
+    if (resizeMask_ & 8) h = std::max(minH, h + dy);
+    x = std::max(x, 0.f);
+    y = std::max(y, 0.f);
+    w = std::min(w, lastWinW_ - x);   // nao sai da janela do editor
+    h = std::min(h, lastWinH_ - y);
+    pos_ = {x, y};
+    userSize_ = {w, h};
+    userSized_ = true;
+    fullHeight_ = h;
+    frame_ = SU::Rect{pos_, {w, minimized_ ? std::min(metrics_.headerHeight, h) : h}};
   }
 
-  void pointerUp() { dragging_ = false; }
+  void pointerUp() {
+    dragging_ = false;
+    resizing_ = false;
+  }
 
   // Estado de interacao que o painel precisa resetar quando a janela some.
-  void reset() { dragging_ = false; }
+  void reset() {
+    dragging_ = false;
+    resizing_ = false;
+  }
 
   // Minimizar (botao da moldura): recolhe ao cabecalho e volta a altura cheia no segundo clique. Usa a altura da
   // ultima place(), entao chame place() no proximo quadro para aplicar.
@@ -154,6 +207,13 @@ class Frame {
   SU::Vec2 grab_{};
   bool placed_ = false;
   bool dragging_ = false;
+  bool resizing_ = false;
+  int resizeMask_ = 0;
+  SU::Rect startRect_{};
+  SU::Vec2 startPointer_{};
+  bool userSized_ = false;      // o usuario redimensionou: userSize_ manda sobre o tamanho pedido pelo painel
+  SU::Vec2 userSize_{};
+  float lastWinW_ = 0.f, lastWinH_ = 0.f;
   bool minimized_ = false;
   bool docked_ = false;
   float fullHeight_ = Metrics::kHeight;   // altura cheia, guardada para voltar do minimizado

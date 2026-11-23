@@ -2144,7 +2144,7 @@ enum FormId : int {
     kPhysPreset0 = 210,                        // 210 a 216: gravidades prontas
     kPhysIterations = 220, kPhysStepHz, kPhysColliders, kPhysSimRadius,
     // Optimizing (300)
-    kOptFps = 300, kOptChunkCache, kOptUiScale, kOptIdle,
+    kOptFps = 300, kOptChunkCache, kOptUiScale, kOptIdle, kOptSimplify, kOptSimplifyDist, kOptSimplifyAmount,
     // Language (400)
     kLangPack = 400, kLangReload, kLangExport,
     // Tags (500)
@@ -2242,6 +2242,11 @@ void addOptimizingRows(Editor& ed, editor::settings_form::Rows& rows) {
     rows.push_back(Head(T("Interface")));
     rows.push_back(Slide(kOptUiScale, T("UI scale"), ed.theme.scale, ::editor::settings_model::kInterfaceScaleMin, ::editor::settings_model::kInterfaceScaleMax));
     rows.push_back(Check(kOptIdle, T("Idle rendering"), ed.idleRendering));
+    rows.push_back(Head(T("Mesh simplification")));
+    rows.push_back(Check(kOptSimplify, T("Simplify distant meshes"), ed.simplifyFar));
+    rows.push_back(Slide(kOptSimplifyDist, T("Simplify beyond (m)"), ed.simplifyDistance,
+                         ::editor::settings_model::kSimplifyDistanceMin, ::editor::settings_model::kSimplifyDistanceMax));
+    rows.push_back(Slide(kOptSimplifyAmount, T("Faces removed"), ed.simplifyAmount, 0.f, ::editor::settings_model::kSimplifyAmountMax));
 }
 
 // Linhas da secao Language (drawLanguageTab).
@@ -2508,6 +2513,9 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
             ed.settingsDirty = true;
             break;
         case kOptIdle: ed.idleRendering = on; ed.settingsDirty = true; break;
+        case kOptSimplify: ed.simplifyFar = on; ed.settingsDirty = true; break;
+        case kOptSimplifyDist: ed.simplifyDistance = ::editor::settings_model::ClampSimplifyDistance(value); ed.settingsDirty = true; break;
+        case kOptSimplifyAmount: ed.simplifyAmount = ::editor::settings_model::ClampSimplifyAmount(value); ed.settingsDirty = true; break;
         // Language
         case kLangPack: {
             auto& i18n = editor::I18n::get();
@@ -3035,6 +3043,7 @@ void saveSettings(Editor& ed) {
   j.set("upscaleMode", ed.upscaleMode); j.set("aaMode", ed.aaMode);
   j.set("chunkCacheMax", static_cast<double>(ed.chunkCacheMax));
   j.set("idleRendering", ed.idleRendering);
+  j.set("simplifyFar", ed.simplifyFar); j.set("simplifyDistance", static_cast<double>(ed.simplifyDistance)); j.set("simplifyAmount", static_cast<double>(ed.simplifyAmount));
   j.set("interfaceScale", static_cast<double>(ed.theme.scale));
   j.set("buttonRadius", static_cast<double>(editor::ui_style::buttonRadius())); j.set("windowRadius", static_cast<double>(editor::ui_style::windowRadius())); j.set("textScale", static_cast<double>(editor::ui_style::textScale()));
   j.set("lockInterface", ed.lockInterface); j.set("dockWithShift", ed.dockWithShift);
@@ -3062,6 +3071,9 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
       ed.upscaleMode = std::clamp(static_cast<int>(editor::ser::num(*j, "upscaleMode", 2.f)), 0, 3); ed.aaMode = std::clamp(static_cast<int>(editor::ser::num(*j, "aaMode", 0.f)), 0, 1);
       ed.chunkCacheMax = ::editor::settings_model::ClampChunkCacheSize(static_cast<int>(editor::ser::num(*j, "chunkCacheMax", 8192.f)));
       ed.idleRendering = editor::ser::flag(*j, "idleRendering", true);
+      ed.simplifyFar = editor::ser::flag(*j, "simplifyFar", false);
+      ed.simplifyDistance = ::editor::settings_model::ClampSimplifyDistance(editor::ser::num(*j, "simplifyDistance", 60.f));
+      ed.simplifyAmount = ::editor::settings_model::ClampSimplifyAmount(editor::ser::num(*j, "simplifyAmount", 0.5f));
       editor::ui_style::buttonRadius() = ::editor::settings_model::ClampButtonRadius(editor::ser::num(*j, "buttonRadius", 3.f));
       editor::ui_style::windowRadius() = ::editor::settings_model::ClampWindowRadius(editor::ser::num(*j, "windowRadius", 6.f));
       editor::ui_style::textScale() = ::editor::settings_model::ClampTextScale(editor::ser::num(*j, "textScale", 1.f));

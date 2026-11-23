@@ -35,6 +35,8 @@
 #include "tool/render/upscale.hpp"
 #include "tool/render/lighting.hpp"
 #include "tool/render/soft_renderer.hpp"
+#include "tool/render/mesh_simplify.hpp"
+#include "settings_model.hpp"
 #ifdef TOOL_EDITOR_GPU
 #include "tool/rhi/diligent_device.hpp"
 #endif
@@ -117,6 +119,13 @@ struct Editor {
   struct ChunkCacheEntry { std::unique_ptr<ChunkMeshes> mesh; uint64_t lastUsed = 0; };
   std::unordered_map<uint64_t, ChunkCacheEntry> chunkCache_;
   size_t chunkCacheMax = 8192;   // teto configuravel de malhas de chunk em memoria
+  // Simplificacao de malhas distantes (aba Optimizing): objeto alem de simplifyDistance usa uma malha com menos faces.
+  bool simplifyFar = false;
+  float simplifyDistance = 60.f;   // metros, da camera ate a origem do objeto
+  float simplifyAmount = 0.5f;     // fracao de faces removida (0 a 0.9)
+  struct SimplifiedEntry { uint32_t revision = 0; size_t faces = 0; float keep = 1.f; std::unique_ptr<tool::Mesh> mesh; };
+  std::unordered_map<const tool::Mesh*, SimplifiedEntry> simplified_;
+  uint32_t simplifiedSeq_ = 0;     // revisao nova para cada malha simplificada (o GPU reconhece a troca pelo endereco e revisao)
   uint64_t chunkUseTick_ = 0;    // relogio monotonico por acesso (refina um "ultimo quadro usado")
   // Chamada depois de marcar a entrada em uso: a mais recente nunca e removida (alvo >= 1), entao a
   // referencia devolvida por chunkMeshesOf continua valida.
@@ -663,6 +672,31 @@ struct Editor {
   // Junta as luzes da cena. A primeira Global Light e o "sol": e a unica que projeta sombras.
   // `sunIdx` = posicao do sol em `lights` (-1 se nao ha sol).
   // Esfera (centro + raio) da malha, em espaco local. Cacheada por malha (refeita se a malha for recarregada).
+  // Malha simplificada de `m`, refeita so quando a malha original muda ou a quantidade muda. Custa caro: fica em cache.
+  const tool::Mesh& simplifiedMesh(const tool::Mesh& m) {
+    const float keep = 1.f - ::editor::settings_model::ClampSimplifyAmount(simplifyAmount);
+    if (keep >= 1.f) return m;
+    auto it = simplified_.find(&m);
+    if (it != simplified_.end() && it->second.revision == m.revision && it->second.faces == m.idx.size() && it->second.keep == keep)
+      return *it->second.mesh;
+    SimplifiedEntry& entry = simplified_[&m];
+    entry.mesh = std::make_unique<tool::Mesh>(tool::render::SimplifyMesh(m, keep));
+    entry.mesh->revision = ++simplifiedSeq_;
+    entry.revision = m.revision;
+    entry.faces = m.idx.size();
+    entry.keep = keep;
+    return *entry.mesh;
+  }
+  // Malha usada para desenhar: a original perto da camera; alem de simplifyDistance, a versao simplificada.
+  const tool::Mesh& pickMesh(const tool::Mesh& m, tool::Entity e, const tool::Camera& cam) {
+    if (!simplifyFar) return m;
+    const tool::Mat4 wm = worldMat(e);
+    const float dx = wm.m[3][0] - cam.eye.x, dy = wm.m[3][1] - cam.eye.y, dz = wm.m[3][2] - cam.eye.z;
+    const float d = ::editor::settings_model::ClampSimplifyDistance(simplifyDistance);
+    if (dx * dx + dy * dy + dz * dz <= d * d) return m;
+    return simplifiedMesh(m);
+  }
+
   Bounds meshBounds(const tool::Mesh& m) {
     const size_t n = m.pos.size(); const void* dp = m.pos.data();
     auto it = boundsCache_.find(&m);
@@ -905,11 +939,11 @@ private:
           if (override && override->texture[0]) m.albedoMap = lib.texture(override->texture);
           else if (mr.texture[0]) m.albedoMap = lib.texture(mr.texture);
           if (highlight && e == selected) m.albedo = m.albedo * 1.25f;
-          fn(part.mesh, m);
+          fn(pickMesh(part.mesh, e, cam), m);
         }
         return;
       }
-      if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) fn(*m, material(e, mr));
+      if (const tool::Mesh* m = lodMeshOf(e, mr, cam)) fn(pickMesh(*m, e, cam), material(e, mr));
     };
     // Frustum culling: pula objetos fora da visao. Oclusao: pula objetos inteiramente atras de objetos grandes
     // (so camera em perspectiva; ver tool/render/occlusion.hpp). Objeto que projeta sombra nunca e pulado.
@@ -1005,10 +1039,12 @@ private:
         const int gx = static_cast<int>(std::lround(wm.m[3][0] / s)), gy = static_cast<int>(std::lround(wm.m[3][1] / s)), gz = static_cast<int>(std::lround(wm.m[3][2] / s));
         auto neighborAt = [&](int dx, int dy, int dz) -> const VoxelChunk* { auto it = grid.find({gx + dx, gy + dy, gz + dz}); return it == grid.end() ? nullptr : it->second; };
         const ChunkNeighbors nb = {neighborAt(1, 0, 0), neighborAt(-1, 0, 0), neighborAt(0, 1, 0), neighborAt(0, -1, 0), neighborAt(0, 0, 1), neighborAt(0, 0, -1)};
-        if (doCull && !shadows) {
+        if (doCull) {
           const float half = vc.cell * kChunkSize * 0.5f, r = half * 1.7321f;   // meia diagonal do chunk
           const tool::Vec3 c = wm.transformPoint({half, half, half});
-          for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) { ++prof.counters.culled; return; }
+          // Chunk de bloco projeta sombra (material com castShadow): se cai numa fatia do sol, fica mesmo fora da camera.
+          if (!(shadows && sunShadowNeeded(c, r)))
+            for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) { ++prof.counters.culled; return; }
         }
         ChunkMeshes& cm = chunkMeshesOf(ce, vc, nb);
         for (int t = 1; t < kBlockTypes; ++t) {
