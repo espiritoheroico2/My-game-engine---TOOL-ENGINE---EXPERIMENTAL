@@ -88,6 +88,10 @@ if(TOOL_WITH_SPRITEUI)
   endif()
 
   # Captura headless da janela Assets (assets_spriteui.hpp): PPM por cenario, sem janela.
+  # Captura headless da janela Narrative (SpriteUI): grafo de exemplo para conferir o desenho.
+  add_executable(editor_narrative_capture tools/narrative_capture.cpp)
+  target_include_directories(editor_narrative_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_narrative_capture PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
   add_executable(editor_assets_capture tools/assets_capture.cpp)
   target_include_directories(editor_assets_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(editor_assets_capture PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
@@ -227,6 +231,12 @@ add_executable(editor_settings_bridge_tests tests/test_settings_bridge.cpp)
 target_include_directories(editor_settings_bridge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(editor_settings_bridge_tests PRIVATE SpriteUi::SpriteUI)
 add_test(NAME Editor.SettingsBridge COMMAND editor_settings_bridge_tests)
+
+# Modelo do Controlador Narrativo (narrative_model.hpp): nos, ligacoes, bloco fixo, variaveis e teste rapido.
+add_executable(editor_narrative_model_tests tests/test_narrative_model.cpp)
+target_include_directories(editor_narrative_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_narrative_model_tests PRIVATE tool::narrative)
+add_test(NAME Editor.NarrativeModel COMMAND editor_narrative_model_tests)
 
 # Captura do mouse dos paineis SpriteUI (pointer_capture.hpp): Up fora do painel e movimento sem botao.
 add_executable(editor_pointer_capture_tests tests/test_pointer_capture.cpp)

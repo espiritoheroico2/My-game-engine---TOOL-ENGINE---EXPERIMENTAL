@@ -29,6 +29,7 @@ struct CheckboxStyle {
     float markThickness = 2.0f;
     float focusRingWidth = 2.0f;
     float hoverAmount = 0.10f;
+    bool round = true;            // caixa redonda (circulo). false = quadrado
 };
 
 struct CheckboxEvents {

@@ -41,6 +41,8 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "inspector_panel.hpp"
 #include "coding_panel.hpp"
 #include "scenes_panel.hpp"
+#include "narrative_panel.hpp"
+#include "editor_info_panel.hpp"
 #include "assets_sprite_panel.hpp"
 #include "settings_changes.hpp"
 #include "settings_panel.hpp"
@@ -418,6 +420,20 @@ void confirmScene(Editor& ed, editor::scenes_model::Model& m) {
 }
 
 // Aplica as acoes que a janela Scenes reportou neste quadro ao Editor.
+// Acoes da janela Editor info: Save copia o rascunho para o projeto e grava project.json; Close fecha a janela.
+void applyEditorInfoActions(Editor& ed, editor::infoui::Panel& panel, const std::vector<editor::infoui::View::Action>& acts) {
+  using A = editor::infoui::View::Action;
+  for (A a : acts) {
+    if (a == A::Save) {
+      panel.model().applyTo(ed.projSettings);
+      const bool ok = ed.projSettings.save(ed.project);
+      panel.model().setSaveResult(ok, ok ? std::string(T("Saved.")) : std::string(T("Could not save project.json.")));
+    } else if (a == A::Close) {
+      ed.showEditorInfo = false;
+    }
+  }
+}
+
 void applyScenesActions(Editor& ed, editor::scenesui::Panel& panel, const std::vector<editor::scenesui::View::Action>& acts) {
   using A = editor::scenesui::View::Action;
   namespace SM = editor::scenes_model;
@@ -3211,7 +3227,6 @@ static int runEditorMain(int argc, char** argv) {
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
-  ImNodes::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
   // Clique (botao para baixo e para cima) processado no mesmo quadro: sem isso o ImGui espalha os dois por dois quadros e
@@ -3301,7 +3316,7 @@ static int runEditorMain(int argc, char** argv) {
     }
     if (closed) { // fechou na janela de inicio: nada foi criado
       ImGui_ImplSDLRenderer3_Shutdown(); ImGui_ImplSDL3_Shutdown();
-      ImNodes::DestroyContext(); ImGui::DestroyContext();
+      ImGui::DestroyContext();
       SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
       return 0;
     }
@@ -3414,6 +3429,11 @@ static int runEditorMain(int argc, char** argv) {
   std::unique_ptr<editor::scenesui::Panel> scenesPanel;
   if (uiReady) scenesPanel = std::make_unique<editor::scenesui::Panel>(uiText, uiRenderer);
   gScenesPanel = scenesPanel.get();
+  std::unique_ptr<editor::NarrativePanel> narrativePanel;   // Narrative Controller em SpriteUI (dados: ed.narrative)
+  if (uiReady) narrativePanel = std::make_unique<editor::NarrativePanel>(uiText, uiRenderer, ed.narrative);
+  std::unique_ptr<editor::infoui::Panel> editorInfoPanel;   // Editor info em SpriteUI (rascunho em editor_info_model.hpp)
+  if (uiReady) editorInfoPanel = std::make_unique<editor::infoui::Panel>(uiText, uiRenderer);
+  bool editorInfoWasOpen = false;
   std::unique_ptr<editor::assetsui::Panel> assetsPanel;   // Assets em SpriteUI (sem a fonte, a versao ImGui)
   if (uiReady) assetsPanel = std::make_unique<editor::assetsui::Panel>(uiText, uiRenderer);
 #ifdef TOOL_WITH_SPRITEUI
@@ -3438,6 +3458,7 @@ static int runEditorMain(int argc, char** argv) {
     addDockWindow(*dockOwner, Kind::Inspector, [] { return std::string(T("Inspector")); }, [&ed]() -> bool& { return ed.showInspector; }, [&] { return inspPanel ? &inspPanel->chrome() : nullptr; });
     addDockWindow(*dockOwner, Kind::Settings, [] { return std::string(T("Settings")); }, [&ed]() -> bool& { return ed.showSettings; }, [&] { return settingsPanel ? &settingsPanel->chrome() : nullptr; });
     addDockWindow(*dockOwner, Kind::Coding, [] { return std::string(T("Coding")); }, [&ed]() -> bool& { return ed.showCoding; }, [&] { return codingPanel ? &codingPanel->chrome() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Narrative, [] { return std::string(T("Narrative Controller")); }, [&ed]() -> bool& { return ed.showNarrative; }, [&] { return narrativePanel ? &narrativePanel->chrome() : nullptr; });
     dockOwner->load(kDockLayoutFile);   // organizacao salva na sessao anterior (se houver e for valida)
   }
 #endif
@@ -3483,6 +3504,10 @@ static int runEditorMain(int argc, char** argv) {
       gPanelRouter.add(pr::kCodingHandle, {gCodingBody.x, gCodingBody.y, gCodingBody.w, gCodingBody.h},
                        ToolEngine::SpriteUi::UILayer::Docked);
     }
+    if (narrativePanel && ed.showNarrative && narrativePanel->chrome().visible() && !narrativePanel->chrome().minimized()) {   // Narrative: moldura SpriteUI
+      const auto nr = narrativePanel->chrome().frameRect();
+      gPanelRouter.add(pr::kNarrativeHandle, {nr.position.x, nr.position.y, nr.size.x, nr.size.y}, ToolEngine::SpriteUi::UILayer::Docked);
+    }
 #endif
     SDL_Event e;
     // Ocioso: espera ate 16 ms pelo proximo evento (em vez de girar o quadro sem parar). O evento volta para a fila.
@@ -3523,6 +3548,15 @@ static int runEditorMain(int argc, char** argv) {
       // campo em foco, e o atalho precisa chegar ao ImGui e aos outros paineis. Texto digitado (TEXT_INPUT) passa
       // sempre: sem campo em foco, o painel devolve false e o ImGui recebe.
       const bool shortcutKey = e.type == SDL_EVENT_KEY_DOWN && (e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0;
+      // Editor info (janela flutuante): recebe teclado e ponteiro enquanto esta aberta e ativa o campo clicado.
+      const bool eiHandled = !dockHandled && editorInfoPanel && ed.showEditorInfo && editorInfoPanel->handleEvent(e, true);
+      // Narrative vem antes dos outros: um clique em outra janela solta o teclado dele (releaseKeyboard).
+      bool narHandled = false;
+      if (!dockHandled && narrativePanel && dockShown(editor::dock_host::Kind::Narrative, ed.showNarrative)) {
+        const bool narrativeMayReceive = !pointerEvt || gPanelRouter.mayReceive(pr::kNarrativeHandle, ptrX, ptrY);
+        if (pointerEvt && !narrativeMayReceive) narrativePanel->releaseKeyboard();
+        else narHandled = !shortcutKey && narrativePanel->handleEvent(e);
+      }
       const bool setHandled = !dockHandled && settingsPanel && dockShown(editor::dock_host::Kind::Settings, ed.showSettings) && settingsMayReceive && !shortcutKey && settingsPanel->handleEvent(e);
       const bool inspHandled = !dockHandled && inspPanel && dockShown(editor::dock_host::Kind::Inspector, ed.showInspector) && inspPanel->handleEvent(e);
       const bool scrHandled = !dockHandled && gScriptPanel && gScriptPanel->handleEvent(e, ed);
@@ -3532,7 +3566,7 @@ static int runEditorMain(int argc, char** argv) {
       const bool sceneFrameHandled = !dockHandled && forwardViewEvent(e, dockShown(editor::dock_host::Kind::Scene, ed.showScene), dockShown(editor::dock_host::Kind::Game, ed.showGame));   // Scene e Jogo veem o evento; a moldura da Scene consome o clique
       // ImGui so recebe o ponteiro se nenhum painel SpriteUI registrado cobre o ponto: senao as janelas ImGui de tras reagiriam.
       const bool ownedBySui = pointerEvt && gPanelRouter.coveredBySui(ptrX, ptrY);
-      if (!dockHandled && !spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !codHandled && !scrHandled && !scnHandled && !asstHandled && !sceneFrameHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
+      if (!dockHandled && !spriteUiHandled && !profHandled && !helpHandled && !consoleHandled && !hierHandled && !setHandled && !inspHandled && !codHandled && !narHandled && !eiHandled && !scrHandled && !scnHandled && !asstHandled && !sceneFrameHandled && !menuHandled && testMapAction == editor::testmap::Action::None && !ownedBySui) ImGui_ImplSDL3_ProcessEvent(&e);
 #else
       ImGui_ImplSDL3_ProcessEvent(&e);
 #endif
@@ -3642,9 +3676,7 @@ static int runEditorMain(int argc, char** argv) {
 #else
       if (ed.showSettings) drawSettings(ed);
 #endif
-      if (ed.showNarrative) ed.narrative.draw(&ed.showNarrative);
       if (ed.showInputMap) editor::drawInputMap(ed, &ed.showInputMap);
-      if (ed.showEditorInfo) editor::drawEditorInfo(ed, &ed.showEditorInfo);
       if (ed.showExport) editor::drawExport(ed, &ed.showExport);
     }
     { // "Panels" = tempo dos paineis SEM as renderizacoes 3D (essas ja foram contadas nas suas proprias zonas)
@@ -3755,6 +3787,24 @@ static int runEditorMain(int argc, char** argv) {
         ed.showScenes = false;
       } else {
         applyScenesActions(ed, *scenesPanel, scenesActs);
+      }
+    }
+    if (narrativePanel) {   // Narrative Controller (SpriteUI): moldura, grafo, variaveis e propriedades
+      int nw = 0, nh = 0;
+      SDL_GetWindowSize(window, &nw, &nh);
+      if (!narrativePanel->draw(renderer, static_cast<float>(nw), static_cast<float>(nh), dockShown(editor::dock_host::Kind::Narrative, ed.showNarrative))) tool::logError(std::string("Narrative render failed: ") + SDL_GetError());
+      if (narrativePanel->chrome().consumeClose()) ed.showNarrative = false;
+      if (narrativePanel->chrome().consumeHelp()) editor::openHelp("narrative");
+    }
+    if (editorInfoPanel) {   // Editor info (SpriteUI): abre com o que esta salvo; Save e Close viram acoes do host
+      if (ed.showEditorInfo && !editorInfoWasOpen) editorInfoPanel->open(ed.projSettings);
+      editorInfoWasOpen = ed.showEditorInfo;
+      if (ed.showEditorInfo) {
+        std::vector<editor::infoui::View::Action> eiActs;
+        int ew = 0, eh = 0;
+        SDL_GetWindowSize(window, &ew, &eh);
+        if (!editorInfoPanel->draw(renderer, static_cast<float>(ew), static_cast<float>(eh), eiActs)) tool::logError(std::string("Editor info SpriteUI render failed: ") + SDL_GetError());
+        else applyEditorInfoActions(ed, *editorInfoPanel, eiActs);
       }
     }
     if (inspPanel) {   // moldura do Inspector (SpriteUI): titulo, X, "?" e grip
@@ -3908,7 +3958,7 @@ static int runEditorMain(int argc, char** argv) {
   ed.shutdownGpu();
   ImGui_ImplSDLRenderer3_Shutdown(); ImGui_ImplSDL3_Shutdown();
   SDL_SetCursor(SDL_GetDefaultCursor());
-  ImNodes::DestroyContext(); ImGui::DestroyContext();
+  ImGui::DestroyContext();
 #ifdef TOOL_WITH_SPRITEUI
   profPanel.reset();
   menuPanel.reset();

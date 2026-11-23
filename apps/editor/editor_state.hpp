@@ -11,7 +11,7 @@
 #include "voxel.hpp"
 #include "chunk_cache.hpp"
 #include "game_grid.hpp"
-#include "narrative_panel.hpp"
+#include "narrative_model.hpp"
 #include "profiler.hpp"
 #include "perf_warnings.hpp"
 #include "project.hpp"
@@ -76,7 +76,7 @@ struct Editor {
   std::deque<std::pair<tool::LogLevel, std::string>> console;
   std::uint64_t consoleSerial = 0;   // cresce a cada mudanca no log (o painel SpriteUI refaz a lista so nesse caso)
   std::vector<float> frameHistory = std::vector<float>(120, 0.f);
-  ::editor::NarrativePanel narrative;
+  ::editor::NarrativeModel narrative;   // dados do Narrative (a janela SpriteUI le e altera este modelo)
   std::unique_ptr<tool::rhi::IDevice> device = tool::rhi::createNullDevice();
 
   // janelas
@@ -534,7 +534,7 @@ struct Editor {
   void refreshScenes() { sceneList = project.listScenes(); }
   bool saveScene() {
     ensureSceneCode(); openSceneNarrative();
-    if (narrative.canvasReady() && !sceneInfo.narrative.empty() && narrative.path() == project.resolve(sceneInfo.narrative).string()) narrative.save();
+    if (!sceneInfo.narrative.empty() && narrative.path() == project.resolve(sceneInfo.narrative).string()) narrative.save();
     const bool ok = saveSceneFile(project, scene, sceneInfo);
     statusLine = ok ? "Scene saved: " + sceneInfo.name : "Failed to save scene";
     if (ok) tool::logInfo(statusLine); else tool::logError(statusLine);
@@ -936,12 +936,39 @@ private:
         }
       });
     }
+    // Direcao em que a luz do sol viaja (a mesma usada pela LightPrism para montar as cascatas).
+    tool::Vec3 sunTravel{0.f, -1.f, 0.f};
+    for (const tool::Light& l : lights) if (l.type == tool::LightType::Directional) { sunTravel = tool::normalize(l.direction); break; }
+    const tool::LightingSettings& shadowCfg = sceneInfo.render.lighting;
+    // Objeto entra na lista de sombras do sol so se cair numa fatia: a coluna de cada cascata e infinita na direcao da
+    // luz (o casterExtension fica nela), entao basta a distancia do centro ate o eixo da cascata. Alem de shadowDistance
+    // (mais o casterExtension), nao projeta sombra em nada visivel e nao entra.
+    auto sunShadowNeeded = [&](const tool::Vec3& c, float r) -> bool {
+      if (!shadows) return false;
+      if (shadowCfg.shadowDistance > 0.f) {
+        const float dx = c.x - cam.eye.x, dy = c.y - cam.eye.y, dz = c.z - cam.eye.z;
+        if (std::sqrt(dx * dx + dy * dy + dz * dz) - r > shadowCfg.shadowDistance + shadowCfg.casterExtension) return false;
+      }
+      for (tool::u32 k = 0; k < lf.csm.gpu.cascadeCount; ++k) {
+        const auto& sc0 = lf.csm.sphereCenter[k];
+        const float dx = c.x - sc0.x, dy = c.y - sc0.y, dz = c.z - sc0.z;
+        const float t = dx * sunTravel.x + dy * sunTravel.y + dz * sunTravel.z;
+        const float px = dx - t * sunTravel.x, py = dy - t * sunTravel.y, pz = dz - t * sunTravel.z;
+        if (std::sqrt(px * px + py * py + pz * pz) <= lf.csm.sphereRadius[k] + r) return true;
+      }
+      return false;
+    };
     auto skipCulled = [&](tool::Entity e, const tool::Mesh& m, const MeshRenderer& mr) -> bool {
-      // Quem projeta sombra nunca e pulado: vale para o sol (shadows) e para as sombras de pontual/spot.
-      if (!(doCull || occ.active()) || ((shadows || !lf.shadowLights.empty()) && mr.castShadow)) return false;
+      // Sombras de pontual/spot: quem projeta continua sempre desenhado (sem culling para essas sombras).
+      if (!lf.shadowLights.empty() && mr.castShadow) return false;
+      const bool sunCaster = shadows && mr.castShadow;
+      if (!(doCull || occ.active()) && !sunCaster) return false;
       const Bounds b = meshBounds(m); const tool::Mat4 wm = worldMat(e);
       const float sc = std::max({std::hypot(wm.m[0][0], wm.m[0][1], wm.m[0][2]), std::hypot(wm.m[1][0], wm.m[1][1], wm.m[1][2]), std::hypot(wm.m[2][0], wm.m[2][1], wm.m[2][2])});
       const tool::Vec3 c = wm.transformPoint(b.center); const float r = b.radius * sc;
+      // Quem projeta sombra numa fatia do sol fica na lista (o passe de sombra precisa dele), mesmo fora da camera.
+      if (sunCaster && sunShadowNeeded(c, r)) return false;
+      if (!(doCull || occ.active())) return false;
       if (doCull) for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) { ++prof.counters.culled; return true; }
       if (occ.active()) {
         // Caixa do tamanho da esfera (contem a esfera, entao "escondida" aqui vale para o objeto inteiro).

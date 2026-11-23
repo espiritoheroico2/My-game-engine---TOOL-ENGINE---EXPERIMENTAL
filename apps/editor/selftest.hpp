@@ -16,7 +16,7 @@
 #include "image_io.hpp"
 #include "help_content.hpp"
 #include "script_complete.hpp"
-#include "narrative_panel.hpp"
+#include "narrative_model.hpp"
 #include "export.hpp"
 #ifdef TOOL_WITH_SPRITEUI
 #include "spriteui_diagnostics.hpp"
@@ -701,7 +701,7 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(ed.meshOf(*ed.scene.world().get<MeshRenderer>(wheelE)) == &ed.wheel, "primitives: shape 7 (wheel) maps to its mesh");
   }
   { // bloco padrao da cena no Narrative: um unico bloco fixo com o nome da cena, que acompanha a renomeacao
-    editor::NarrativePanel np;
+    editor::NarrativeModel np;
     np.setScene("Fase 1");
     auto countPinned = [&] { int k = 0; const auto* nodes = np.graph().find("nodes"); if (nodes) for (auto& n : nodes->items()) k += n.has("pinned") ? 1 : 0; return k; };
     check(countPinned() == 1, "narrative: the scene block is created once");

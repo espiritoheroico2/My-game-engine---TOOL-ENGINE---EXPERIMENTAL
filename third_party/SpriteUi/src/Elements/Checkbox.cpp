@@ -76,8 +76,12 @@ std::vector<Rendering::UIRenderItem> BuildCheckboxItems(const Checkbox& checkbox
     if (!IsFinite(box.position) || !IsFinite(box.size)) return out;
 
     std::uint64_t paint = paintOrder;
-    out.push_back(Rendering::MakeSolidRect(checkbox.handle, box, BoxColor(checkbox, style),
-                                           Rendering::NoClipIndex, zOrder, paint++));
+    if (style.round) {   // padrao: caixa redonda (circulo), como o radio; round = false volta ao quadrado
+        AppendRoundedItem(checkbox.handle, box, BoxColor(checkbox, style), zOrder, paint, out);
+    } else {
+        out.push_back(Rendering::MakeSolidRect(checkbox.handle, box, BoxColor(checkbox, style),
+                                               Rendering::NoClipIndex, zOrder, paint++));
+    }
     if (checkbox.checked) AppendMark(checkbox.handle, box, style, paint, out);
     if (checkbox.states.focused && !checkbox.states.disabled) {
         AppendOutlineItems(checkbox.handle, box, style.focusRingWidth, style.focusRing, zOrder, paint, out);

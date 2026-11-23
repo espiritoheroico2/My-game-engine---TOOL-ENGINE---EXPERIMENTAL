@@ -22,6 +22,7 @@ inline constexpr SU::UIHandle kSettingsHandle{0xE0000002u, 1u};
 inline constexpr SU::UIHandle kScenesHandle{0xE0000003u, 1u};
 inline constexpr SU::UIHandle kAssetsHandle{0xE0000004u, 1u};
 inline constexpr SU::UIHandle kCodingHandle{0xE0000005u, 1u};
+inline constexpr SU::UIHandle kNarrativeHandle{0xE0000006u, 1u};
 
 struct Area {
   float x = 0.f, y = 0.f, w = 0.f, h = 0.f;

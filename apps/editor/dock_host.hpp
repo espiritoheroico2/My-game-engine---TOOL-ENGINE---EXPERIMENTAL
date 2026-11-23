@@ -41,7 +41,7 @@ namespace view = editor::view;
 inline view::Pixel px(SU::Vec2 v) { return view::Pixel{v.x, v.y}; }
 
 // Janelas SpriteUI acopláveis. Os ids sao estaveis: o modelo de dock os guarda.
-enum class Kind : std::uint32_t { Hierarchy, Scene, Game, Scenes, Assets, Console, Profiler, Inspector, Settings, Coding };
+enum class Kind : std::uint32_t { Hierarchy, Scene, Game, Scenes, Assets, Console, Profiler, Inspector, Settings, Coding, Narrative };
 inline SU::UIHandle idOf(Kind k) { return SU::UIHandle{0xE0000010u + static_cast<std::uint32_t>(k), 1u}; }
 
 inline constexpr float kStripFont = 12.f;

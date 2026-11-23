@@ -12,6 +12,7 @@
 
 #include "sui_palette.hpp"
 #include "SpriteUi/Rendering/DrawList.hpp"
+#include "SpriteUi/Rendering/Primitives.hpp"
 #include "SpriteUi/Rendering/RenderFlags.hpp"
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Text/TextLayout.hpp"
@@ -122,6 +123,24 @@ class Canvas {
   // Z dos textos deste canvas (padrao 0.9). Um canvas de menu aberto usa um Z maior, por cima dos outros.
   void setTextZ(float z) { textZ_ = z; }
 
+  // Segmento de reta (cabos em curva, por exemplo): de (x1, y1) a (x2, y2), com espessura em pixels logicos.
+  void addLine(float x1, float y1, float x2, float y2, float thickness, SU::Vec4 color, float z = 0.2f) {
+    if (thickness <= 0.f) return;
+    Prim p;
+    p.kind = Prim::Kind::Line;
+    p.x = x1;
+    p.y = std::min(y1, y2) - thickness;
+    p.w = std::abs(x2 - x1);
+    p.h = std::abs(y2 - y1) + 2.f * thickness;
+    p.x2 = x2;
+    p.y2 = y2;
+    p.y1 = y1;
+    p.thickness = thickness;
+    p.color = color;
+    p.z = z;
+    prims_.push_back(p);
+  }
+
   void addSolid(float x, float y, float w, float h, SU::Vec4 color, float z = 0.2f, float cornerRadius = 0.f) {
     if (w <= 0.f || h <= 0.f) return;
     Prim p;
@@ -142,6 +161,11 @@ class Canvas {
     for (const Prim& p : prims_) {
       const float sy = originY + p.y - scrollY;
       if (sy + p.h < viewTop || sy > viewBottom) continue;
+      if (p.kind == Prim::Kind::Line) {
+        const float ly1 = originY + p.y1 - scrollY, ly2 = originY + p.y2 - scrollY;
+        if (auto line = SR::MakeLine(owner, {originX + p.x, ly1}, {originX + p.x2, ly2}, p.thickness, p.color, clip, p.z, paint++)) out.push_back(*line);
+        continue;
+      }
       if (p.kind == Prim::Kind::Solid) {
         SR::UIRenderItem item = solidItem(originX + p.x, sy, p.w, p.h, p.color, p.z, owner, clip, paint++);
         if (p.cornerRadius > 0.f) {
@@ -176,9 +200,10 @@ class Canvas {
 
  private:
   struct Prim {
-    enum class Kind : std::uint8_t { Solid, Text };
+    enum class Kind : std::uint8_t { Solid, Text, Line };
     Kind kind = Kind::Solid;
     float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
+    float x2 = 0.f, y1 = 0.f, y2 = 0.f, thickness = 0.f;   // Line: (x, y1) -> (x2, y2)
     SU::Vec4 color{};
     float z = 0.f;
     float cornerRadius = 0.f;

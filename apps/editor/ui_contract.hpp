@@ -131,7 +131,7 @@
 // 2.16 Nos (ImNodes) - editor de grafo do Narrative
 //   BeginNodeEditor/EndNodeEditor, BeginNode/EndNode, BeginNodeTitleBar, Begin/EndInput/OutputAttribute,
 //   Link, IsLinkCreated/IsLinkDestroyed, NumSelectedNodes/GetSelectedNodes, SetNodeGridSpacePos.
-//   Cada no tem um id (int) que e a chave para os dados do grafo (narrative_panel.hpp).
+//   Cada no tem um id (texto) que e a chave para os dados do grafo (narrative_model.hpp).
 //
 // 2.17 Backends e ciclo de vida
 //   ImGui::CreateContext/DestroyContext, ImNodes::CreateContext/DestroyContext
@@ -189,7 +189,7 @@
 //                         viewport (imagem + gizmos), jogo (modo --player).
 //   extra_ui.hpp          Inspetor: componentes (fisica, ferramentas, UI, particulas, script, add/remove).
 //   assets_panel.hpp      Painel de Assets: pastas, arquivos, arrastar, dialogos de criar/renomear/apagar.
-//   narrative_panel.hpp   Editor de grafo (ImNodes) do Narrative Controller.
+//   narrative_panel.hpp   Janela do Narrative Controller em SpriteUI (grafo proprio, sem ImNodes); dados em narrative_model.hpp.
 //   project_dialog.hpp    Dialogo de criar/abrir projeto (tabela de projetos recentes).
 //   export_ui.hpp         Janelas Editor info e Export (formulario e botao de exportar).
 //   fx.hpp                Overlays desenhados com ImDrawList: particulas, UI do jogo, botoes.
