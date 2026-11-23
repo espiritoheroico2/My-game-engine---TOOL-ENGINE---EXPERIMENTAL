@@ -58,10 +58,12 @@ void BenchmarkExtraction() {
     }
 
     Rendering::RenderExtractor extractor;
+    Rendering::FramePacket packet;
+    Rendering::RenderExtractionScratch scratch;
     std::uint64_t submitted = 0;
     const auto start = Clock::now();
     for (std::size_t i = 0; i < IterationCount; ++i) {
-        const auto packet = extractor.Build(i, items);
+        extractor.BuildInto(packet, i, items, nullptr, {}, &scratch);
         submitted += packet.instances.size();
     }
     const double elapsed = ElapsedMilliseconds(start, Clock::now());

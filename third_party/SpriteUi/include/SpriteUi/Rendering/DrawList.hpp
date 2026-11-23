@@ -85,10 +85,26 @@ struct ExtractionStats {
     std::uint32_t batchCount = 0;
 };
 
+// Caller-owned temporary storage for BuildInto. Keeping this alongside a reusable
+// FramePacket avoids allocating the ordering list on every frame.
+struct RenderExtractionScratch {
+    std::vector<const UIRenderItem*> ordered;
+};
+
 [[nodiscard]] bool IsFramePacketValid(const FramePacket& packet) noexcept;
 
 class RenderExtractor {
 public:
+    // Writes into packet, retaining capacities between frames. scratch must not
+    // be shared by concurrent calls.
+    void BuildInto(
+        FramePacket& packet,
+        std::uint64_t frameId,
+        const std::vector<UIRenderItem>& items,
+        ExtractionStats* stats = nullptr,
+        std::span<const ClipRectGPU> clipRects = {},
+        RenderExtractionScratch* scratch = nullptr) const;
+
     [[nodiscard]] FramePacket Build(
         std::uint64_t frameId,
         const std::vector<UIRenderItem>& items,

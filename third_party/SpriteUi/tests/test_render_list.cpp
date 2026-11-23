@@ -151,6 +151,48 @@ void TestCacheHandlesNodeSizeChange() {
     CHECK(items.back().handle.Pack() == (UIHandle{2, 1}).Pack());
 }
 
+void TestBuildIntoReusesStorageAndClearsData() {
+    std::vector<R::UIRenderItem> items;
+    for (std::uint32_t i = 0; i < 8; ++i) {
+        auto item = R::MakeSolidRect(UIHandle{i + 1, 1}, {}, {1.0f, 1.0f, 1.0f, 1.0f});
+        item.paintOrder = i;
+        items.push_back(item);
+    }
+
+    R::FramePacket packet;
+    R::RenderExtractionScratch scratch;
+    R::RenderExtractor extractor;
+    extractor.BuildInto(packet, 1, items, nullptr, {R::ClipRectGPU{0, 0, 10, 10}}, &scratch);
+    const auto instanceCapacity = packet.instances.capacity();
+    const auto batchCapacity = packet.batches.capacity();
+    const auto clipCapacity = packet.clipRects.capacity();
+    const auto scratchCapacity = scratch.ordered.capacity();
+
+    items.resize(1);
+    extractor.BuildInto(packet, 2, items, nullptr, {}, &scratch);
+    CHECK(packet.frameId == 2);
+    CHECK(packet.instances.size() == 1 && packet.batches.size() == 1 && packet.clipRects.empty());
+    CHECK(packet.instances.capacity() == instanceCapacity);
+    CHECK(packet.batches.capacity() == batchCapacity);
+    CHECK(packet.clipRects.capacity() == clipCapacity);
+    CHECK(scratch.ordered.capacity() == scratchCapacity);
+    CHECK(R::IsFramePacketValid(packet));
+}
+
+void TestBuildIntoPreservesPaintOrder() {
+    auto first = R::MakeSolidRect(UIHandle{1, 1}, {}, {1.0f, 1.0f, 1.0f, 1.0f});
+    auto second = R::MakeSolidRect(UIHandle{2, 1}, {}, {1.0f, 1.0f, 1.0f, 1.0f});
+    first.paintOrder = 2;
+    second.paintOrder = 1;
+    const std::vector<R::UIRenderItem> items{first, second};
+
+    R::FramePacket packet;
+    R::RenderExtractionScratch scratch;
+    R::RenderExtractor{}.BuildInto(packet, 1, items, nullptr, {}, &scratch);
+    CHECK(packet.instances.size() == 2);
+    CHECK(packet.instances[0].transformRow0[2] == second.layout.resolvedPosition.x);
+}
+
 } // namespace
 
 int main() {
@@ -159,6 +201,8 @@ int main() {
     TestCacheRebuildsOnlyDirtyNode();
     TestCacheUpdatesSameSizeInPlace();
     TestCacheHandlesNodeSizeChange();
+    TestBuildIntoReusesStorageAndClearsData();
+    TestBuildIntoPreservesPaintOrder();
 
     std::printf("RenderList: %d checks, %d falhas\n", run, failed);
     return failed == 0 ? 0 : 1;

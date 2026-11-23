@@ -115,19 +115,24 @@ bool IsFramePacketValid(const FramePacket& packet) noexcept {
     return expectedFirst == packet.instances.size();
 }
 
-FramePacket RenderExtractor::Build(
+void RenderExtractor::BuildInto(
+    FramePacket& packet,
     std::uint64_t frameId,
     const std::vector<UIRenderItem>& items,
     ExtractionStats* outStats,
-    std::span<const ClipRectGPU> clipRects) const
+    std::span<const ClipRectGPU> clipRects,
+    RenderExtractionScratch* scratch) const
 {
-    FramePacket packet;
     packet.frameId = frameId;
+    packet.instances.clear();
+    packet.batches.clear();
     packet.clipRects.assign(clipRects.begin(), clipRects.end());
 
     ExtractionStats localStats{};
-    std::vector<const UIRenderItem*> ordered;
-    ordered.reserve(items.size());
+    RenderExtractionScratch localScratch;
+    RenderExtractionScratch& storage = scratch ? *scratch : localScratch;
+    storage.ordered.clear();
+    storage.ordered.reserve(items.size());
 
     for (const UIRenderItem& item : items) {
         if (!item.visible || !item.layout.visible) {
@@ -140,23 +145,25 @@ FramePacket RenderExtractor::Build(
             ++localStats.skippedInvalid;
             continue;
         }
-        ordered.push_back(&item);
+        storage.ordered.push_back(&item);
     }
 
-    // Paint order is authoritative. Material sorting is intentionally forbidden
-    // across non-adjacent items because alpha blending is order dependent.
-    std::stable_sort(ordered.begin(), ordered.end(),
-        [](const UIRenderItem* a, const UIRenderItem* b) noexcept {
-            if (a->layer != b->layer) return a->layer < b->layer;
-            if (a->zOrder != b->zOrder) return a->zOrder < b->zOrder;
-            if (a->paintOrder != b->paintOrder) return a->paintOrder < b->paintOrder;
-            return a->handle.Pack() < b->handle.Pack();
-        });
+    const auto paintOrderLess = [](const UIRenderItem* a, const UIRenderItem* b) noexcept {
+        if (a->layer != b->layer) return a->layer < b->layer;
+        if (a->zOrder != b->zOrder) return a->zOrder < b->zOrder;
+        if (a->paintOrder != b->paintOrder) return a->paintOrder < b->paintOrder;
+        return a->handle.Pack() < b->handle.Pack();
+    };
+    // Paint order is authoritative. Avoid even the linear-time sort setup when
+    // extraction already produced the required order.
+    if (!std::is_sorted(storage.ordered.begin(), storage.ordered.end(), paintOrderLess)) {
+        std::stable_sort(storage.ordered.begin(), storage.ordered.end(), paintOrderLess);
+    }
 
-    packet.instances.reserve(ordered.size());
-    packet.batches.reserve(ordered.size());
+    packet.instances.reserve(storage.ordered.size());
+    packet.batches.reserve(storage.ordered.size());
 
-    for (const UIRenderItem* item : ordered) {
+    for (const UIRenderItem* item : storage.ordered) {
         const auto affine = BuildUnitQuadTransform(item->layout, item->transform);
         if (!affine) {
             ++localStats.skippedInvalid;
@@ -174,12 +181,10 @@ FramePacket RenderExtractor::Build(
         instance.transformRow0[1] = affine->m01;
         instance.transformRow0[2] = affine->tx;
         instance.transformRow0[3] = packedDepth;
-
         instance.transformRow1[0] = affine->m10;
         instance.transformRow1[1] = affine->m11;
         instance.transformRow1[2] = affine->ty;
         instance.transformRow1[3] = std::max(0.0f, item->cornerRadius);
-
         std::copy(std::begin(item->uvRect), std::end(item->uvRect), std::begin(instance.uvRect));
 
         const Vec4 tint = item->tintPremultipliedLinear * Clamp01(item->opacity);
@@ -187,7 +192,6 @@ FramePacket RenderExtractor::Build(
         instance.tint[1] = tint.y;
         instance.tint[2] = tint.z;
         instance.tint[3] = tint.w;
-
         instance.resourceIds[0] = item->textureSlice;
         instance.resourceIds[1] = item->materialIndex;
         instance.resourceIds[2] = item->clipIndex;
@@ -213,6 +217,16 @@ FramePacket RenderExtractor::Build(
     localStats.submittedItems = static_cast<std::uint32_t>(packet.instances.size());
     localStats.batchCount = static_cast<std::uint32_t>(packet.batches.size());
     if (outStats) *outStats = localStats;
+}
+
+FramePacket RenderExtractor::Build(
+    std::uint64_t frameId,
+    const std::vector<UIRenderItem>& items,
+    ExtractionStats* outStats,
+    std::span<const ClipRectGPU> clipRects) const
+{
+    FramePacket packet;
+    BuildInto(packet, frameId, items, outStats, clipRects);
     return packet;
 }
 
