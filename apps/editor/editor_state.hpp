@@ -349,6 +349,8 @@ struct Editor {
   }
   // Troca a API grafica em execucao; se falhar, volta para o renderizador em CPU e mostra o motivo.
   void applyApi(int choice) {
+    // Diagnostico: se a troca travar, a ultima linha do console mostra ate onde chegou.
+    tool::logInfo(std::string("Graphics API: switching to ") + apiName(choice) + "...");
     shutdownGpu();
     apiRequested = choice;
     apiChoice = choice;
@@ -392,11 +394,13 @@ struct Editor {
     gpuDev = tool::rhi::createDiligentDevice(info, &err);
     if (!gpuDev || !gpu.init(*gpuDev, tool::rhi::createLightPrismDevice(*gpuDev), "assets/shaders", 640, 360)) {
       apiStatus = "FAILED (" + (err.empty() ? std::string("shaders/pipeline") : err) + "): using CPU";
+      tool::logError("Graphics API " + std::string(apiName(choice)) + " failed: " + apiStatus);
       shutdownGpu(); apiChoice = 0; return;
     }
     if (glCtx) SDL_GL_MakeCurrent(gpuWin, nullptr); // solta o contexto: ele so e usado dentro de renderView
     apiActive = choice; if (!renderScaleSet) renderScale = 1.f;
     apiStatus = std::string(tool::rhi::toString(gpuDev->backend())) + " - " + gpuDev->deviceName();
+    tool::logInfo("Graphics API ready: " + apiStatus);
     lib.clear(); // as malhas importadas sobem para a GPU de novo (os ponteiros mudam)
 #else
     apiStatus = "This build has no GPU backends (use the editor-gpu preset)"; apiChoice = 0;

@@ -22,6 +22,7 @@
 #include "settings_bridge.hpp"
 #include "settings_changes.hpp"
 #include "settings_form.hpp"
+#include "pointer_capture.hpp"
 #include "settings_model.hpp"
 #include "sui_panel.hpp"
 #include "ui_style.hpp"
@@ -144,7 +145,9 @@ class SettingsPanel {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (e.button.button != SDL_BUTTON_LEFT) return inside(e.button.x, e.button.y);
                 window_ = SDL_GetWindowFromID(e.button.windowID);   // janela do clique: liga e desliga o texto do SDL
-                return pointer(Elm::PointerPhase::Down, e.button.x, e.button.y);
+                if (!pointer(Elm::PointerPhase::Down, e.button.x, e.button.y)) return false;
+                capture_.down();   // so um clique dentro do painel abre a captura
+                return true;
             case SDL_EVENT_TEXT_INPUT:
                 if (FormSlot* s = focusedSlot()) {
                     if (e.text.text) s->edit.InsertText(e.text.text);
@@ -159,9 +162,19 @@ class SettingsPanel {
                     return true;
                 }
                 if (e.button.button != SDL_BUTTON_LEFT) return inside(e.button.x, e.button.y);
+                // O Up chega mesmo que o botao tenha sido solto fora do painel: senao o controle fica preso.
+                if (capture_.up()) {
+                    releasePointer(e.button.x, e.button.y);
+                    return true;
+                }
                 return pointer(Elm::PointerPhase::Up, e.button.x, e.button.y);
             case SDL_EVENT_MOUSE_MOTION:
                 if (bar_.Dragging()) return dragScrollbar(e.motion.x, e.motion.y);
+                // Sem o botao esquerdo, nao existe arrasto: se a captura estava aberta, solta os controles.
+                if (capture_.move((e.motion.state & SDL_BUTTON_LMASK) != 0)) {
+                    releasePointer(e.motion.x, e.motion.y);
+                    return true;
+                }
                 return pointer(Elm::PointerPhase::Move, e.motion.x, e.motion.y);
             case SDL_EVENT_MOUSE_WHEEL:
                 return wheel(e.wheel.mouse_x, e.wheel.mouse_y, e.wheel.y);
@@ -1050,6 +1063,15 @@ class SettingsPanel {
         return true;
     }
 
+    // Solta os controles que ficaram "pressionados" (botao solto fora do painel ou sem botao no movimento).
+    // So entrega o Up aos controles: nao abre secoes, paletas nem passos, porque o clique nao foi nelas.
+    void releasePointer(float x, float y) {
+        const SU::Vec2 p{x - rect_.x, y - rect_.y};
+        if (appearanceSliderPointer(Elm::PointerPhase::Up, p)) return;
+        if (formPointer(Elm::PointerPhase::Up, p)) return;
+        if (open_[kGraphicsTab]) contentPointer(Elm::PointerPhase::Up, p);
+    }
+
     bool sectionPointer(const SU::Vec2& p) {
         for (std::size_t i = 0; i < sm::kTabCount; ++i) {
             if (headers_[i].contains(p.x, p.y)) {
@@ -1261,6 +1283,7 @@ class SettingsPanel {
 
     Elm::TabBarStyle tabStyle_;
     SU::Vec2 hover_{-1.f, -1.f};   // ultima posicao do ponteiro (coordenadas da janela), para o hover
+    pointer_capture::PointerCapture capture_;   // botao esquerdo segurado dentro do painel (ver pointer_capture.hpp)
     Elm::RadioStyle radioStyle_;
     Elm::DropdownStyle dropdownStyle_;
     Elm::SliderStyle sliderStyle_;

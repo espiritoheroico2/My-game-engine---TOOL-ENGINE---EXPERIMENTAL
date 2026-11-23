@@ -228,6 +228,11 @@ target_include_directories(editor_settings_bridge_tests PRIVATE ${CMAKE_CURRENT_
 target_link_libraries(editor_settings_bridge_tests PRIVATE SpriteUi::SpriteUI)
 add_test(NAME Editor.SettingsBridge COMMAND editor_settings_bridge_tests)
 
+# Captura do mouse dos paineis SpriteUI (pointer_capture.hpp): Up fora do painel e movimento sem botao.
+add_executable(editor_pointer_capture_tests tests/test_pointer_capture.cpp)
+target_include_directories(editor_pointer_capture_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.PointerCapture COMMAND editor_pointer_capture_tests)
+
 # Regra que grava os pedidos da janela Configuracoes no Editor (settings_changes.hpp), com alvo falso.
 add_executable(editor_settings_changes_tests tests/test_settings_changes.cpp)
 target_include_directories(editor_settings_changes_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
