@@ -2664,7 +2664,7 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
 editor::settings_panel::Values settingsValues(Editor& ed) {
   editor::settings_panel::Values v;
   auto& L = ed.sceneInfo.render.lighting;
-  v.tab = ed.settingsTab < 0 ? 1 : ed.settingsTab;
+  v.tab = ed.settingsTab < 0 ? 1 : std::clamp(ed.settingsTab, 0, editor::settings_model::kTabCount - 1);
   v.palette = static_cast<int>(editor::palette::activeIndex());
   v.buttonRadius = editor::ui_style::buttonRadius();
   v.windowRadius = editor::ui_style::windowRadius();
@@ -2672,14 +2672,14 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   v.api = ed.apiRequested;
   v.apiBuilt = settingsApiBuilt();
   v.apiStatus = F("Active API: %s", ed.apiStatus.c_str());
-  // Secoes sem conteudo fixo: as linhas genericas. Physics, Tags e Project aparecem depois de API/Graphics.
+  // Cada dominio tem sua própria seção; física não fica misturada com a API gráfica.
   v.form[2] = [&] { editor::settings_form::Rows rows; addGameRows(ed, rows); return rows; }();
-  v.form[3] = [&] { editor::settings_form::Rows rows; addLightingRows(ed, rows); return rows; }();
-  v.form[4] = [&] { editor::settings_form::Rows rows; addOptimizingRows(ed, rows); return rows; }();
-  v.form[5] = [&] { editor::settings_form::Rows rows; addLanguageRows(ed, rows); return rows; }();
+  v.form[3] = [&] { editor::settings_form::Rows rows; addPhysicsRows(ed, rows); return rows; }();
+  v.form[4] = [&] { editor::settings_form::Rows rows; addLightingRows(ed, rows); return rows; }();
+  v.form[5] = [&] { editor::settings_form::Rows rows; addOptimizingRows(ed, rows); return rows; }();
+  v.form[6] = [&] { editor::settings_form::Rows rows; addLanguageRows(ed, rows); return rows; }();
   {
     editor::settings_form::Rows& g = v.form[editor::settings_panel::kGraphicsTab];
-    addPhysicsRows(ed, g);
     addTagsRows(ed, g);
     addProjectRows(ed, g);
   }
@@ -2779,8 +2779,9 @@ void drawSettingsTabBody(Editor& ed, int i) {
     ImGui::SeparatorText(T("Physics"));
     editor::drawPhysicsTab(ed);
   } else if (i == 2) drawGameTab(ed);
-  else if (i == 3) drawLightingTab(ed);
-  else if (i == 4) {
+  else if (i == 3) editor::drawPhysicsTab(ed);
+  else if (i == 4) drawLightingTab(ed);
+  else if (i == 5) {
     bool c = false;
     ImGui::SeparatorText(T("Frame and cache"));
     c |= ImGui::Combo(T("Frame rate limit"), &ed.fpsMode, "VSync\0" "30 FPS\0" "60 FPS\0" "120 FPS\0" "Unlimited\0");
@@ -2797,7 +2798,7 @@ void drawSettingsTabBody(Editor& ed, int i) {
       ed.settingsDirty = true;
     }
     if (ImGui::Checkbox(T("Idle rendering"), &ed.idleRendering)) ed.settingsDirty = true;
-  } else if (i == 5) drawLanguageTab(ed);
+  } else if (i == 6) drawLanguageTab(ed);
 }
 
 void drawSettings(Editor& ed) {

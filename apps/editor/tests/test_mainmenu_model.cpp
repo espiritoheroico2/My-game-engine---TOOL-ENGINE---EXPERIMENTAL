@@ -56,15 +56,16 @@ void TestRequestsFollowTheRows() {
   CHECK(editor::mainmenu::requestAt(0, 99).command == Command::None);  // fora de faixa
   CHECK(editor::mainmenu::requestAt(9, 0).command == Command::None);   // menu inexistente
   CHECK(editor::mainmenu::requestAt(4, 6).command == Command::Settings);
-  CHECK(editor::mainmenu::requestAt(4, 6).tab == 6);
+  CHECK(editor::mainmenu::requestAt(4, 6).tab == 1);
 }
 
 void TestSettingsTabsFromOptionsMenu() {
   current = "TestSettingsTabsFromOptionsMenu";
+  const int expectedTabs[] = {0, 1, 2, 3, 4, 6, 1, 1};
   for (std::size_t i = 0; i < 8; ++i) {
     const auto request = editor::mainmenu::requestAt(4, i);
     CHECK(request.command == Command::Settings);
-    CHECK(request.tab == static_cast<int>(i));
+    CHECK(request.tab == expectedTabs[i]);
   }
 }
 

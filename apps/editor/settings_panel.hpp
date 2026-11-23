@@ -98,18 +98,18 @@ struct Values {
 
 struct Metrics {
     static constexpr float kStripH = 0.f;   // faixa de abas removida: o conteudo comeca no topo do painel
-    static constexpr float kHeaderH = 30.f;   // cabecalho de cada secao (recolhivel)
+    static constexpr float kHeaderH = 36.f;   // cabecalho de cada secao (recolhivel)
     static constexpr float kPad = sui::kPanelPadding;
     static constexpr float kStripArrowW = 24.f;
-    static constexpr float kLabelW = 190.f;
-    static constexpr float kControlW = 260.f;
-    static constexpr float kRowH = 26.f;
-    static constexpr float kRadioRowH = 22.f;
-    static constexpr float kHeadingH = 26.f;
-    static constexpr float kTextH = 18.f;
-    static constexpr float kGap = 4.f;
-    static constexpr float kFont = 12.f;
-    static constexpr float kSmallFont = 11.f;
+    static constexpr float kLabelW = 210.f;
+    static constexpr float kControlW = 280.f;
+    static constexpr float kRowH = 32.f;
+    static constexpr float kRadioRowH = 27.f;
+    static constexpr float kHeadingH = 32.f;
+    static constexpr float kTextH = 22.f;
+    static constexpr float kGap = 7.f;
+    static constexpr float kFont = 15.f;
+    static constexpr float kSmallFont = 13.f;
     static constexpr float kStepW = 26.f;     // botoes - e + dos tamanhos personalizados
     static constexpr float kValueW = 56.f;    // espaco do valor ao lado do deslizante
     static constexpr float kScrollW = 8.f;    // largura da barra de rolagem do conteudo
@@ -671,7 +671,20 @@ class SettingsPanel {
     // Linhas de uma secao, depois do conteudo fixo. Devolve o y final.
     float layoutForm(std::size_t i, const settings_form::Rows& rows, float y) {
         syncFormPool(i, rows);
-        for (std::size_t k = 0; k < rows.size(); ++k) y = layoutFormRow(i, k, rows[k], y);
+        for (std::size_t k = 0; k < rows.size(); ++k) {
+            // RGB fields remain individually editable, but the group also gets a clear visual color preview.
+            if (k + 2 < rows.size() && rows[k].kind == settings_form::RowKind::Slider &&
+                rows[k + 1].kind == settings_form::RowKind::Slider && rows[k + 2].kind == settings_form::RowKind::Slider &&
+                rows[k].label.find(" (R)") != std::string::npos && rows[k + 1].label.find(" (G)") != std::string::npos &&
+                rows[k + 2].label.find(" (B)") != std::string::npos) {
+                const float r = std::clamp(rows[k].value, 0.f, 1.f);
+                const float g = std::clamp(rows[k + 1].value, 0.f, 1.f);
+                const float b = std::clamp(rows[k + 2].value, 0.f, 1.f);
+                canvas_.addSolid(rect_.w - Metrics::kPad - 30.f, y + 3.f, 26.f, 26.f, SU::Vec4{r, g, b, 1.f}, 0.24f,
+                                 editor::ui_style::buttonRadius());
+            }
+            y = layoutFormRow(i, k, rows[k], y);
+        }
         return y;
     }
 

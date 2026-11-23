@@ -23,11 +23,12 @@ void Check(bool ok, const char* expr, int line) {
 #define CHECK(expr) Check((expr), #expr, __LINE__)
 
 void TestTabNamesMatchTheBar() {
-  CHECK(kTabCount == 6);
+  CHECK(kTabCount == 7);
   CHECK(std::strcmp(kTabNames[0], "Appearance") == 0);
   CHECK(std::strcmp(kTabNames[1], "API/Graphics") == 0);
-  CHECK(std::strcmp(kTabNames[4], "Optimizing") == 0);
-  CHECK(std::strcmp(kTabNames[5], "Language") == 0);
+  CHECK(std::strcmp(kTabNames[3], "Physics") == 0);
+  CHECK(std::strcmp(kTabNames[5], "Optimizing") == 0);
+  CHECK(std::strcmp(kTabNames[6], "Language") == 0);
 }
 
 void TestOptimizingLimits() {

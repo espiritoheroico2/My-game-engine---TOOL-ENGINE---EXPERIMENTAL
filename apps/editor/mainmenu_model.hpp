@@ -164,13 +164,13 @@ inline const std::vector<MenuDef>& definitions() {
         {"Reset layout", "", Command::ResetLayout, 0}, {"Save layout", "", Command::SaveLayout, 0}}},
       {"Options",
        {{"Appearance and colors...", "", Command::Settings, 0},
-        {"Language...", "", Command::Settings, 1},
-        {"Graphics API...", "", Command::Settings, 2},
-        {"Game view (grid, split)...", "", Command::Settings, 3},
+       {"Graphics API...", "", Command::Settings, 1},
+       {"Game view (grid, split)...", "", Command::Settings, 2},
+       {"Physics (world gravity)...", "", Command::Settings, 3},
         {"Lighting and shadows...", "", Command::Settings, 4},
-        {"Tags...", "", Command::Settings, 5},
-        {"Project and export preset...", "", Command::Settings, 6},
-        {"Physics (world gravity)...", "", Command::Settings, 7}}},
+       {"Language...", "", Command::Settings, 6},
+       {"Tags...", "", Command::Settings, 1},
+       {"Project and export preset...", "", Command::Settings, 1}}},
   };
   return defs;
 }
