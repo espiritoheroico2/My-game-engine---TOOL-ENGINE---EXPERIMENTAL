@@ -1,6 +1,7 @@
 // SpriteUI: quads ja expandidos pela CPU (um quad = 4 vertices). Cores e alfa em premultiplicado linear.
 // O atlas e RGBA8 com RGB = 1 e A = cobertura (texto) ou 1 (retangulos). O pixel (0,0) do atlas e branco solido.
-// UV e em PIXELS do atlas (nao normalizada): o PS le com Load, sem sampler, como o resto do RHI.
+// UV e em PIXELS do atlas (nao normalizada): este caminho RHI usa politica Nearest explicita
+// (Load/texelFetch). Atlas de cobertura/MSDF exige Linear e permanece no caminho SDL ate o RHI expor sampler.
 // Cantos arredondados (radius > 0) usam o mesmo SDF de caixa arredondada do SpriteUI (PanelSdf.hpp).
 cbuffer SpriteUiParams : register(b0) { float2 viewportSize; float2 atlasSize; };
 Texture2D atlasTex : register(t0);

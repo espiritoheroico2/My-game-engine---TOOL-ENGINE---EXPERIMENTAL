@@ -78,7 +78,7 @@ struct PipelineDesc {
   CullMode cull = CullMode::Back;
   std::vector<VertexAttrib> layout; u32 vertexStride = 0;
   std::vector<std::string> uniformNames; // slot i -> nome do cbuffer no HLSL
-  std::vector<std::string> textureNames; // slot i -> nome da textura (Texture2D) no shader de pixel; lida com Load/texelFetch (sem sampler)
+  std::vector<std::string> textureNames; // slot i -> textura no shader de pixel; esta interface nao expoe sampler (Load/texelFetch = Nearest)
   std::vector<std::string> storageNames; // slot i -> nome de um StructuredBuffer somente leitura (SRV) em VS e PS (setStorage)
   std::string name;
 };

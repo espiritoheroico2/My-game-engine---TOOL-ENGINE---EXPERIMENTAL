@@ -23,6 +23,11 @@ O que o core entrega hoje para texto de bitmap, e o que continua fora:
 - **Limites de entrada:** atlas com no maximo `maxGlyphCount` codepoints (padrao 4096, teto 65536), em ate
   512 px e padding ate 64. Fonte com cabecalho ou tabela fora dos limites e recusada; `FontLoadPolicy` limita o
   tamanho do arquivo (32 MiB) e pode recusar fontes nao confiaveis.
+- **Politica de amostragem:** `TextureSamplingPolicy.hpp` diferencia pixel art (`Nearest`), cobertura bitmap
+  (`Linear`), cor (`LinearMipmapped`) e SDF/MSDF (`SdfLinear`/`MsdfLinear`). O caminho SDL aplica `Linear` aos
+  atlas de texto e usa `SDL_SCALEMODE_NEAREST` somente quando o recurso declara pixel art. O contrato RHI atual
+  nao expoe sampler e os shaders `toolengine` usam `Load`/`texelFetch` (`Nearest`); portanto atlas de cobertura,
+  SDF e MSDF nao devem ser enviados por esse caminho ate a interface de sampler ser ampliada.
 
 Nao esta implementado: HarfBuzz (kerning, ligaduras, bidi), FreeType (parser completo), MSDF real, atlas
 multipagina e a integracao com o cache de textura do host. Ver `docs/IMPLEMENTATION_STATUS.md`, secao de escopo

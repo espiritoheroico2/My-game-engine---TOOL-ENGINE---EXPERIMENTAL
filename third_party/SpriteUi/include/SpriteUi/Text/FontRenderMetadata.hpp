@@ -8,6 +8,7 @@
 // offline. Cada um carrega o proprio metadado, e o chamador pede a flag a partir dele.
 
 #include "SpriteUi/Rendering/RenderFlags.hpp"
+#include "SpriteUi/Text/TextureSamplingPolicy.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -26,6 +27,7 @@ struct FontRenderMetadata {
     TextRenderMode mode = TextRenderMode::BitmapCoverage;
     float pxRange = 0.0f;                   // Largura da faixa de distancia em pixels (SDF/MSDF). Zero no bitmap.
     std::uint32_t rasterPixelSize = 0;      // Tamanho do em usado ao gerar o atlas (0 = desconhecido).
+    SamplerPolicy sampler = SamplerPolicyFor(TextureKind::BitmapCoverage);
 };
 
 // Flag do shader para um modo de atlas. Sem valor (nullopt) quando o modo nao tem caminho de shader nesta versao:

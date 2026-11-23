@@ -1,5 +1,6 @@
 #version 430
 
+// O caminho RHI liga este recurso com politica Nearest: texelFetch e intencional.
 uniform sampler2D atlasTex;
 
 layout(location = 0) in vec2 i_uv;

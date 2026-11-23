@@ -166,6 +166,7 @@ bool BuildTruetypeAtlas(
     out.metrics.atlasWidth = static_cast<float>(out.width);
     out.metrics.atlasHeight = static_cast<float>(out.height);
     out.renderMetadata.mode = TextRenderMode::BitmapCoverage;   // Cobertura 8 bits: nunca MSDF.
+    out.renderMetadata.sampler = SamplerPolicyFor(TextureKind::BitmapCoverage);
     out.renderMetadata.rasterPixelSize = static_cast<std::uint32_t>(std::lround(config.rasterPixelSize));
 
     const std::uint32_t pad = config.padding;

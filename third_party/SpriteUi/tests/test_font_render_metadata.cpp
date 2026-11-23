@@ -37,7 +37,18 @@ void TestDefaultMetadataIsBitmap() {
     current = "TestDefaultMetadataIsBitmap";
     const FontRenderMetadata defaults;
     CHECK(defaults.mode == TextRenderMode::BitmapCoverage);
+    CHECK(defaults.sampler == SamplerPolicy::Linear);
     CHECK(TextShaderFlagFor(defaults).value_or(0u) == Rendering::FlagBitmapText);
+}
+
+// A politica acompanha o tipo de recurso: pixel art e pontual, enquanto cobertura e distancia sao filtradas.
+void TestSamplerPoliciesAreExplicit() {
+    current = "TestSamplerPoliciesAreExplicit";
+    CHECK(SamplerPolicyFor(TextureKind::PixelArt) == SamplerPolicy::Nearest);
+    CHECK(SamplerPolicyFor(TextureKind::BitmapCoverage) == SamplerPolicy::Linear);
+    CHECK(SamplerPolicyFor(TextureKind::Sdf) == SamplerPolicy::SdfLinear);
+    CHECK(SamplerPolicyFor(TextureKind::Msdf) == SamplerPolicy::MsdfLinear);
+    CHECK(SamplerPolicyFor(TextureKind::Color) == SamplerPolicy::LinearMipmapped);
 }
 
 // MSDF so vale quando o metadado diz MSDF (o gerador ainda nao existe: a flag so descreve o formato).
@@ -62,6 +73,7 @@ void TestUnsupportedModesHaveNoFlag() {
 int main() {
     TestBitmapCoverageMapsToBitmapFlag();
     TestDefaultMetadataIsBitmap();
+    TestSamplerPoliciesAreExplicit();
     TestMsdfMapsToMsdfFlag();
     TestUnsupportedModesHaveNoFlag();
     std::printf("font render metadata: %d/%d checks passed\n", run - failed, run);

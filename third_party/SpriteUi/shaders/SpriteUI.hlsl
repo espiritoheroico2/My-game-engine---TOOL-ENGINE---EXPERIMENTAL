@@ -23,6 +23,7 @@ Texture2DArray SpriteTextures : register(t1);
 // minX,minY,maxX,maxY. O backend deve converter de pixels logicos (ClipRectGPU) para pixels
 // do framebuffer (multiplicando pelo fator de DPI) ao preencher este buffer.
 StructuredBuffer<float4> ClipRects : register(t2);
+// Recursos de SpriteUI devem selecionar a politica do backend; este shader usa o sampler ligado em s0.
 SamplerState SpriteSampler : register(s0);
 
 struct VSOutput
