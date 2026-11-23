@@ -1,4 +1,5 @@
-// Newtoon Physics - BVH (arvore de volumes envolventes) para broad-phase e raycast. Reconstruida a cada passo (O(n log n)),
+// Newtoon Physics - BVH (arvore de volumes envolventes) para broad-phase e raycast. Atualizada por refit linear e
+// reconstruida periodicamente para recuperar a qualidade espacial,
 // vetor contiguo de nos, sem ponteiros. A mesma arvore pode servir ao render (culling de luzes) - ver docs/planos/10_FISICA.md.
 #pragma once
 #include "newtoon_types.hpp"
@@ -51,6 +52,7 @@ class BVH {
   std::vector<BVHNode> nodes;
 
   // `boxes[i]` = AABB da entidade i; `valid[i]` = 0 para ignorar. Reaproveita a memoria entre chamadas.
+  // Depois de Build(), Refit() pode atualizar apenas os bounds sem reordenar a topologia.
   // Contrato (F-05):
   //   - valid.size() != boxes.size() lanca std::invalid_argument (antes lia valid[i] fora do limite);
   //   - mais de kMaxEntities entidades validas lanca std::length_error;
@@ -72,6 +74,27 @@ class BVH {
     if (depth + 1 > static_cast<size_t>(kStack)) { ids_.clear(); throw std::length_error("BVH::Build: profundidade excede a pilha de percurso"); }
     nodes.reserve(ids_.size() * 2);
     BuildRange(boxes, 0, ids_.size());
+  }
+  // Atualiza os bounds da arvore mantendo a topologia criada por Build(). Retorna false se a topologia
+  // deixou de corresponder as entradas (por exemplo, quantidade ou validade mudou).
+  bool Refit(const std::vector<AABB>& boxes, const std::vector<char>& valid) {
+    if (valid.size() != boxes.size() || nodes.empty()) return false;
+    rejected_ = 0;
+    for (size_t i = nodes.size(); i-- > 0;) {
+      BVHNode& node = nodes[i];
+      if (node.IsLeaf()) {
+        if (node.entity == kNoEntity || node.entity >= boxes.size() || !valid[node.entity] || !IsUsableBox(boxes[node.entity])) {
+          ++rejected_;
+          return false;
+        }
+        node.bounds = boxes[node.entity];
+      } else {
+        if (node.left < 0 || node.right < 0 || static_cast<size_t>(node.left) >= nodes.size() || static_cast<size_t>(node.right) >= nodes.size()) return false;
+        node.bounds.min = Min(nodes[static_cast<size_t>(node.left)].bounds.min, nodes[static_cast<size_t>(node.right)].bounds.min);
+        node.bounds.max = Max(nodes[static_cast<size_t>(node.left)].bounds.max, nodes[static_cast<size_t>(node.right)].bounds.max);
+      }
+    }
+    return true;
   }
   // True se a BVH nao tem nos (nenhuma caixa valida na ultima Build).
   bool Empty() const { return nodes.empty(); }

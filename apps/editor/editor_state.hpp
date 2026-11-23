@@ -214,6 +214,8 @@ struct Editor {
   struct Bounds { tool::Vec3 center{}; float radius = 0.f; };
   struct BoundsEntry { size_t n = 0; const void* data = nullptr; tool::u32 revision = 0; Bounds b; };
   std::unordered_map<const tool::Mesh*, BoundsEntry> boundsCache_;   // esfera de cada malha (para o frustum culling)
+  std::unordered_map<std::uint64_t, tool::Mat4> renderWorldMatCache_; // matrizes reutilizadas durante a preparacao de cada vista
+  bool renderWorldMatCacheActive_ = false;
   std::unique_ptr<LightPrism::Rt::Bvh> rtBvh_;                         // BVH da cena para o RT AO (CPU); refeito so se a cena mudou
   std::uint64_t rtSig_ = 0; bool rtHave_ = false;
   std::uint64_t psigCpu[2] = {0, 0}; bool psigCpuValid[2] = {false, false};   // assinatura das sombras de pontual/spot (CPU), por vista (0 = Scene, 1 = Game)
@@ -834,6 +836,13 @@ struct Editor {
 
 private:
   const tool::u8* renderScene(const tool::Camera& cam, int w, int h, bool highlight, int vi, std::size_t gameGridSlot) {
+    renderWorldMatCache_.clear();
+    renderWorldMatCache_.reserve(8192);
+    renderWorldMatCacheActive_ = true;
+    struct RenderWorldMatCacheGuard {
+      Editor& editor;
+      ~RenderWorldMatCacheGuard() { editor.renderWorldMatCacheActive_ = false; }
+    } renderWorldMatCacheGuard{*this};
     ZoneTimer prepareTimer(prof, Zone::ScenePrepare);
     tool::SoftRenderer& renderer = vi ? rendererGame : rendererScene;   // renderizador e assinatura da vista (0 = Scene, 1 = Game)
     std::vector<tool::Light> lights; tool::Vec3 ambient; int sunIdx = -1;

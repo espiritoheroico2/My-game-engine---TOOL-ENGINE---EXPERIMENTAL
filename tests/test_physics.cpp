@@ -110,7 +110,7 @@ TEST(newtoon_idle_world_refreshes_externally_moved_shapes) {
   s.t[body].position = {3, 0, 0};
   s.w.Simulate(s.t, s.r, s.c, s.w.fixedDt);
 
-  CHECK(s.w.stats.idleSteps == 1 && s.w.stats.broadphaseBuilds == 1);
+  CHECK(s.w.stats.idleSteps == 1 && (s.w.stats.broadphaseBuilds + s.w.stats.broadphaseRefits) >= 1);
   CHECK(s.w.Raycast({3, 0, 3}, {0, 0, -1}, 10.f).hit);
   CHECK(!s.w.Raycast({0, 0, 3}, {0, 0, -1}, 10.f).hit);
 

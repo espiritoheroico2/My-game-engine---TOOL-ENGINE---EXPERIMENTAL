@@ -47,6 +47,24 @@ inline tool::Entity Editor::parentOf(tool::Entity e) {
 }
 
 inline tool::Mat4 Editor::worldMat(tool::Entity e) {
+  if (renderWorldMatCacheActive_) {
+    const std::uint64_t key = (static_cast<std::uint64_t>(e.index) << 32) | e.generation;
+    const auto it = renderWorldMatCache_.find(key);
+    if (it != renderWorldMatCache_.end()) return it->second;
+
+    auto& w = scene.world();
+    tool::Mat4 m; bool first = true; tool::Entity cur = e;
+    // sobe ate a raiz multiplicando: world = P_n * ... * P_1 * local
+    for (int depth = 0; depth < 32 && w.alive(cur); ++depth) {
+      const Transform* t = w.get<Transform>(cur);
+      if (t) { m = first ? worldMatrix(*t) : worldMatrix(*t) * m; first = false; }
+      cur = parentOf(cur);
+      if (!w.alive(cur)) break;
+    }
+    renderWorldMatCache_.emplace(key, m);
+    return m;
+  }
+
   auto& w = scene.world();
   tool::Mat4 m; bool first = true; tool::Entity cur = e;
   // sobe ate a raiz multiplicando: world = P_n * ... * P_1 * local

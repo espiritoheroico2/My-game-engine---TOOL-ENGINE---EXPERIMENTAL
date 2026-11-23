@@ -29,7 +29,7 @@ class PhysicsWorld {
   std::vector<PhysicsMaterial> materials{PhysicsMaterial{}}; // materialId indexa aqui
 
   // estatisticas do ultimo Simulate (para o Profiler)
-  struct Stats { int bodies = 0, awake = 0, pairs = 0, contacts = 0, steps = 0, idleSteps = 0, broadphaseBuilds = 0; } stats;
+  struct Stats { int bodies = 0, awake = 0, pairs = 0, contacts = 0, steps = 0, idleSteps = 0, broadphaseBuilds = 0, broadphaseRefits = 0; } stats;
 
   // Eventos de colisao (Enter/Stay/Exit) geradas desde o ultimo ClearEvents().
   const std::vector<CollisionEvent>& GetCollisionEvents() const { return events_; }
@@ -45,12 +45,14 @@ class PhysicsWorld {
     while (acc_ >= fixedDt && steps < maxStepsPerFrame) { Step(tf, rb, col, n, fixedDt); acc_ -= fixedDt; ++steps; }
     if (steps == maxStepsPerFrame) acc_ = 0.f;
     stats.steps = steps;
-    if (steps == 0 && cache_.size() != n) { Prepare(tf, rb, col, n); ++stats.broadphaseBuilds; } // primeira chamada: deixa o raycast pronto
+    if (steps == 0 && cache_.size() != n) {
+      if (Prepare(tf, rb, col, n)) ++stats.broadphaseBuilds; else ++stats.broadphaseRefits;
+    } // primeira chamada: deixa o raycast pronto
   }
 
   // Recalcula formas no mundo + BVH (ja chamado por Simulate). Chame antes de Raycast se ainda nao simulou.
   void Rebuild(const std::vector<Transform>& tf, const std::vector<Rigidbody>& rb, const std::vector<Collider>& col) {
-    Prepare(tf, rb, col, std::min({tf.size(), rb.size(), col.size()}));
+    Prepare(tf, rb, col, std::min({tf.size(), rb.size(), col.size()}), true);
   }
 
   // Raycast no mundo: devolve o acerto mais proximo ate maxDistance a partir de origin na direcao dirIn (normalizada). `ignore` e a entidade a desconsiderar.
@@ -117,14 +119,21 @@ class PhysicsWorld {
     return true;
   }
 
-  // Recalcula formas no mundo para os n corpos e reconstroi a BVH.
-  void Prepare(const std::vector<Transform>& tf, const std::vector<Rigidbody>& rb, const std::vector<Collider>& col, size_t n) {
+  // Recalcula formas no mundo e atualiza a BVH. O refit preserva a topologia por varios passos;
+  // uma reconstrução periódica recupera a qualidade espacial da árvore.
+  bool Prepare(const std::vector<Transform>& tf, const std::vector<Rigidbody>& rb, const std::vector<Collider>& col, size_t n, bool forceFull = false) {
     cache_.resize(n); boxes_.resize(n); valid_.assign(n, 1); shapeInputs_.resize(n);
     JobSystem::Get().ParallelFor(n, 512, [&](size_t b, size_t e) { for (size_t i = b; i < e; ++i) {
       cache_[i] = MakeShape(tf[i], col[i], rb[i], true); boxes_[i] = cache_[i].box;
       shapeInputs_[i] = {tf[i], col[i].type, col[i].extents, col[i].offset, rb[i].inverseInertiaLocal, col[i].radius, rb[i].IsDynamic()};
     } });
-    bvh_.Build(boxes_, valid_);
+    constexpr std::size_t kRefitRebuildInterval = 60;
+    const bool full = forceFull || bvh_.Empty() || bvhBodyCount_ != n || refitSteps_ >= kRefitRebuildInterval;
+    if (full || !bvh_.Refit(boxes_, valid_)) {
+      bvh_.Build(boxes_, valid_); bvhBodyCount_ = n; refitSteps_ = 0; return true;
+    }
+    ++refitSteps_;
+    return false;
   }
 
   // ------------------------------------------------------------------ passo fixo
@@ -134,8 +143,7 @@ class PhysicsWorld {
     bool hasActiveBody = false;
     for (size_t i = 0; i < n && !hasActiveBody; ++i) hasActiveBody = active(i);
     if (!hasActiveBody && !ShapeInputsUnchanged(tf, rb, col, n)) {
-      Prepare(tf, rb, col, n);
-      ++stats.broadphaseBuilds;
+      if (Prepare(tf, rb, col, n)) ++stats.broadphaseBuilds; else ++stats.broadphaseRefits;
     }
     if (!hasActiveBody) {
       for (size_t i = 0; i < n; ++i) {
@@ -168,8 +176,7 @@ class PhysicsWorld {
       }
     });
     // 2) formas + BVH
-    Prepare(tf, rb, col, n);
-    ++stats.broadphaseBuilds;
+    if (Prepare(tf, rb, col, n)) ++stats.broadphaseBuilds; else ++stats.broadphaseRefits;
     // 3) pares (broad-phase)
     pairs_.clear();
     for (size_t i = 0; i < n; ++i) {
@@ -413,6 +420,7 @@ class PhysicsWorld {
   std::vector<char> invIwReady_;
   std::vector<Shape> cache_; std::vector<AABB> boxes_; std::vector<char> valid_;
   BVH bvh_;
+  size_t bvhBodyCount_ = 0, refitSteps_ = 0;
   std::vector<std::pair<Entity, Entity>> pairs_; std::vector<Pt> tmp_; std::vector<Contact> contacts_;
   std::unordered_map<uint64_t, PairInfo> curPairs_, prevPairs_;
   std::vector<CollisionEvent> events_;

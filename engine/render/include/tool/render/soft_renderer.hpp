@@ -5,6 +5,7 @@
 #pragma once
 #include "tool/render/lighting.hpp"
 #include "tool/render/texture.hpp"
+#include "tool/render/frustum_cull.hpp"
 #include "tool/core/parallel.hpp"
 
 #include "LightPrism/Reference/Brdf.hpp"
@@ -333,9 +334,22 @@ public:
     }
     const u32 matIdx = static_cast<u32>(mats_.size());
     mats_.push_back(mat);
-    if (shadowOn_ && !shadowSkip_ && mat.castShadow && mat.opacity >= 1.f) { // transparentes nao projetam sombra (como na GPU) // triangulos vistos do sol, uma lista por cascata (sem culling: sombra vale para as duas faces)
+    if (shadowOn_ && !shadowSkip_ && mat.castShadow && mat.opacity >= 1.f) { // transparentes nao projetam sombra (como na GPU)
+      Vec3 lo = m.pos.empty() ? Vec3{} : m.pos.front(), hi = lo;
+      for (const Vec3& p : m.pos) {
+        lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+        hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+      }
+      const Vec3 localCenter = (lo + hi) * 0.5f;
+      f32 localRadius2 = 0.f;
+      for (const Vec3& p : m.pos) { const Vec3 d = p - localCenter; localRadius2 = std::max(localRadius2, d.x * d.x + d.y * d.y + d.z * d.z); }
+      const Vec3 worldCenter = world.transformPoint(localCenter);
+      const f32 scale = std::max({std::hypot(world.m[0][0], world.m[0][1], world.m[0][2]), std::hypot(world.m[1][0], world.m[1][1], world.m[1][2]), std::hypot(world.m[2][0], world.m[2][1], world.m[2][2])});
+      const f32 worldRadius = std::sqrt(localRadius2) * scale;
       const f32 R = static_cast<f32>(shadowRes_);
       for (u32 k = 0; k < shadowCount_; ++k) {
+        const render::Frustum frustum = render::frustumFromViewProj(cascadeVp_[k].m, true);
+        if (!render::sphereInFrustum(frustum, worldCenter.x, worldCenter.y, worldCenter.z, worldRadius, 4)) continue;
         std::vector<Vec3> ls(m.pos.size()); // x,y em texels, z em 0..1 (convencao da LightPrism: y cresce para baixo)
         for (size_t i = 0; i < m.pos.size(); ++i) {
           const Vec3 wp = world.transformPoint(m.pos[i]); const Vec4 c = cascadeVp_[k].mul({wp.x, wp.y, wp.z, 1});

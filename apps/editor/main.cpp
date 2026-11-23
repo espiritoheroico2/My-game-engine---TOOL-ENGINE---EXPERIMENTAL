@@ -3070,13 +3070,17 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
   return api;
 }
 
-// Renderer SDL da interface (SpriteUI). E independente da API da Cena e do Jogo (Diligent): a interface usa o driver de
-// GPU mais adequado (OpenGL primeiro, depois Direct3D, Metal e GLES) e so cai para software se nenhum abrir.
-// Vulkan fica de fora porque a Cena ja o usa. Driver escolhido vai para o log.
+// Renderer SDL da interface (SpriteUI). E independente da API da Cena e do Jogo (Diligent).
+// No Windows, Direct3D vem antes de OpenGL para evitar que o contexto OpenGL oculto da cena
+// substitua o contexto usado pelo SDL_Renderer da interface. Vulkan fica de fora porque a cena ja o usa.
 SDL_Renderer* createEditorRenderer(SDL_Window* window, bool forceSoftware) {
   if (!window) return nullptr;
   if (forceSoftware) return SDL_CreateRenderer(window, "software");
-  static constexpr const char* kPreferred[] = {"opengl", "direct3d11", "metal", "opengles2", "direct3d12"};
+#if defined(_WIN32)
+  static constexpr const char* kPreferred[] = {"direct3d11", "direct3d12", "opengl", "opengles2"};
+#else
+  static constexpr const char* kPreferred[] = {"opengl", "metal", "opengles2", "direct3d11", "direct3d12"};
+#endif
   auto accept = [&](const char* driver) -> SDL_Renderer* {
     SDL_Renderer* renderer = SDL_CreateRenderer(window, driver);
     if (renderer) tool::logInfo(std::string("Interface SpriteUI: driver de render ") + SDL_GetRendererName(renderer));

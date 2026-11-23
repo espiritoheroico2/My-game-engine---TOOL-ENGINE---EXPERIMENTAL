@@ -66,6 +66,8 @@ inline void Editor::tickSpawners(float) {
       tr.scale[0] = tr.scale[1] = tr.scale[2] = sc;
       w.add<Transform>(s, tr);
       MeshRenderer mr; mr.shape = 1;
+      // O benchmark do ECS mede criacao, atualizacao e fisica; sombras sao um cenario separado.
+      mr.castShadow = false;
       mr.color[0] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f; mr.color[1] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f; mr.color[2] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f;
       mr.roughness = 0.4f;
       w.add<MeshRenderer>(s, mr);
@@ -80,7 +82,7 @@ inline void Editor::tickSpawners(float) {
       tool::logWarn("ECS test: out of memory after " + std::to_string(sp->spawned) + " spheres. Stopped the test; press Stop to clear them.");
       continue;
     }
-    if (any) { play.world.Rebuild(play.tf, play.rb, play.col); play.built = true; }   // um Rebuild por quadro, nao um por esfera
+    if (any) play.built = true;   // Simulate prepara a BVH no proximo passo; nao reconstruir uma vez extra por quadro
     sp->spawned += n;
     if (sp->spawned >= sp->total && !sp->logged) {
       sp->logged = true; sp->armed = false;
@@ -105,8 +107,18 @@ inline void Editor::startEcsTest(long long n) {
   sp.armed = true;
   sp.seed = 2463534242u ^ static_cast<uint32_t>(n);
   w.add<SpawnerComp>(call, sp);
-  if (!playing) startPlay();   // o teste roda no Play; o Stop desfaz as esferas
-  else tool::logInfo("ECS test armed while playing.");
+  if (!playing) {
+    startPlay();   // o teste roda no Play; o Stop desfaz as esferas
+  } else {
+    tool::logInfo("ECS test armed while playing.");
+  }
+  play.ents.reserve(play.ents.size() + static_cast<size_t>(n));
+  play.tf.reserve(play.tf.size() + static_cast<size_t>(n));
+  play.rb.reserve(play.rb.size() + static_cast<size_t>(n));
+  play.col.reserve(play.col.size() + static_cast<size_t>(n));
+  play.dead.reserve(play.dead.size() + static_cast<size_t>(n));
+  play.culled.reserve(play.culled.size() + static_cast<size_t>(n));
+  play.indexOf.reserve(play.indexOf.size() + static_cast<size_t>(n));
 }
 
 // Comandos digitados no Console. Mantenha simples: cada comando e uma linha.
