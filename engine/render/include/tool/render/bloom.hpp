@@ -1,4 +1,4 @@
-// Bloom no renderizador CPU (o mesmo algoritmo do assets/shaders/bloom.hlsl, para a imagem sair igual nos dois caminhos):
+// Bloom no renderizador CPU (o mesmo algoritmo do assets/shaders/hlsl/bloom.hlsl, para a imagem sair igual nos dois caminhos):
 //   1) limiar em linear: so o que passa do limiar entra, em meia resolucao (media 2x2)
 //   2) blur gaussiano separavel de 9 taps (horizontal e vertical)
 //   3) composicao: cor + halo * forca, com a cor de volta em sRGB de 8 bits

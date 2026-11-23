@@ -13,11 +13,11 @@
 - Editor: regras de janela (`window_manager.*`, 30 verificacoes). Ainda nao ligadas aos paineis; o gerenciador do editor deve sair depois da migracao, com aprovacao. Commit `e16b7f2`.
 - Editor: teste ECS nao derruba o editor por falta de memoria: captura de excecao no topo (`crash_report.txt`), spawner para sozinho (`bad_alloc`) e aviso de memoria estimada (cerca de 7 KB por esfera). Commit `e16b7f2`. Nao reproduzido com janela.
 - Editor: `PanelRouter` (`apps/editor/panel_router.hpp`) com teste `Editor.PanelRouter`. Commit `89254f8`.
-- Branch `ui-settings-router` (commits `f2cdd24`, `a8b1676`, `c24f490`): menu e Configuracoes roteados pelo `PanelRouter`; lista de menu aberta bloqueia cliques atras dela; ImGui nao recebe ponteiro coberto por painel SpriteUI. Aguardando teste visual (`CODAR.MD` T-1 a T-4).
+- Commits `f2cdd24`, `a8b1676`, `c24f490`: menu e Configuracoes roteados pelo `PanelRouter`; lista de menu aberta bloqueia cliques atras dela; ImGui nao recebe ponteiro coberto por painel SpriteUI. Aguardando teste visual, a registrar em `../planos/00_CHECKLIST.md`.
 - Build MSVC: aviso C4324 desligado (relleno de alinhamento intencional). Commit `1048fa7`.
 - Shaders: `Instances` em `t17` (conflito com `IblBrdfLut` em `t15`), `check_bindings.py` no ctest, GLSL regenerado. Commit `f974d2f`.
 - Validacao desta sessao: `ctest` do editor 34/34; `ctest` da SpriteUI 39/39; execucao headless do editor com 259 quadros sem erro. Nao validado: aparencia em janela real e GPU.
-- Documentacao: `../../planos/00_ROADMAP.md` reescrito com estado por item e fases; `CODAR.MD` na branch com os testes do responsavel. `docs/ESTADO_ATUAL.md`, `P1_IMPLEMENTACAO.md` e `CODAR.MD` (raiz) foram removidos no `908cbaf`.
+- Documentacao: `../../planos/00_ROADMAP.md` reescrito com estado por item e fases; `docs/ESTADO_ATUAL.md`, `P1_IMPLEMENTACAO.md` e `CODAR.MD` (raiz) foram removidos no `908cbaf`.
 
 **Sessao de manutencao (SpriteUI, fonte, shaders, repositorio)**
 
@@ -194,7 +194,7 @@ Pendente desta versao: canal alpha no mesh, "use object as light", bloom mais fo
 **Ambient occlusion (SSAO), CPU e GPU**
 - Porta do `LightPrism::Ssao` (`Post/Ssao`): AO bruto por kernel + desfoque bilateral. `LightingSettings`: `ssao` (liga/desliga), `ssaoKernel` (1 a 32), `ssaoRadius`, `ssaoBias`, `ssaoPower`. Aparece em Settings > Lighting e e salvo no projeto.
 - CPU: `SoftRenderer` guarda cor direta e ambiente separados, profundidade e normal por pixel; a AO e aplicada so ao ambiente (convencao da Light Prism).
-- GPU: prepasse que grava normal e profundidade (RGBA16F), dois passes de tela cheia (`assets/shaders/ssao.hlsl`) e o `AoMap` multiplicando o ambiente no `pbr.hlsl`.
+- GPU: prepasse que grava normal e profundidade (RGBA16F), dois passes de tela cheia (`assets/shaders/hlsl/ssao.hlsl`) e o `AoMap` multiplicando o ambiente no `pbr.hlsl`.
 - Correcao no caminho da CPU: triangulos com vertice atras do plano near eram descartados, o que sumia com o chao em alguns angulos. Agora sao recortados contra o near.
 - Teste: `gpu_test` compara a AO na GPU e na CPU (1344 x 1339 pixels escurecidos, Vulkan/lavapipe).
 - Limitacoes: a SSAO da CPU usa o `ComputeSsao` single-thread da Light Prism (nao medido em resolucoes altas); sem meia resolucao exposta; D3D12 nao compilado neste ambiente.

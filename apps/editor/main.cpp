@@ -816,19 +816,26 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     return out;
   };
   h.openToolsHelp = [] { editor::openHelp("jslib"); };
-  h.voxelPaint = [&ed](int x, int layer, int z, int brush) {   // mesmo setBlock do ImGui (revisao sobe la)
+  h.voxelPaint = [&ed](int x, int layer, int z, int brush) {   // cada acao discreta no grid cria um passo de undo
+    ed.undoTick(true);
     if (auto* vc = ed.scene.world().get<ed_::VoxelChunk>(ed.selected)) editor::setBlock(*vc, x, layer, z, static_cast<unsigned char>(brush));
+    ed.undoTick(false);
   };
   h.voxelFill = [&ed] {   // mesmo calculo do ImGui: o terreno acompanha a posicao do objeto
+    ed.undoTick(true);
     auto& w = ed.scene.world();
     auto* vc = w.get<ed_::VoxelChunk>(ed.selected);
-    if (!vc) return;
-    const auto* tr = w.get<ed_::Transform>(ed.selected);
-    const float span = vc->cell * ed_::kChunkSize;
-    editor::fillTerrain(*vc, tr ? static_cast<int>(std::lround(tr->pos[0] / span)) : 0, tr ? static_cast<int>(std::lround(tr->pos[2] / span)) : 0);
+    if (vc) {
+      const auto* tr = w.get<ed_::Transform>(ed.selected);
+      const float span = vc->cell * ed_::kChunkSize;
+      editor::fillTerrain(*vc, tr ? static_cast<int>(std::lround(tr->pos[0] / span)) : 0, tr ? static_cast<int>(std::lround(tr->pos[2] / span)) : 0);
+    }
+    ed.undoTick(false);
   };
   h.voxelClear = [&ed] {
+    ed.undoTick(true);
     if (auto* vc = ed.scene.world().get<ed_::VoxelChunk>(ed.selected)) editor::clearChunk(*vc);
+    ed.undoTick(false);
   };
   h.removeUi = [&ed] { ed.scene.world().remove<ed_::UiCanvas>(ed.selected); };
   h.addResource = [&ed](int id) {   // mesmas regras do menu "+ Add Resource" do ImGui
@@ -960,6 +967,14 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
       po->items.push_back(ov);
     } else if (po) {
       po->items.erase(std::remove_if(po->items.begin(), po->items.end(), [&](const ed_::PartOverride& it) { return it.part == pi; }), po->items.end());
+    }
+  };
+  h.setPartTexture = [&ed](int pi, const std::string& texture) {
+    auto* overrides = ed.scene.world().get<ed_::PartOverrides>(ed.selected);
+    if (!overrides) return;
+    for (auto& item : overrides->items) if (item.part == pi) {
+      ed_::ser::copyStr(item.texture, sizeof item.texture, texture);
+      return;
     }
   };
   return h;
@@ -3086,7 +3101,7 @@ SDL_Renderer* createEditorRenderer(SDL_Window* window, bool forceSoftware) {
 void enterProjectRoot() {
   namespace fs = std::filesystem;
   std::error_code ec;
-  auto isRoot = [&](const fs::path& p) { return fs::exists(p / "assets" / "shaders" / "pbr.hlsl", ec); };
+  auto isRoot = [&](const fs::path& p) { return fs::exists(p / "assets" / "shaders" / "hlsl" / "pbr.hlsl", ec); };
   if (isRoot(fs::current_path(ec))) return;
   if (const char* base = SDL_GetBasePath()) {
     fs::path p = fs::path(base);
@@ -3662,7 +3677,7 @@ static int runEditorMain(int argc, char** argv) {
         helpPanel->openTopic(help.pending);
         help.pending.clear();
       }
-      if (!helpPanel->draw(renderer, window, help.open, editor::helpIsPt())) {
+      if (!helpPanel->draw(renderer, window, help.open, editor::helpLanguage())) {
         tool::logError(std::string("Help SpriteUI render failed: ") + SDL_GetError());
         helpPanel.reset();
       }

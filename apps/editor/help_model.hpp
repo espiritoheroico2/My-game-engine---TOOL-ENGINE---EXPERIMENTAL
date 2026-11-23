@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace editor::help {
@@ -85,11 +86,18 @@ inline std::string Lower(std::string text) {
 }
 
 inline const char* TitleOf(const HelpTopic& topic, bool portuguese) { return portuguese ? topic.titlePt : topic.titleEn; }
+inline const char* TitleOf(const HelpTopic& topic, const std::string& language) {
+  if (language.rfind("es", 0) == 0 && topic.titleEs) return topic.titleEs;
+  if (language.rfind("pt", 0) == 0) return topic.titlePt;
+  return topic.titleEn;
+}
 
 class HelpModel {
  public:
-  void SetPortuguese(bool portuguese) { portuguese_ = portuguese; }
-  [[nodiscard]] bool Portuguese() const { return portuguese_; }
+  void SetPortuguese(bool portuguese) { SetLanguage(portuguese ? "pt-BR" : "en"); }
+  void SetLanguage(std::string language) { language_ = std::move(language); }
+  [[nodiscard]] bool Portuguese() const { return language_.rfind("pt", 0) == 0; }
+  [[nodiscard]] const std::string& Language() const { return language_; }
 
   // Abre o topico de um id (icone "?" ou F1). Id desconhecido: fica o topico atual.
   void Open(const std::string& id) {
@@ -104,9 +112,9 @@ class HelpModel {
 
   [[nodiscard]] std::size_t SelectedIndex() const { return selected_; }
   [[nodiscard]] const HelpTopic& Current() const { return helpTopics()[selected_]; }
-  [[nodiscard]] const char* CurrentTitle() const { return TitleOf(Current(), portuguese_); }
+  [[nodiscard]] const char* CurrentTitle() const { return TitleOf(Current(), language_); }
   [[nodiscard]] std::vector<Block> CurrentBlocks() const {
-    return ParseBody(portuguese_ ? Current().bodyPt : Current().bodyEn);
+    return ParseBody(BodyOf(Current()));
   }
 
   // Indices (em helpTopics()) dos topicos que passam na busca, na ordem da lista.
@@ -149,14 +157,20 @@ class HelpModel {
  private:
   // Busca no titulo e no texto do idioma da interface.
   [[nodiscard]] bool Matches(const HelpTopic& topic, const std::string& query) const {
-    const std::string title = Lower(TitleOf(topic, portuguese_));
-    const std::string body = Lower(portuguese_ ? topic.bodyPt : topic.bodyEn);
+    const std::string title = Lower(TitleOf(topic, language_));
+    const std::string body = Lower(BodyOf(topic));
     return title.find(query) != std::string::npos || body.find(query) != std::string::npos;
+  }
+
+  const char* BodyOf(const HelpTopic& topic) const {
+    if (language_.rfind("es", 0) == 0 && topic.bodyEs) return topic.bodyEs;
+    if (language_.rfind("pt", 0) == 0) return topic.bodyPt;
+    return topic.bodyEn;
   }
 
   Edit::TextField search_;
   std::size_t selected_ = 0;
-  bool portuguese_ = false;
+  std::string language_ = "en";
 };
 
 }  // namespace editor::help

@@ -115,6 +115,7 @@ struct Hooks {
     std::function<void(bool)> setLocked;
     std::function<void(bool)> setPrincipal;
     std::function<void(int, bool)> setPartOverride;                        // parte, ligado
+    std::function<void(int, const std::string&)> setPartTexture;           // textura de albedo, por parte
     std::function<void(bool)> setSplitVertical;
     std::function<bool(const std::string&)> addTagNamed;           // cria (se preciso) e atribui; false: limite de tags
     std::function<void(std::size_t)> addTagIndex;                  // atribui uma tag existente
@@ -615,6 +616,7 @@ class InspectorPanel {
                 swatch(T("Color"), ov->color);
                 slider(T("Roughness"), &ov->roughness, {0.05f, 1.f});
                 slider(T("Metallic"), &ov->metallic, {0.f, 1.f});
+                partTextureRow(part, ov->texture);
             } else {
                 canvas_.addText(innerX_, y_ + 5.f, T("File material"), Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
                 nextRow();
@@ -628,6 +630,22 @@ class InspectorPanel {
             if (it.part == part) return &it;
         }
         return nullptr;
+    }
+
+    void partTextureRow(int part, char* texture) {
+        std::vector<std::string> options{T("(none)")};
+        std::size_t selected = 0;
+        if (hooks_.assets) for (const std::string& rel : hooks_.assets(editor::AssetKind::Texture)) {
+            if (rel == texture) selected = options.size();
+            options.push_back(rel);
+        }
+        if (texture[0] && selected == 0) { options.push_back(texture); selected = options.size() - 1; }
+        const std::vector<std::string> list = options;
+        drop(T("Texture"), std::move(options), selected, [this, part, texture, list](std::size_t i) {
+            const std::string chosen = i == 0 || i >= list.size() ? std::string() : list[i];
+            std::snprintf(texture, 160, "%s", chosen.c_str());
+            if (hooks_.setPartTexture) hooks_.setPartTexture(part, chosen);
+        });
     }
 
     void light() {

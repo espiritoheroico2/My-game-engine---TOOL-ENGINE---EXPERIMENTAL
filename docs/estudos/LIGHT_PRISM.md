@@ -11,7 +11,7 @@ sistema antigo (Forward+ proprio, atenuacao e `shadow.hpp`) nos dois renderizado
 | CPU | `engine/render/include/tool/render/soft_renderer.hpp` | `setLighting(frame, reuse)`: BRDF, `CsmVisibility`, SH9 |
 | GPU | `engine/render/include/tool/render/gpu_renderer.hpp` | `setLighting(rig, view, proj, reuse)`: sobe luzes, roda clusters, importa buffers |
 | Dispositivo | `engine/rhi_diligent/src/lightprism_bridge.cpp` | `createLightPrismDevice`: dispositivo Light Prism sobre o RHI Diligent |
-| Shaders | `assets/shaders/pbr.hlsl`, `assets/shaders/lightprism/` | PBR com `EvaluateClusteredLights`, sombra CSM adaptada ao RHI |
+| Shaders | `assets/shaders/hlsl/pbr.hlsl`, `assets/shaders/lightprism/` | PBR com `EvaluateClusteredLights`, sombra CSM adaptada ao RHI |
 
 ## Fluxo por quadro
 

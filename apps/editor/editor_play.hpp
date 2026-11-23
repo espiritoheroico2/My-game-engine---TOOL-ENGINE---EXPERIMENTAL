@@ -54,6 +54,30 @@ inline void Editor::startPhysics() {
     play.indexOf[e.index] = static_cast<uint32_t>(play.ents.size());
     play.ents.push_back(e); play.tf.push_back(nt); play.rb.push_back(r); play.col.push_back(c);
   });
+  // Cada coluna vertical de blocos solidos vira uma caixa estatica. Isso conserva os vazios do chunk sem criar
+  // um corpo por bloco; os indices duplicados em `play.ents` apontam de volta para o chunk dono.
+  w.each<VoxelChunk, Transform>([&](tool::Entity e, VoxelChunk& chunk, Transform& t) {
+    if (w.has<Inactive>(e) || chunk.cell <= 0.f) return;
+    const float cell = chunk.cell;
+    for (int z = 0; z < kChunkSize; ++z) for (int x = 0; x < kChunkSize; ++x) {
+      int y = 0;
+      while (y < kChunkSize) {
+        while (y < kChunkSize && chunk.at(x, y, z) == 0) ++y;
+        if (y >= kChunkSize) break;
+        const int first = y;
+        while (y < kChunkSize && chunk.at(x, y, z) != 0) ++y;
+        const int count = y - first;
+        Newtoon::Transform nt; nt.position = {t.pos[0], t.pos[1], t.pos[2]}; nt.rotation = eulerToQuat(t.rot);
+        Newtoon::Collider c; c.type = Newtoon::ShapeType::Box;
+        c.extents = {cell * 0.5f * std::fabs(t.scale[0]), cell * count * 0.5f * std::fabs(t.scale[1]), cell * 0.5f * std::fabs(t.scale[2])};
+        c.offset = {(x + 0.5f) * cell * t.scale[0],
+                    (first + count * 0.5f) * cell * t.scale[1],
+                    (z + 0.5f) * cell * t.scale[2]};
+        Newtoon::Rigidbody r; r.inverseMass = 0.f; r.inverseInertiaLocal = {0, 0, 0};
+        play.ents.push_back(e); play.tf.push_back(nt); play.rb.push_back(r); play.col.push_back(c);
+      }
+    }
+  });
   play.dead.assign(play.ents.size(), 0);
   play.culled.assign(play.ents.size(), 0); play.culledCount = 0;
   if (!play.ents.empty() && ps.enabled) { play.world.Rebuild(play.tf, play.rb, play.col); play.built = true; }

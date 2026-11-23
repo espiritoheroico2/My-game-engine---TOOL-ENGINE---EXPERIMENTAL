@@ -62,7 +62,12 @@ struct MeshRenderer {
   float fogAmount = 1.f;     // 0..1: quanto da cor da neblina entra no objeto a partir de fogEnd
 };
 // Material editado por parte de um modelo (sobrepoe o material que veio do arquivo). `part` = indice em ModelData::parts.
-struct PartOverride { int part = 0; float color[3] = {0.8f, 0.8f, 0.8f}; float roughness = 0.5f, metallic = 0.f; };
+struct PartOverride {
+  int part = 0;
+  float color[3] = {0.8f, 0.8f, 0.8f};
+  float roughness = 0.5f, metallic = 0.f;
+  char texture[160] = "";  // albedo opcional, por parte; vazio preserva a textura do arquivo/modelo
+};
 struct PartOverrides { std::vector<PartOverride> items; };
 // Hierarquia: o Transform de um objeto com Parent e LOCAL (relativo ao pai). Sem Parent, e o mundo. Ver editor_hier.hpp.
 struct Parent { tool::Entity e; };
@@ -299,7 +304,8 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     Json arr = Json::array();
     for (const PartOverride& it : po->items) {
       Json o = Json::object(); o.set("part", it.part); o.set("color", ser::vec(it.color, 3));
-      o.set("roughness", static_cast<double>(it.roughness)); o.set("metallic", static_cast<double>(it.metallic)); arr.push(o);
+      o.set("roughness", static_cast<double>(it.roughness)); o.set("metallic", static_cast<double>(it.metallic));
+      o.set("texture", std::string(it.texture)); arr.push(o);
     }
     j.set("partMaterials", arr);
   }
@@ -393,6 +399,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     for (const auto& o : j["partMaterials"].items()) {
       PartOverride it; it.part = static_cast<int>(o["part"].asNumber(0));
       ser::readVec(o["color"], it.color, 3); it.roughness = ser::num(o, "roughness", 0.5f); it.metallic = ser::num(o, "metallic", 0.f);
+      ser::copyStr(it.texture, sizeof it.texture, o["texture"].asString());
       po.items.push_back(it);
     }
     w.add<PartOverrides>(e, po);

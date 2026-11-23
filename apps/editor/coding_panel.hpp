@@ -11,6 +11,7 @@
 
 #include "framed_window.hpp"
 #include "i18n.hpp"
+#include "script_check.hpp"
 #include "spriteui_host.hpp"
 #include "text_atlas_set.hpp"
 #include "view_painter.hpp"
@@ -49,7 +50,7 @@ namespace Wd = ToolEngine::SpriteUi::Widgets;
 
 // Cores do painel, tiradas da paleta em uso (Configuracoes > Appearance).
 struct Ink {
-  view::Color text, dim, field, list, rowHover, rowSel, button, buttonOn, border, error;
+  view::Color text, dim, field, list, rowHover, rowSel, button, buttonOn, border, error, warning, ok;
 };
 
 class Panel {
@@ -161,6 +162,7 @@ class Panel {
   bool drawBody(SDL_Renderer* renderer, const sui::Box& body, const fs::path& root) {
     if (body.h <= 0.f || body.w <= 0.f) return true;   // minimizada ou escondida
     setRoot(root);
+    refreshScriptIssues(SDL_GetTicks() / 1000.0);
     window_ = SDL_GetRenderWindow(renderer);
     refreshInk();
     body_ = body;
@@ -204,7 +206,7 @@ class Panel {
   };
 
   struct Layout {
-    SU::Rect save, toggle, slider, list, pane, gutter, editor;
+    SU::Rect save, toggle, slider, list, pane, gutter, editor, diagnostics;
     float sizeLabelX = 0.f;
     bool listShown = false;
   };
@@ -227,7 +229,9 @@ class Panel {
                c(mix(p.surface, p.accent, 0.6f)),
                c(p.accent),
                c(p.border),
-               c(p.error)};
+               c(p.error),
+               view::rgbaF(0.95f, 0.68f, 0.12f, 1.f),
+               view::rgbaF(0.25f, 0.78f, 0.38f, 1.f)};
     style_.background = sui::PaletteColor(p.surface);
     style_.focusBackground = sui::PaletteColor(focus);
     style_.text = sui::PaletteColor(p.text);
@@ -292,12 +296,15 @@ class Panel {
     }
     const float paneW = std::max(0.f, b.x + b.w - paneX);
     layout_.pane = rect(paneX, top, paneW, areaH);
+    const float diagnosticH = isToolScript() ? std::min(66.f, areaH * 0.32f) : 0.f;
+    const float editorH = std::max(0.f, areaH - diagnosticH);
+    if (diagnosticH > 0.f) layout_.diagnostics = rect(paneX, top + editorH, paneW, diagnosticH);
 
     const std::size_t lines = lineCount(field_->Edit().Text());
     const float digits = static_cast<float>(std::max<std::size_t>(2, std::to_string(lines).size()));
     const float gutterW = std::min(paneW * 0.5f, std::max(40.f, digits * codeFont_ * 0.62f + 14.f));
-    layout_.gutter = rect(paneX, top, gutterW, areaH);
-    layout_.editor = rect(paneX + gutterW, top + 2.f, std::max(0.f, paneW - gutterW), std::max(0.f, areaH - 4.f));
+    layout_.gutter = rect(paneX, top, gutterW, editorH);
+    layout_.editor = rect(paneX + gutterW, top + 2.f, std::max(0.f, paneW - gutterW), std::max(0.f, editorH - 4.f));
     editorBox_ = layout_.editor;
     listScroll_ = std::clamp(listScroll_, 0.f, maxListScroll());
     tree_.Arrange(root_, {{layout_.editor.position.x, layout_.editor.position.y},
@@ -396,7 +403,37 @@ class Panel {
       if (y + codeFont_ < p.position.y || y > p.position.y + p.size.y) continue;
       const std::string n = std::to_string(number);
       const float w = textWidth(n, codeFont_);
-      s.text({g.position.x + g.size.x - 6.f - w, y}, n, codeFont_, ink_.dim);
+      s.text({g.position.x + g.size.x - 6.f - w, y}, n, codeFont_, issueColor(static_cast<int>(number)));
+    }
+    drawDiagnostics(s);
+  }
+
+  view::Color issueColor(int line) const {
+    for (const ScriptIssue& issue : issues_) if (issue.line == line)
+      return issue.sev == tool::Severity::Error ? ink_.error : ink_.warning;
+    return ink_.dim;
+  }
+
+  void drawDiagnostics(view::ShapeList& s) {
+    if (!isToolScript() || layout_.diagnostics.size.y <= 0.f) return;
+    const SU::Rect r = layout_.diagnostics;
+    s.rectFilled({r.position.x, r.position.y}, {r.position.x + r.size.x, r.position.y + r.size.y}, ink_.list, 0.f);
+    if (issues_.empty()) {
+      s.text({r.position.x + kPad, r.position.y + 4.f}, T("ToolObject script check: OK"), editor::ui_style::uiFont(kFont), ink_.ok, false,
+             r.size.x - 2.f * kPad);
+      return;
+    }
+    const std::size_t visible = std::min<std::size_t>(3, issues_.size());
+    for (std::size_t i = 0; i < visible; ++i) {
+      const ScriptIssue& issue = issues_[i];
+      const std::string message = "L" + std::to_string(issue.line) + " [" + issue.code + "] " + issue.msg;
+      const view::Color color = issue.sev == tool::Severity::Error ? ink_.error : ink_.warning;
+      s.text({r.position.x + kPad, r.position.y + 3.f + static_cast<float>(i) * 18.f}, message,
+             editor::ui_style::uiFont(kFont), color, false, r.size.x - 2.f * kPad);
+    }
+    if (issues_.size() > visible) {
+      s.text({r.position.x + kPad, r.position.y + 3.f + static_cast<float>(visible) * 18.f},
+             "+" + std::to_string(issues_.size() - visible) + " more", editor::ui_style::uiFont(kFont), ink_.dim);
     }
   }
 
@@ -518,7 +555,25 @@ class Panel {
 
   void edited() {
     dirty_ = true;
+    if (isToolScript()) {
+      issuesPending_ = true;
+      issuesChangedAt_ = SDL_GetTicks() / 1000.0;
+    }
     field_->KeepCaretVisible(fieldLayout(), contentSize(), style_);
+  }
+
+  bool isToolScript() const {
+    if (current_ < 0 || static_cast<std::size_t>(current_) >= files_.size()) return false;
+    const std::string& path = files_[static_cast<std::size_t>(current_)].rel;
+    constexpr char suffix[] = ".tool.js";
+    constexpr std::size_t suffixLength = sizeof(suffix) - 1;
+    return path.size() >= suffixLength && path.compare(path.size() - suffixLength, suffixLength, suffix) == 0;
+  }
+
+  void refreshScriptIssues(double now) {
+    if (!issuesPending_ || current_ < 0 || static_cast<std::size_t>(current_) >= files_.size() || now - issuesChangedAt_ < 0.4) return;
+    issues_ = checkScriptSource(field_->Edit().Text(), files_[static_cast<std::size_t>(current_)].rel);
+    issuesPending_ = false;
   }
 
   void setText(const std::string& text, std::size_t cursor) {
@@ -582,6 +637,9 @@ class Panel {
     current_ = static_cast<int>(index);
     dirty_ = false;
     setText(text, 0);
+    issues_.clear();
+    issuesPending_ = false;
+    if (isToolScript()) issues_ = checkScriptSource(text, files_[index].rel);
   }
 
   void save() {
@@ -600,6 +658,10 @@ class Panel {
     if (!f) return;   // falha ao salvar: o texto continua na tela e o arquivo fica marcado
     f << out;
     dirty_ = false;
+    if (isToolScript()) {
+      issues_ = checkScriptSource(field_->Edit().Text(), files_[static_cast<std::size_t>(current_)].rel);
+      issuesPending_ = false;
+    }
   }
 
   // ---------- Membros ----------
@@ -629,6 +691,9 @@ class Panel {
   int current_ = -1;
   bool crlf_ = false;
   bool dirty_ = false;
+  bool issuesPending_ = false;
+  double issuesChangedAt_ = -10.0;
+  std::vector<ScriptIssue> issues_;
   bool focused_ = false, dragging_ = false, sliding_ = false, listShown_ = true;
   float listScroll_ = 0.f;
   float codeFont_ = kMinCodeFont;

@@ -13,7 +13,7 @@
 //  - Cantos arredondados (FlagRoundedPanel) usam o mesmo SDF de caixa do SpriteUI, com 1 px de anti-aliasing.
 //  - Coordenadas do FramePacket sao pixels do alvo (DPI 1). O alvo e definido com setTarget().
 //
-// Precisa de SpriteUI (SpriteUi::SpriteUI) e do RHI. Os shaders vem de assets/shaders/spriteui.hlsl; em OpenGL
+// Precisa de SpriteUI (SpriteUi::SpriteUI) e do RHI. Os shaders vem de assets/shaders/hlsl/spriteui.hlsl; em OpenGL
 // usa os GLSL gerados em assets/shaders/glsl/spriteui.{vs,ps}.430.glsl (tools/shaders/build_glsl.py).
 
 #pragma once
@@ -203,8 +203,8 @@ private:
       d.source.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
       d.lang = rhi::ShaderLang::GLSL; d.entry = "main";
     } else {
-      std::ifstream in(shaderDir_ + "/spriteui.hlsl", std::ios::binary);
-      if (!in) { fail("nao achei spriteui.hlsl em " + shaderDir_); return {}; }
+      std::ifstream in(shaderDir_ + "/hlsl/spriteui.hlsl", std::ios::binary);
+      if (!in) { fail("nao achei spriteui.hlsl em " + shaderDir_ + "/hlsl"); return {}; }
       d.source.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
       d.lang = rhi::ShaderLang::HLSL;
     }

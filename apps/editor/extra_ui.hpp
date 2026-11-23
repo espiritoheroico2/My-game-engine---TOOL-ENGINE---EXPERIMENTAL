@@ -53,7 +53,7 @@ inline void helpIcon(const char* topic) {
   if (clicked) openHelp(topic);
 }
 
-inline bool helpIsPt() { return I18n::get().code().rfind("pt", 0) == 0; }
+inline std::string helpLanguage() { return I18n::get().code(); }
 
 // ====================================================================================================== EDIT EXTERNAL
 // Abre um arquivo do projeto no editor de codigo escolhido em Settings > Project. NUNCA usa shell nem "abrir com o programa

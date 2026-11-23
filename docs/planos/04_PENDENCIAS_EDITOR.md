@@ -93,8 +93,8 @@ Candidatos a revisão (referenciados pouco ou com dados de versões antigas, por
 
 ## 7. Plano incremental de renderização
 
-Base: `docs/sugestaoarquiteturanova.md`. Adotar a proposta por etapas, sem substituir o `GpuRenderer` ou duplicar
-o batching existente. Os nomes P0-P5 do documento são locais à proposta; mapear para as prioridades do
+Base: `02_RENDER_DRAW_CALLS.md`. Seguir o plano por etapas, sem substituir o `GpuRenderer` ou duplicar
+o batching existente. Os nomes P0-P6 do documento são locais ao plano; mapear para as prioridades do
 `00_ROADMAP.md` antes de reordenar o roadmap oficial.
 
 - [x] **P0 parcial**: contar os `drawIndexed` do `GpuRenderer` por passe, vista Scene/Game e total; capturar o

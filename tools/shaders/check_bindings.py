@@ -14,6 +14,7 @@ import os, re, sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SHADERS = os.path.join(ROOT, "assets", "shaders")
+HLSL = os.path.join(SHADERS, "hlsl")
 INCLUDE = re.compile(r'^\s*#include\s+"([^"]+)"', re.M)
 DIRECTIVE = re.compile(r'^\s*#\s*(ifdef|ifndef|else|endif|define)\b\s*(\w+)?', re.M)
 DECL = re.compile(r'(\w+)\s*(?:\[[^\]]*\])?\s*:\s*register\(\s*([a-zA-Z])(\d+)\s*(?:,[^)]*)?\)')
@@ -69,11 +70,11 @@ def active_lines(text, defines):
 
 
 def check_hlsl(errors):
-    names = sorted(f for f in os.listdir(SHADERS) if f.endswith(".hlsl"))
+    names = sorted(f for f in os.listdir(HLSL) if f.endswith(".hlsl"))
     for name in names:
         variants = VARIANTS.get(name, [set()])
         for defs in variants:
-            src = active_lines(flatten(os.path.join(SHADERS, name), set()), set(defs))
+            src = active_lines(flatten(os.path.join(HLSL, name), set()), set(defs))
             seen = {}
             for m in DECL.finditer(src):
                 key = (m.group(2).lower(), int(m.group(3)))

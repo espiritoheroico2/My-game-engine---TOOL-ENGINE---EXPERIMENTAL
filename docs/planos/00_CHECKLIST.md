@@ -12,7 +12,7 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `../referencia/CH
 - [x] Limiar de 16 px para sair do dock (`undockThreshold`), 6 px para janela solta (`a98825e`)
 - [x] `UIEventRouter::TopmostAt`: alvo mais alto sem estado, mesma regra do clique (`21b15ac`)
 - [x] Teste `SpriteUI.LayersAndInput` registrado no CMake: 39/39 testes da SpriteUI passam nesta maquina
-- [x] Menu e Settings roteados pelo `PanelRouter` (branch `ui-settings-router`, `f2cdd24`): lista aberta bloqueia cliques atras dela
+- [x] Menu e Settings roteados pelo `PanelRouter` (`f2cdd24`): lista aberta bloqueia cliques atras dela
 - [~] Geometria solida pelo SDL existente; ainda falta backend SpriteUI de producao e migracao de telas do editor
 - [~] Texto, imagens/fontes e primeira tela principal migrada (tela inicial); demais janelas em ImGui
 - [ ] Grip desenhado (icone) em cada janela do editor
@@ -30,9 +30,9 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `../referencia/CH
 - [x] Troca de API: pedido responde no quadro; troca aplicada no quadro seguinte (`requestApi`, `applyPendingApi`)
 - [x] Aviso C4324 desligado no MSVC (`1048fa7`)
 - [x] Roteador de paineis do editor (`Editor.PanelRouter`) (`89254f8`)
-- [~] Roteador ligado ao menu e as Configuracoes: na branch `ui-settings-router` (`f2cdd24`), aguardando teste visual
+- [~] Roteador ligado ao menu e as Configuracoes (`f2cdd24`); aguardando teste visual
 - [ ] T7 D3D12: captura de `ppCompilerOutput` e DLLs do compilador
-- [ ] T8 shaders nativos em pastas HLSL e GLSL separadas
+- [~] T8 fontes HLSL movidas para `assets/shaders/hlsl` e GLSL em `assets/shaders/glsl`; caminhos de runtime e ferramentas atualizados, aguardando compilacao/validacao
 - [ ] T10 timestamps de GPU no RHI
 - [ ] T11 CRT e `_ITERATOR_DEBUG_LEVEL` do Diligent (LNK C4743); avisos C4456/C4457 do projeto
 - [ ] T12 teste ECS com janela (`test ECS: 10000` e cargas maiores)
@@ -44,7 +44,7 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `../referencia/CH
 - [x] Multi-material: cada parte com o proprio material (glTF por primitive, FBX por LayerElementMaterial)
 - [x] Inspector: sobrepor material por parte (PartOverrides), salvo no projeto
 - [x] Limpeza medida: registry do Vulkan, FormatValidation, capturas nao citadas e recompressao PNG sem perda
-- [ ] Textura por parte (hoje a textura do objeto vale para todas as partes)
+- [~] Textura por parte: override manual no Inspector e persistido por parte; mapas embutidos do importador ainda nao sao aplicados, aguardando compilacao/validacao
 - [ ] Animacao e skins (ainda ignorados no importador)
 - [ ] D3D12: compilar e testar na maquina Windows (nao verificado neste ambiente Linux)
 - [ ] SSAO: meia resolucao exposta e medida de custo da CPU em resolucoes altas
@@ -60,7 +60,7 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `../referencia/CH
 - [x] SSAO: feito na 0.7.17-beta
 - [ ] Ray tracing: Light Prism `Rt/Bvh` e `RtEffects` (sombra de contato, AO), CPU primeiro; GPU depois
 - [ ] Demais recursos da Light Prism: VSM, SDF, fog volumetrico, probes, PRT, SSR, VPL emissivo, planar shadows, CascadeCache, MemoryBudget
-- [ ] Pagina de ajuda do Light Prism no editor (help_content.hpp) e textos pt-BR/es
+- [~] Pagina de ajuda Light Prism no editor atualizada em EN/PT-BR/es; aguardando compilacao/validacao visual
 - [ ] Um so caminho de iluminacao para CPU e GPU (hoje a fachada e o LightRig, mas o AO/RT ainda nao passam por ela)
 
 ### 0.7.15-beta (iluminacao pela Light Prism)
@@ -88,8 +88,8 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `../referencia/CH
 - [x] Selftest do editor: 207 checks, 0 falhas
 - [~] Chunks no caminho da GPU: compila, nao executado nesta maquina
 - [~] Esfera distante e hierarquia achatada: nao vistas na tela
-- [ ] Colisao de fisica por chunk
-- [ ] Undo para edicoes de blocos do Inspector
+- [~] Colisao de fisica por chunk: proxies estaticos em colunas de voxels; aguardando compilacao/validacao
+- [~] Undo para edicoes de blocos do Inspector: paint, fill e clear em uma etapa; aguardando validacao
 - [ ] Selecao de chunk no viewport
 - [ ] Sombra dos chunks em mundos grandes (area do mapa de sombra)
 
@@ -158,7 +158,7 @@ Legenda: [x] feito · [~] parcial · [ ] pendente. Versões em `../referencia/CH
 - [x] Help: tutoriais de FPS e de portas com E (EN e PT), codigo testado no selftest
 - [x] Selftest do editor: 166 checks, 0 falhas
 - [~] Lista de problemas no Inspector e filtros do Console: nao verificados visualmente
-- [ ] Verificador tambem no editor de texto de arquivos (hoje so no Inspector e no Console)
+- [~] Verificador no editor de texto para arquivos .tool.js, com debounce e diagnosticos; aguardando compilacao/validacao visual
 
 ### 0.7.8-beta (usabilidade do editor e scripts)
 - [x] Cache da lista de assets e dos combos (sem varredura de pasta a cada quadro)

@@ -1,8 +1,8 @@
 # Roteiro consolidado do ToolEngine
 
-Ultima atualizacao: 2026-11-19
+Ultima atualizacao: 2026-11-22
 Versao de referencia: `0.7.19-beta (em andamento)`
-Branch de trabalho desta etapa: `ui-settings-router` (ainda nao mesclada no `main`)
+Branch de trabalho nesta revisao: `main`
 
 Este documento e a fonte resumida para decidir o que fazer a seguir. Ele consolida os antigos documentos
 operacionais de tarefas (`CODAR.MD`, `ESTADO_ATUAL.md`, `P1_IMPLEMENTACAO.md`, removidos no commit `908cbaf`),
@@ -16,7 +16,7 @@ Em caso de contradicao, esta pagina define a prioridade. O changelog define o qu
 | Marca | Significado |
 |---|---|
 | **[F]** | Feito e verificado por teste automatico nesta maquina |
-| **[V]** | Feito no codigo; falta teste visual, em GPU real ou no Windows (ver `docs/CODAR.MD` da branch) |
+| **[V]** | Feito no codigo; falta teste visual, em GPU real ou no Windows (registrar em `00_CHECKLIST.md`) |
 | **[P]** | Parcial: parte feita e parte pendente, listado no item |
 | **[ ]** | Pendente |
 | **[X]** | Adiado ou descartado nesta versao, com motivo |
@@ -61,7 +61,7 @@ Regra: nenhum item vira **[F]** por texto. So testes automatizados ou observacao
   - Teste `SpriteUI.LayersAndInput` registrado; 39/39 testes da SpriteUI passam nesta maquina.
 - Editor, regras de janela (`apps/editor/window_manager.*`): 30 verificacoes no teste `Editor.WindowManager`.
   Estas regras ainda nao estao ligadas aos paineis; ver T13.
-- Editor, teste `Editor.PanelRouter` (`apps/editor/panel_router.hpp`) no `main`. A ligacao do roteador ao menu e as Configuracoes esta na branch `ui-settings-router` (ver 1.2).
+- Editor, teste `Editor.PanelRouter` (`apps/editor/panel_router.hpp`); o roteador do menu e das Configuracoes esta integrado (ver 1.2).
 - Editor, teste ECS: captura de excecao no topo (grava `crash_report.txt`), spawner para sozinho ao faltar
   memoria (`bad_alloc`) e avisa a memoria estimada antes de comecar (cerca de 7 KB por esfera).
 - Build MSVC: aviso C4324 desligado de proposito (relleno de alinhamento intencional).
@@ -73,7 +73,7 @@ Regra: nenhum item vira **[F]** por texto. So testes automatizados ou observacao
 | P1 instanciamento | Cena real em Vulkan/OpenGL, screenshot antes/depois, `DrawStats` e CSV com `--ecs 1000 --play` |
 | Troca de API | Validacao visual da janela em uma sessao interativa e medicao da troca (T9) |
 | SpriteUI | Validar em GPU real, migrar paineis ativos e verificar docking em janela real (T13, Fase C) |
-| Menu e Settings (roteador) | Na branch `ui-settings-router`, ainda nao mesclada. Teste visual: lista aberta nao deixa clique passar (`CODAR.MD` T-1 a T-4) |
+| Menu e Settings (roteador) | Implementado; falta teste visual: lista aberta nao deixa clique passar (registrar em `00_CHECKLIST.md`) |
 | Teste ECS | Reproduzir `test ECS: 10000` e cargas maiores com janela; confirmar que o editor nao fecha (T12) |
 | Profiler: secao Priority | Aparencia final em negrito e tamanho; GPU % ainda nao medido (T10) |
 | OpenGL | Validar texturas, bloom, sombra pontual, neblina e emissao em uma maquina com GPU |
@@ -100,7 +100,6 @@ Regra: nenhum item vira **[F]** por texto. So testes automatizados ou observacao
 | 2026-11-18 | Mudancas na SpriteUI sao feitas direto em `third_party/SpriteUi` neste repositorio | Autorizado pelo responsavel |
 | 2026-11-18 | Aviso C4324 desligado no MSVC | Alinhamento de SIMD e intencional; aviso so polui o log |
 | 2026-11-19 | Roteamento de ponteiro: o menu e as Configuracoes passam pelo `PanelRouter`; ImGui nao recebe ponteiro coberto por painel SpriteUI | Clique atras de menu aberto era o problema relatado (b) |
-| 2026-11-19 | Trabalho desta etapa vai para a branch `ui-settings-router`, nao para o `main` | Pedido do responsavel: testar antes de mesclar |
 
 ---
 
@@ -156,8 +155,8 @@ Regra: nenhum item vira **[F]** por texto. So testes automatizados ou observacao
    - Compartilhar nomes, semantica e registradores.
    - Fazer `check_bindings.py` validar HLSL e GLSL.
    - Feito: checador de bindings no ctest; GLSL regenerado; `build_glsl.py --check` confere a sincronia com o HLSL. A contagem de arquivos aparece como 23 no changelog e 26 no relatorio de 2026-11-18; conferir antes de citar.
-   - Pendente: pastas separadas `assets/shaders/hlsl` e `assets/shaders/glsl`; `build_glsl.py` vira ferramenta
-     de comparacao, nao o caminho de producao.
+   - Feito nesta rodada: fontes HLSL em `assets/shaders/hlsl`; GLSL gerado em `assets/shaders/glsl`; caminhos do
+     runtime e das ferramentas apontam para as pastas novas. Pendente: compilar e validar os backends.
    - Pendente conhecido (`../estudos/AUDITORIA_SHADERS.md`): PBR com 9 buffers uniformes dinamicos no Vulkan (limite de 8).
      Correcao proposta, nao aplicada.
    - Limite do checador: so entende `#ifdef` simples. Se usar `#if` com expressao, revisar o checador.
@@ -184,11 +183,11 @@ Regra: nenhum item vira **[F]** por texto. So testes automatizados ou observacao
 ### Fase C: migracao incremental da interface (SpriteUI no lugar do ImGui)
 
 Esta fase substitui a antiga remocao "de uma vez". Cada etapa tem criterio de entrada, criterio de saida e
-um teste que o responsavel executa (ver `docs/CODAR.MD` da branch `ui-settings-router`).
+um teste visual registrado em `00_CHECKLIST.md`.
 
 9. **Settings SpriteUI** [P]
    - Ja feito: `settings_bridge.hpp` integrado ao painel (`settings_panel.hpp` e `main.cpp` usam).
-   - Ja feito (branch `ui-settings-router`): menu e Settings roteados pelo `PanelRouter`; lista de menu aberta
+   - Ja feito: menu e Settings roteados pelo `PanelRouter`; lista de menu aberta
      bloqueia cliques atras dela; ImGui nao recebe ponteiro coberto por painel SpriteUI.
    - Completar Appearance, Settings, Game, Lighting, Optimizing e Language.
    - Entrada: `ctest` verde e roteador validado no teste visual T-1 a T-4.
@@ -223,7 +222,7 @@ um teste que o responsavel executa (ver `docs/CODAR.MD` da branch `ui-settings-r
       ponte ate a migracao e depois sera removido **somente com aprovacao**.
     - Pendente: ligar as demais janelas ao roteador (item 10); validar popup, arraste pelo grip, limiar de dock e
       multicamada em janela real; desenhar o grip (icone) em cada janela.
-    - Criterio: teste visual T-1 a T-4 do `CODAR.MD` sem falhas.
+    - Criterio: teste visual de menu e Settings sem falhas, registrado em `00_CHECKLIST.md`.
 
 #### Inventario das janelas ainda em ImGui (2026-11-19)
 
@@ -291,8 +290,7 @@ Estado: `frustum_cull.hpp` existe e tem teste; **nao esta ligado ao renderizador
 - Sombras e prepass podem ser agrupados separadamente, mas somente apos validar o passe principal.
 - Criterios obrigatorios: imagem equivalente, draw calls perto do numero de lotes, menos buffer
   uploads e nenhuma falha de binding.
-- Registro atual: `Instances` em `t17` (nao conflita com `IblBrdfLut` em `t15`); `docs/PESQUISA_MILHARES_OBJETOS.md`
-  tem a pesquisa e o plano.
+- Registro atual: `Instances` em `t17` (nao conflita com `IblBrdfLut` em `t15`); a pesquisa e o plano estao nas secoes P1-P6 deste documento.
 
 ### Implementacao tecnica P2-P6
 
@@ -370,7 +368,7 @@ Detalhes: `../estudos/RUNTIME_CODIGO.md` e `../estudos/JS_VS_CPP.md`.
 - Zero-copy e readback assincrono.
 - FXAA/nitidez e bloom na GPU.
 - Validacao opcional em Settings (hoje so por variavel de ambiente).
-- Texturas por parte, mipmaps e sRGB (hoje "mais proximo", valores sem conversao sRGB).
+- Textura por parte tem override manual no Inspector; mapas embutidos no importador, mipmaps e sRGB seguem pendentes.
 - Canal alpha no mesh; "use object as light"; bloom mais forte e skybox.
 - Cache do skybox enquanto a camera nao muda.
 - Grid/gizmos 2D adaptados a camera ortografica (hoje usam a projecao perspectiva).
@@ -400,7 +398,7 @@ Detalhes: `../estudos/RUNTIME_CODIGO.md` e `../estudos/JS_VS_CPP.md`.
 - Compute shader, indirect draw e emission por malha somente apos compute no RHI.
 - Sub-emissores, fraturamento e audio espacial.
 - Colisores exatos de cilindro, cone, capsula, roda e prismas (hoje caixa envolvente).
-- Colisao por chunk, selecao de chunk no viewport e undo para edicoes de blocos do Inspector.
+- Colisao por chunk usa proxies estaticos em colunas; falta validacao. Undo para paint/fill/clear foi implementado e aguarda validacao. Selecao de chunk no viewport segue pendente.
 - Sombra dos chunks em mundos grandes (area do mapa de sombra).
 
 ### Projeto e exportacao
@@ -416,10 +414,10 @@ Detalhes: `../estudos/RUNTIME_CODIGO.md` e `../estudos/JS_VS_CPP.md`.
 ### Editor e ferramentas
 
 - Inspector: copiar e remover componente; secoes de Fisica, Ferramentas e Script ainda no formato antigo.
-- Verificador de scripts tambem no editor de texto de arquivos (hoje so no Inspector e no Console).
+- Verificador de scripts no editor de texto para arquivos .tool.js foi implementado e aguarda validacao visual.
 - Propriedades de shader expostas aos scripts.
 - Um contexto de script por arquivo (hoje um por objeto).
-- Animacao e skins (ainda ignorados no importador); textura por parte.
+- Animacao e skins (ainda ignorados no importador); aplicacao automatica das texturas embutidas por parte.
 
 ### Seguranca e repositorio
 
@@ -462,9 +460,9 @@ Nenhuma tarefa fica pronta sem:
 |---|---|
 | Estado por versao | `../referencia/CHANGELOG.md` |
 | Checklist detalhada | `00_CHECKLIST.md` |
-| Tarefas, testes do responsavel e plano de remocao do ImGui | `docs/CODAR.MD` (branch `ui-settings-router`) |
+| Testes visuais e estado por versao | `00_CHECKLIST.md` |
 | Tarefas e estado P1-P6 | Este documento |
-| Pesquisa de milhoes de objetos | `docs/PESQUISA_MILHARES_OBJETOS.md` e secoes P1-P6 deste documento |
+| Pesquisa de milhoes de objetos | Secoes P1-P6 deste documento |
 | Performance | `03_DESEMPENHO_EDITOR.md`, `../estudos/AUDITORIA_DESEMPENHO.md` |
 | SpriteUI | `06_SPRITEUI.md`, `../referencia/IDIOMAS_E_TEMAS.md`, `07_UI_DE_JOGO.md` |
 | Shaders | `../estudos/AUDITORIA_SHADERS.md`, `../estudos/MATRIZ_APIS_SHADER.md` |
@@ -492,4 +490,3 @@ Removidos no commit `908cbaf`: `CODAR.MD` (raiz), `P1_IMPLEMENTACAO.md` (raiz), 
 1. Aprovar a remocao de `window_manager.*` do editor depois da migracao?
 2. Aprovar a ordem de migracao da Fase C (Console, Profiler, Hierarchy/Inspector, Assets/Narrative)?
 3. O item T11 (CRT do Diligent) deve ser feito na sua maquina Windows, com o build do Diligent recompilado?
-4. Mesclar a branch `ui-settings-router` no `main` depois dos testes do `CODAR.MD`?

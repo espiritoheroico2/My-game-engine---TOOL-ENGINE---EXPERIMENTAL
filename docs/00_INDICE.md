@@ -66,6 +66,5 @@ Estes documentos não são etapas. Servem para decidir se e quando algo entra no
 Já existiam antes desta reorganização. Decidir se o documento volta, se a citação sai ou se aponta para outro arquivo:
 
 - `docs/RENDER_PERF.md` (citado em `assets/lang/*.json`, `apps/editor/extra_ui.hpp`)
-- `docs/sugestaoarquiteturanova.md` (citado no README e em `PENDENCIAS`)
-- `docs/SHADOWS.md`, `docs/CLUSTERS.md`, `docs/IBL.md`, `docs/diagnostics.md`, `docs/PESQUISA_MILHARES_OBJETOS.md`
+- `docs/SHADOWS.md`, `docs/CLUSTERS.md`, `docs/IBL.md`, `docs/diagnostics.md`
 - `docs/ALPHA.md`, `docs/BETA.md`, `docs/BUILD_TIME.md`, `docs/ESTADO_ATUAL.md`, `docs/IMPLEMENTATION_STATUS.md`, `docs/NEXT_STEPS.md` (citados no `ROADMAP` antigo)
