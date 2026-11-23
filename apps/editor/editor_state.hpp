@@ -884,8 +884,13 @@ private:
           tool::Material m = part.material;
           m.castShadow = mr.castShadow; m.receiveShadow = mr.receiveShadow;
           m.emissive = emissionOf(mr); m.opacity = mr.opacity; applyFog(m, mr);
-          if (po) for (const PartOverride& ov : po->items) if (ov.part == pi) { m.albedo = {ov.color[0], ov.color[1], ov.color[2]}; m.roughness = ov.roughness; m.metallic = ov.metallic; }
-          if (mr.texture[0]) m.albedoMap = lib.texture(mr.texture);
+          const PartOverride* override = nullptr;
+          if (po) for (const PartOverride& ov : po->items) if (ov.part == pi) {
+            override = &ov;
+            m.albedo = {ov.color[0], ov.color[1], ov.color[2]}; m.roughness = ov.roughness; m.metallic = ov.metallic;
+          }
+          if (override && override->texture[0]) m.albedoMap = lib.texture(override->texture);
+          else if (mr.texture[0]) m.albedoMap = lib.texture(mr.texture);
           if (highlight && e == selected) m.albedo = m.albedo * 1.25f;
           fn(part.mesh, m);
         }

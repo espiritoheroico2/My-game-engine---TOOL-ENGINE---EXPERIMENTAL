@@ -2,6 +2,7 @@
 
 Engine 3D leve, multi-API, em C++20. Estrutura pensada para o **Visual Studio Code**.
 Criado por: João Vitor Dias da Silva
+ver: 0.8 beta
 
 
 ## Como abrir
@@ -33,7 +34,7 @@ engine/scene    Scene, ToolObject, Blueprint, DeleteAndReuse (pool)
 engine/input, platform, audio   entrada/gamepad, janela, mixer de audio
 engine/math, rhi, render        matematica, interface de GPU, iluminacao, SoftRenderer (CPU)
 engine/narrative, mod, net, pack   Controlador Narrativo, ModTool, NetTool, pacotes .tpak
-apps/editor     editor ImGui + painel experimental SpriteUI (preset editor)   fuzz/  fuzzers   tools/  compilador de shaders   assets/shaders  HLSL
+apps/editor     editor ImGui + painel experimental SpriteUI (preset editor)   fuzz/  fuzzers   tools/  compilador de shaders   assets/shaders/hlsl e glsl
 apps/sandbox    jogo de teste
 tests           testes automatizados (sem dependências)
 docs/           notas de construção
@@ -50,8 +51,8 @@ O renderizador esta sendo dividido em etapas, sem substituir o `GpuRenderer` de 
 - metricas por passe e vista, alem de culling e cache de sombras por regiao/face.
 
 A comparacao visual das mudancas recentes ainda esta pendente. O estado detalhado e as proximas etapas estao em
-[`docs/planos/04_PENDENCIAS_EDITOR.md`](docs/planos/04_PENDENCIAS_EDITOR.md), e a proposta de arquitetura esta em
-[`docs/sugestaoarquiteturanova.md`](docs/sugestaoarquiteturanova.md).
+[`docs/planos/04_PENDENCIAS_EDITOR.md`](docs/planos/04_PENDENCIAS_EDITOR.md), e o plano de renderizacao esta em
+[`docs/planos/02_RENDER_DRAW_CALLS.md`](docs/planos/02_RENDER_DRAW_CALLS.md).
 
 Status: **0.7.19-beta (em andamento)** - veja `docs/referencia/CHANGELOG.md`, `docs/estudos/LIGHT_PRISM.md`, `docs/planos/06_SPRITEUI.md`, `docs/referencia/ERROS_SCRIPT.md`, `docs/estudos/REVISAO_ILUMINACAO.md`, `docs/planos/08_PARTICULAS.md`, `docs/estudos/AUDITORIA_DESEMPENHO.md`, `docs/estudos/ESCALONAMENTO_RENDER.md`, `docs/referencia/ECS.md`, `docs/planos/03_DESEMPENHO_EDITOR.md`, `docs/estudos/AMD_FSR.md`, `docs/estudos/SEGURANCA_ARQUIVOS.md`, `docs/planos/00_CHECKLIST.md`, `docs/estudos/PESO_REPOSITORIO.md` (peso do repositorio), `docs/estudos/AUDITORIA_SHADERS.md` (shaders GLSL/HLSL e limite de buffers do Vulkan).
 

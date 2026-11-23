@@ -1,4 +1,4 @@
-# Matriz de APIs do shader PBR (assets/shaders/pbr.hlsl)
+# Matriz de APIs do shader PBR (assets/shaders/hlsl/pbr.hlsl)
 
 Auditoria estatica do PBR nas APIs DX11, DX12, Vulkan e OpenGL, mais o caso GLES/WebGL2.
 Base: branch `spriteui-rhi-backend`, HEAD `de82d40` (commit de correcao da fog: `e404d30`).

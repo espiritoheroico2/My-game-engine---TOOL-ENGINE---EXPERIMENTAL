@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gera os shaders GLSL 430 (OpenGL) a partir dos HLSL de assets/shaders, offline.
+"""Gera os shaders GLSL 430 (OpenGL) a partir dos HLSL de assets/shaders/hlsl, offline.
 
 Pipeline (o mesmo caminho que os drivers de shader usam, sem depender do tradutor interno do Diligent):
   1) achata os #include (cada arquivo entra uma vez)
@@ -15,6 +15,7 @@ import os, re, subprocess, sys, tempfile, hashlib
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SHADERS = os.path.join(ROOT, "assets", "shaders")
+HLSL = os.path.join(SHADERS, "hlsl")
 OUT = os.path.join(SHADERS, "glsl")
 LP_OUT = os.path.join(SHADERS, "lightprism", "glsl")
 
@@ -107,7 +108,7 @@ def run(cmd):
 def build(hlsl, stage, entry, name, tmp, out=OUT):
     src = os.path.join(tmp, name + ".hlsl")
     with open(src, "w", encoding="utf-8") as f:
-        f.write(flatten(os.path.join(SHADERS, hlsl)))
+        f.write(flatten(os.path.join(HLSL, hlsl)))
     spv = os.path.join(tmp, name + ".spv")
     run(["glslangValidator", "-D", "-V", "-S", stage, "-e", entry, "-o", spv, src])
     glsl = os.path.join(out, f"{name}.430.glsl")

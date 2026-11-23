@@ -3,7 +3,7 @@
 Objetivo: remover o Dear ImGui do editor e usar só SpriteUI. Este documento é o processo a repetir,
 janela por janela, e a lista do que falta. Quem for fazer o backend de uma janela segue a seção 2.
 
-Estado de referência: branch `ui-settings-router`. Janela piloto: **Editor info** (`apps/editor/editor_info_spriteui.hpp`).
+Estado de referência: branch `main`. Janela piloto: **Editor info** (`apps/editor/editor_info_spriteui.hpp`).
 
 ---
 
@@ -18,7 +18,7 @@ Cada janela passa pelas mesmas 7 etapas. Não avance uma etapa sem a anterior ve
 | 3 | **Testes de elementos** | `tests/test_<janela>_view.cpp`: clique em cada botão, X, grip, campo, foco, digitação e batches | Todos os checks passam |
 | 4 | **Backend** | Ligar ações ao editor (salvar, abrir, selecionar etc.) e o host (`main.cpp`) | Teste de modelo e de ação passam |
 | 5 | **Print + desempenho** | Captura do editor (`--screenshot`) e contagem de draw calls | Print confere; batches registrados |
-| 6 | **Teste visual** | Você testa no seu PC e registra no `CODAR.MD` | Você aprova |
+| 6 | **Teste visual** | Registrar o resultado em `00_CHECKLIST.md` | Você aprova |
 | 7 | **Remover a antiga** | Apagar a janela ImGui e a chamada no `main.cpp` | Só depois da etapa 6 aprovada |
 
 Regra: **nenhuma janela ImGui é removida sem a etapa 6 aprovada.** Durante a migração, a ImGui e a SpriteUI
@@ -162,5 +162,5 @@ Depois da lista, faltam: remover `imgui` e `imnodes` do build, do `main.cpp` e d
 
 1. Escolha a próxima janela da tabela 4.6 (Console é a menor).
 2. Siga as etapas 1 a 7 da seção 1, com os testes da seção 3.
-3. Atualize a tabela 4.6 e o `CODAR.MD` (teste visual para você).
+3. Atualize a tabela 4.6 e registre o teste visual em `00_CHECKLIST.md`.
 4. Não apague nada da ImGui antes da etapa 6 aprovada.

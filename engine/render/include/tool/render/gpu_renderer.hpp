@@ -1,7 +1,7 @@
 // ToolEngine - GpuRenderer: desenha a cena 3D iluminada (PBR) sobre o RHI (Diligent: Vulkan / D3D12).
 // A iluminacao vem da Light Prism: luzes e clusters sao calculados pelo backend Diligent da propria biblioteca
 // (ClusterSystem), no mesmo dispositivo e contexto do RHI. As cascatas do sol sao calculadas em CPU (ComputeCsm) e
-// cada uma tem o seu mapa de profundidade. Shaders: assets/shaders/pbr.hlsl + assets/shaders/lightprism/.
+// cada uma tem o seu mapa de profundidade. Shaders: assets/shaders/hlsl/ + assets/shaders/glsl/.
 #pragma once
 #include "tool/render/lighting.hpp"
 #include "tool/render/instance_batch.hpp"
@@ -116,29 +116,30 @@ public:
   // Libera tudo na GPU. Chamar ANTES de destruir o dispositivo.
   void shutdown() { release(); }
 
-  // shaderDir = pasta "assets/shaders" (pbr.hlsl + lightprism/). `lp` = dispositivo da Light Prism sobre o mesmo RHI
+  // shaderDir = pasta "assets/shaders" (hlsl/, glsl/ e lightprism/). `lp` = dispositivo da Light Prism sobre o mesmo RHI
   // (rhi::createLightPrismDevice). Sem ele (backend sem Diligent), o init falha e o editor volta para o renderizador
   // em CPU. No OpenGL os shaders PBR usam o GLSL 430 de glsl/ (mk abaixo); o init nao falha por isso.
   bool init(rhi::IDevice& dev, std::unique_ptr<LightPrism::IGraphicsDevice> lp, const std::string& shaderDir, u32 w, u32 h) {
     release();
     if (!lp) { debug().report("TOOL-E142", Severity::Error, "dispositivo Light Prism indisponivel (backend sem Diligent)"); return false; }
     dev_ = &dev; lp_ = std::move(lp);
+    const std::string hlslDir = shaderDir + "/hlsl";
     LightPrism::ClusterSystemDesc cd;
     cd.shaderDirectory = shaderDir + "/lightprism";
     clusters_ = std::make_unique<LightPrism::ClusterSystem>(cd);
 
     std::string src;
-    if (!loadHlsl(shaderDir, "pbr.hlsl", src)) { debug().report("TOOL-E140", Severity::Error, "nao achei pbr.hlsl em " + shaderDir); release(); return false; }
+    if (!loadHlsl(hlslDir, "pbr.hlsl", src)) { debug().report("TOOL-E140", Severity::Error, "nao achei pbr.hlsl em " + hlslDir); release(); return false; }
     std::string legacySrc;
-    if (!loadHlsl(shaderDir, "pbr_object.hlsl", legacySrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei pbr_object.hlsl em " + shaderDir); release(); return false; }
+    if (!loadHlsl(hlslDir, "pbr_object.hlsl", legacySrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei pbr_object.hlsl em " + hlslDir); release(); return false; }
     std::string sh;
-    if (!loadHlsl(shaderDir, "shadow.hlsl", sh)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow.hlsl em " + shaderDir); release(); return false; }
+    if (!loadHlsl(hlslDir, "shadow.hlsl", sh)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow.hlsl em " + hlslDir); release(); return false; }
     std::string ssaoSrc, prepassSrc;
-    if (!loadHlsl(shaderDir, "ssao.hlsl", ssaoSrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei ssao.hlsl em " + shaderDir); release(); return false; }
-    if (!loadHlsl(shaderDir, "prepass.hlsl", prepassSrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei prepass.hlsl em " + shaderDir); release(); return false; }
+    if (!loadHlsl(hlslDir, "ssao.hlsl", ssaoSrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei ssao.hlsl em " + hlslDir); release(); return false; }
+    if (!loadHlsl(hlslDir, "prepass.hlsl", prepassSrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei prepass.hlsl em " + hlslDir); release(); return false; }
     std::string shp, shClear;
-    if (!loadHlsl(shaderDir, "shadow_point.hlsl", shp)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow_point.hlsl em " + shaderDir); release(); return false; }
-    if (!loadHlsl(shaderDir, "shadow_clear.hlsl", shClear)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow_clear.hlsl em " + shaderDir); release(); return false; }
+    if (!loadHlsl(hlslDir, "shadow_point.hlsl", shp)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow_point.hlsl em " + hlslDir); release(); return false; }
+    if (!loadHlsl(hlslDir, "shadow_clear.hlsl", shClear)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow_clear.hlsl em " + hlslDir); release(); return false; }
 
     // OpenGL: cada shader usa o GLSL 430 gerado offline (tools/shaders/build_glsl.py -> glsl/<nome>.430.glsl).
     // Vulkan/D3D12 seguem com o HLSL. Um ponto unico de criacao: mk(desc).
@@ -216,7 +217,7 @@ public:
     blurPipe_ = dev.createPipeline(bp);
     {   // Bloom (bloom.hlsl): limiar, blur e composicao, todos em tela cheia com o mesmo triangulo do SSAO (fsVs_)
       std::string bloomSrc;
-      if (!loadHlsl(shaderDir, "bloom.hlsl", bloomSrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei bloom.hlsl em " + shaderDir); release(); return false; }
+      if (!loadHlsl(hlslDir, "bloom.hlsl", bloomSrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei bloom.hlsl em " + hlslDir); release(); return false; }
       rhi::ShaderDesc bs; bs.stage = rhi::ShaderStage::Pixel; bs.source = bloomSrc;
       bs.name = "bloom.thr"; bs.entry = "BloomThreshold"; bloomThrPs_ = mk(bs);
       bs.name = "bloom.blur"; bs.entry = "BloomBlur"; bloomBlurPs_ = mk(bs);

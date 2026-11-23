@@ -129,10 +129,10 @@ class HelpPanel {
   }
 
   // Desenha a janela quando `open`. Retorna false so em falha do SDL.
-  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool& open, bool portuguese) {
+  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool& open, const std::string& language) {
     theme_ = sui::Theme{};   // cores da paleta em uso (Configuracoes > Appearance)
-    if (model_.Portuguese() != portuguese) {
-      model_.SetPortuguese(portuguese);
+    if (model_.Language() != language) {
+      model_.SetLanguage(language);
       dirty_ = true;
     }
     open_ = open;
@@ -231,7 +231,7 @@ class HelpPanel {
       }
       if (index == model_.SelectedIndex()) list_.addSolid(0.f, y, listBox_.w, kRowH, colors_.selection, 0.1f);
       rows_.push_back({Box{0.f, y, listBox_.w, kRowH}, index});
-      list_.addText(kRowInset, y + (kRowH - lh) * 0.5f, TitleOf(topic, model_.Portuguese()), kFont, theme_.text, listBox_.w - 2.f * kRowInset);
+      list_.addText(kRowInset, y + (kRowH - lh) * 0.5f, TitleOf(topic, model_.Language()), kFont, theme_.text, listBox_.w - 2.f * kRowInset);
       y += kRowH;
     }
     listContentH_ = y;

@@ -22,7 +22,7 @@ def run(cmd):
 def main():
     ap = argparse.ArgumentParser()
     root = Path(__file__).resolve().parent.parent
-    ap.add_argument("--src", default=str(root / "assets/shaders"))
+    ap.add_argument("--src", default=str(root / "assets/shaders/hlsl"))
     ap.add_argument("--out", default=str(root / "out/shaders"))
     ap.add_argument("--dxc"); ap.add_argument("--glslang"); ap.add_argument("--spirv-cross")
     a = ap.parse_args()

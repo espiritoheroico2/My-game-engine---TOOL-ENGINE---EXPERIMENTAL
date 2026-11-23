@@ -229,7 +229,7 @@ TEST(gpu_renderer_needs_a_lightprism_device) {
 }
 
 TEST(hlsl_include_resolution) {
-  std::string src; CHECK(loadHlsl(std::string(TOOL_SOURCE_DIR) + "/assets/shaders", "pbr.hlsl", src));
+  std::string src; CHECK(loadHlsl(std::string(TOOL_SOURCE_DIR) + "/assets/shaders/hlsl", "pbr.hlsl", src));
   CHECK(src.find("#include") == std::string::npos && src.find("EvaluateClusteredLights") != std::string::npos);
 }
 

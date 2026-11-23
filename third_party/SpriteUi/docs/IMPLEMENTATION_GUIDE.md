@@ -25,7 +25,7 @@ item como concluído sem o critério de aceitação da seção 5.
 include/SpriteUi/          API pública do núcleo (Core, Layout, Input, Text, Rendering, Widgets, Animation, Binding, Config)
 src/                       implementação do núcleo
 adapters/toolengine/       adaptador header-only para o RHI da ToolEngine (opcional)
-shaders/toolengine/        HLSL e GLSL 430 usados pelo adaptador (cópias de assets/shaders do engine: manter iguais)
+shaders/toolengine/        HLSL e GLSL 430 usados pelo adaptador (cópias de assets/shaders/hlsl e assets/shaders/glsl do engine: manter iguais)
 third_party/stb/           stb_truetype (opcional, para o atlas de texto)
 Fonts/Xmind/               fonte para testes e exemplos (OFL 1.1)
 tests/                     testes do núcleo (test_main, test_text_layout, test_truetype_atlas, test_layout_patterns, ...) e visuais

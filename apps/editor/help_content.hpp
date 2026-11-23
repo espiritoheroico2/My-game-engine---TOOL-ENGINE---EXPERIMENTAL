@@ -7,7 +7,16 @@
 
 namespace editor {
 
-struct HelpTopic { const char* id; const char* group; const char* titleEn; const char* titlePt; const char* bodyEn; const char* bodyPt; };
+struct HelpTopic {
+  const char* id;
+  const char* group;
+  const char* titleEn;
+  const char* titlePt;
+  const char* bodyEn;
+  const char* bodyPt;
+  const char* titleEs = nullptr;
+  const char* bodyEs = nullptr;
+};
 
 inline const std::vector<HelpTopic>& helpTopics() {
   static const std::vector<HelpTopic> t = {
@@ -395,22 +404,43 @@ Memoria de 16 MB para todos os scripts, pilha de 256 KB, 5 ms por chamada. Um er
 this.position, Input.axis, Scene.find, Physics.raycast, onCollisionEnter, import de bibliotecas de script, parametros de shader. Para fisica, colisoes e as versoes nativas dessas acoes, use os Tools (Inspector > Add Tool).)H"},
   // ------------------------------------------------------------------------------------------------ RENDER
   {"lighting", "Rendering", "Lighting, shadows and post-processing", "Iluminacao, sombras e pos-processamento",
-R"H(# Lights
-- Global Light = the sun (color, direction, day/night cycle). Only the first one is used.
-- Light source (Point/Spot) lights nearby objects. They do NOT cast shadows yet: only the Global Light (sun) does. Point and spot shadows are planned (see docs/estudos/REVISAO_ILUMINACAO.md).
-# Shadows
-Each object decides: "Cast shadow" (throws a shadow) and "Receive shadow" (gets shadows). A ground usually only receives; a tree trunk usually only casts.
-Settings > Lighting: resolution, distance, bias, soft edges (PCF), strength. Fewer casters = faster: zero cost if nobody casts.
+R"H(# Light Prism in ToolEngine
+Light Prism supplies the engine's physically based lighting. The editor uses it from both the CPU renderer and the Diligent GPU renderer.
+# Light types
+- Global Light is the sun. Its direction and color drive cascaded shadow maps (CSM).
+- Point and Spot lights illuminate nearby objects. The editor can render their shadows when the point/spot shadow budget is above zero.
+- Lighting is evaluated with clustered light lists on supported GPU paths; the CPU renderer evaluates the same scene lighting on the CPU.
+# Ambient occlusion and shadows
+SSAO darkens ambient lighting around nearby surfaces; it does not replace direct-light shadows. Objects can independently cast and receive shadows. Point and Spot shadow work is limited by Settings > Lighting > shadow-light budget (0 to 4) and the selected face resolution.
+# Settings
+Settings > Lighting controls quality presets, light budgets, sun shadow cascades, ambient lighting and point/spot shadow limits. Higher resolutions and more shadowed lights cost more memory and render time.
 # Post-processing
-Global (Settings > Lighting) and per camera (Inspector > Camera): exposure, contrast, saturation, tint, vignette, sharpen. Camera values add to or replace the global ones.)H",
-R"H(# Luzes
-- Global Light = o sol (cor, direcao, ciclo dia/noite). So a primeira e usada.
-- Light source (Point/Spot) ilumina objetos proximos. Ainda NAO projetam sombras: so a luz global (sol) projeta. Sombras de luzes pontuais e de spot estao planejadas (veja docs/estudos/REVISAO_ILUMINACAO.md).
-# Sombras
-Cada objeto decide: "Cast shadow" (projeta sombra) e "Receive shadow" (recebe sombra). O chao normalmente so recebe; o tronco de uma arvore normalmente so projeta.
-Settings > Lighting: resolucao, distancia, bias, bordas suaves (PCF), forca. Menos projetores = mais rapido: custo zero se ninguem projeta.
+Exposure, contrast, saturation, tint, vignette and sharpening are controlled globally or per camera. CPU and GPU implementations exist, but backend support and performance should be checked on the target graphics API.)H",
+R"H(# Light Prism na ToolEngine
+A Light Prism fornece a iluminacao fisicamente baseada da engine. O editor a usa no renderizador de CPU e no renderizador de GPU Diligent.
+# Tipos de luz
+- Global Light e o sol. A direcao e a cor dele controlam as cascatas de sombra (CSM).
+- Luzes Point e Spot iluminam objetos proximos. O editor pode desenhar as sombras delas quando o orcamento de sombras pontuais/spot e maior que zero.
+- Nos caminhos de GPU compatíveis, as luzes sao avaliadas em listas por cluster; o renderizador de CPU avalia a mesma cena na CPU.
+# Oclusao ambiente e sombras
+SSAO escurece a iluminacao ambiente perto de superficies; nao substitui as sombras da luz direta. Cada objeto pode projetar e receber sombras. O custo das sombras Point e Spot e limitado por Settings > Lighting > shadow-light budget (0 a 4) e pela resolucao de cada face.
+# Configuracoes
+Settings > Lighting controla presets de qualidade, orcamento de luzes, cascatas de sombra do sol, iluminacao ambiente e limite de sombras Point/Spot. Mais resolucao e mais luzes com sombra aumentam o uso de memoria e o tempo de renderizacao.
 # Pos-processamento
-Global (Settings > Lighting) e por camera (Inspector > Camera): exposicao, contraste, saturacao, tinta, vinheta, nitidez. Os valores da camera somam ou substituem os globais.)H"},
+Exposicao, contraste, saturacao, tinta, vinheta e nitidez podem ser ajustados globalmente ou por camera. Existem implementacoes de CPU e GPU; confira suporte e desempenho na API grafica de destino.)H",
+"Iluminacion, sombras y posprocesado",
+R"H(# Light Prism en ToolEngine
+Light Prism proporciona la iluminacion basada en fisica de la engine. El editor la usa tanto en el renderizador de CPU como en el renderizador de GPU Diligent.
+# Tipos de luz
+- Global Light es el sol. Su direccion y color controlan las cascadas de sombras (CSM).
+- Las luces Point y Spot iluminan objetos cercanos. El editor puede dibujar sus sombras cuando el presupuesto de sombras Point/Spot es mayor que cero.
+- En las rutas de GPU compatibles, las luces se evalúan mediante listas por cluster; el renderizador de CPU evalua la misma escena en la CPU.
+# Oclusion ambiental y sombras
+SSAO oscurece la iluminacion ambiental cerca de superficies; no sustituye las sombras de la luz directa. Cada objeto puede proyectar y recibir sombras. El coste de las sombras Point y Spot esta limitado por Settings > Lighting > shadow-light budget (0 a 4) y la resolucion de cada cara.
+# Configuracion
+Settings > Lighting controla los perfiles de calidad, el presupuesto de luces, las cascadas de sombras del sol, la iluminacion ambiental y el limite de sombras Point/Spot. Una mayor resolucion y mas luces con sombras consumen mas memoria y tiempo de renderizado.
+# Posprocesado
+Exposicion, contraste, saturacion, tinte, viñeta y nitidez se pueden ajustar globalmente o por camara. Hay implementaciones de CPU y GPU; comprueba el soporte y el rendimiento en la API grafica de destino.)H"},
 
   {"materials", "Rendering", "Materials and shaders", "Materiais e shaders",
 R"H(Inspector > Material. A Material file (.tmat) holds color, roughness, metallic, emissive and an optional shader file. Assign it to a Mesh Renderer.

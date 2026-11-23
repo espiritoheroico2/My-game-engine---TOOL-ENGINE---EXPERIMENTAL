@@ -169,7 +169,7 @@ Limites deste passo: um glifo por codepoint, sem kerning, ligaduras ou marcas co
 
 ## Backend RHI da ToolEngine (opcional)
 
-Na engine, o módulo header-only `ui_sprite` (`engine/ui_sprite/include/tool/ui/spriteui_rhi.hpp`, ligado com `TOOL_WITH_SPRITEUI`) implementa `IRenderBackend` sobre `tool::rhi::IDevice`. Cada `SpriteInstanceGPU` vira um quad de quatro vértices expandidos na CPU, num único vertex buffer por quadro, na ordem do pacote. Cada trecho com o mesmo recorte vira um `drawIndexedRange` com `setScissor`. O blend é premultiplicado (`ONE`, `INV_SRC_ALPHA`). Os shaders são `assets/shaders/spriteui.hlsl` e, para OpenGL, os GLSL gerados por `tools/shaders/build_glsl.py`.
+Na engine, o módulo header-only `ui_sprite` (`engine/ui_sprite/include/tool/ui/spriteui_rhi.hpp`, ligado com `TOOL_WITH_SPRITEUI`) implementa `IRenderBackend` sobre `tool::rhi::IDevice`. Cada `SpriteInstanceGPU` vira um quad de quatro vértices expandidos na CPU, num único vertex buffer por quadro, na ordem do pacote. Cada trecho com o mesmo recorte vira um `drawIndexedRange` com `setScissor`. O blend é premultiplicado (`ONE`, `INV_SRC_ALPHA`). Os shaders são `assets/shaders/hlsl/spriteui.hlsl` e, para OpenGL, os GLSL gerados por `tools/shaders/build_glsl.py`.
 
 Para isso o RHI ganhou três extensões: `PipelineDesc::blendPremultiplied`, `ICommandList::setScissor` e `ICommandList::drawIndexedRange(firstIndex, count)`. O Diligent liga o scissor no rasterizador. O dispositivo Null implementa as mesmas operações para os testes sem GPU (`tests/test_spriteui_rhi.cpp`). O teste com GPU é `spriteui_gpu_test` (OpenGL via `xvfb-run`): desenha num alvo offscreen e confere pixels de cor sólida, recorte, blend, glifo com cobertura total e parcial, e fundo.
 
@@ -350,6 +350,6 @@ dos widgets está em `docs/COMPOSITION.md`. `BuildClipHierarchy` recebe clips em
 
 - `include/`, `src/`: núcleo independente (sem dependências obrigatórias).
 - `adapters/toolengine/`: adaptador header-only para o RHI da ToolEngine (`SPRITEUI_WITH_TOOLENGINE_RHI=ON`). Fica fora do núcleo; o consumidor informa o alvo do RHI com `SPRITEUI_TOOLENGINE_RHI_TARGET`.
-- `shaders/toolengine/`: HLSL e GLSL gerados usados pelo adaptador. São cópias do engine (`assets/shaders`): mantenha iguais.
+- `shaders/toolengine/`: HLSL e GLSL gerados usados pelo adaptador. São cópias do engine (`assets/shaders/hlsl` e `assets/shaders/glsl`): mantenha iguais.
 - `docs/IMPLEMENTATION_GUIDE.md`: guia de implementação e testes por camadas.
 - `docs/THIRD_PARTY.md`: dependências de terceiros, licenças e quando entram.
