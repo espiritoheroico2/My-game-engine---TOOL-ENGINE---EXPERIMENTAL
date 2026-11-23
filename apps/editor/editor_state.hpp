@@ -925,6 +925,13 @@ private:
         const tool::Mesh* m = lodMeshOf(e, mr, cam);
         if (!m || m->idx.size() / 3 > kOccluderMaxTris) return;
         const tool::Mat4 wm = worldMat(e);
+        // Oclusor totalmente fora de um plano do frustum projeta fora da tela: nao esconde nada visivel. Pula.
+        if (doCull) {
+          const Bounds b = meshBounds(*m);
+          const float sc = std::max({std::hypot(wm.m[0][0], wm.m[0][1], wm.m[0][2]), std::hypot(wm.m[1][0], wm.m[1][1], wm.m[1][2]), std::hypot(wm.m[2][0], wm.m[2][1], wm.m[2][2])});
+          const tool::Vec3 c = wm.transformPoint(b.center); const float r = b.radius * sc;
+          for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) return;
+        }
         for (size_t i = 0; i + 2 < m->idx.size(); i += 3) {
           // Dois triangulos de uma face (a,b,c)+(a,c,d), como em Mesh::cube e Mesh::plane, viram um quad.
           if (i + 5 < m->idx.size() && m->idx[i + 3] == m->idx[i] && m->idx[i + 4] == m->idx[i + 2]) {
