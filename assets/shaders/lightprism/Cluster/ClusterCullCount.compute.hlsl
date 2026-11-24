@@ -18,7 +18,9 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID) {
     bool active = i < clusterCount;
 
     uint3 c = active ? ClusterCoordsOf(Grid, i) : uint3(0, 0, 0);
-    ClusterAABB aabb = active ? BuildClusterAABB(Grid, c) : (ClusterAABB)0;
+    // Sem ternario: HLSL nao aceita ramos de tipos diferentes (struct x escalar).
+    ClusterAABB aabb = (ClusterAABB)0;
+    if (active) aabb = BuildClusterAABB(Grid, c);
     uint total = Grid.numPointLights + Grid.numSpotLights;
 
     uint count = 0;
