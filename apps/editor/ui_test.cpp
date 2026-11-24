@@ -1,6 +1,4 @@
-// UI-CONTRATO: teste sem janela de idiomas e temas. Usa ImGui so para criar e destruir o contexto
-// (CreateContext, GetStyle, DestroyContext). Ao trocar o ImGui pela SpriteUI, este teste deve ser mantido
-// com a parte de idiomas e temas (ver ui_contract.hpp, secao 3.3 e 2.14).
+// Teste dos sistemas de UI sem janela: pacotes de idioma e temas (escolha, escala e arquivo). Sem ImGui.
 // Teste dos sistemas de UI do editor: pacotes de idioma e temas (sem abrir janela).
 #include "i18n.hpp"
 #include "theme.hpp"
@@ -40,24 +38,20 @@ int main() {
     CHECK(j && (*j)["strings"].members().size() > 3);
   }
 
-  ImGui::CreateContext();
-  ImGui::GetIO().Fonts->AddFontDefault();
   editor::Theme th;
   th.setPreset(1); // Claro
-  CHECK(editor::Theme::luma(ImGui::GetStyle().Colors[ImGuiCol_WindowBg]) > 0.8f);
-  th.base.accent = {0.9f, 0.1f, 0.1f, 1}; th.apply();
-  CHECK(ImGui::GetStyle().Colors[ImGuiCol_CheckMark].x > 0.8f);
-  ImGui::GetStyle().Colors[ImGuiCol_Text] = {0.1f, 0.2f, 0.3f, 1}; // ajuste avancado
+  CHECK(th.current == "Light" && th.base.bg.x > 0.8f);
+  th.base.accent = {0.9f, 0.1f, 0.1f, 1};
+  th.scale = 1.5f;
   const std::string tf = std::string(TOOL_SOURCE_DIR) + "/out/ui_test_tema.json";
   CHECK(th.save(tf, "teste"));
   editor::Theme t2;
   t2.setPreset(0); // escuro
   CHECK(t2.load(tf));
   CHECK(t2.current == "teste");
-  CHECK(std::abs(ImGui::GetStyle().Colors[ImGuiCol_Text].y - 0.2f) < 1e-3f); // ajuste avancado sobreviveu ao ciclo
-  CHECK(ImGui::GetStyle().Colors[ImGuiCol_CheckMark].x > 0.8f);
+  CHECK(std::abs(t2.base.accent.x - 0.9f) < 1e-3f);   // cor de destaque sobreviveu ao ciclo
+  CHECK(std::abs(t2.scale - 1.5f) < 1e-3f);           // escala sobreviveu ao ciclo
   CHECK(!t2.load(std::string(TOOL_SOURCE_DIR) + "/out/nao_existe.json"));
-  ImGui::DestroyContext();
   std::printf(fails ? "ui_test: %d falha(s)\n" : "ui_test: OK\n", fails);
   return fails ? 1 : 0;
 }

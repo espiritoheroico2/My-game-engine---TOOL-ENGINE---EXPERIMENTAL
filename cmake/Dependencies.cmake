@@ -37,7 +37,7 @@ option(TOOL_WITH_DILIGENT "Backends graficos de GPU via Diligent Engine (Vulkan 
 option(TOOL_WITH_D3D12 "Backend Direct3D 12 (so Windows; AINDA NAO TESTADO)" OFF)
 option(TOOL_WITH_D3D11 "Backend Direct3D 11 (so Windows; opcional)" OFF)
 option(TOOL_WITH_QUICKJS "Runtime de scripts ToolObject (QuickJS-ng, MIT, vendorizado em third_party/quickjs-ng)" ON)
-option(TOOL_WITH_EDITOR "Editor ImGui + imnodes (requer TOOL_WITH_SDL3)" ON)
+option(TOOL_WITH_EDITOR "Editor ToolEngine em SpriteUI (requer TOOL_WITH_SDL3)" ON)
 option(TOOL_WITH_SPRITEUI "SpriteUI diagnostics and incremental editor UI migration" ON)
 option(TOOL_WITH_MINIAUDIO "Saida de audio real via miniaudio (dominio publico)" ON)
 
@@ -103,29 +103,6 @@ if(TOOL_WITH_EDITOR)
   endif()
 
 
-  if(EXISTS ${TOOL_THIRD_PARTY}/imgui/imgui.cpp AND EXISTS ${TOOL_THIRD_PARTY}/imnodes/imnodes.cpp)
-    set(imgui_SOURCE_DIR ${TOOL_THIRD_PARTY}/imgui)
-    set(imnodes_SOURCE_DIR ${TOOL_THIRD_PARTY}/imnodes)
-  else()
-    FetchContent_Declare(imgui GIT_REPOSITORY https://github.com/ocornut/imgui.git GIT_TAG v1.91.9b-docking GIT_SHALLOW ON)
-    FetchContent_Declare(imnodes GIT_REPOSITORY https://github.com/Nelarius/imnodes.git GIT_TAG v0.5 GIT_SHALLOW ON)
-    FetchContent_MakeAvailable(imgui imnodes)
-    set(imgui_SOURCE_DIR "${imgui_SOURCE_DIR}")
-    set(imnodes_SOURCE_DIR "${imnodes_SOURCE_DIR}")
-  endif()
-
-  add_library(imgui_lib STATIC
-    ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
-    ${imnodes_SOURCE_DIR}/imnodes.cpp)
-  target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${imnodes_SOURCE_DIR})
-  # imnodes usa operadores de ImVec2 que o ImGui so expoe com esta definicao; silenciamos os avisos do codigo de terceiros.
-  if(MSVC)
-    set_source_files_properties(${imnodes_SOURCE_DIR}/imnodes.cpp PROPERTIES COMPILE_OPTIONS "/DIMGUI_DEFINE_MATH_OPERATORS;/w")
-  else()
-    set_source_files_properties(${imnodes_SOURCE_DIR}/imnodes.cpp PROPERTIES COMPILE_OPTIONS "-DIMGUI_DEFINE_MATH_OPERATORS;-w")
-  endif()
-  target_link_libraries(imgui_lib PUBLIC SDL3::SDL3-static)
 endif()
 
 if(TOOL_WITH_DILIGENT)

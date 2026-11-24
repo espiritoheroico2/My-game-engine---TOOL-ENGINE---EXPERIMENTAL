@@ -1,6 +1,6 @@
 add_executable(tool_editor main.cpp image_io.cpp)
 target_include_directories(tool_editor PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
-target_link_libraries(tool_editor PRIVATE tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod imgui_lib)
+target_link_libraries(tool_editor PRIVATE tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod SDL3::SDL3-static)
 if(TOOL_WITH_MINIAUDIO)
   target_link_libraries(tool_editor PRIVATE tool::audio_miniaudio)
 endif()
@@ -158,7 +158,7 @@ if(TOOL_WITH_SPRITEUI)
 endif()
 
 add_executable(tool_ui_test ui_test.cpp)
-target_link_libraries(tool_ui_test PRIVATE imgui_lib tool::core)
+target_link_libraries(tool_ui_test PRIVATE tool::core)
 add_test(NAME ui_editor COMMAND tool_ui_test)
 
 # Presets do visual em JSON (ui_presets.hpp): ida e volta, limites, leitura tolerante e arquivos.

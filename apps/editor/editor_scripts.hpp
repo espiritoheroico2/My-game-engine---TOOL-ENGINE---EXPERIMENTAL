@@ -1,17 +1,15 @@
-// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo e regras em ui_contract.hpp (secao 2.13).
-// Elementos: IsKeyPressed/IsKeyDown para movimento no modo Play (teclas do mapa de entrada), GetIO e
-//   GetCurrentContext para saber se ha campo de texto ativo (WantTextInput).
-// Dados: mapa de entrada (input_map.hpp), nao da UI.
-// Troca SpriteUI: a leitura de teclas passa a vir da camada de entrada da SpriteUI, com a mesma regra de foco.
 // editor_scripts.hpp - Ligacao dos scripts ToolObject (QuickJS) com o Editor. Roda so durante o Play.
 //
 // Ordem de cada quadro (tick): Narrative -> scripts (start/update, Transform copiado para o JS e de volta)
 // -> fisica/Tools. Os pedidos dos scripts (fila ScriptHost::cmds) sao aplicados DEPOIS de cada chamada de script,
 // no maximo 8 passadas por quadro (um evento pode disparar outro evento; passou disso, o resto e descartado).
 // Um objeto desativado (Inactive) nao roda update; o start acontece na primeira vez que ele fica ativo.
+// Teclas: mapa de entrada (input_map.hpp) lido com frame_input.hpp (SDL). Sem ImGui.
 #pragma once
 
-#include "imgui.h"
+#include "frame_input.hpp"
+
+#include <SDL3/SDL.h>
 #include "script_check.hpp"
 
 #include <algorithm>
@@ -85,27 +83,26 @@ inline void Editor::checkAllScripts() {
 }
 
 // Entrada do quadro para os scripts: teclas mantidas, teclas pressionadas neste quadro e movimento do mouse.
-// Mapa de nomes (usados em input.down / input.pressed) para teclas do ImGui.
+// Mapa de nomes (usados em input.down / input.pressed) para teclas SDL. Entrada do quadro: frame_input.hpp.
 inline void Editor::fillScriptInput() {
-  struct KeyName { const char* name; ImGuiKey key; };
+  struct KeyName { const char* name; SDL_Scancode key; };
   static const KeyName kKeys[] = {
-    {"W", ImGuiKey_W}, {"A", ImGuiKey_A}, {"S", ImGuiKey_S}, {"D", ImGuiKey_D}, {"Q", ImGuiKey_Q}, {"E", ImGuiKey_E},
-    {"R", ImGuiKey_R}, {"F", ImGuiKey_F}, {"Space", ImGuiKey_Space}, {"Shift", ImGuiKey_LeftShift}, {"Ctrl", ImGuiKey_LeftCtrl},
-    {"Alt", ImGuiKey_LeftAlt}, {"Up", ImGuiKey_UpArrow}, {"Down", ImGuiKey_DownArrow}, {"Left", ImGuiKey_LeftArrow},
-    {"Right", ImGuiKey_RightArrow}, {"Enter", ImGuiKey_Enter}, {"Escape", ImGuiKey_Escape}, {"1", ImGuiKey_1}, {"2", ImGuiKey_2},
+    {"W", SDL_SCANCODE_W}, {"A", SDL_SCANCODE_A}, {"S", SDL_SCANCODE_S}, {"D", SDL_SCANCODE_D}, {"Q", SDL_SCANCODE_Q}, {"E", SDL_SCANCODE_E},
+    {"R", SDL_SCANCODE_R}, {"F", SDL_SCANCODE_F}, {"Space", SDL_SCANCODE_SPACE}, {"Shift", SDL_SCANCODE_LSHIFT}, {"Ctrl", SDL_SCANCODE_LCTRL},
+    {"Alt", SDL_SCANCODE_LALT}, {"Up", SDL_SCANCODE_UP}, {"Down", SDL_SCANCODE_DOWN}, {"Left", SDL_SCANCODE_LEFT},
+    {"Right", SDL_SCANCODE_RIGHT}, {"Enter", SDL_SCANCODE_RETURN}, {"Escape", SDL_SCANCODE_ESCAPE}, {"1", SDL_SCANCODE_1}, {"2", SDL_SCANCODE_2},
   };
   ScriptHost::InputState& in = scriptHost.input;
   in.held.clear(); in.pressed.clear(); in.mouseDx = in.mouseDy = 0.f;
-  if (!ImGui::GetCurrentContext()) return; // sem interface (selftest, linha de comando): sem teclado
-  const ImGuiIO& io = ImGui::GetIO();
+  const editor::FrameInput& f = editor::frameInput();
   for (const KeyName& k : kKeys) {
-    if (ImGui::IsKeyDown(k.key)) in.held.push_back(k.name);
-    if (ImGui::IsKeyPressed(k.key, false)) in.pressed.push_back(k.name);
+    if (f.down(k.key)) in.held.push_back(k.name);
+    if (k.key < SDL_SCANCODE_COUNT && f.pressed[k.key]) in.pressed.push_back(k.name);
   }
-  if (io.MouseDown[0]) in.held.push_back("Mouse0");
-  if (io.MouseDown[1]) in.held.push_back("Mouse1");
-  if (io.MouseClicked[0]) in.pressed.push_back("Mouse0");
-  in.mouseDx = io.MouseDelta.x; in.mouseDy = io.MouseDelta.y;
+  if (f.held[0]) in.held.push_back("Mouse0");
+  if (f.held[1]) in.held.push_back("Mouse1");
+  if (f.clicked[0]) in.pressed.push_back("Mouse0");
+  in.mouseDx = f.mdx; in.mouseDy = f.mdy;
 }
 
 // Copia o Transform do objeto para o JS, roda start (se preciso), evento ou update, e copia o Transform de volta.

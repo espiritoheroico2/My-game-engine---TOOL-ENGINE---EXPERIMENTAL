@@ -1,18 +1,12 @@
-// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo, padroes e regras em ui_contract.hpp (secoes 2.10 e 3.6).
-// Elementos: overlays com ImDrawList (GetWindowDrawList): particulas (AddCircleFilled, AddTriangleFilled, AddLine para
-//   trajetoria), UI do jogo (drawUiOverlay: PushClipRect, AddText, AddRect, barras e botoes), GetFont/GetFontSize para
-//   medir texto, InvisibleButton para os botoes do jogo (so reagem no Play), ColorConvert para cores.
-// Dados: UiCanvas e ParticleComp dos componentes; cores float 0..1.
-// Troca SpriteUI: TODO o desenho de UI do jogo (drawUiOverlay) e o desenho de sprites das particulas viram SpriteUI.
-// fx.hpp - Particulas (CPU, integrador simples com gravidade/quique da fisica Newtoon da cena) e UI de jogo (overlay ImGui por camera).
-// Particulas e UI sao DESENHADAS por cima da imagem (ImDrawList): sem teste de profundidade contra a cena (limite conhecido; ver docs/planos/07_UI_DE_JOGO.md).
+// fx.hpp - Particulas (CPU, integrador simples com gravidade/quique da fisica Newtoon da cena) e a formatacao do texto
+// de UI do jogo ("{variavel}"). O desenho das particulas e da UI do jogo esta em view_overlays.hpp (SpriteUI).
 #pragma once
 #include "editor_state.hpp"
-#include "viewport_tools.hpp"
-#include "imgui.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 namespace editor {
 
@@ -24,7 +18,7 @@ inline float rnd(uint32_t& s) { s = s * 1664525u + 1013904223u; return static_ca
 //  1) SERIAL: le o mundo (worldMat nao e thread-safe) e calcula, por emissor, base de emissao, gravidade e quantas
 //     particulas pode criar neste quadro (respeitando o limite do emissor e o ORCAMENTO global de particulas).
 //  2) PARALELA: cada emissor cria e integra as proprias particulas (lista e semente proprias: nao ha dado compartilhado).
-// Desenho: drawParticleOverlay, sobre a vista (cor verdadeira, alfa real, sem iluminacao).
+// Desenho: view_overlays.hpp (cor e alfa reais, sobre a vista).
 namespace fxdetail {
 struct EmitterJob {
   Editor::ParticleSim* sim = nullptr; const ParticleComp* pc = nullptr;
@@ -143,69 +137,6 @@ inline void Editor::updateParticles(float dt) {
   for (auto it = particles.begin(); it != particles.end();) { if (it->second.touched != particleFrame) it = particles.erase(it); else ++it; }
 }
 
-// Particulas desenhadas sobre a vista: cor e alfa reais (sem iluminacao e sem escurecer). `selected` mostra a
-// trajetoria do objeto selecionado na Scene. Nao ha teste de profundidade: ficam por cima dos objetos.
-inline void drawParticleOverlay(Editor& ed, const tool::Camera& cam, ImVec2 org, ImVec2 size, tool::Entity selected) {
-  if (size.x < 2.f || size.y < 2.f) return;
-  tool::World& w = ed.scene.world(); ImDrawList* dl = ImGui::GetWindowDrawList();
-  const tool::Mat4 vp = cam.projection(size.x, size.y) * tool::Mat4::lookAt(cam.eye, cam.target, cam.up);
-  const tool::Vec3 fwd = tool::normalize(cam.target - cam.eye), right = tool::normalize(tool::cross(fwd, cam.up));
-  auto toScr = [&](tool::Vec3 p, ImVec2& s) {
-    const tool::Vec4 c = vp.mul({p.x, p.y, p.z, 1.f});
-    if (!cam.ortho && c.w < cam.nearZ) return false;
-    s = {org.x + (c.x / c.w * 0.5f + 0.5f) * size.x, org.y + (1.f - (c.y / c.w * 0.5f + 0.5f)) * size.y};
-    return true;
-  };
-  dl->PushClipRect(org, {org.x + size.x, org.y + size.y}, true);
-  w.each<ParticleComp>([&](tool::Entity e, ParticleComp& pc) {
-    if (w.has<Inactive>(e)) return;
-    if (e == selected && pc.route && pc.routeCount >= 2) { // trajetoria: linha amarela + pontos de controle
-      const tool::Mat4 wm = ed.worldMat(e); ImVec2 prev{}; bool hasPrev = false;
-      for (int k = 0; k <= 64; ++k) {
-        const tool::Vec3 l = fxdetail::routeSample(pc, static_cast<float>(k) / 64.f); const tool::Vec4 wp = wm.mul({l.x, l.y, l.z, 1.f});
-        ImVec2 s; if (!toScr({wp.x, wp.y, wp.z}, s)) { hasPrev = false; continue; }
-        if (hasPrev) dl->AddLine(prev, s, IM_COL32(255, 220, 80, 230), 2.f);
-        prev = s; hasPrev = true;
-      }
-      for (int i = 0; i < pc.routeCount; ++i) {
-        const tool::Vec4 wp = wm.mul({pc.routePts[i][0], pc.routePts[i][1], pc.routePts[i][2], 1.f}); ImVec2 s;
-        if (toScr({wp.x, wp.y, wp.z}, s)) { dl->AddCircleFilled(s, 4.f, IM_COL32(255, 220, 80, 255)); dl->AddCircle(s, 6.f, IM_COL32(0, 0, 0, 200), 0, 1.f); }
-      }
-    }
-    auto it = ed.particles.find(e.index); if (it == ed.particles.end()) return;
-    for (const Editor::Particle& p : it->second.list) {
-      const float t = std::clamp(p.age / std::max(p.life, 1e-4f), 0.f, 1.f);
-      const float sz = pc.size + (pc.sizeEnd - pc.size) * t;
-      if (sz <= 1e-3f) continue;
-      const float a = fxdetail::particleAlpha(pc, p);
-      if (a <= 0.003f) continue;
-      ImVec2 s; if (!toScr(p.p, s)) continue;
-      ImVec2 sr; if (!toScr(p.p + right * (sz * 0.5f), sr)) continue;
-      const float r = std::max(1.f, std::hypot(sr.x - s.x, sr.y - s.y));
-      if (s.x + r < org.x || s.x - r > org.x + size.x || s.y + r < org.y || s.y - r > org.y + size.y) { ++ed.prof.counters.culled; continue; }
-      const tool::Vec3 c = fxdetail::particleColor(pc, t);
-      const ImU32 col = ImGui::GetColorU32({c.x, c.y, c.z, a});
-      switch (pc.form) {
-        case 1: dl->AddRectFilled({s.x - r, s.y - r}, {s.x + r, s.y + r}, col); break;
-        case 2: dl->AddTriangleFilled({s.x, s.y - r * 1.2f}, {s.x - r, s.y + r * 0.8f}, {s.x + r, s.y + r * 0.8f}, col); break;
-        case 3: { ImVec2 pts[10]; for (int k = 0; k < 10; ++k) { const float ang = -1.5708f + k * 0.6283185f, rr = (k % 2) ? r * 0.45f : r * 1.2f; pts[k] = {s.x + std::cos(ang) * rr, s.y + std::sin(ang) * rr}; }
-          dl->AddConcavePolyFilled(pts, 10, col); break; }
-        case 4: dl->AddCircle(s, r, col, 16, std::max(1.f, r * 0.35f)); break;
-        case 5: { ImVec2 q = s; const tool::Vec3 back = p.p - p.v * 0.04f; ImVec2 qb; if (toScr(back, qb)) q = qb;
-          dl->AddLine(q, s, col, std::max(1.f, r * 0.8f)); break; }
-        case 6: { // fumaca: halo leve por fora, borda densa e miolo quase transparente (volumetrica)
-          dl->AddCircleFilled(s, r, ImGui::GetColorU32({c.x, c.y, c.z, a * 0.22f}), 24);
-          dl->AddCircle(s, r * 0.82f, ImGui::GetColorU32({c.x, c.y, c.z, a * 0.7f}), 24, std::max(1.f, r * 0.4f));
-          dl->AddCircleFilled(s, r * 0.4f, ImGui::GetColorU32({c.x, c.y, c.z, a * 0.1f}), 16); break; }
-        default: { // bolinha suave: halo + nucleo
-          dl->AddCircleFilled(s, r * 1.6f, ImGui::GetColorU32({c.x, c.y, c.z, a * 0.25f}), 16);
-          dl->AddCircleFilled(s, r, col, 16); break; }
-      }
-    }
-  });
-  dl->PopClipRect();
-}
-
 // "{nome}" no texto vira o valor da variavel do jogo (ed.vars); suporta varias por texto.
 inline std::string uiFormat(const Editor& ed, const char* text) {
   std::string out, src = text;
@@ -215,41 +146,6 @@ inline std::string uiFormat(const Editor& ed, const char* text) {
     out += src[i++];
   }
   return out;
-}
-
-// Desenha todos os UiCanvas que pertencem a `camEnt` dentro do retangulo [org, org+size]. Botoes so reagem durante o Play.
-inline void drawUiOverlay(Editor& ed, tool::Entity camEnt, ImVec2 org, ImVec2 size, bool interactive) {
-  tool::World& w = ed.scene.world(); ImDrawList* dl = ImGui::GetWindowDrawList();
-  const auto* cn = w.get<Name>(camEnt);
-  dl->PushClipRect(org, {org.x + size.x, org.y + size.y}, true);
-  w.each<UiCanvas>([&](tool::Entity ce, UiCanvas& cv) {
-    if (!cv.visible) return;
-    if (cv.camera[0]) { if (!cn || std::string(cv.camera) != cn->text) return; }
-    else if (!ed.isPrincipal(camEnt)) return;
-    for (int i = 0; i < cv.count && i < kMaxUi; ++i) {
-      UiElem& it = cv.items[i]; const ImVec2 a{org.x + it.x * size.x, org.y + it.y * size.y}, b{a.x + it.w * size.x, a.y + it.h * size.y};
-      const ImU32 col = ImGui::ColorConvertFloat4ToU32({it.color[0], it.color[1], it.color[2], it.color[3]});
-      const std::string txt = uiFormat(ed, it.text);
-      auto label = [&](ImU32 c) { ImFont* f = ImGui::GetFont(); const float fs = ImGui::GetFontSize() * it.fontScale * std::max(0.5f, size.y / 600.f); const ImVec2 ts = f->CalcTextSizeA(fs, 1e9f, 0.f, txt.c_str());
-        dl->AddText(f, fs, {a.x + std::max(2.f, (b.x - a.x - ts.x) * 0.5f), a.y + (b.y - a.y - ts.y) * 0.5f}, c, txt.c_str()); };
-      switch (static_cast<UiKind>(it.kind)) {
-        case UiKind::Text: { ImFont* f = ImGui::GetFont(); const float fs = ImGui::GetFontSize() * it.fontScale * std::max(0.5f, size.y / 600.f); dl->AddText(f, fs, a, col, txt.c_str()); break; }
-        case UiKind::Panel: dl->AddRectFilled(a, b, col, 4.f); if (txt.size()) label(IM_COL32(255, 255, 255, 255)); break;
-        case UiKind::Bar: { const auto vit = ed.vars.find(it.action); const float v = vit == ed.vars.end() ? 0.f : vit->second; const float f = std::clamp(v / it.maxValue, 0.f, 1.f);
-          dl->AddRectFilled(a, b, IM_COL32(20, 20, 20, 180), 3.f); dl->AddRectFilled(a, {a.x + (b.x - a.x) * f, b.y}, col, 3.f); dl->AddRect(a, b, IM_COL32(255, 255, 255, 120), 3.f); break; }
-        case UiKind::Button: {
-          bool hov = false, down = false;
-          if (interactive) { ImGui::SetCursorScreenPos(a); char id[48]; std::snprintf(id, sizeof id, "##ui%u_%d", ce.index, i);
-            if (ImGui::InvisibleButton(id, {std::max(1.f, b.x - a.x), std::max(1.f, b.y - a.y)})) { if (it.action[0]) ed.uiEvents.push_back(it.action); }
-            hov = ImGui::IsItemHovered(); down = ImGui::IsItemActive(); }
-          const ImVec4 c4 = ImGui::ColorConvertU32ToFloat4(col); const float k = down ? 0.7f : hov ? 1.15f : 1.f;
-          dl->AddRectFilled(a, b, ImGui::ColorConvertFloat4ToU32({std::min(1.f, c4.x * k), std::min(1.f, c4.y * k), std::min(1.f, c4.z * k), c4.w}), 6.f); dl->AddRect(a, b, IM_COL32(255, 255, 255, 160), 6.f);
-          label(IM_COL32(0, 0, 0, 255)); break; }
-        default: break;
-      }
-    }
-  });
-  dl->PopClipRect();
 }
 
 } // namespace editor

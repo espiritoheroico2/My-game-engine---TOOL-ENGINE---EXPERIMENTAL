@@ -42,7 +42,7 @@ enum class Zone : int {
 inline const char* zoneName(Zone z) {
   static const char* n[] = {"Events + input", "Update (audio, pool)", "Panels (hierarchy, inspector...)", "Scene view render",
                             "Scene preparation (culling, shadows)", "CPU rasterization", "GPU render/submit", "GPU readback",
-                            "Game view render", "Post-processing (FXAA, sharpen)", "Skybox (images)", "UI draw (ImGui)",
+                            "Game view render", "Post-processing (FXAA, sharpen)", "Skybox (images)", "UI draw",
                             "Present (VSync)", "Physics simulation"};
   return n[static_cast<int>(z)];
 }

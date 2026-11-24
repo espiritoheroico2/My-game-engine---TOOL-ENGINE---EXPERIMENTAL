@@ -10,7 +10,7 @@ WHAT YOU GET
   The default language is English; Portuguese (pt-BR) and Spanish are in
   Settings > Language.
 
-  SDL3, ImGui, imnodes and miniaudio are already inside third_party/. The
+  SDL3 and miniaudio are already inside third_party/. The
   experimental SpriteUI diagnostics panel is fetched by CMake on the first
   build (Git and internet required). For an offline build, configure with
   -DTOOL_WITH_SPRITEUI=OFF. Ninja and Python are not needed for the CPU editor.
@@ -108,7 +108,7 @@ WHAT YOU GET
   apps/editor    the editor (this is what is built)
   engine/        engine modules (static libraries linked into the editor)
   assets/        shaders, language packs (assets/lang), themes (assets/themes)
-  third_party/   vendored SDL3, ImGui, imnodes, miniaudio (no download)
+  third_party/   vendored SDL3, miniaudio (no download)
   cmake/, CMakeLists.txt, CMakePresets.json   build system
   tests/, fuzz/, tools/, docs/                development extras (not built by
                                               the editor preset)

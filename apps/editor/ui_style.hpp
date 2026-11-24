@@ -21,5 +21,7 @@ namespace editor::ui_style {
 
 // Tamanho de fonte da interface: o tamanho base vezes a escala do texto.
 [[nodiscard]] inline float uiFont(float base) { return base * textScale(); }
+// Altura da barra de menu e da barra de status (SpriteUI): antes era a altura de linha do ImGui.
+[[nodiscard]] inline float barHeight() { return 28.f * textScale(); }
 
 }  // namespace editor::ui_style

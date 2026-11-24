@@ -6,8 +6,6 @@ Para compilar, copie-as para a pasta third_party/ do projeto (mesmos nomes):
 
   DiligentCore   (renderizacao: Vulkan, D3D12, OpenGL) - pasta completa
   SDL3           - pasta completa
-  imgui          - pasta completa (ImGui 1.91.9b)
-  imnodes        - pasta completa
   miniaudio      - pasta completa
   quickjs-ng     - pasta completa
   stb            - pasta completa

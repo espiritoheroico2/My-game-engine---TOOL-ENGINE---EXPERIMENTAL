@@ -14,7 +14,7 @@ ver: 0.8 beta
 
 ## Abrir o editor (caminho direto)
 - Windows: dois cliques em `build_editor.bat` (qualquer Visual Studio recente com "Desenvolvimento para desktop com C++"). Linux/macOS: `./build_editor.sh`.
-- A tela inicial (criar/abrir projeto) usa SpriteUI. Para voltar ao dialogo antigo do ImGui: `--imgui-start`.
+- O editor inteiro e desenhado com SpriteUI (sem Dear ImGui). A tela inicial (criar/abrir projeto) tambem.
 - Sem Git, Ninja ou internet para o build legado (dependências embutidas em `third_party/`). O painel experimental SpriteUI e habilitado por padrao e e obtido pelo CMake; para build offline, configure com `-DTOOL_WITH_SPRITEUI=OFF`. Passo a passo: `COMO_COMPILAR.txt` / `HOW_TO_BUILD.txt`.
 
 ## Linha de comando (núcleo e testes)

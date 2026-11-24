@@ -1,7 +1,3 @@
-// UI-CONTRATO: este arquivo usa Dear ImGui. Catalogo, padroes e regras em ui_contract.hpp (secao 2.13).
-// Elementos: entrada de mouse do viewport (IsMouseClicked, IsMouseDown) e GetIO para posicao.
-// Dados: raio de selecao calculado a partir da camera (pickByRay); nao desenha widgets.
-// Troca SpriteUI: a entrada de mouse vira um evento da SpriteUI ou continua lendo a entrada da plataforma.
 // ToolEngine Editor - ferramentas da janela Scene: projecao 3D->tela e gizmo de transformacao (mover/girar/escalar).
 //
 // GIZMO: setas coloridas (X vermelho, Y verde, Z azul) no objeto selecionado, com tamanho constante na tela.
@@ -10,49 +6,18 @@
 //   Escalar (R):  arraste a ponta de um eixo -> escala so nele; arraste o quadrado central -> escala uniforme (Ctrl = passos de 0.1).
 //   Mover com Ctrl = passos de 0.25 m.
 // Tudo e feito em espaco de tela (sem raycast 3D): barato, estavel e independente da API grafica.
+// Sem ImGui: selecao por raio e snap usam so tipos do editor (Px). A janela Scene desenha em SpriteUI.
 // Os valores sao gravados direto no Transform do objeto (os mesmos campos do Inspector).
 #pragma once
 #include "editor_state.hpp"
-
-#include "imgui.h"
 
 #include <algorithm>
 #include <cmath>
 
 namespace editor {
 
-// Matriz de uma camera + retangulo da imagem na tela: transforma pontos 3D em pixels do ImGui.
-struct ViewXf {
-  tool::Mat4 vp; ImVec2 org, size; tool::Vec3 eye; float focal = 1.f; // focal = 1/tan(fovY/2)
-  static ViewXf make(const tool::Camera& c, ImVec2 org, ImVec2 size) {
-    ViewXf v; v.org = org; v.size = size; v.eye = c.eye; v.focal = 1.f / std::tan(std::max(0.01f, c.fovY) * 0.5f);
-    v.vp = tool::Mat4::perspective(c.fovY, size.x / size.y, c.nearZ, c.farZ) * tool::Mat4::lookAt(c.eye, c.target, c.up);
-    return v;
-  }
-  ImVec2 toScreen(const tool::Vec4& c) const { return {org.x + (c.x / c.w * 0.5f + 0.5f) * size.x, org.y + (1.f - (c.y / c.w * 0.5f + 0.5f)) * size.y}; }
-  bool point(tool::Vec3 p, ImVec2& s) const { const tool::Vec4 c = vp.mul({p.x, p.y, p.z, 1}); if (c.w < 0.01f) return false; s = toScreen(c); return true; }
-  // Linha 3D recortada no plano da camera (evita linhas "esticadas" quando um ponta esta atras).
-  bool line(tool::Vec3 a, tool::Vec3 b, ImVec2& pa, ImVec2& pb) const {
-    tool::Vec4 ca = vp.mul({a.x, a.y, a.z, 1}), cb = vp.mul({b.x, b.y, b.z, 1});
-    constexpr float eps = 0.01f;
-    if (ca.w < eps && cb.w < eps) return false;
-    auto lerp = [](const tool::Vec4& p, const tool::Vec4& q, float t) { return tool::Vec4{p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t, p.z + (q.z - p.z) * t, p.w + (q.w - p.w) * t}; };
-    if (ca.w < eps) ca = lerp(ca, cb, (eps - ca.w) / (cb.w - ca.w)); else if (cb.w < eps) cb = lerp(cb, ca, (eps - cb.w) / (ca.w - cb.w));
-    pa = toScreen(ca); pb = toScreen(cb);
-    return true;
-  }
-};
-
-inline void line3(ImDrawList* dl, const ViewXf& v, tool::Vec3 a, tool::Vec3 b, ImU32 col, float th = 1.f) {
-  ImVec2 pa, pb; if (v.line(a, b, pa, pb)) dl->AddLine(pa, pb, col, th);
-}
-
-// Distancia (px) de um ponto a um segmento.
-inline float distToSegment(ImVec2 p, ImVec2 a, ImVec2 b) {
-  const float dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-  const float t = l2 > 1e-6f ? std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0.f, 1.f) : 0.f;
-  return std::hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
-}
+// Ponto em pixels (da imagem da Scene ou da tela).
+struct Px { float x = 0.f, y = 0.f; };
 
 // Caixa alinhada aos eixos do objeto no mundo (cantos da malha ja transformados). false se nao tem malha.
 inline bool worldBox(Editor& ed, tool::Entity e, tool::Vec3& lo, tool::Vec3& hi) {
@@ -131,7 +96,7 @@ inline bool snapToContact(Editor& ed, tool::Entity e) {
 // ---------------------------------------------------------------------------------------------------------------------
 struct Ray { tool::Vec3 o, d; };
 
-inline Ray rayFromScreen(const tool::Camera& c, ImVec2 org, ImVec2 size, ImVec2 mouse) {
+inline Ray rayFromScreen(const tool::Camera& c, Px org, Px size, Px mouse) {
   const float nx = ((mouse.x - org.x) / size.x) * 2.f - 1.f, ny = 1.f - ((mouse.y - org.y) / size.y) * 2.f;
   const tool::Vec3 f = tool::normalize(c.target - c.eye), r = tool::normalize(tool::cross(f, c.up)), u = tool::cross(r, f);
   const float th = std::tan(c.fovY * 0.5f), asp = size.x / size.y;

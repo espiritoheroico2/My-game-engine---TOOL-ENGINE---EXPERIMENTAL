@@ -10,7 +10,7 @@ O QUE VOCE RECEBE
   O idioma padrao e o INGLES; Portugues (pt-BR) e Espanhol ficam em
   Settings > Language.
 
-  SDL3, ImGui, imnodes e miniaudio ja estao em third_party/. O painel
+  SDL3 e miniaudio ja estao em third_party/. O painel
   experimental SpriteUI e baixado pelo CMake no primeiro build (precisa de Git
   e internet); para compilar offline, use -DTOOL_WITH_SPRITEUI=OFF.
   Ninja e Python nao sao necessarios para o editor CPU.
@@ -105,7 +105,7 @@ O QUE VOCE RECEBE
   apps/editor    o editor (e o unico alvo compilado)
   engine/        modulos da engine (bibliotecas estaticas ligadas ao editor)
   assets/        shaders, pacotes de idioma (assets/lang), temas (assets/themes)
-  third_party/   SDL3, ImGui, imnodes, miniaudio embutidos (sem download)
+  third_party/   SDL3, miniaudio embutidos (sem download)
   cmake/, CMakeLists.txt, CMakePresets.json   sistema de build
   tests/, fuzz/, tools/, docs/                extras de desenvolvimento (o
                                               preset editor nao compila)
