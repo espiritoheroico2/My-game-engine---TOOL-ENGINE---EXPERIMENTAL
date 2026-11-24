@@ -278,7 +278,7 @@ Ordem proposta (uma janela por commit, cada uma com modelo testavel quando possi
 Nao aplicar P3-P6 antes de P1-P2 terem sido medidos. Hi-Z pode causar atrasos de aparecimento em
 movimentos rapidos; P5 exige simplificacao offline; P6 e especulativo ate haver uma cena de referencia.
 
-Estado: `frustum_cull.hpp` existe e tem teste; **nao esta ligado ao renderizador** (P2 pendente).
+Estado: `frustum_cull.hpp` tem testes (`tests/test_frustum_cull.cpp`) e **esta ligado ao renderizador**: `GpuRenderer` aplica o culling de camera em paralelo a cada quadro (`gpu_renderer.hpp`, avaliacao de `queueItems_`). Pendente do P2: validacao visual de borda (objetos nao podem sumir na borda da tela), que precisa de execucao com renderizacao.
 
 ### Implementacao tecnica do P1
 
