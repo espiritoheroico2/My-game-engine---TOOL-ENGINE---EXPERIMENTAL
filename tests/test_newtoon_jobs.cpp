@@ -1,6 +1,7 @@
 // Testes de F-04: contrato do JobSystem::ParallelFor (grain, n, excecoes no chamador e em worker).
 #include "test.hpp"
 #include "tool/physics/newtoon_jobs.hpp"
+#include "tool/core/parallel.hpp"
 
 #include <atomic>
 #include <stdexcept>
@@ -89,4 +90,13 @@ TEST(jobs_pool_still_works_after_exceptions) {
   bool ok = true;
   for (int h : hits) ok = ok && h == 1;
   CHECK(ok);
+}
+
+TEST(jobs_splits_into_oversubscribed_blocks) {
+  // A carga vira threads * kOversub blocos (balanceamento dinamico); com um thread so, um bloco.
+  std::atomic<size_t> blocks{0};
+  JobSystem::Get().ParallelFor(1000000, 1, [&](size_t, size_t) { ++blocks; });
+  const size_t threads = JobSystem::Get().WorkerCount() + 1;
+  const size_t expect = threads == 1 ? 1 : threads * tool::ParallelPool::kOversub;
+  CHECK(blocks.load() == expect);
 }

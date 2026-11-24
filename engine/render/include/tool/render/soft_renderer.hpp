@@ -416,7 +416,7 @@ public:
     flushShadow();
     const int H = static_cast<int>(h_);
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    const int nT = std::clamp(static_cast<int>(std::min(hw, 8u)), 1, std::max(1, H / 24));
+    const int nT = std::clamp(static_cast<int>(std::min(hw, 32u)), 1, std::max(1, H / 24));
     std::vector<u64> shadedPer(static_cast<size_t>(nT), 0);
     auto work = [&](int band) {
       const int y0 = H * band / nT, y1 = H * (band + 1) / nT - 1;
@@ -579,7 +579,7 @@ public:
     const int R = shadowRes_;
     auto raster = [R](const std::vector<ShadowTri>& tris, std::vector<f32>& map) {
       const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-      const int nT = std::clamp(static_cast<int>(std::min(hw, 8u)), 1, std::max(1, R / 64));
+      const int nT = std::clamp(static_cast<int>(std::min(hw, 32u)), 1, std::max(1, R / 64));
       auto work = [&](int band) {
         const int y0 = R * band / nT, y1 = R * (band + 1) / nT - 1;
         for (const ShadowTri& t : tris) {

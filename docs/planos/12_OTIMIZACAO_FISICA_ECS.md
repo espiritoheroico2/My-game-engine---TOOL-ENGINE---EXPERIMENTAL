@@ -58,3 +58,12 @@ O commit `82269d9` tinha `newtoon_world.hpp` usando `Transform`, `velocity` e `I
 1. Medir o quadro na cena real com `--ecs` e `--play` (Zonas Physics e Render), antes e depois.
 2. Se a física aparecer como gargalo, aplicar o `GlobalTransform` e o streaming de instâncias, um de cada vez, com build e medição.
 3. Revisar os shaders de cluster só com dados de tempo de GPU.
+
+## Threads: um pool, escala com os núcleos
+
+- Antes: dois pools independentes (`tool::ParallelPool` com teto de 8 threads e o `JobSystem` da física com 7 workers), divisão estática com um bloco por thread.
+- Agora: um único pool (`tool::ParallelPool`), com teto de 64 threads (`hardware_concurrency - 1` workers). O `JobSystem` da física delega para ele.
+- A carga vira `threads × 4` blocos e cada thread pega o próximo bloco livre, então um bloco lento não deixa os outros núcleos parados.
+- Exceções em qualquer bloco são capturadas e relançadas no chamador depois que todos os blocos terminam.
+- Soft renderer: bandas de 8 para 32 no máximo.
+- Limite: a máquina de desenvolvimento tem 2 núcleos. O ganho com mais núcleos precisa de medição no hardware do usuário. Testes: `ctest` 47/47 repetido 40 vezes, `--selftest` 250/250, teste novo `jobs_splits_into_oversubscribed_blocks`.
