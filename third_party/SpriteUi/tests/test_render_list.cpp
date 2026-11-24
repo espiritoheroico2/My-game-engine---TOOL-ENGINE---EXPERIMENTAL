@@ -173,9 +173,9 @@ void TestCacheCommitsMultipleStructuralChangesTogether() {
     CHECK(items.size() == 5);
     CHECK(cache.LastRebuildCount() == 3);
     CHECK(items[0].handle.Pack() == (UIHandle{1, 1}).Pack());
-    CHECK(items[2].handle.Pack() == UIHandle{1, 1}.Pack());
+    CHECK(items[2].handle.Pack() == (UIHandle{1, 1}).Pack());
     CHECK(items[3].handle.Pack() == (UIHandle{3, 1}).Pack());
-    CHECK(items[4].handle.Pack() == UIHandle{3, 1}.Pack());
+    CHECK(items[4].handle.Pack() == (UIHandle{3, 1}).Pack());
 }
 
 void TestCacheBuilderFailureDoesNotPublishPartialUpdate() {
