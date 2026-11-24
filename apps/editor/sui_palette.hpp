@@ -48,15 +48,62 @@ inline constexpr std::array<Palette, kCount> kPresets{{
      {0.350f, 0.560f, 1.000f}, {0.350f, 0.560f, 1.000f}, {0.120f, 0.130f, 0.165f}, {1.000f, 0.450f, 0.400f}},
 }};
 
-// Indice da paleta em uso. Padrao 0 (Azul escuro).
+// Paleta personalizada (Configuracoes > Appearance > Custom). Como no ImGui antigo: 5 cores-base geram os 8 tokens;
+// a lista avancada troca um token sem mexer nos outros. Trocar uma cor-base recalcula todos os tokens.
+inline constexpr std::size_t kCustomIndex = kCount;   // indice da paleta Custom (depois das prontas)
+inline constexpr std::size_t kTokenCount = 8;
+inline constexpr std::size_t kBaseCount = 5;
+inline constexpr const char* kBaseNames[kBaseCount] = {"Background", "Surface", "Text", "Accent", "Border"};
+inline constexpr const char* kTokenNames[kTokenCount] = {"Panel", "Surface", "Text", "Dim text", "Accent", "Scroll", "Border", "Error"};
+
+struct Custom {
+  Rgb base[kBaseCount];     // bg, surface, text, accent, border
+  Rgb token[kTokenCount];   // panel, surface, text, textDim, accent, scroll, border, error (ordem de Palette)
+};
+
+inline Rgb mixRgb(const Rgb& a, const Rgb& b, float t) {
+  return Rgb{a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, 1.f};
+}
+
+// Recalcula os tokens a partir das cores-base (o erro fica como no preset). Usado ao trocar uma cor-base.
+inline void deriveTokens(Custom& c) {
+  const Rgb& bg = c.base[0];
+  c.token[0] = bg;
+  c.token[1] = c.base[1];
+  c.token[2] = c.base[2];
+  c.token[3] = mixRgb(bg, c.base[2], 0.5f);
+  c.token[4] = c.base[3];
+  c.token[5] = c.base[3];
+  c.token[6] = c.base[4];
+  c.token[7] = kPresets[0].error;
+}
+
+// Estado da paleta personalizada. Comeca igual ao padrao (Azul escuro).
+inline Custom& custom() {
+  static Custom c = [] {
+    Custom out{};
+    const Palette& p = kPresets[0];
+    out.base[0] = p.panel; out.base[1] = p.surface; out.base[2] = p.text; out.base[3] = p.accent; out.base[4] = p.border;
+    out.token[0] = p.panel; out.token[1] = p.surface; out.token[2] = p.text; out.token[3] = p.textDim;
+    out.token[4] = p.accent; out.token[5] = p.scroll; out.token[6] = p.border; out.token[7] = p.error;
+    return out;
+  }();
+  return c;
+}
+
+// Indice da paleta em uso. Padrao 0 (Azul escuro); kCustomIndex = personalizada.
 inline std::size_t& activeIndex() {
   static std::size_t index = 0;
   return index;
 }
 
 // Paleta em uso. Indice invalido cai no padrao.
-inline const Palette& active() {
+inline Palette active() {
   const std::size_t i = activeIndex();
+  if (i == kCustomIndex) {
+    const Custom& c = custom();
+    return Palette{"Custom", c.token[0], c.token[1], c.token[2], c.token[3], c.token[4], c.token[5], c.token[6], c.token[7]};
+  }
   return kPresets[i < kCount ? i : 0];
 }
 

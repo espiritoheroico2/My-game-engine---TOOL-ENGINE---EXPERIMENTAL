@@ -85,6 +85,7 @@ struct Context {
     AudioSource* audio = nullptr;
     std::vector<std::string> tagNames;   // todas as tags da cena (indice = id da tag)
     std::vector<bool> tagOn;             // quais o objeto tem
+    std::vector<bool> tagBuiltin;        // tags embutidas: nao podem ser renomeadas
     ScriptComp* script = nullptr;        // script do objeto (nullptr: nao tem)
     std::string scriptPath;              // caminho relativo do script ("" se nao tem arquivo)
     bool playing = false;                // Play ligado: mostra o status do script
@@ -120,6 +121,7 @@ struct Hooks {
     std::function<bool(const std::string&)> addTagNamed;           // cria (se preciso) e atribui; false: limite de tags
     std::function<void(std::size_t)> addTagIndex;                  // atribui uma tag existente
     std::function<void(std::size_t)> removeTagIndex;               // tira uma tag do objeto
+    std::function<bool(std::size_t, const std::string&)> renameTagIndex;   // renomeia a tag na cena; false: nome invalido
     std::function<void()> openScriptHelp;                          // "Help: script examples"
     std::function<void()> addScript;                               // cria o arquivo de script do objeto
     std::function<void(const std::string&)> openScriptExternal;    // abre o arquivo no editor de codigo
@@ -213,6 +215,7 @@ class InspectorPanel {
             closePopups();
             endEdit();
             tagMsg_.clear();
+            renaming_ = -1;
         }
         header();
         if (ctx.transform) transform();
@@ -338,6 +341,8 @@ class InspectorPanel {
         std::function<void(std::size_t)> setIndex;        // Drop
         std::function<void(const std::string&)> setText;  // Text
         std::function<void()> onClick;                    // Header, Swatch, Button
+        std::function<void()> onEnter, onCancel;          // Text: Enter confirma, Esc cancela (renomear tag)
+        bool flat = false;                                // Button: sem fundo (so a area de clique, como um rotulo)
     };
 
     // ------------------------------------------------------------------ chaves e helpers de layout
@@ -1205,13 +1210,22 @@ class InspectorPanel {
         endSection();
     }
 
-    // Tags do objeto: uma linha por tag atribuida (Remove), campo para criar e o botao Add tag, e a lista das
-    // tags existentes que o objeto ainda nao tem. Renomear com duplo clique ainda nao existe (ver docs/planos/05_REMOVER_IMGUI.md).
+    // Tags do objeto: uma linha por tag atribuida (Remove). Duplo clique no nome abre a renomeacao (Enter confirma,
+    // Esc cancela); tags embutidas nao renomeiam. Depois, campo para criar e Add tag, e a lista das tags existentes.
     void tags() {
         if (!beginSection(im::Section::Tags, T("Tags"))) return;
         for (std::size_t i = 0; i < ctx_.tagNames.size() && i < ctx_.tagOn.size(); ++i) {
             if (!ctx_.tagOn[i]) continue;
+            if (renaming_ == static_cast<int>(i)) {
+                tagRenameRow(i);
+                continue;
+            }
+            const bool builtin = i < ctx_.tagBuiltin.size() && ctx_.tagBuiltin[i];
             label(y_, ctx_.tagNames[i].c_str());
+            Control& hit = add(Kind::Button, rect(innerX_, y_, labelW_, Metrics::kRowH), nextKey());
+            hit.flat = true;
+            hit.disabled = disabled_;
+            hit.onClick = [this, i, builtin] { onTagNameClick(i, builtin); };
             button(ctrlX_, T("Remove"), [this, i] { hooks_.removeTagIndex(i); }, Metrics::kButtonW);
             nextRow();
         }
@@ -1237,6 +1251,41 @@ class InspectorPanel {
             nextRow();
         }
         endSection();
+    }
+
+    // Clique no nome da tag: dois cliques seguidos (ate 400 ms) comecam a renomear.
+    void onTagNameClick(std::size_t i, bool builtin) {
+        if (disabled_ || builtin) return;
+        const std::uint32_t now = SDL_GetTicks();
+        const bool twice = lastTagClick_ == static_cast<int>(i) && now - lastTagClickMs_ < 400u;
+        lastTagClick_ = static_cast<int>(i);
+        lastTagClickMs_ = now;
+        if (!twice) return;
+        renaming_ = static_cast<int>(i);
+        std::snprintf(renameBuf_, sizeof renameBuf_, "%s", ctx_.tagNames[i].c_str());
+        renameFocus_ = true;
+        tagMsg_ = T("Enter confirms, Esc cancels.");
+        lastTagClick_ = -1;
+    }
+
+    // Linha da tag em renomeacao: campo com o nome. Enter grava (hook renameTagIndex); Esc desfaz.
+    void tagRenameRow(std::size_t i) {
+        label(y_, ctx_.tagNames[i].c_str());
+        Control& c = add(Kind::Text, rect(ctrlX_, y_, ctrlW_, Metrics::kRowH), nextKey());
+        c.text = renameBuf_;
+        c.setText = [this](const std::string& t) { std::snprintf(renameBuf_, sizeof renameBuf_, "%s", t.c_str()); };
+        c.onEnter = [this, i] {
+            const std::string to = renameBuf_;
+            renaming_ = -1;
+            if (hooks_.renameTagIndex && hooks_.renameTagIndex(i, to)) tagMsg_.clear();
+            else tagMsg_ = std::string(T("Could not rename: the name is empty, too long, already used, or a built-in tag."));
+        };
+        c.onCancel = [this] { renaming_ = -1; tagMsg_.clear(); };
+        if (renameFocus_) {
+            renameFocus_ = false;
+            startEdit(c, SDL_GetKeyboardFocus());
+        }
+        nextRow();
     }
 
     void audio() {
@@ -1299,7 +1348,7 @@ class InspectorPanel {
                 Elm::Button& b = buttons_[c.key];
                 b.border = c.box;
                 b.states.disabled = c.disabled;
-                append(items, paint, Elm::BuildButtonBackground(b, buttonStyle_, Metrics::kZControl, paint));
+                if (!c.flat) append(items, paint, Elm::BuildButtonBackground(b, buttonStyle_, Metrics::kZControl, paint));
                 break;
             }
             case Kind::Cell:   // celula da grade do voxel: a cor ja foi para o canvas; so recebe clique
@@ -1620,6 +1669,8 @@ class InspectorPanel {
         edit_range_ = c.range;
         edit_set_f_ = c.setF;
         edit_set_text_ = c.setText;
+        edit_on_enter_ = c.onEnter;
+        edit_on_cancel_ = c.onCancel;
         if (window) SDL_StartTextInput(window);
     }
 
@@ -1638,6 +1689,8 @@ class InspectorPanel {
         field_key_ = 0;
         edit_set_f_ = nullptr;
         edit_set_text_ = nullptr;
+        edit_on_enter_ = nullptr;
+        edit_on_cancel_ = nullptr;
         if (window) SDL_StopTextInput(window);
     }
 
@@ -1666,8 +1719,16 @@ class InspectorPanel {
         const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
         const bool ctrl = (mod & SDL_KMOD_CTRL) != 0;
         SDL_Window* window = SDL_GetWindowFromID(windowId);
-        if (key == SDLK_ESCAPE || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        if (key == SDLK_ESCAPE) {
+            const std::function<void()> cancel = edit_on_cancel_;
             endEdit(window);
+            if (cancel) cancel();
+            return;
+        }
+        if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+            const std::function<void()> enter = edit_on_enter_;
+            endEdit(window);
+            if (enter) enter();
             return;
         }
         if (ctrl && key == SDLK_A) {
@@ -1740,6 +1801,13 @@ class InspectorPanel {
     im::Range edit_range_{};
     std::function<void(float)> edit_set_f_;
     std::function<void(const std::string&)> edit_set_text_;
+    std::function<void()> edit_on_enter_, edit_on_cancel_;
+    // Renomear tag: a tag em edicao, o texto novo e o pedido para o campo ganhar foco no quadro seguinte.
+    int renaming_ = -1;
+    char renameBuf_[48] = "";
+    bool renameFocus_ = false;
+    int lastTagClick_ = -1;
+    std::uint32_t lastTagClickMs_ = 0;
 
     struct Popup {
         bool open = false;

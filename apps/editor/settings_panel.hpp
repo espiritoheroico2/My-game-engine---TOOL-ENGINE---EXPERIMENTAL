@@ -86,6 +86,9 @@ struct Values {
     float buttonRadius = 3.f; // raio dos botoes (px)
     float windowRadius = 6.f; // raio dos cantos das janelas (px)
     float textScale = 1.f;    // escala do texto da interface (1 = 100%)
+    // Paleta Custom: 5 cores-base e 8 tokens, cada um como R, G, B (0..1). Ordem: base 0..4, depois tokens 5..12.
+    std::array<float, 39> customColor{};
+    std::vector<std::string> themeFiles;   // arquivos de tema (assets/themes), na ordem da lista
     bool shadows = false;
     int shadowQuality = 0;   // indice (0 a 3), ja convertido pelo main.cpp
     bool rayTracing = true;
@@ -332,12 +335,16 @@ class SettingsPanel {
     // Cada bloco devolve o y da linha seguinte. contentH_ guarda a altura total (com as margens) para a rolagem.
     // Secoes recolheis, uma embaixo da outra. Cada cabecalho e clicavel; o corpo so existe se a secao esta aberta.
     void layoutSections(const Values& v) {
+        palette_ = v.palette;
         labelW_ = std::min(Metrics::kLabelW, rect_.w * 0.5f);
         controlW_ = rect_.w - 2.f * Metrics::kPad - labelW_;
         const float contentTop = Metrics::kStripH + Metrics::kPad;
         const float top = contentTop - scroll_.scrollOffset.y;
         const float headerW = rect_.w - 2.f * Metrics::kPad;
         for (auto& row : paletteRows_) row = sui::Box{};   // linhas de tema so existem com a secao aberta
+        for (auto& row : themeRows_) row = sui::Box{};
+        baseBtns_.fill(sui::Box{});
+        tokenPrev_ = tokenNext_ = sui::Box{};
         appearanceOpen_ = false;
         float y = top;
         for (std::size_t i = 0; i < sm::kTabCount; ++i) {
@@ -389,17 +396,30 @@ class SettingsPanel {
         canvas_.addText(Metrics::kPad, y, std::string(T("Theme")), Metrics::kFont, theme_.textDim, textWidth());
         y += Metrics::kTextH + 6.f;
         const auto& presets = editor::palette::kPresets;
-        for (std::size_t k = 0; k < editor::palette::kCount; ++k) {
+        for (std::size_t k = 0; k <= editor::palette::kCustomIndex; ++k) {   // as prontas e, por ultimo, Custom
             paletteRows_[k] = sui::Box{Metrics::kPad, y, textWidth(), Metrics::kRowH};
             const bool selected = static_cast<int>(k) == v.palette;
             canvas_.addSolid(paletteRows_[k].x, y, paletteRows_[k].w, Metrics::kRowH,
                              selected ? theme_.accent : theme_.surface, 0.2f, editor::ui_style::buttonRadius());
-            canvas_.addText(Metrics::kPad + 10.f, y + 5.f, std::string(T(presets[k].name)), Metrics::kFont, theme_.text,
-                            textWidth() - 20.f);
+            const std::string name = k < editor::palette::kCount ? std::string(T(presets[k].name)) : std::string(T("Custom"));
+            canvas_.addText(Metrics::kPad + 10.f, y + 5.f, name, Metrics::kFont, theme_.text, textWidth() - 20.f);
             y += Metrics::kRowH + Metrics::kGap;
         }
         y += Metrics::kGap;
         appearanceOpen_ = true;
+        if (v.palette == static_cast<int>(editor::palette::kCustomIndex)) y = layoutCustom(v, y);
+        if (!v.themeFiles.empty()) {   // arquivos de tema (assets/themes): clique aplica
+            canvas_.addText(Metrics::kPad, y, std::string(T("User themes")), Metrics::kFont, theme_.textDim, textWidth());
+            y += Metrics::kTextH + 6.f;
+            themeRows_.assign(v.themeFiles.size(), sui::Box{});
+            for (std::size_t k = 0; k < v.themeFiles.size(); ++k) {
+                themeRows_[k] = sui::Box{Metrics::kPad, y, textWidth(), Metrics::kRowH};
+                canvas_.addSolid(themeRows_[k].x, y, themeRows_[k].w, Metrics::kRowH, theme_.surface, 0.2f, editor::ui_style::buttonRadius());
+                canvas_.addText(Metrics::kPad + 10.f, y + 5.f, v.themeFiles[k], Metrics::kFont, theme_.text, textWidth() - 20.f);
+                y += Metrics::kRowH + Metrics::kGap;
+            }
+            y += Metrics::kGap;
+        }
         y = styleRow(buttonRadius_, v.buttonRadius, "Button corner radius", y, 0.f, sm::kButtonRadiusMax, 1.f, true,
                      std::to_string(static_cast<int>(v.buttonRadius + 0.5f)) + " px");
         y = styleRow(windowRadius_, v.windowRadius, "Window corner radius", y, 0.f, sm::kWindowRadiusMax, 1.f, true,
@@ -407,6 +427,46 @@ class SettingsPanel {
         y = styleRow(textScale_, v.textScale, "Interface text size", y, sm::kTextScaleMin, sm::kTextScaleMax, 0.05f, false,
                      std::to_string(static_cast<int>(v.textScale * 100.f + 0.5f)) + "%");
         return y;
+    }
+
+    // Editor da paleta Custom: as 5 cores-base (botoes), a lista avancada (token com < e >) e os sliders R, G, B da
+    // cor escolhida. colorSlot_: 0..4 = cor-base; 5..12 = token (5 + indice do token).
+    float layoutCustom(const Values& v, float y) {
+        canvas_.addText(Metrics::kPad, y, std::string(T("Base colors")), Metrics::kFont, theme_.textDim, textWidth());
+        y += Metrics::kTextH + 6.f;
+        const float bw = textWidth() / static_cast<float>(editor::palette::kBaseCount);
+        for (std::size_t b = 0; b < editor::palette::kBaseCount; ++b) {
+            baseBtns_[b] = sui::Box{Metrics::kPad + bw * static_cast<float>(b), y, bw - 4.f, Metrics::kRowH};
+            const bool sel = colorSlot_ == static_cast<int>(b);
+            canvas_.addSolid(baseBtns_[b].x, y, baseBtns_[b].w, Metrics::kRowH, sel ? theme_.accent : theme_.surface, 0.2f,
+                             editor::ui_style::buttonRadius());
+            canvas_.addText(baseBtns_[b].x + 4.f, y + 5.f, std::string(T(editor::palette::kBaseNames[b])), Metrics::kSmallFont,
+                            theme_.text, bw - 12.f);
+        }
+        y += Metrics::kRowH + Metrics::kGap;
+        canvas_.addText(Metrics::kPad, y, std::string(T("Advanced colors")), Metrics::kFont, theme_.textDim, textWidth());
+        y += Metrics::kTextH + 6.f;
+        tokenPrev_ = sui::Box{Metrics::kPad, y, Metrics::kRowH, Metrics::kRowH};
+        tokenNext_ = sui::Box{Metrics::kPad + textWidth() - Metrics::kRowH, y, Metrics::kRowH, Metrics::kRowH};
+        canvas_.addSolid(tokenPrev_.x, y, tokenPrev_.w, tokenPrev_.h, theme_.surface, 0.2f, editor::ui_style::buttonRadius());
+        canvas_.addSolid(tokenNext_.x, y, tokenNext_.w, tokenNext_.h, theme_.surface, 0.2f, editor::ui_style::buttonRadius());
+        canvas_.addText(tokenPrev_.x + 9.f, y + 5.f, std::string("<"), Metrics::kFont, theme_.text, 20.f);
+        canvas_.addText(tokenNext_.x + 9.f, y + 5.f, std::string(">"), Metrics::kFont, theme_.text, 20.f);
+        canvas_.addText(tokenPrev_.x + Metrics::kRowH + 6.f, y + 5.f,
+                        std::string(T(editor::palette::kTokenNames[colorSlot_ >= 5 ? colorSlot_ - 5 : 0])), Metrics::kFont,
+                        theme_.text, textWidth() - 2.f * Metrics::kRowH - 12.f);
+        y += Metrics::kRowH + Metrics::kGap;
+        // Sliders R, G, B da cor escolhida (valor de 0 a 1 com duas casas).
+        const int slot = std::clamp(colorSlot_, 0, 12);
+        const char* names[3] = {"Red", "Green", "Blue"};
+        Elm::Slider* sliders[3] = {&customR_, &customG_, &customB_};
+        for (int ch = 0; ch < 3; ++ch) {
+            const float value = v.customColor[static_cast<std::size_t>(slot * 3 + ch)];
+            char shown[16];
+            std::snprintf(shown, sizeof shown, "%.2f", static_cast<double>(value));
+            y = styleRow(*sliders[ch], value, names[ch], y, 0.f, 1.f, 0.01f, false, shown);
+        }
+        return y + Metrics::kGap;
     }
 
     // Um slider com rotulo e valor na linha: a faixa do controle fica em `s.border` (coordenadas locais).
@@ -426,6 +486,11 @@ class SettingsPanel {
         append(items, paint, Elm::BuildSliderItems(buttonRadius_, sliderStyle_, z, paint), kContentClip);
         append(items, paint, Elm::BuildSliderItems(windowRadius_, sliderStyle_, z, paint), kContentClip);
         append(items, paint, Elm::BuildSliderItems(textScale_, sliderStyle_, z, paint), kContentClip);
+        if (static_cast<int>(editor::palette::kCustomIndex) == palette_) {
+            append(items, paint, Elm::BuildSliderItems(customR_, sliderStyle_, z, paint), kContentClip);
+            append(items, paint, Elm::BuildSliderItems(customG_, sliderStyle_, z, paint), kContentClip);
+            append(items, paint, Elm::BuildSliderItems(customB_, sliderStyle_, z, paint), kContentClip);
+        }
     }
 
     // Arrasto dos sliders de Appearance: cada valor vai pelo mesmo caminho dos outros campos (pedido -> main.cpp).
@@ -1068,6 +1133,7 @@ class SettingsPanel {
         if (phase == Elm::PointerPhase::Up && sectionPointer(p)) return true;
         if (phase == Elm::PointerPhase::Up && paletteRowPointer(p)) return true;
         if (appearanceSliderPointer(phase, p)) return true;
+        if (customSliderPointer(phase, p)) return true;
         if (phase == Elm::PointerPhase::Down && scrollbarPointer(p)) return true;
         if (formPointer(phase, p)) return true;
         if (!open_[kGraphicsTab]) return true;
@@ -1097,11 +1163,40 @@ class SettingsPanel {
     }
 
     bool paletteRowPointer(const SU::Vec2& p) {
-        for (std::size_t k = 0; k < editor::palette::kCount; ++k) {
+        for (std::size_t k = 0; k <= editor::palette::kCustomIndex; ++k) {
             if (paletteRows_[k].contains(p.x, p.y)) {
                 pending_.push_back({sc::Field::Palette, static_cast<int>(k), 0.f, false});
                 return true;
             }
+        }
+        return customPointer(p);
+    }
+
+    // Cliques da paleta Custom (cor-base, token < e >) e das linhas de tema. Mudanca de cor pelos sliders vai no arrasto.
+    bool customPointer(const SU::Vec2& p) {
+        for (std::size_t b = 0; b < editor::palette::kBaseCount; ++b) {
+            if (baseBtns_[b].contains(p.x, p.y)) { colorSlot_ = static_cast<int>(b); return true; }
+        }
+        const int tokens = static_cast<int>(editor::palette::kTokenCount);
+        if (tokenPrev_.contains(p.x, p.y)) { colorSlot_ = 5 + (colorSlot_ >= 5 ? (colorSlot_ - 5 + tokens - 1) % tokens : tokens - 1); return true; }
+        if (tokenNext_.contains(p.x, p.y)) { colorSlot_ = 5 + (colorSlot_ >= 5 ? (colorSlot_ - 5 + 1) % tokens : 0); return true; }
+        for (std::size_t k = 0; k < themeRows_.size(); ++k) {
+            if (themeRows_[k].contains(p.x, p.y)) {
+                pending_.push_back({sc::Field::ThemeFile, static_cast<int>(k), 0.f, false});
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Sliders R, G, B da cor escolhida: cada movimento vai como Field::CustomColor (index = slot * 3 + canal).
+    bool customSliderPointer(Elm::PointerPhase phase, const SU::Vec2& p) {
+        if (palette_ != static_cast<int>(editor::palette::kCustomIndex)) return false;
+        Elm::Slider* sliders[3] = {&customR_, &customG_, &customB_};
+        for (int ch = 0; ch < 3; ++ch) {
+            const Elm::SliderEvents ev = sliders[ch]->OnPointer(event(phase, p, sliders[ch]->border));
+            if (ev.valueChanged) pending_.push_back({sc::Field::CustomColor, std::clamp(colorSlot_, 0, 12) * 3 + ch, sliders[ch]->Value(), false});
+            if (ev.pressStarted || ev.valueChanged || ev.pressEnded) return true;
         }
         return false;
     }
@@ -1251,7 +1346,7 @@ class SettingsPanel {
         return a;
     }();
     std::array<sui::Box, sm::kTabCount> headers_{};                      // cabecalhos (coordenadas locais)
-    std::array<sui::Box, editor::palette::kCount> paletteRows_{};        // linhas de tema (coordenadas locais)
+    std::array<sui::Box, editor::palette::kCount + 1> paletteRows_{};        // linhas de tema (coordenadas locais)
     SU::Vec4 panelColor_ = sui::Srgb(0.055f, 0.075f, 0.11f, 0.97f);
     SU::Vec4 headingColor_ = sui::Srgb(0.45f, 0.72f, 0.96f);
     SU::Vec4 btnColor_ = sui::Srgb(0.13f, 0.16f, 0.21f);
@@ -1284,6 +1379,12 @@ class SettingsPanel {
     Elm::Dropdown resolution_;
     Elm::Slider scale_;
     Elm::Slider buttonRadius_, windowRadius_, textScale_;   // Appearance: raios e escala do texto
+    Elm::Slider customR_, customG_, customB_;               // Appearance > Custom: cor escolhida
+    std::array<sui::Box, editor::palette::kBaseCount> baseBtns_{};   // cores-base (botoes)
+    sui::Box tokenPrev_{}, tokenNext_{};                             // lista avancada (< e >)
+    std::vector<sui::Box> themeRows_;                                // arquivos de tema (clique aplica)
+    int colorSlot_ = 0;                                              // cor editada: 0..4 base, 5..12 token
+    int palette_ = 0;                                                // paleta em uso neste quadro (para desenhar os sliders)
     bool appearanceOpen_ = false;
     Elm::Dropdown upscale_;
     Elm::Dropdown aa_;

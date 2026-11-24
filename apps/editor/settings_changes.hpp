@@ -18,6 +18,8 @@ enum class Field : std::uint8_t {
     Tab, Api, ResMode, CustomW, CustomH, RenderScale, Upscale, Aa, PixelFilter, Fps,
     Shadows, ShadowQuality, RayTracing, RtAo, ChunkCacheMax, InterfaceScale, IdleRendering, Palette,
     ButtonRadius, WindowRadius, TextScale,
+    CustomColor,   // paleta Custom: index = slot * 3 + canal (slots 0..4 cor-base, 5..12 token); value = 0..1
+    ThemeFile,     // arquivo de tema da lista (index = posicao)
     Form   // linha generica (settings_form.hpp): id, value, on, index e text
 };
 
@@ -60,6 +62,8 @@ void ApplyChanges(Target& target, const Requests& requests) {
             case Field::ButtonRadius: target.setButtonRadius(c.value); break;
             case Field::WindowRadius: target.setWindowRadius(c.value); break;
             case Field::TextScale: target.setTextScale(c.value); break;
+            case Field::CustomColor: target.setCustomColor(c.index, c.value); break;
+            case Field::ThemeFile: target.setThemeFile(c.index); break;
             case Field::Form: target.setForm(c.id, c.value, c.on, c.index, c.text); break;
         }
     }

@@ -18,9 +18,7 @@
 #include "script_complete.hpp"
 #include "narrative_model.hpp"
 #include "export.hpp"
-#ifdef TOOL_WITH_SPRITEUI
 #include "spriteui_diagnostics.hpp"
-#endif
 #include <algorithm>
 
 namespace editor {
@@ -223,7 +221,6 @@ inline int runSelfTest(const std::string& samplesDir) {
     const MeshRenderer* fz = ed.scene.world().get<MeshRenderer>(fo);
     check(fz && !fz->fogOn && fz->fogAmount == 1.f, "old scene without fog stays without fog; amount is clamped to 0..1");
   }
-#ifdef TOOL_WITH_SPRITEUI
   { // SpriteUI diagnostics: logica do painel sem janela (layout, clique, fechar, Escape, janela minimizada)
     editor::SpriteUiDiagnostics d;
     bool vis = true;
@@ -268,7 +265,6 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(d.update(100, 60, {0.f, 0.f, false}, vis, 60.f, 1.f, 0.5f) && d.hasPacket(), "spriteui: janela pequena ainda gera pacote");
     check(d.update(0, 0, {0.f, 0.f, false}, vis, 60.f, 1.f, 0.5f) && vis && !d.hasPacket(), "spriteui: janela minimizada (0x0) nao fecha o painel");
   }
-#endif
   { // luz pontual com sombra: o flag tem que sobreviver ao salvar/carregar (antes o editor o zerava)
     tool::Entity le = ed.make("ShadowLightTest", true);
     tool::Light lt; lt.type = tool::LightType::Point; lt.castShadow = true; ed.scene.world().add<LightComp>(le, LightComp{lt});

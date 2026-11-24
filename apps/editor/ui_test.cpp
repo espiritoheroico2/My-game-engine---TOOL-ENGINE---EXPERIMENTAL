@@ -2,6 +2,7 @@
 // Teste dos sistemas de UI do editor: pacotes de idioma e temas (sem abrir janela).
 #include "i18n.hpp"
 #include "theme.hpp"
+#include "ui_style.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -52,6 +53,14 @@ int main() {
   CHECK(std::abs(t2.base.accent.x - 0.9f) < 1e-3f);   // cor de destaque sobreviveu ao ciclo
   CHECK(std::abs(t2.scale - 1.5f) < 1e-3f);           // escala sobreviveu ao ciclo
   CHECK(!t2.load(std::string(TOOL_SOURCE_DIR) + "/out/nao_existe.json"));
+  { // escala da interface: multiplica o texto; no padrao (125%) nao muda nada
+    namespace us = editor::ui_style;
+    us::textSetting() = 1.f; us::interfaceFactor() = 1.f; us::refreshScale();
+    CHECK(std::abs(us::textScale() - 1.f) < 1e-6f);
+    us::interfaceFactor() = 1.5f / editor::Theme::kDefaultScale; us::textSetting() = 1.2f; us::refreshScale();
+    CHECK(std::abs(us::textScale() - 1.44f) < 1e-4f);
+    us::textSetting() = 1.f; us::interfaceFactor() = 1.f; us::refreshScale();
+  }
   std::printf(fails ? "ui_test: %d falha(s)\n" : "ui_test: OK\n", fails);
   return fails ? 1 : 0;
 }

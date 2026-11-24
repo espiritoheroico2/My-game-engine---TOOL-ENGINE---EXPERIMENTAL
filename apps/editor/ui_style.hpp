@@ -14,10 +14,22 @@ namespace editor::ui_style {
   static float value = 6.f;
   return value;
 }
+// Escala que a SpriteUI le a cada quadro: texto do usuario x escala da interface (UI scale). Atualizada por refreshScale().
 [[nodiscard]] inline float& textScale() {
   static float value = 1.f;
   return value;
 }
+// Tamanho de texto escolhido em Appearance > Interface text size (sem a escala da interface).
+[[nodiscard]] inline float& textSetting() {
+  static float value = 1.f;
+  return value;
+}
+// Fator da escala da interface (UI scale / padrao 125%): 1 no padrao, maior aumenta os elementos.
+[[nodiscard]] inline float& interfaceFactor() {
+  static float value = 1.f;
+  return value;
+}
+inline void refreshScale() { textScale() = textSetting() * interfaceFactor(); }
 
 // Tamanho de fonte da interface: o tamanho base vezes a escala do texto.
 [[nodiscard]] inline float uiFont(float base) { return base * textScale(); }

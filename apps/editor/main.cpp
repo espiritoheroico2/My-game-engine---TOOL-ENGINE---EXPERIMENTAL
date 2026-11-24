@@ -20,7 +20,6 @@
 #include "script_window.hpp"
 editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (SpriteUI); dono: main
 #include "mainmenu_model.hpp"
-#ifdef TOOL_WITH_SPRITEUI
 #include "mainmenu_panel.hpp"
 #include "spriteui_diagnostics.hpp"
 #include "start_screen_spriteui.hpp"
@@ -41,15 +40,12 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "settings_panel.hpp"
 #include "sui_palette.hpp"
 #include "panel_router.hpp"
-#ifdef TOOL_WITH_SPRITEUI
 #include "scene_view_panel.hpp"
 #include "game_view_panel.hpp"
 #include "dock_host.hpp"
 #include "view_overlays.hpp"
-#endif
 #include "settings_model.hpp"
 #include "ui_style.hpp"
-#endif
 
 
 #include <SDL3/SDL.h>
@@ -110,7 +106,6 @@ using editor::issueSummary;
 
 
 
-#ifdef TOOL_WITH_SPRITEUI
 // Janela Hierarchy em SpriteUI (hierarchy_panel.hpp). O ImGui so cria a moldura da janela (titulo, X e posicao);
 // a lista, a selecao e o arraste sao do painel. Os pedidos do painel sao aplicados aqui, na cena.
 bool gHierarchySpriteOn = false;   // o painel SpriteUI existe
@@ -214,7 +209,6 @@ void applyHierarchyRequests(Editor& ed, const editor::hierarchy_panel::Requests&
   }
 }
 
-#endif
 
 // --- Inspetor --------------------------------------------------------------------------------------------------
 // Componentes do objeto (nome, Transform, Mesh Renderer, Light, Global Light, Camera, Audio Source) em SpriteUI
@@ -536,7 +530,6 @@ void applyAssetsActions(Editor& ed, editor::assetsui::Panel& panel, const std::v
 
 editor::scenesui::Panel* gScenesPanel = nullptr;   // o painel existe (dono: main); usado pelo atalho "Nova cena"
 
-#ifdef TOOL_WITH_SPRITEUI
 editor::inspector_panel::InspectorPanel* gInspectorPanel = nullptr;   // o painel existe (dono: main)
 bool gInspectorSpriteOn = false;     // o painel SpriteUI existe
 bool gInspectorFrame = false;        // a janela ImGui do Inspector esta aberta neste quadro
@@ -628,6 +621,7 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   for (tool::TagId i = 0; i < ed.scene.tags().size(); ++i) {
     c.tagNames.emplace_back(ed.scene.tags().name(i));
     c.tagOn.push_back(mask.test(i));
+    c.tagBuiltin.push_back(ed_::isBuiltinTag(std::string(ed.scene.tags().name(i))));
   }
   return c;
 }
@@ -663,6 +657,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   };
   h.addTagIndex = [&ed](std::size_t i) { ed.scene.world().addTag(ed.selected, static_cast<tool::TagId>(i)); };
   h.removeTagIndex = [&ed](std::size_t i) { ed.scene.world().removeTag(ed.selected, static_cast<tool::TagId>(i)); };
+  h.renameTagIndex = [&ed](std::size_t i, const std::string& to) { return ed.renameTag(static_cast<tool::TagId>(i), to); };
   h.openScriptHelp = [] { editor::openHelp("script_examples"); };   // mesmas acoes do scriptUi (ImGui)
   h.addScript = [&ed] { ed.attachScript(ed.selected); };
   h.openScriptExternal = [&ed](const std::string& rel) { editor::openInExternalEditor(ed, rel); };
@@ -847,7 +842,6 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
 // Bloco SpriteUI: prepara os controles, reserva a altura no ImGui e guarda a parte visivel dentro da janela.
 bool gDockSaveRequested = false;   // Janela > Salvar layout: o host salva no proximo quadro
 constexpr const char* kDockLayoutFile = "editor_dock_layout.txt";
-#ifdef TOOL_WITH_SPRITEUI
 editor::sui::Box gInspectorBody{}, gSettingsBody{}, gCodingBody{};   // corpo (abaixo do cabecalho) da moldura SpriteUI neste quadro
 // Corpo de uma janela de moldura SpriteUI neste quadro. Escondida (ou sem painel): a moldura some e o corpo e vazio.
 editor::sui::Box framedBody(editor::framed::Chrome* chrome, bool shown, int winW, int winH, float w, float h) {
@@ -858,17 +852,13 @@ editor::sui::Box framedBody(editor::framed::Chrome* chrome, bool shown, int winW
   }
   return chrome->prepare(static_cast<float>(winW), static_cast<float>(winH), w, h);
 }
-#endif
 
 
-#endif
 
 // LEGADO (nao chamado desde a migracao do Console para a moldura SpriteUI). Remover na etapa 7 do
 // docs/planos/05_REMOVER_IMGUI.md, so depois da aprovacao visual do usuario.
-#ifdef TOOL_WITH_SPRITEUI
 bool gConsoleFrame = false;
 editor::sui::Box gConsoleRect;
-#endif
 
 
 // Clicar numa linha "[Nome] ..." seleciona o objeto Nome na cena (nome vazio: nada).
@@ -879,7 +869,6 @@ void selectObjectNamed(Editor& ed, const std::string& name) {
 }
 
 
-#ifdef TOOL_WITH_SPRITEUI
 editor::statusbar::Info statusBarInfo(Editor& ed) {
   editor::statusbar::Info info;
   info.api = ed.apiStatus;
@@ -892,9 +881,7 @@ editor::statusbar::Info statusBarInfo(Editor& ed) {
   info.language = editor::I18n::get().code();
   return info;
 }
-#endif
 
-#ifdef TOOL_WITH_SPRITEUI
 // Pedidos do painel SpriteUI do Console (o painel nao conhece o Editor). Aplicados depois do desenho.
 void applyConsoleRequests(Editor& ed, const editor::console_panel::Requests& req) {
   if (req.clear) {
@@ -905,7 +892,6 @@ void applyConsoleRequests(Editor& ed, const editor::console_panel::Requests& req
   if (!req.command.empty()) editor::runConsoleCommand(ed, req.command);
   selectObjectNamed(ed, req.select);
 }
-#endif
 
 // Dados que o Profiler nao conhece (API, luz, GPU, cena): entram no modelo do painel SpriteUI a cada refresh.
 editor::profiler_model::Extras fillProfilerExtras(Editor& ed) {
@@ -944,7 +930,6 @@ editor::profiler_model::Extras fillProfilerExtras(Editor& ed) {
 // --- Janelas de visualizacao (Scene e Game) -------------------------------------------------------------------
 
 
-#ifdef TOOL_WITH_SPRITEUI
 // Janelas Scene e Jogo em SpriteUI (scene_view_panel.hpp, game_view_panel.hpp). O ImGui cria a janela (titulo, foco,
 // docking, o "?") e mede a area; o painel desenha imagem, barra e sobreposicoes depois do ImGui. Sem a fonte, a
 // janela nao aparece (como as outras janelas SpriteUI).
@@ -962,7 +947,6 @@ editor::scene_view_panel::ScenePanel* gScenePanel = nullptr;   // dono: main (un
 editor::game_view_panel::GamePanel* gGamePanel = nullptr;
 bool gSceneFrame = false;   // a janela Scene foi desenhada neste quadro
 bool gGameFrame = false;
-#ifdef TOOL_WITH_SPRITEUI
 editor::dock_host::Host* gDock = nullptr;   // dono: main (unique_ptr); docking das janelas SpriteUI
 // Janela visivel: o host decide (aberta e aba ativa, ou flutuante). Sem host, vale a flag do Editor.
 bool dockShown(editor::dock_host::Kind k, bool open) { return gDock ? gDock->visible(editor::dock_host::idOf(k), open) : open; }
@@ -985,7 +969,6 @@ void addDockWindow(editor::dock_host::Host& host, editor::dock_host::Kind k, std
   w.floatAt = [get](ToolEngine::SpriteUi::Vec2 at) { if (auto* p = get()) p->floatAt(at); };
   host.add(std::move(w));
 }
-#endif
 editor::sui::Box gSceneRect;   // area da janela (pixels da janela)
 editor::sui::Box gGameRect;
 scene_panel::Values gSceneValues;   // montado no quadro, desenhado depois do ImGui
@@ -1345,13 +1328,6 @@ bool forwardViewEvent(const SDL_Event& e, bool sceneShown, bool gameShown) {
   const bool gameFrame = gameShown && gGamePanel && gGamePanel->handleEvent(e);
   return sceneFrame || gameFrame;
 }
-#else
-void beginViewsFrame() {}
-void drawSceneWindow(Editor&, SDL_Renderer*) {}
-void drawGameWindow(Editor&, SDL_Renderer*, bool) {}
-void drawViewPanels(Editor&, SDL_Renderer*) {}
-void forwardViewEvent(const SDL_Event&) {}
-#endif  // TOOL_WITH_SPRITEUI
 
 
 
@@ -1360,7 +1336,6 @@ void forwardViewEvent(const SDL_Event&) {}
 
 
 
-#ifdef TOOL_WITH_SPRITEUI
 // Janela Configuracoes em SpriteUI (settings_panel.hpp): a faixa de abas e a aba Graficos. As outras abas seguem
 // no ImGui, abaixo da faixa. Os pedidos do painel sao gravados no Editor aqui (mesmas regras da aba no ImGui).
 bool gSettingsSpriteOn = false;   // o painel SpriteUI existe
@@ -1845,7 +1820,8 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
             break;
         case kOptUiScale:
             ed.theme.scale = ::editor::settings_model::ClampInterfaceScale(value);
-            
+            editor::ui_style::interfaceFactor() = ed.theme.scale / editor::Theme::kDefaultScale;
+            editor::ui_style::refreshScale();
             ed.settingsDirty = true;
             break;
         case kOptIdle: ed.idleRendering = on; ed.settingsDirty = true; break;
@@ -2026,9 +2002,17 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   auto& L = ed.sceneInfo.render.lighting;
   v.tab = ed.settingsTab < 0 ? 1 : std::clamp(ed.settingsTab, 0, editor::settings_model::kTabCount - 1);
   v.palette = static_cast<int>(editor::palette::activeIndex());
+  {   // paleta Custom: cores-base (0..4) e tokens (5..12), cada um R, G, B
+    const auto& c = editor::palette::custom();
+    for (std::size_t k = 0; k < 13; ++k) {
+      const editor::palette::Rgb& col = k < 5 ? c.base[k] : c.token[k - 5];
+      v.customColor[k * 3] = col.r; v.customColor[k * 3 + 1] = col.g; v.customColor[k * 3 + 2] = col.b;
+    }
+  }
+  for (const auto& f : ed.theme.files) v.themeFiles.push_back(f.name);
   v.buttonRadius = editor::ui_style::buttonRadius();
   v.windowRadius = editor::ui_style::windowRadius();
-  v.textScale = editor::ui_style::textScale();
+  v.textScale = editor::ui_style::textSetting();
   v.api = ed.apiRequested;
   v.apiBuilt = settingsApiBuilt();
   v.apiStatus = F("Active API: %s", ed.apiStatus.c_str());
@@ -2073,11 +2057,52 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
 
 // Alvo dos pedidos da janela Configuracoes (settings_changes.hpp): cada metodo grava um campo no Editor com a mesma
 // regra que a aba tinha no ImGui (marca o modo de janela como sujo, troca de API pelo applyApi etc.).
+// Cor-base da paleta Custom para o tema do editor (editor_theme.json), que guarda as 5 cores-base.
+void syncThemeBaseFrom(Editor& ed) {
+  const auto& c = editor::palette::custom();
+  ed.theme.base.bg = {c.base[0].r, c.base[0].g, c.base[0].b, 1.f};
+  ed.theme.base.surface = {c.base[1].r, c.base[1].g, c.base[1].b, 1.f};
+  ed.theme.base.text = {c.base[2].r, c.base[2].g, c.base[2].b, 1.f};
+  ed.theme.base.accent = {c.base[3].r, c.base[3].g, c.base[3].b, 1.f};
+  ed.theme.base.border = {c.base[4].r, c.base[4].g, c.base[4].b, 1.f};
+}
+
 struct SettingsEditorTarget {
   Editor& ed;
   int apiRequested() const { return ed.apiRequested; }
   void setTab(int i) { ed.settingsTab = i; }
-  void setPalette(int i) { editor::palette::activeIndex() = static_cast<std::size_t>(i < 0 ? 0 : i); }
+  void setPalette(int i) {
+    editor::palette::activeIndex() = static_cast<std::size_t>(std::clamp(i, 0, static_cast<int>(editor::palette::kCustomIndex)));
+    ed.settingsDirty = true;
+  }
+  // Grava uma cor da paleta Custom. Trocar uma cor-base recalcula os tokens (como o ImGui); trocar um token so muda ele.
+  void setCustomColor(int index, float value) {
+    auto& c = editor::palette::custom();
+    const int slot = std::clamp(index / 3, 0, 12);
+    const int ch = index % 3;
+    editor::palette::Rgb& col = slot < 5 ? c.base[slot] : c.token[slot - 5];
+    (ch == 0 ? col.r : ch == 1 ? col.g : col.b) = std::clamp(value, 0.f, 1.f);
+    if (slot < 5) editor::palette::deriveTokens(c);
+    syncThemeBase();
+    ed.settingsDirty = true;
+    ed.themeDirty = true;
+  }
+  void syncThemeBase() { syncThemeBaseFrom(ed); }
+  // Aplica um arquivo de tema da lista: as cores-base vem do arquivo, a paleta vira Custom.
+  void setThemeFile(int i) {
+    if (i < 0 || i >= static_cast<int>(ed.theme.files.size())) return;
+    if (!ed.theme.load(ed.theme.files[static_cast<std::size_t>(i)].path)) return;
+    auto& c = editor::palette::custom();
+    c.base[0] = {ed.theme.base.bg.x, ed.theme.base.bg.y, ed.theme.base.bg.z};
+    c.base[1] = {ed.theme.base.surface.x, ed.theme.base.surface.y, ed.theme.base.surface.z};
+    c.base[2] = {ed.theme.base.text.x, ed.theme.base.text.y, ed.theme.base.text.z};
+    c.base[3] = {ed.theme.base.accent.x, ed.theme.base.accent.y, ed.theme.base.accent.z};
+    c.base[4] = {ed.theme.base.border.x, ed.theme.base.border.y, ed.theme.base.border.z};
+    editor::palette::deriveTokens(c);
+    editor::palette::activeIndex() = editor::palette::kCustomIndex;
+    ed.settingsDirty = true;
+    ed.themeDirty = true;
+  }
   void applyApi(int api) { ed.requestApi(api); ed.settingsDirty = true; }   // pedido: a troca acontece no inicio do proximo quadro
   void setResMode(int i) { ed.resMode = i; ed.settingsDirty = true; }
   void setCustomW(int w) { ed.customW = w; ed.settingsDirty = true; }
@@ -2111,12 +2136,14 @@ struct SettingsEditorTarget {
   // Linhas genericas (settings_form.hpp): Game, Physics, Optimizing, Language, Lighting, Tags e Project.
   void setForm(int id, float value, bool on, int index, const std::string& text) { applyFormRequest(ed, id, value, on, index, text); }
   void setTextScale(float value) {
-    editor::ui_style::textScale() = ::editor::settings_model::ClampTextScale(value);
+    editor::ui_style::textSetting() = ::editor::settings_model::ClampTextScale(value);
+    editor::ui_style::refreshScale();
     ed.settingsDirty = true;
   }
   void setInterfaceScale(float value) {
     ed.theme.scale = ::editor::settings_model::ClampInterfaceScale(value);
-    
+    editor::ui_style::interfaceFactor() = ed.theme.scale / editor::Theme::kDefaultScale;
+    editor::ui_style::refreshScale();
     ed.settingsDirty = true;
   }
   void setIdleRendering(bool on) {
@@ -2125,7 +2152,6 @@ struct SettingsEditorTarget {
   }
 };
 
-#endif
 
 
 
@@ -2237,7 +2263,10 @@ void saveSettings(Editor& ed) {
   j.set("idleRendering", ed.idleRendering);
   j.set("simplifyFar", ed.simplifyFar); j.set("simplifyDistance", static_cast<double>(ed.simplifyDistance)); j.set("simplifyAmount", static_cast<double>(ed.simplifyAmount));
   j.set("interfaceScale", static_cast<double>(ed.theme.scale));
-  j.set("buttonRadius", static_cast<double>(editor::ui_style::buttonRadius())); j.set("windowRadius", static_cast<double>(editor::ui_style::windowRadius())); j.set("textScale", static_cast<double>(editor::ui_style::textScale()));
+  j.set("buttonRadius", static_cast<double>(editor::ui_style::buttonRadius())); j.set("windowRadius", static_cast<double>(editor::ui_style::windowRadius())); j.set("textScale", static_cast<double>(editor::ui_style::textSetting())); j.set("palette", static_cast<double>(editor::palette::activeIndex()));
+  { tool::Json pc = tool::Json::array(); const auto& c = editor::palette::custom();   // paleta Custom: 5 cores-base e 8 tokens
+    for (std::size_t k = 0; k < 13; ++k) { const editor::palette::Rgb& col = k < 5 ? c.base[k] : c.token[k - 5]; pc.push(col.r); pc.push(col.g); pc.push(col.b); }
+    j.set("paletteCustom", pc); }
   j.set("lockInterface", ed.lockInterface); j.set("dockWithShift", ed.dockWithShift);
   j.set("dockLockV2", true); j.set("dockLockV3", true);
   j.set("renderScaleSet", ed.renderScaleSet); if (ed.renderScaleSet) j.set("renderScale", static_cast<double>(ed.renderScale));
@@ -2268,7 +2297,17 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
       ed.simplifyAmount = ::editor::settings_model::ClampSimplifyAmount(editor::ser::num(*j, "simplifyAmount", 0.5f));
       editor::ui_style::buttonRadius() = ::editor::settings_model::ClampButtonRadius(editor::ser::num(*j, "buttonRadius", 3.f));
       editor::ui_style::windowRadius() = ::editor::settings_model::ClampWindowRadius(editor::ser::num(*j, "windowRadius", 6.f));
-      editor::ui_style::textScale() = ::editor::settings_model::ClampTextScale(editor::ser::num(*j, "textScale", 1.f));
+      editor::ui_style::textSetting() = ::editor::settings_model::ClampTextScale(editor::ser::num(*j, "textScale", 1.f));
+      editor::palette::activeIndex() = static_cast<std::size_t>(std::clamp(static_cast<int>(editor::ser::num(*j, "palette", 0.f)), 0, static_cast<int>(editor::palette::kCustomIndex)));
+      if ((*j)["paletteCustom"].isArray() && (*j)["paletteCustom"].items().size() >= 39) {   // paleta Custom salva
+        auto& c = editor::palette::custom();
+        const auto& it = (*j)["paletteCustom"].items();
+        for (std::size_t k = 0; k < 13; ++k) {
+          editor::palette::Rgb& col = k < 5 ? c.base[k] : c.token[k - 5];
+          col.r = static_cast<float>(it[k * 3].asNumber(col.r)); col.g = static_cast<float>(it[k * 3 + 1].asNumber(col.g)); col.b = static_cast<float>(it[k * 3 + 2].asNumber(col.b));
+        }
+        syncThemeBaseFrom(ed);
+      }
       if ((*j)["interfaceScale"].isNumber()) {
         interfaceScaleSet = true;
         interfaceScale = static_cast<float>((*j)["interfaceScale"].asNumber(ed.theme.scale));
@@ -2283,10 +2322,9 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
     }
   }
   ed.theme.load("editor_theme.json");
-  if (interfaceScaleSet) {
-    ed.theme.scale = ::editor::settings_model::ClampInterfaceScale(interfaceScale);
-    
-  }
+  if (interfaceScaleSet) ed.theme.scale = ::editor::settings_model::ClampInterfaceScale(interfaceScale);
+  editor::ui_style::interfaceFactor() = ed.theme.scale / editor::Theme::kDefaultScale;
+  editor::ui_style::refreshScale();
   return api;
 }
 
@@ -2452,15 +2490,14 @@ static int runEditorMain(int argc, char** argv) {
   } else if (!headless) {
     // Tela de inicio (SpriteUI): criar ou abrir o projeto antes do editor.
     editor::sui::TextAtlasSet startText;   // um atlas por tamanho de texto (como o resto da UI)
-    const bool fontOk = startText.load("assets/fonts/Xmind-Regular.ttf", SDL_GetWindowDisplayScale(window));
+    startText.load("assets/fonts/Xmind-Regular.ttf", SDL_GetWindowDisplayScale(window));   // sem a pasta, usa a fonte embutida
     bool closed = false;
     bool startDone = false;
     editor::start::Model model(lastProject, editor::defaultProjectsFolder(lastProject));
-    if (fontOk) startDone = editor::start::RunStartScreen(window, renderer, model, startText, editor::defaultProjectsFolder(lastProject), closed);
-    else std::fprintf(stderr, "Fonte da tela de inicio nao encontrada (assets/fonts/Xmind-Regular.ttf).\n");
-    if (!startDone) { // fechou na tela de inicio (ou sem fonte): nada foi criado
+    startDone = editor::start::RunStartScreen(window, renderer, model, startText, editor::defaultProjectsFolder(lastProject), closed);
+    if (!startDone) { // fechou na tela de inicio: nada foi criado
       SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
-      return fontOk ? 0 : 1;
+      return 0;
     }
     ed.project.root = model.result();
     saveSettings(ed); // lembra o projeto para o proximo "Abrir ultimo projeto"
@@ -2505,7 +2542,6 @@ static int runEditorMain(int argc, char** argv) {
     if (benchCsv) { std::fprintf(benchCsv, "frame,total_ms"); for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::fprintf(benchCsv, ",z%d", z); std::fprintf(benchCsv, "\n"); }
   }
   bool benchArmed = false;
-#ifdef TOOL_WITH_SPRITEUI
   editor::SpriteUiDiagnostics spriteUiDiagnostics;
   // Fonte e renderizador unicos das janelas SpriteUI. Sem a fonte, as janelas ficam na versao ImGui.
   editor::sui::TextAtlasSet uiText;   // atlas de glifos por tamanho (texto nitido em qualquer tamanho)
@@ -2584,7 +2620,6 @@ static int runEditorMain(int argc, char** argv) {
   bool editorInfoWasOpen = false;
   std::unique_ptr<editor::assetsui::Panel> assetsPanel;   // Assets em SpriteUI (sem a fonte, a versao ImGui)
   if (uiReady) assetsPanel = std::make_unique<editor::assetsui::Panel>(uiText, uiRenderer);
-#ifdef TOOL_WITH_SPRITEUI
   std::unique_ptr<editor::scene_view_panel::ScenePanel> scenePanel;
   std::unique_ptr<editor::game_view_panel::GamePanel> gamePanel;
   if (uiReady) scenePanel = std::make_unique<editor::scene_view_panel::ScenePanel>(uiText, uiRenderer);
@@ -2609,12 +2644,7 @@ static int runEditorMain(int argc, char** argv) {
     addDockWindow(*dockOwner, Kind::Narrative, [] { return std::string(T("Narrative Controller")); }, [&ed]() -> bool& { return ed.showNarrative; }, [&] { return narrativePanel ? &narrativePanel->chrome() : nullptr; });
     dockOwner->load(kDockLayoutFile);   // organizacao salva na sessao anterior (se houver e for valida)
   }
-#endif
   gInspectorSpriteOn = inspPanel != nullptr;
-#else
-  const bool statusSpriteOn = false;
-  const bool menuSpriteOn = false;
-#endif
   while (!quit) {
     const Uint64 frameStart = SDL_GetTicksNS();
     ed.applyPendingApi();   // troca de API pedida no quadro anterior (com o aviso ja desenhado)
@@ -2623,7 +2653,6 @@ static int runEditorMain(int argc, char** argv) {
     ed.prof.beginFrame();
     // Areas dos paineis SpriteUI para o roteador: vem do quadro anterior (o layout so muda ao redimensionar).
     gPanelRouter.beginFrame();
-#ifdef TOOL_WITH_SPRITEUI
     namespace pr = editor::panel_router;
     if (menuPanel) {
       int screenW = 0, screenH = 0;
@@ -2657,7 +2686,6 @@ static int runEditorMain(int argc, char** argv) {
       const auto nr = narrativePanel->chrome().frameRect();
       gPanelRouter.add(pr::kNarrativeHandle, {nr.position.x, nr.position.y, nr.size.x, nr.size.y}, ToolEngine::SpriteUi::UILayer::Docked);
     }
-#endif
     SDL_Event e;
     // Ocioso: espera ate 16 ms pelo proximo evento (em vez de girar o quadro sem parar). O evento volta para a fila.
     // A espera vem ANTES da zona de medicao: nao e trabalho e nao deve aparecer como "Events + input".
@@ -2669,9 +2697,7 @@ static int runEditorMain(int argc, char** argv) {
     }
     editor::ZoneTimer zone(ed.prof, editor::Zone::Events);
     int nEvents = 0;
-#ifdef TOOL_WITH_SPRITEUI
     spriteUiDiagnostics.beginFrame();
-#endif
     while (SDL_PollEvent(&e)) {
       editor::frameInput().onEvent(e);   // entrada do quadro (SDL), para a Scene e o Game
       // Movimento do mouse sem botao (so passar por cima) nao conta como atividade: senao a cena nunca fica ociosa
@@ -2767,7 +2793,6 @@ static int runEditorMain(int argc, char** argv) {
       const float barH = editor::ui_style::barHeight();   // barras de menu e de status (SpriteUI)
       const float menuH = menuSpriteOn ? barH : 0.f;
       const float statusH = statusSpriteOn ? barH : 0.f;
-#ifdef TOOL_WITH_SPRITEUI
       if (gDock) {   // area do dock: entre a barra de menu e a de status
         int dockW = 0, dockH = 0;
         SDL_GetWindowSize(window, &dockW, &dockH);
@@ -2788,15 +2813,9 @@ static int runEditorMain(int argc, char** argv) {
         gSettingsRect = gSettingsBody;
         gSettingsFrame = gSettingsBody.h > 0.f;
       }
-#endif
       ed.resetLayout = false;
-#ifdef TOOL_WITH_SPRITEUI
       if (dockShown(editor::dock_host::Kind::Scene, ed.showScene)) drawSceneWindow(ed, renderer);
       if (dockShown(editor::dock_host::Kind::Game, ed.showGame)) drawGameWindow(ed, renderer, false);
-#else
-      if (ed.showScene) drawSceneWindow(ed, renderer);
-      if (ed.showGame) drawGameWindow(ed, renderer, false);
-#endif
     }
     { // "Panels" = tempo dos paineis SEM as renderizacoes 3D (essas ja foram contadas nas suas proprias zonas)
       const float total = std::chrono::duration<float, std::milli>(editor::FrameProfiler::Clock::now() - panelsStart).count();
@@ -2809,7 +2828,6 @@ static int runEditorMain(int argc, char** argv) {
     { const auto bg = editor::palette::active().panel; SDL_SetRenderDrawColor(renderer, static_cast<Uint8>(bg.r * 255), static_cast<Uint8>(bg.g * 255), static_cast<Uint8>(bg.b * 255), 255); }
     SDL_RenderClear(renderer);
     drawViewPanels(ed, renderer);   // Scene e Jogo em SpriteUI
-#ifdef TOOL_WITH_SPRITEUI
     const double nowSec = static_cast<double>(SDL_GetTicksNS()) * 1e-9;
     if (profPanel) {   // Profiler: moldura SpriteUI com o botao Exportar (sem janela ImGui)
       if (profPanel->consumeExportRequest()) profPanel->beginExport(nowSec);
@@ -2824,29 +2842,6 @@ static int runEditorMain(int argc, char** argv) {
       }
       if (profPanel->consumeClose()) ed.showProfiler = false;   // X da moldura
       if (profPanel->consumeHelp()) editor::openHelp("profiler");   // ? da moldura
-    }
-    if (helpPanel) {   // por cima do Profiler; o "?" e F1 abrem o topico em helpState().pending
-      editor::HelpState& help = editor::helpState();
-      if (!help.pending.empty()) {
-        helpPanel->openTopic(help.pending);
-        help.pending.clear();
-      }
-      if (!helpPanel->draw(renderer, window, help.open, editor::helpLanguage())) {
-        tool::logError(std::string("Help SpriteUI render failed: ") + SDL_GetError());
-        helpPanel.reset();
-      }
-    }
-    if (testMapPanel) {
-      editor::TestMapState& testMap = editor::testMapState();
-      if (!testMapPanel->draw(renderer, window, testMap.open, testMap.side, editor::I18n::get().code())) {
-        tool::logError(std::string("Test map SpriteUI render failed: ") + SDL_GetError());
-        testMapPanel.reset();
-      }
-      if (testMapGenerate) {
-        testMapGenerate = false;
-        const int made = ed.generateChunkMap(testMap.side);
-        tool::logInfo("Test map: " + std::to_string(made) + " chunks");
-      }
     }
     if (hierPanel) {   // Hierarchy: janela SpriteUI com moldura propria (sem janela ImGui)
       const bool shown = dockShown(editor::dock_host::Kind::Hierarchy, ed.showHierarchy);
@@ -2912,6 +2907,29 @@ static int runEditorMain(int argc, char** argv) {
       if (!narrativePanel->draw(renderer, static_cast<float>(nw), static_cast<float>(nh), dockShown(editor::dock_host::Kind::Narrative, ed.showNarrative))) tool::logError(std::string("Narrative render failed: ") + SDL_GetError());
       if (narrativePanel->chrome().consumeClose()) ed.showNarrative = false;
       if (narrativePanel->chrome().consumeHelp()) editor::openHelp("narrative");
+    }
+    if (helpPanel) {   // por cima das outras janelas; o "?" e F1 abrem o topico em helpState().pending
+      editor::HelpState& help = editor::helpState();
+      if (!help.pending.empty()) {
+        helpPanel->openTopic(help.pending);
+        help.pending.clear();
+      }
+      if (!helpPanel->draw(renderer, window, help.open, editor::helpLanguage())) {
+        tool::logError(std::string("Help SpriteUI render failed: ") + SDL_GetError());
+        helpPanel.reset();
+      }
+    }
+    if (testMapPanel) {
+      editor::TestMapState& testMap = editor::testMapState();
+      if (!testMapPanel->draw(renderer, window, testMap.open, testMap.side, editor::I18n::get().code())) {
+        tool::logError(std::string("Test map SpriteUI render failed: ") + SDL_GetError());
+        testMapPanel.reset();
+      }
+      if (testMapGenerate) {
+        testMapGenerate = false;
+        const int made = ed.generateChunkMap(testMap.side);
+        tool::logInfo("Test map: " + std::to_string(made) + " chunks");
+      }
     }
     if (editorInfoPanel) {   // Editor info (SpriteUI): abre com o que esta salvo; Save e Close viram acoes do host
       if (ed.showEditorInfo && !editorInfoWasOpen) editorInfoPanel->open(ed.projSettings);
@@ -3002,8 +3020,6 @@ static int runEditorMain(int argc, char** argv) {
         ed.showSpriteUiDiagnostics = false;
       }
     }
-#endif
-#ifdef TOOL_WITH_SPRITEUI
     float mouseX = 0.f, mouseY = 0.f;
     SDL_GetMouseState(&mouseX, &mouseY);
     const bool textFieldHovered = SDL_GetMouseFocus() == window && (
@@ -3024,11 +3040,8 @@ static int runEditorMain(int argc, char** argv) {
         cursorWarningLogged = true;
       }
     }
-#endif
-#ifdef TOOL_WITH_SPRITEUI
     if (gDock && !playerMode) gDock->overlay(renderer);   // faixas de abas e guias do arraste: por cima de tudo
     if (gScriptPanel && !gScriptPanel->render(renderer, window, ed, SDL_GetTicks() / 1000.0)) tool::logError(std::string("Script render failed: ") + SDL_GetError());   // janela flutuante: por cima das docadas
-#endif
     if (!screenshotPath.empty() && maxFrames > 0 && frame + 1 >= maxFrames) {
       if (SDL_Surface* shot = SDL_RenderReadPixels(renderer, nullptr)) {
         if (SDL_Surface* rgb = SDL_ConvertSurface(shot, SDL_PIXELFORMAT_RGB24)) {
@@ -3093,7 +3106,6 @@ static int runEditorMain(int argc, char** argv) {
   ed.sceneTex.destroy(); ed.gameTex[0].destroy(); ed.gameTex[1].destroy();
   ed.shutdownGpu();
   SDL_SetCursor(SDL_GetDefaultCursor());
-#ifdef TOOL_WITH_SPRITEUI
   profPanel.reset();
   menuPanel.reset();
   statusPanel.reset();
@@ -3101,7 +3113,6 @@ static int runEditorMain(int argc, char** argv) {
   testMapPanel.reset();
   if (spriteTextCursor) SDL_DestroyCursor(spriteTextCursor);
   uiRenderer.destroy();   // a textura do atlas e destruida antes do renderer SDL
-#endif
   SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
   std::printf("editor exited after %d frames\n", frame);
   {

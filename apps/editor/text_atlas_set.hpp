@@ -6,6 +6,7 @@
 //
 // Cada tamanho usa um slice proprio (kFirstSlice + pixels - kMinPx). Slice 1 continua sendo o atlas padrao.
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
+#include "embedded_font.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +20,31 @@
 
 namespace editor::sui {
 
+// Decodifica base64 (alfabeto padrao, ignora '=' e espacos). Usado so para a fonte embutida.
+inline std::vector<std::uint8_t> decodeBase64(const char* text, std::size_t length) {
+  std::vector<std::uint8_t> out;
+  out.reserve(length / 4 * 3);
+  std::uint32_t acc = 0;
+  int bits = 0;
+  for (std::size_t i = 0; i < length; ++i) {
+    const char c = text[i];
+    int v;
+    if (c >= 'A' && c <= 'Z') v = c - 'A';
+    else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
+    else if (c >= '0' && c <= '9') v = c - '0' + 52;
+    else if (c == '+') v = 62;
+    else if (c == '/') v = 63;
+    else continue;
+    acc = (acc << 6) | static_cast<std::uint32_t>(v);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push_back(static_cast<std::uint8_t>((acc >> bits) & 0xFFu));
+    }
+  }
+  return out;
+}
+
 namespace ST = ToolEngine::SpriteUi::Text;
 
 class TextAtlasSet {
@@ -28,11 +54,15 @@ class TextAtlasSet {
   static constexpr std::uint32_t kSlots = static_cast<std::uint32_t>(kMaxPx - kMinPx + 1);
   static constexpr std::uint32_t kFirstSlice = 32u;   // slices de texto: [kFirstSlice, kFirstSlice + kSlots)
 
-  // Le o arquivo da fonte. displayScale: escala da janela; o atlas usa tamanho * escala pixels reais.
+  // Le o arquivo da fonte. Se o arquivo nao existe (pasta assets/fonts ausente), usa a fonte embutida no executavel.
+  // displayScale: escala da janela; o atlas usa tamanho * escala pixels reais.
   bool load(const std::string& fontPath, float displayScale) {
     std::ifstream file(fontPath, std::ios::binary);
-    if (!file) return false;
-    bytes_.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (file) bytes_.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (bytes_.empty()) {
+      bytes_ = decodeBase64(embedded::kXmindFontBase64, sizeof(embedded::kXmindFontBase64) - 1);
+      bytes_.resize(embedded::kXmindFontSize);
+    }
     scale_ = (std::isfinite(displayScale) && displayScale > 0.f) ? displayScale : 1.f;
     slots_.clear();
     slots_.resize(kSlots);
