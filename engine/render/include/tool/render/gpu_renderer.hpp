@@ -478,7 +478,7 @@ public:
         for (const InstanceBatch& b : queue.plan.batches) {
           BatchCB bc{};
           bc.first = static_cast<u32>(queue.instanceBase + b.first);
-          dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+          uploadBatchCb(bc);
           cl->setUniform(1, batchCb_);
           const Draw& d = *queue.orderedDraws[b.first];
           cl->setVertexBuffer(d.mesh->vertex); cl->setIndexBuffer(d.mesh->index);
@@ -522,7 +522,7 @@ public:
           for (const InstanceBatch& b : queue.plan.batches) {
             BatchCB bc{};
             bc.first = static_cast<u32>(queue.instanceBase + b.first);
-            dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+            uploadBatchCb(bc);
             cl->setUniform(1, batchCb_);
             const Draw& d = *queue.orderedDraws[b.first];
             cl->setVertexBuffer(d.mesh->vertex); cl->setIndexBuffer(d.mesh->index);
@@ -573,7 +573,7 @@ public:
       for (const InstanceBatch& b : prepassPlan_.batches) {
         BatchCB bc{};
         bc.first = b.first;
-        dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+        uploadBatchCb(bc);
         pl->setUniform(1, batchCb_);
         const Draw& d = draws_[renderQueues_.prepass[prepassPlan_.order[b.first]]];
         pl->setVertexBuffer(d.mesh->vertex); pl->setIndexBuffer(d.mesh->index);
@@ -663,7 +663,7 @@ public:
     for (const InstanceBatch& b : opaquePlan_.batches) {
       BatchCB bc{};
       bc.first = b.first;
-      dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+      uploadBatchCb(bc);
       cl_->setUniform(1, batchCb_);
       const Draw& d = draws_[renderQueues_.opaque[opaquePlan_.order[b.first]]];
       cl_->setTexture(0, d.tex.isNull() ? white_ : d.tex);
@@ -702,7 +702,7 @@ public:
           for (const InstanceBatch& b : emissionPlan_.batches) {
             BatchCB bc{};
             bc.first = b.first;
-            dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+            uploadBatchCb(bc);
             gl->setUniform(1, batchCb_);
             const Draw& d = draws_[renderQueues_.emissive[emissionPlan_.order[b.first]]];
             gl->setVertexBuffer(d.mesh->vertex);
@@ -749,7 +749,7 @@ public:
       for (const InstanceBatch& b : transparentPlan_.batches) {
         BatchCB bc{};
         bc.first = b.first;
-        dev_->updateBuffer(batchCb_, &bc, sizeof bc);
+        uploadBatchCb(bc);
         tl->setUniform(1, batchCb_);
         const Draw& d = tdraws_[transparentPlan_.order[b.first]];
         tl->setTexture(0, d.tex.isNull() ? white_ : d.tex);
@@ -777,6 +777,8 @@ public:
   size_t cachedMeshes() const { return meshes_.size(); }
   const render::RenderViewStats& renderStats() const { return stats_; }
   const LightPrism::ClusterSystem* clusters() const { return clusters_.get(); }
+  // Total de uploads do BatchCB desde a criacao (um por lote desenhado). Diferenca entre dois quadros = uploads por quadro.
+  u64 batchCbUploads() const { return batchCbUploads_; }
 
   void forget(const Mesh& m) {
     auto it = meshes_.find(&m);
@@ -785,6 +787,8 @@ public:
   }
 
 private:
+  // Envia o BatchCB de um lote e conta o upload (medido pelo bench).
+  void uploadBatchCb(const BatchCB& bc) { dev_->updateBuffer(batchCb_, &bc, sizeof bc); ++batchCbUploads_; }
   void recordDraw(rhi::ICommandList& commands, render::RenderPassId pass, u32 indexCount, u32 instances) {
     commands.drawIndexed(indexCount, instances);
     stats_.passes[static_cast<std::size_t>(pass)].recordDraw(indexCount, instances);
@@ -1028,6 +1032,7 @@ private:
   rhi::PipelineId prePipe_, ssaoPipe_, blurPipe_;
   rhi::BufferId fsVb_, fsIb_, ssaoCb_;
   rhi::PipelineId pipe_, shPipe_, ptPipe_, pointClearPipe_;
+  u64 batchCbUploads_ = 0;
   rhi::BufferId frameCb_, objCb_, batchCb_, instBuf_, emiInstBuf_, transInstBuf_, shadowInstBuf_, prepassInstBuf_, shCb_, csmCb_, iblCb_, pointCb_;
   u32 instCap_ = 0, emiInstCap_ = 0, transInstCap_ = 0, shadowInstCap_ = 0, prepassInstCap_ = 0;
   std::vector<InstanceGPU> instCpu_, emiCpu_, transCpu_;
