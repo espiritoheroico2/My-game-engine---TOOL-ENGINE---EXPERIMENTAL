@@ -102,3 +102,25 @@ Os nomes e caminhos devem ser confirmados com o preset escolhido no ambiente loc
 ## 8. Próxima etapa
 
 Etapa 2 — auditar a árvore de layout e seus mutadores para introduzir invalidação incremental de measure/arrange sem alterar resultados existentes. Antes de alterar o algoritmo, mapear os consumidores de `LayoutTree::Layout`, os pontos de mutação e as regras de `LayoutEngine`.
+
+## 9. Segunda revisão crítica
+
+A revisão posterior aos commits verificou novamente o diff entre a branch e a baseline:
+
+- A branch está adiante da `main` e não está atrás dela.
+- O diff desta etapa está restrito ao cache, ao teste correspondente e à documentação de engenharia.
+- O teste de atualização estrutural cobre crescimento, esvaziamento de segmento e preservação da ordem dos segmentos limpos.
+- O teste de exceção cobre staging parcial e retry.
+- O caminho sem mudança de contagem mantém a lista contígua no mesmo armazenamento.
+- O caminho estrutural constrói o vetor substituto antes de fazer `swap`.
+
+**Risco residual explicitamente mantido:** a reconstrução estrutural ainda copia os segmentos limpos uma vez. Isso é consequência do contrato de retorno como vetor contíguo e não foi escondido como se tivesse sido eliminado. A classe também não oferece sincronização para chamadas concorrentes.
+
+A revisão foi estática. Sem compilação, não é possível confirmar compatibilidade efetiva com todos os compiladores nem considerar os testes aprovados.
+
+## 10. Identificação da entrega
+
+- **Branch:** `work/architecture-improvements-2026-11`
+- **Baseline:** `1a3c1d23ab672153a3aa2c2fc049bf331643baa6`
+- **HEAD após a documentação da etapa:** `ea8a8e89adf749766f049158ae0e51df81efca39`
+- **Estado de main:** permanece no SHA da baseline durante esta etapa.
