@@ -48,7 +48,8 @@ O commit `82269d9` tinha `newtoon_world.hpp` usando `Transform`, `velocity` e `I
 
 ## Não aplicado (e por quê)
 
-- **`GlobalTransform` + `syncTransformsParallel` (components.hpp):** não é chamado em lugar nenhum. Entra quando houver um caminho de render que consuma `GlobalTransform`.
+- **`GlobalTransform` + `syncTransformsParallel` (components.hpp):** removidos. Não tinham nenhum chamador, e a matriz global já é calculada por `worldMatrix` onde é usada. Se um caminho de render precisar de cache de matriz global no futuro, ele deve ser reintroduzido junto com a medição.
+- **Plano indireto por quadro (`gpu_renderer.hpp`):** a chamada `planIndirectArgs` em todo quadro foi removida, junto com o membro `opaqueIndirectPlan_` e o accessor, que não tinham chamadores. O RHI não tem draw indireto (`drawIndexed` e `drawIndexedRange` apenas). O helper `indirect_plan.hpp` continua no repositório, coberto por `tests/test_render_helpers.cpp`, para quando houver draw indireto.
 - **Streaming de instâncias (`GpuInstanceStreamer`, `indirect_plan`, `gpu_renderer` reescrito):** o relatório reescreve arquivos grandes do renderizador com APIs de Diligent e Light Prism que não foram verificadas contra o repositório. Precisa de build e de medição de GPU.
 - **Light Prism (`ClusterActiveMark.compute.hlsl`, early-out em `ClusterCullCount`, shaders GLSL 430):** mudanças de shader sem medição de GPU. Podem ser aplicadas depois que houver um perfil do quadro.
 

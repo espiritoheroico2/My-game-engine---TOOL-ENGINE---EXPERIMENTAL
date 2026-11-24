@@ -37,12 +37,6 @@ constexpr float kDeg2Rad = 3.14159265f / 180.f;
 struct Name { char text[40] = "Object"; };
 struct Transform { float pos[3] = {0, 0, 0}, rot[3] = {0, 0, 0}, scale[3] = {1, 1, 1}; };
 
-// Matriz global pre-calculada para evitar multiplicar 5 matrizes por objeto a cada draw call/culling.
-struct GlobalTransform {
-  tool::Mat4 world = tool::Mat4::identity();
-  bool valid = false;
-};
-
 struct MeshRenderer {
   int shape = 0;
   float color[3] = {0.8f, 0.3f, 0.2f};
@@ -176,41 +170,6 @@ struct AudioSource {
 inline tool::Mat4 worldMatrix(const Transform& t) {
   return tool::Mat4::translation({t.pos[0], t.pos[1], t.pos[2]}) * tool::Mat4::rotationY(t.rot[1] * kDeg2Rad) * tool::Mat4::rotationX(t.rot[0] * kDeg2Rad) *
          tool::Mat4::rotationZ(t.rot[2] * kDeg2Rad) * tool::Mat4::scale({t.scale[0], t.scale[1], t.scale[2]});
-}
-
-// Calcula a matriz global acumulando a cadeia de Parent (protegido contra ciclos de ate 64 niveis).
-inline tool::Mat4 computeWorldMatrixHier(const tool::World& w, tool::Entity e, const Transform& local) {
-  tool::Mat4 m = worldMatrix(local);
-  tool::Entity cur = e;
-  for (int depth = 0; depth < 64; ++depth) {
-    const auto* p = w.get<Parent>(cur);
-    if (!p || !w.alive(p->e)) break;
-    const auto* pt = w.get<Transform>(p->e);
-    if (!pt) break;
-    m = worldMatrix(*pt) * m;
-    cur = p->e;
-  }
-  return m;
-}
-
-// Propaga Transform -> GlobalTransform em paralelo:
-// Via rapida paralela para entidades planas (sem Parent), e propagacao hierarquica apenas onde ha Parent.
-inline void syncTransformsParallel(tool::World& w) {
-  // Garante que todo objeto com Transform tenha GlobalTransform alocado antes de parallelEachDense
-  w.each<Transform>([&](tool::Entity e, Transform&) {
-    if (!w.has<GlobalTransform>(e)) w.add<GlobalTransform>(e, GlobalTransform{});
-  });
-
-  w.parallelEachDense<Transform>([&](tool::Entity e, Transform& t) {
-    auto* gt = w.getByIndex<GlobalTransform>(e.index);
-    if (!gt) return;
-    if (!w.hasByIndex<Parent>(e.index)) {
-      gt->world = worldMatrix(t);
-    } else {
-      gt->world = computeWorldMatrixHier(w, e, t);
-    }
-    gt->valid = true;
-  }, 512);
 }
 
 inline tool::Vec3 forwardOf(const Transform& t) {

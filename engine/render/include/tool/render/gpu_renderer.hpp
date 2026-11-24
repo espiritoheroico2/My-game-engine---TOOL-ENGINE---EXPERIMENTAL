@@ -640,12 +640,6 @@ public:
       return BatchItem{meshId, texId};
     }, 4096);
 
-    // Prepara o plano de argumentos indiretos (pronto para Multi-Draw Indirect quando suportado pelo RHI)
-    render::planIndirectArgs(opaquePlan_.batches, [&](u64 meshPtr) -> render::IndirectMeshRange {
-      const auto* gm = reinterpret_cast<const GpuMesh*>(static_cast<uintptr_t>(meshPtr));
-      return gm ? render::IndirectMeshRange{gm->count, 0u, 0} : render::IndirectMeshRange{};
-    }, 65536, opaqueIndirectPlan_);
-
     // Empacotamento paralelo das instancias opacas no SSBO
     const size_t opaqueCount = opaquePlan_.order.size();
     instCpu_.resize(opaqueCount);
@@ -782,7 +776,6 @@ public:
   u32 draws() const { return drawCount_; }
   size_t cachedMeshes() const { return meshes_.size(); }
   const render::RenderViewStats& renderStats() const { return stats_; }
-  const render::IndirectPlan& opaqueIndirectPlan() const { return opaqueIndirectPlan_; }
   const LightPrism::ClusterSystem* clusters() const { return clusters_.get(); }
 
   void forget(const Mesh& m) {
@@ -1046,7 +1039,6 @@ private:
   render::RenderQueues renderQueues_;
   std::vector<BatchItem> opaqueItemsScratch_, prepassItemsScratch_, emissionItemsScratch_, transparentItemsScratch_, shadowItemsScratch_;
   BatchPlan opaquePlan_, prepassPlan_, emissionPlan_, transparentPlan_;
-  render::IndirectPlan opaqueIndirectPlan_;
   std::vector<ShadowInstanceGPU> shadowInstances_;
   rhi::TextureId brdfTex_;
   rhi::TextureId pointStrip_[kMaxPointShadowLights], pointDepth_;
