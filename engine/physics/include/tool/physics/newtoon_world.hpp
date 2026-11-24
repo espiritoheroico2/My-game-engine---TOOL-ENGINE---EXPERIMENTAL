@@ -223,7 +223,7 @@ class PhysicsWorld {
         const Entity a = pairs_[idx].first, bEnt = pairs_[idx].second;
         if (!Collide(cache_[a], cache_[bEnt], localPts)) continue;
         res.hit = true;
-        res.pts = localPts;
+        res.pts.assign(localPts.begin(), localPts.end());
         localPts.clear();
       }
     });
@@ -341,7 +341,6 @@ class PhysicsWorld {
     }
     prevPairs_ = std::move(curPairs_);
     TrimEvents();
-    frameArena_.Reset();
   }
 
   static float c0Up(const Vec3& n) { return n.y; }
@@ -443,4 +442,135 @@ class PhysicsWorld {
       std::sort(out.begin() + static_cast<long>(first), out.end(), [](const Pt& x, const Pt& y) { return x.depth > y.depth; });
       out.resize(first + 8);
     }
-    return true
+    return true;
+  }
+
+  static bool RayShape(const Shape& S, const Vec3& o, const Vec3& d, float maxT, float& tOut, Vec3& nOut) {
+    if (S.sphere) {
+      const Vec3 oc = o - S.c; const float b = Dot(oc, d), c = Dot(oc, oc) - S.r * S.r, disc = b * b - c; if (disc < 0.f) return false;
+      float t = -b - std::sqrt(disc); if (t < 0.f) { t = -b + std::sqrt(disc); if (t < 0.f) return false; }
+      if (t > maxT) return false;
+      tOut = t; nOut = Normalized(o + d * t - S.c); return true;
+    }
+    const Mat3 Rt = S.R.Transposed(); const Vec3 lo = Rt * (o - S.c), ld = Rt * d;
+    float t0 = 0.f, t1 = maxT; int axis = -1; float sgn = 1.f;
+    for (int i = 0; i < 3; ++i) {
+      const float oi = At(lo, i), di = At(ld, i), ei = At(S.e, i);
+      if (std::fabs(di) < 1e-9f) { if (std::fabs(oi) > ei) return false; continue; }
+      float a = (-ei - oi) / di, b = (ei - oi) / di, s = -1.f; if (a > b) { std::swap(a, b); s = 1.f; }
+      if (a > t0) { t0 = a; axis = i; sgn = s; } t1 = std::min(t1, b); if (t0 > t1) return false;
+    }
+    tOut = t0; Vec3 nl{}; if (axis == 0) nl.x = sgn; else if (axis == 1) nl.y = sgn; else if (axis == 2) nl.z = sgn; else nl = {0, 1, 0};
+    nOut = S.R * nl; return true;
+  }
+
+  // ------------------------------------------------------------------ solver paralelo
+  void PreSolve(const std::vector<Transform>& tf, std::vector<Rigidbody>& rb, float dt) {
+    JobSystem::Get().ParallelFor(contacts_.size(), 256, [&](size_t b, size_t e) {
+      for (size_t i = b; i < e; ++i) {
+        auto& c = contacts_[i];
+        const Rigidbody& A = rb[c.a];
+        const Rigidbody& B = rb[c.b];
+        c.ra = c.p - tf[c.a].position;
+        c.rb = c.p - tf[c.b].position;
+        const Mat3& IA = invIw_[c.a];
+        const Mat3& IB = invIw_[c.b];
+        auto eff = [&](const Vec3& dir) {
+          const Vec3 rna = Cross(c.ra, dir), rnb = Cross(c.rb, dir);
+          return A.inverseMass + B.inverseMass + Dot(dir, Cross(IA * rna, c.ra) + Cross(IB * rnb, c.rb));
+        };
+        const float k = eff(c.n);
+        c.normalMass = k > 1e-9f ? 1.f / k : 0.f;
+        const Vec3 vrel = (B.velocity + Cross(B.angularVelocity, c.rb)) - (A.velocity + Cross(A.angularVelocity, c.ra));
+        const float vn = Dot(vrel, c.n);
+        c.bias = std::min(4.f, baumgarte / dt * std::max(c.depth - slop, 0.f));
+        if (vn < -restitutionThreshold) c.bias += -c.e * vn;
+        Vec3 t = vrel - c.n * vn;
+        t = t.SqrMagnitude() > 1e-8f ? Normalized(t) : (std::fabs(c.n.x) > 0.9f ? Normalized(Cross(c.n, Vec3{0, 1, 0})) : Normalized(Cross(c.n, Vec3{1, 0, 0})));
+        c.t1 = t;
+        c.t2 = Normalized(Cross(c.n, t));
+        const float k1 = eff(c.t1), k2 = eff(c.t2);
+        c.tangentMass = k1 > 1e-9f ? 1.f / k1 : 0.f;
+        c.tangentMass2 = k2 > 1e-9f ? 1.f / k2 : 0.f;
+        c.jn = c.jt1 = c.jt2 = 0.f;
+      }
+    });
+  }
+
+  void SolveSingleContact(Contact& c, std::vector<Rigidbody>& rb) {
+    Rigidbody& A = rb[c.a];
+    Rigidbody& B = rb[c.b];
+    auto vrel = [&] { return (B.velocity + Cross(B.angularVelocity, c.rb)) - (A.velocity + Cross(A.angularVelocity, c.ra)); };
+    // So escreve em corpos dinamicos: estaticos/cinematicos nao sao escritos, evitando corrida de dados entre threads.
+    const bool dynA = A.IsDynamic(), dynB = B.IsDynamic();
+    auto apply = [&](const Vec3& P) {
+      if (dynA) { A.velocity -= P * A.inverseMass; A.angularVelocity -= invIw_[c.a] * Cross(c.ra, P); }
+      if (dynB) { B.velocity += P * B.inverseMass; B.angularVelocity += invIw_[c.b] * Cross(c.rb, P); }
+    };
+    {
+      const float vn = Dot(vrel(), c.n);
+      float dj = c.normalMass * (-vn + c.bias);
+      const float old = c.jn;
+      c.jn = std::max(0.f, old + dj);
+      dj = c.jn - old;
+      apply(c.n * dj);
+    }
+    const float maxF = c.mu * c.jn;
+    {
+      const float vt = Dot(vrel(), c.t1);
+      float dj = -c.tangentMass * vt;
+      const float old = c.jt1;
+      c.jt1 = std::clamp(old + dj, -maxF, maxF);
+      dj = c.jt1 - old;
+      apply(c.t1 * dj);
+    }
+    {
+      const float vt = Dot(vrel(), c.t2);
+      float dj = -c.tangentMass2 * vt;
+      const float old = c.jt2;
+      c.jt2 = std::clamp(old + dj, -maxF, maxF);
+      dj = c.jt2 - old;
+      apply(c.t2 * dj);
+    }
+  }
+
+  // Resolve todas as cores independentes em paralelo; apenas o ultimo balde (fallback) roda sequencialmente.
+  void SolveContactsColored(std::vector<Rigidbody>& rb) {
+    for (uint32_t colIdx = 0; colIdx < ConstraintColorGraph::kMaxColors - 1; ++colIdx) {
+      const auto& bucket = colorGraph_.buckets[colIdx];
+      if (bucket.empty()) continue;
+      JobSystem::Get().ParallelFor(bucket.size(), 64, [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i) {
+          SolveSingleContact(contacts_[bucket[i]], rb);
+        }
+      });
+    }
+    // Fallback sequencial caso algum contato tenha excedido as 15 cores paralelas
+    for (uint32_t contactIdx : colorGraph_.buckets[ConstraintColorGraph::kMaxColors - 1]) {
+      SolveSingleContact(contacts_[contactIdx], rb);
+    }
+  }
+
+  struct NarrowResult {
+    std::vector<Pt> pts;
+    bool hit = false;
+  };
+
+  ConstraintColorGraph colorGraph_;
+  std::vector<Mat3> invIw_;
+  std::vector<char> invIwReady_;
+  std::vector<Shape> cache_;
+  std::vector<AABB> boxes_;
+  std::vector<char> valid_;
+  BVH bvh_;
+  size_t bvhBodyCount_ = 0, refitSteps_ = 0;
+  std::vector<std::vector<std::pair<Entity, Entity>>> chunkPairs_;
+  std::vector<std::pair<Entity, Entity>> pairs_;
+  std::vector<NarrowResult> narrowResults_;
+  std::vector<Contact> contacts_;
+  std::unordered_map<uint64_t, PairInfo> curPairs_, prevPairs_;
+  std::vector<CollisionEvent> events_;
+  float acc_ = 0.f;
+};
+
+} // namespace Newtoon

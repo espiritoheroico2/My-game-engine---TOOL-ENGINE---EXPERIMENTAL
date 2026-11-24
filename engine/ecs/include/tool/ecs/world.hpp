@@ -316,4 +316,13 @@ private:
   }
 
   HandleAllocator ids_;
-  std::vector<std::unique_ptr<IStorage>>
+  std::vector<std::unique_ptr<IStorage>> storages_;
+  std::vector<TagMask> tags_;
+  std::vector<uint8_t> dormant_;                // 1 byte por entidade (thread-safe; std::vector<bool> era bit-packed)
+  std::vector<char> sim_;                       // 1 = simulando (padrao), 0 = fora da simulacao
+  std::vector<char> keepScratch_;               // reserva de resetTo (evita alocar a cada reuso)
+  mutable std::deque<std::vector<u32>> scratch_; // reserva de vetores de indices (ver lease)
+  size_t scratchDepth_ = 0;
+};
+
+} // namespace tool

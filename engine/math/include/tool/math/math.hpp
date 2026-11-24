@@ -34,6 +34,8 @@ struct Vec4 { f32 x = 0, y = 0, z = 0, w = 0; };
 struct Mat4 {
   f32 m[4][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
 
+  // Matriz identidade (o construtor padrao ja e a identidade).
+  static Mat4 identity() { return Mat4{}; }
   // Produto de matrizes: aplica b e depois a.
   friend Mat4 operator*(const Mat4& a, const Mat4& b) {
     Mat4 r;

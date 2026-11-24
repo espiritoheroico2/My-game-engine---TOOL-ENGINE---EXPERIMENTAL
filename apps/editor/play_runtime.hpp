@@ -81,7 +81,8 @@ struct PlayRuntime {
 
   // Avalia o culling por raio da camera em paralelo para milhares de corpos dinamicos.
   void updateSimulationRadiusParallel(tool::World& ecsWorld, float radius, float cx, float cy, float cz) {
-    const size_t count = ents.size();
+    // Limita ao menor vetor: dead/culled/tf/rb sao indexados pelo mesmo i (evita leitura fora do limite).
+    const size_t count = std::min({ents.size(), tf.size(), rb.size(), dead.size(), culled.size()});
     if (count == 0) return;
 
     if (radius > 0.f) {
