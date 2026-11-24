@@ -1,60 +1,128 @@
 #pragma once
 
-// Lista de itens de desenho em trechos, um trecho por no (por exemplo, um botao ou um painel).
-// Quando um no fica sujo, so o trecho dele e refeito; os outros sao reaproveitados como estao.
-// Exemplo: um painel com tres botoes. Mudar o texto do botao 2 chama o construtor so para o botao 2.
-// Sem mudanca nenhuma, nenhum no e refeito.
+// Lista de itens de desenho em trechos, um trecho por no.
+// Os builders dos nos sujos sao executados antes de publicar qualquer alteracao.
+// Se a quantidade de itens nao mudar, somente os intervalos sujos sao copiados.
+// Se houver mudanca estrutural, a lista contigua e reconstruida uma unica vez.
 
 #include "SpriteUi/Rendering/DrawList.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <stdexcept>
 #include <vector>
 
 namespace ToolEngine::SpriteUi::Rendering {
 
 class RenderListCache {
 public:
-    // Preenche out com os itens do no. Recebe o indice do no e uma lista vazia para escrever.
     using NodeBuilder = std::function<void(std::size_t node, std::vector<UIRenderItem>& out)>;
 
-    // Define quantos nos existem. Todos ficam sujos, entao o proximo Update refaz tudo.
     void Reset(std::size_t nodeCount) {
         segments_.assign(nodeCount, Segment{});
         items_.clear();
+        pendingItems_.clear();
+        pendingSegments_.clear();
+        rebuiltItems_.clear();
+        lastRebuildCount_ = 0;
     }
 
     void MarkDirty(std::size_t node) {
         if (node < segments_.size()) segments_[node].dirty = true;
     }
 
-    // Refaz os trechos sujos, na ordem dos nos, e devolve a lista inteira. Nos limpos nao sao chamados.
+    // Atualiza os nos sujos na ordem original.
+    // Se um builder lancar excecao, a lista publicada e os dirty flags permanecem intactos.
     const std::vector<UIRenderItem>& Update(const NodeBuilder& build) {
         lastRebuildCount_ = 0;
-        std::size_t offset = 0;
+        pendingItems_.clear();
+        pendingSegments_.clear();
+
+        // Fase 1: preparar todas as alteracoes sem tocar na lista publicada.
         for (std::size_t node = 0; node < segments_.size(); ++node) {
-            Segment& segment = segments_[node];
-            if (segment.dirty) {
-                scratch_.clear();
-                build(node, scratch_);
-                const auto first = items_.begin() + static_cast<std::ptrdiff_t>(offset);
-                if (scratch_.size() == segment.count) {
-                    std::copy(scratch_.begin(), scratch_.end(), first);
-                } else {
-                    items_.erase(first, first + static_cast<std::ptrdiff_t>(segment.count));
-                    items_.insert(items_.begin() + static_cast<std::ptrdiff_t>(offset), scratch_.begin(), scratch_.end());
-                }
-                segment.count = scratch_.size();
-                segment.dirty = false;
-                ++lastRebuildCount_;
+            if (!segments_[node].dirty) continue;
+
+            scratch_.clear();
+            build(node, scratch_);
+
+            if (scratch_.size() > pendingItems_.max_size() - pendingItems_.size()) {
+                throw std::length_error("RenderListCache: staged item count overflow");
             }
-            offset += segment.count;
+
+            const std::size_t stagedOffset = pendingItems_.size();
+            pendingItems_.insert(pendingItems_.end(), scratch_.begin(), scratch_.end());
+            pendingSegments_.push_back({node, stagedOffset, scratch_.size()});
         }
+
+        if (pendingSegments_.empty()) return items_;
+
+        std::size_t newTotal = 0;
+        bool structuralChange = false;
+        std::size_t pendingIndex = 0;
+        for (std::size_t node = 0; node < segments_.size(); ++node) {
+            const Segment& segment = segments_[node];
+            std::size_t nextCount = segment.count;
+            if (segment.dirty) {
+                const PendingSegment& pending = pendingSegments_[pendingIndex++];
+                nextCount = pending.count;
+                structuralChange = structuralChange || (nextCount != segment.count);
+            }
+            if (nextCount > items_.max_size() - newTotal) {
+                throw std::length_error("RenderListCache: resulting item count overflow");
+            }
+            newTotal += nextCount;
+        }
+
+        // Fase 2: publicar. Sem alteracao estrutural, enderecos e capacidade permanecem estaveis.
+        if (!structuralChange) {
+            std::size_t oldOffset = 0;
+            std::size_t pendingIndexForCopy = 0;
+            for (std::size_t node = 0; node < segments_.size(); ++node) {
+                const Segment& segment = segments_[node];
+                if (segment.dirty) {
+                    const PendingSegment& pending = pendingSegments_[pendingIndexForCopy++];
+                    std::copy_n(pendingItems_.begin() + static_cast<std::ptrdiff_t>(pending.offset),
+                                pending.count,
+                                items_.begin() + static_cast<std::ptrdiff_t>(oldOffset));
+                }
+                oldOffset += segment.count;
+            }
+            for (const PendingSegment& pending : pendingSegments_) {
+                segments_[pending.node].dirty = false;
+            }
+        } else {
+            rebuiltItems_.clear();
+            rebuiltItems_.reserve(newTotal);
+
+            std::size_t oldOffset = 0;
+            pendingIndex = 0;
+            for (std::size_t node = 0; node < segments_.size(); ++node) {
+                const Segment& segment = segments_[node];
+                if (segment.dirty) {
+                    const PendingSegment& pending = pendingSegments_[pendingIndex++];
+                    const auto first = pendingItems_.begin() + static_cast<std::ptrdiff_t>(pending.offset);
+                    rebuiltItems_.insert(rebuiltItems_.end(), first,
+                                          first + static_cast<std::ptrdiff_t>(pending.count));
+                } else {
+                    const auto first = items_.begin() + static_cast<std::ptrdiff_t>(oldOffset);
+                    rebuiltItems_.insert(rebuiltItems_.end(), first,
+                                          first + static_cast<std::ptrdiff_t>(segment.count));
+                }
+                oldOffset += segment.count;
+            }
+
+            items_.swap(rebuiltItems_);
+            for (const PendingSegment& pending : pendingSegments_) {
+                segments_[pending.node].count = pending.count;
+                segments_[pending.node].dirty = false;
+            }
+        }
+
+        lastRebuildCount_ = pendingSegments_.size();
         return items_;
     }
 
-    // Quantos nos foram refeitos na ultima chamada de Update.
     [[nodiscard]] std::size_t LastRebuildCount() const noexcept { return lastRebuildCount_; }
 
 private:
@@ -63,9 +131,18 @@ private:
         bool dirty = true;
     };
 
+    struct PendingSegment {
+        std::size_t node = 0;
+        std::size_t offset = 0;
+        std::size_t count = 0;
+    };
+
     std::vector<Segment> segments_;
     std::vector<UIRenderItem> items_;
     std::vector<UIRenderItem> scratch_;
+    std::vector<UIRenderItem> pendingItems_;
+    std::vector<PendingSegment> pendingSegments_;
+    std::vector<UIRenderItem> rebuiltItems_;
     std::size_t lastRebuildCount_ = 0;
 };
 
