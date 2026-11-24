@@ -1,10 +1,9 @@
 // ToolEngine - GpuRenderer: desenha a cena 3D iluminada (PBR) sobre o RHI (Diligent: Vulkan / D3D12).
-// A iluminacao vem da Light Prism: luzes e clusters sao calculados pelo backend Diligent da propria biblioteca
-// (ClusterSystem), no mesmo dispositivo e contexto do RHI. As cascatas do sol sao calculadas em CPU (ComputeCsm) e
-// cada uma tem o seu mapa de profundidade. Shaders: assets/shaders/hlsl/ + assets/shaders/glsl/.
 #pragma once
+#include "tool/core/parallel.hpp"
 #include "tool/render/lighting.hpp"
 #include "tool/render/instance_batch.hpp"
+#include "tool/render/indirect_plan.hpp"
 #include "tool/render/render_queue.hpp"
 #include "tool/render/frustum_cull.hpp"
 #include "tool/render/render_stats.hpp"
@@ -33,15 +32,12 @@ using render::InstanceBatch;
 using render::InstanceGPU;
 using render::planInstanceBatches;
 
-// Le um .hlsl resolvendo `#include "arquivo"`. Como o compilador HLSL, o include e relativo ao ARQUIVO que o contem
-// (ex.: Common/ClusterLighting.hlsli inclui "PBR.hlsli" e acha Common/PBR.hlsli). `file` e relativo a `dir`.
-// Cada arquivo entra uma vez so (como #pragma once): os headers da Light Prism se incluem entre si por caminhos diferentes.
 inline bool loadHlslRec(const std::string& dir, const std::string& file, std::string& out, std::set<std::string>& seen, int depth) {
   if (depth > 12) return false;
   std::error_code ec;
   const std::filesystem::path full = std::filesystem::path(dir) / file;
   const std::string key = std::filesystem::weakly_canonical(full, ec).string();
-  if (!ec && !seen.insert(key).second) return true;   // ja incluido: pula
+  if (!ec && !seen.insert(key).second) return true;
   std::ifstream f(full, std::ios::binary);
   if (!f) return false;
   const size_t slash = file.find_last_of('/');
@@ -57,68 +53,47 @@ inline bool loadHlslRec(const std::string& dir, const std::string& file, std::st
   }
   return true;
 }
-// Carrega um .hlsl com os includes resolvidos. Devolve false se algum arquivo nao puder ser lido.
+
 inline bool loadHlsl(const std::string& dir, const std::string& file, std::string& out) {
   std::set<std::string> seen;
   return loadHlslRec(dir, file, out, seen, 0);
 }
 
-// Layouts identicos aos cbuffers de pbr.hlsl e shadow.hlsl. Os da Light Prism (Globals, sol, CSM, IBL, clusters) sao
-// os proprios structs da biblioteca (LightPrism::GlobalLightingGPU, CsmGPU, IblGPU, ClusterGridGPU), que ja batem com o HLSL.
-// Constantes por quadro (144 bytes): view-projection, view e posicao da camera.
 struct FrameCB { Mat4 viewProj; Mat4 view; f32 camera[3]; f32 pad = 0; };
-// Constantes por objeto (160 bytes): matriz world, cor, PBR, textura, emissao e nevoa. Mesmo layout de InstanceGPU.
-struct ObjectCB { Mat4 world; f32 color[4]; f32 metallic, roughness, receiveShadow, pad; f32 texInfo[4]; f32 emissive[4]; f32 fogColor[4]; f32 fogParams[4]; }; // texInfo: largura, altura, 1 = tem textura; emissive: rgb = cor x intensidade
-// Constantes do passe de sombra: view-projection da luz (uma por cascata ou face).
+struct ObjectCB { Mat4 world; f32 color[4]; f32 metallic, roughness, receiveShadow, pad; f32 texInfo[4]; f32 emissive[4]; f32 fogColor[4]; f32 fogParams[4]; };
 struct ShadowCB { Mat4 lightViewProj; };
-// Instancia do passe de sombra (64 bytes): so a matriz world, lida do storage buffer.
 struct ShadowInstanceGPU { Mat4 world; };
-// Constantes de lote: indice do primeiro item do lote dentro do buffer de instancias.
 struct BatchCB { u32 first; u32 pad[3]; };
-// Parametros do bloom (espelho de bloom.hlsl): tamanhos em pixels, direcao do blur, limiar e forca.
 struct BloomCB { f32 srcSize[2]; f32 haloSize[2]; f32 dir[2]; f32 threshold, strength; };
 static_assert(sizeof(FrameCB) == 144 && sizeof(ObjectCB) == 160 && sizeof(ShadowCB) == 64 && sizeof(ShadowInstanceGPU) == 64 && sizeof(BatchCB) == 16 && sizeof(BloomCB) == 32, "layout de cbuffer");
 static_assert(sizeof(InstanceGPU) == sizeof(ObjectCB), "layout de instancia deve bater com ObjectCB");
-// Sombras de luzes pontuais/spot (espelho de PointShadowCB em lightprism/Common/PointShadow.hlsli).
+
 struct PointShadowLightGPU { f32 posType[4]; f32 params[4]; Mat4 vp[6]; };
-// Constantes das sombras de pontuais/spot: quantidade de luzes e ate kMaxPointShadowLights entradas.
 struct PointShadowGPU { u32 count; u32 pad[3]; PointShadowLightGPU lights[kMaxPointShadowLights]; };
 static_assert(sizeof(PointShadowLightGPU) == 416 && sizeof(PointShadowGPU) == 16 + 4 * 416, "layout de PointShadowCB");
 static_assert(sizeof(LightPrism::CsmGPU) == 352 && sizeof(LightPrism::Ibl::IblGPU) == 160, "layout dos cbuffers da Light Prism");
 
-// Nomes dos recursos no pbr.hlsl (ordem = slots do pipeline). Mudou no HLSL? Mude aqui tambem.
 inline const std::vector<std::string>& pbrUniformNames() {
   static const std::vector<std::string> n = {"FrameBuffer", "BatchBuffer", "GlobalLightCB", "SunLightCB", "CsmCB", "IblCB", "ClusterGridCB", "PointShadowCB"};
   return n;
 }
-// Nomes das texturas do pbr.hlsl, na ordem dos slots de textura.
 inline const std::vector<std::string>& pbrTextureNames() {
   static const std::vector<std::string> n = {"AlbedoMap", "CsmMap0", "CsmMap1", "CsmMap2", "CsmMap3", "PointShadowMap0", "PointShadowMap1", "PointShadowMap2", "PointShadowMap3", "AoMap", "IblBrdfLut"};
   return n;
 }
-// Nomes dos buffers de storage do pbr.hlsl, na ordem dos slots.
 inline const std::vector<std::string>& pbrStorageNames() {
   static const std::vector<std::string> n = {"PointLightsBuffer", "SpotLightsBuffer", "LightGrid", "LightIndexList", "Instances"};
   return n;
 }
 
-// Renderizador PBR da engine: recebe luzes e malhas e produz a imagem em um alvo de cor, sobre o RHI e a Light Prism. Ordem de uso: init, setLighting, begin, draw e end.
 class GpuRenderer {
 public:
-  // Destrutor: libera os recursos da GPU (equivalente a shutdown).
   ~GpuRenderer() { release(); }
-  // Construtor vazio: nenhum recurso de GPU e criado antes de init().
   GpuRenderer() = default;
-  // Copia proibida: o objeto e dono dos recursos na GPU.
   GpuRenderer(const GpuRenderer&) = delete;
-  // Atribuicao proibida (mesmo motivo da copia).
   GpuRenderer& operator=(const GpuRenderer&) = delete;
-  // Libera tudo na GPU. Chamar ANTES de destruir o dispositivo.
   void shutdown() { release(); }
 
-  // shaderDir = pasta "assets/shaders" (hlsl/, glsl/ e lightprism/). `lp` = dispositivo da Light Prism sobre o mesmo RHI
-  // (rhi::createLightPrismDevice). Sem ele (backend sem Diligent), o init falha e o editor volta para o renderizador
-  // em CPU. No OpenGL os shaders PBR usam o GLSL 430 de glsl/ (mk abaixo); o init nao falha por isso.
   bool init(rhi::IDevice& dev, std::unique_ptr<LightPrism::IGraphicsDevice> lp, const std::string& shaderDir, u32 w, u32 h) {
     release();
     if (!lp) { debug().report("TOOL-E142", Severity::Error, "dispositivo Light Prism indisponivel (backend sem Diligent)"); return false; }
@@ -141,8 +116,6 @@ public:
     if (!loadHlsl(hlslDir, "shadow_point.hlsl", shp)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow_point.hlsl em " + hlslDir); release(); return false; }
     if (!loadHlsl(hlslDir, "shadow_clear.hlsl", shClear)) { debug().report("TOOL-E140", Severity::Error, "nao achei shadow_clear.hlsl em " + hlslDir); release(); return false; }
 
-    // OpenGL: cada shader usa o GLSL 430 gerado offline (tools/shaders/build_glsl.py -> glsl/<nome>.430.glsl).
-    // Vulkan/D3D12 seguem com o HLSL. Um ponto unico de criacao: mk(desc).
     const bool gl = dev.backend() == rhi::Backend::GLES;
     if (gl) debug().report("TOOL-W142", Severity::Warning, "OpenGL: pipeline em GLSL 430 (gerado de HLSL). Pendente: bloom e sombra pontual ainda diferem do Vulkan; use Vulkan ou D3D12 para a versao final.");
     auto mk = [&](rhi::ShaderDesc d) -> rhi::ShaderId {
@@ -163,22 +136,20 @@ public:
     rhi::PipelineDesc pd; pd.vs = vs_; pd.ps = ps_; pd.name = "pbr";
     pd.layout = {{3, 0}, {3, 12}, {2, 24}}; pd.vertexStride = 32;
     pd.uniformNames = pbrUniformNames(); pd.textureNames = pbrTextureNames(); pd.storageNames = pbrStorageNames();
-    // Cor: Vulkan/D3D12 usam alvo sRGB (o hardware converte a saida linear do ACES).
     colorFmt_ = rhi::Format::RGBA8_SRGB;
     pd.color = colorFmt_;
     pipe_ = dev.createPipeline(pd);
-    // Passe de emissao usa o VS instanciado do PBR; o pixel shader so consome a radiancia emissiva.
+
     rhi::ShaderDesc emi = ps; emi.entry = "EmissionPS"; emi.name = "pbr.emi";
     emiPs_ = mk(emi);
     rhi::PipelineDesc ed; ed.vs = vs_; ed.ps = emiPs_; ed.name = "emission"; ed.depthWrite = false; ed.depthTest = true;
     ed.layout = pd.layout; ed.vertexStride = pd.vertexStride; ed.color = rhi::Format::RGBA16F;
     ed.uniformNames = {"FrameBuffer", "BatchBuffer"}; ed.textureNames.clear(); ed.storageNames = {"Instances"};
     emiPipe_ = dev.createPipeline(ed);
-    // Transparente usa o PBR instanciado; somente lotes adjacentes sao agrupados para preservar a ordem alfa.
+
     rhi::PipelineDesc td = pd; td.name = "transparent"; td.blend = true; td.depthWrite = false;
     transPipe_ = dev.createPipeline(td);
 
-    // passe de sombra: so posicao, grava z da luz num alvo R32F, sem culling (as duas faces projetam sombra)
     rhi::ShaderDesc svs = vs, sps = ps;
     svs.name = "shadow.vs"; sps.name = "shadow.ps"; svs.source = sh; sps.source = sh;
     svs.entry = "VSMain"; sps.entry = "PSMain";
@@ -186,7 +157,7 @@ public:
     rhi::PipelineDesc sd; sd.vs = shVs_; sd.ps = shPs_; sd.name = "shadow"; sd.color = rhi::Format::R32F; sd.cull = rhi::CullMode::None;
     sd.layout = {{3, 0}}; sd.vertexStride = 32; sd.uniformNames = {"ShadowBuffer", "BatchBuffer"}; sd.storageNames = {"Instances"};
     shPipe_ = dev.createPipeline(sd);
-    // passe de sombra de pontuais/spot: grava a distancia (clip.w) numa faixa R x 6R por luz
+
     rhi::ShaderDesc pvs = svs, pps = sps;
     pvs.name = "shadowpoint.vs"; pps.name = "shadowpoint.ps"; pvs.source = shp; pps.source = shp;
     ptVs_ = mk(pvs); ptPs_ = mk(pps);
@@ -194,7 +165,7 @@ public:
     ptPipe_ = dev.createPipeline(pd2);
     rhi::ShaderDesc clearPs; clearPs.stage = rhi::ShaderStage::Pixel; clearPs.entry = "PSMain";
     clearPs.name = "shadowclear.ps"; clearPs.source = shClear; pointClearPs_ = mk(clearPs);
-    // SSAO: prepasso (normal + profundidade RGBA16F), AO bruto e blur (triangulo de tela cheia, ver fsVb_)
+
     rhi::ShaderDesc pre; pre.stage = rhi::ShaderStage::Vertex; pre.entry = "VSMain"; pre.name = "prepass.vs"; pre.source = prepassSrc;
     rhi::ShaderDesc prePs = pre; prePs.stage = rhi::ShaderStage::Pixel; prePs.entry = "PSMain"; prePs.name = "prepass.ps";
     preVs_ = mk(pre); prePs_ = mk(prePs);
@@ -202,6 +173,7 @@ public:
     pp.layout = {{3, 0}, {3, 12}, {2, 24}}; pp.vertexStride = 32; pp.uniformNames = {"FrameBuffer", "BatchBuffer"}; pp.storageNames = {"Instances"};
     pp.color = rhi::Format::RGBA16F; pp.cull = rhi::CullMode::Back;
     prePipe_ = dev.createPipeline(pp);
+
     rhi::ShaderDesc fsv; fsv.stage = rhi::ShaderStage::Vertex; fsv.entry = "VSMain"; fsv.name = "ssao.vs"; fsv.source = ssaoSrc;
     rhi::ShaderDesc ssP = fsv; ssP.stage = rhi::ShaderStage::Pixel; ssP.entry = "SsaoMain"; ssP.name = "ssao.ps";
     rhi::ShaderDesc blP = fsv; blP.stage = rhi::ShaderStage::Pixel; blP.entry = "SsaoBlur"; blP.name = "ssaoblur.ps";
@@ -210,12 +182,14 @@ public:
     clearDesc.name = "shadowclear"; clearDesc.layout = {{3, 0}}; clearDesc.vertexStride = 12;
     clearDesc.color = rhi::Format::R32F; clearDesc.depthTest = false; clearDesc.depthWrite = false; clearDesc.cull = rhi::CullMode::None;
     pointClearPipe_ = dev.createPipeline(clearDesc);
+
     rhi::PipelineDesc sp; sp.vs = fsVs_; sp.ps = ssaoPs_; sp.name = "ssao"; sp.layout = {{3, 0}}; sp.vertexStride = 12;
     sp.uniformNames = {"SsaoCB"}; sp.textureNames = {"GBuf"}; sp.color = rhi::Format::R32F; sp.cull = rhi::CullMode::None;
     ssaoPipe_ = dev.createPipeline(sp);
     rhi::PipelineDesc bp = sp; bp.ps = blurPs_; bp.name = "ssaoblur"; bp.textureNames = {"GBuf", "RawAo"};
     blurPipe_ = dev.createPipeline(bp);
-    {   // Bloom (bloom.hlsl): limiar, blur e composicao, todos em tela cheia com o mesmo triangulo do SSAO (fsVs_)
+
+    {
       std::string bloomSrc;
       if (!loadHlsl(hlslDir, "bloom.hlsl", bloomSrc)) { debug().report("TOOL-E140", Severity::Error, "nao achei bloom.hlsl em " + hlslDir); release(); return false; }
       rhi::ShaderDesc bs; bs.stage = rhi::ShaderStage::Pixel; bs.source = bloomSrc;
@@ -234,6 +208,7 @@ public:
       bloomCbV_ = dev.createBuffer({sizeof(BloomCB), rhi::BufferUsage::Uniform, true}, nullptr);
       bloomCbComp_ = dev.createBuffer({sizeof(BloomCB), rhi::BufferUsage::Uniform, true}, nullptr);
     }
+
     static const float fsTri[9] = {-1.f, -1.f, 0.f, 3.f, -1.f, 0.f, -1.f, 3.f, 0.f};
     static const u32 fsIdx[3] = {0, 1, 2};
     fsVb_ = dev.createBuffer({sizeof fsTri, rhi::BufferUsage::Vertex, false}, fsTri);
@@ -245,7 +220,8 @@ public:
     shCb_ = dev.createBuffer({sizeof(ShadowCB), rhi::BufferUsage::Uniform, true}, nullptr);
     csmCb_ = dev.createBuffer({sizeof(LightPrism::CsmGPU), rhi::BufferUsage::Uniform, true}, nullptr);
     iblCb_ = dev.createBuffer({sizeof(LightPrism::Ibl::IblGPU), rhi::BufferUsage::Uniform, true}, nullptr);
-    {   // LUT da BRDF (split-sum) da LightPrism como textura RGBA8: A em R, B em G (valores em [0,1]).
+
+    {
       const LightPrism::Ibl::BrdfLut& lut = sharedBrdfLut();
       std::vector<u8> px(size_t(lut.size) * lut.size * 4);
       for (size_t t = 0; t < size_t(lut.size) * lut.size; ++t) {
@@ -254,16 +230,15 @@ public:
       }
       brdfTex_ = dev.createTexture({lut.size, lut.size, 1, rhi::Format::RGBA8, false}, px.data());
     }
+
     pointCb_ = dev.createBuffer({sizeof(PointShadowGPU), rhi::BufferUsage::Uniform, true}, nullptr);
     if (prePipe_.isNull() || ssaoPipe_.isNull() || blurPipe_.isNull() || pointClearPipe_.isNull() || fsVb_.isNull() || fsIb_.isNull() || ssaoCb_.isNull() || pipe_.isNull() || transPipe_.isNull() || legacyVs_.isNull() || legacyPs_.isNull() || shPipe_.isNull() || ptPipe_.isNull() || frameCb_.isNull() || objCb_.isNull() || batchCb_.isNull() || shCb_.isNull() || csmCb_.isNull() || iblCb_.isNull() || pointCb_.isNull()) { release(); return false; }
-    ensureShadowTargets(1024); // alvos "vazios" para o shader sempre ter as 4 texturas ligadas
-    ensurePointTargets(64);    // idem para as sombras de pontuais/spot (4 faixas pequenas ate uma luz pedir a resolucao)
+    ensureShadowTargets(1024);
+    ensurePointTargets(64);
     resize(w, h);
     return !color_.isNull();
   }
 
-  // Escolhe o alvo de desenho (cor+profundidade) para w*h. As janelas Scene e Game desenham com tamanhos
-  // diferentes no mesmo quadro; por isso guardamos um alvo por tamanho. Alvos sem uso por 120 quadros sao liberados.
   void resize(u32 w, u32 h) {
     if (!dev_) return;
     w_ = std::max(1u, w); h_ = std::max(1u, h);
@@ -273,15 +248,14 @@ public:
       Target t;
       t.color = dev_->createTexture({w_, h_, 1, colorFmt_, true}, nullptr);
       t.depth = dev_->createTexture({w_, h_, 1, rhi::Format::D32F, true}, nullptr);
-      t.gbuf = dev_->createTexture({w_, h_, 1, rhi::Format::RGBA16F, true}, nullptr);  // SSAO: normal de view + profundidade
+      t.gbuf = dev_->createTexture({w_, h_, 1, rhi::Format::RGBA16F, true}, nullptr);
       t.aoRaw = dev_->createTexture({w_, h_, 1, rhi::Format::R32F, true}, nullptr);
       t.ao = dev_->createTexture({w_, h_, 1, rhi::Format::R32F, true}, nullptr);
-      // Bloom: dois alvos de meia resolucao (limiar e blur) e a saida final (cor + halo), na resolucao cheia.
       const u32 hw = std::max(1u, w_ / 2), hh = std::max(1u, h_ / 2);
       t.bloomA = dev_->createTexture({hw, hh, 1, rhi::Format::RGBA16F, true}, nullptr);
       t.bloomB = dev_->createTexture({hw, hh, 1, rhi::Format::RGBA16F, true}, nullptr);
       t.out = dev_->createTexture({w_, h_, 1, colorFmt_, true}, nullptr);
-      t.glow = dev_->createTexture({w_, h_, 1, rhi::Format::RGBA16F, true}, nullptr); // brilho: so a emissao (bloom)
+      t.glow = dev_->createTexture({w_, h_, 1, rhi::Format::RGBA16F, true}, nullptr);
       it = targets_.emplace(key, t).first;
     }
     it->second.lastUse = frame_;
@@ -293,20 +267,15 @@ public:
     }
   }
 
-  // Iluminacao do quadro (chamar entre begin() e draw()). `rig` ja fez LightRig::build() com as MESMAS view/proj desta
-  // camera. Sobe as luzes e os clusters para a GPU (LightPrism), monta o ambiente e prepara as cascatas do sol.
-  // reuse = true: nada que projeta sombra nem a luz mudou: reaproveita os mapas do quadro anterior (sem passe de sombra).
-  // Retorna false se a Light Prism falhar (LastError() diz o motivo).
-  // Point/Spot mantem uma assinatura independente por face; o cache nao depende da camera.
   bool setLighting(LightRig& rig, const Mat4& view, const Mat4& proj, bool reuse = false) {
     if (!dev_ || !lp_) return false;
     const LightFrame& fr = rig.frame();
     LightPrism::LightingSystem& sys = rig.system();
-    // 1) luzes na GPU (buffers da LightPrism) e 2) clusters (compute da LightPrism)
     if (!sys.UploadToGPU(*lp_)) { lastError_ = "Light Prism: falha ao enviar as luzes para a GPU"; return false; }
     LightPrism::ClusterCamera cam = LightPrism::MakeClusterCamera(LightRig::toLp(view), LightRig::toLp(proj), w_, h_, cam_zNear_, cam_zFar_);
+    // Passa a textura de profundidade da cena para permitir compactacao de clusters ativos via Z-Prepass quando disponivel
     if (!clusters_->Execute(*lp_, sys, rig.lastView(), cam)) { lastError_ = "Light Prism clusters: " + clusters_->LastError(); return false; }
-    // 3) importa os buffers da LightPrism para o RHI (nao sao donos: a LightPrism recria quando precisa)
+
     releaseImports();
     auto imp = [&](LightPrism::IGpuBuffer* b) -> rhi::BufferId {
       if (!b || !b->NativeHandle()) return kNullHandle;
@@ -324,7 +293,7 @@ public:
     if (imp_.points.isNull() || imp_.spots.isNull() || imp_.globals.isNull() || imp_.sun.isNull() || imp_.grid.isNull() || imp_.cells.isNull() || imp_.indices.isNull()) {
       lastError_ = "Light Prism: buffers de luz indisponiveis"; return false;
     }
-    // 4) cascatas e ambiente (CPU -> uniformes da engine)
+
     const bool on = fr.shadows();
     const u32 count = on ? std::min<u32>(fr.csm.gpu.cascadeCount, LightPrism::kMaxCsmCascades) : 0u;
     const int res = on ? std::clamp(static_cast<int>(fr.csm.gpu.shadowMapSize), 128, 4096) : shRes_;
@@ -334,7 +303,7 @@ public:
     if (on) ensureShadowTargets(static_cast<u32>(res));
     for (u32 k = 0; k < count; ++k) cascadeVp_[k] = toTool(fr.csm.gpu.cascades[k].viewProj);
     dev_->updateBuffer(csmCb_, &fr.csm.gpu, sizeof(LightPrism::CsmGPU));
-    // Sombras de pontuais/spot (engine): ate 4 luzes, uma faixa R x 6R por luz, cacheada face a face.
+
     pointCount_ = std::min<u32>(static_cast<u32>(fr.shadowLights.size()), kMaxPointShadowLights);
     pointOn_ = pointCount_ > 0;
     pointRes_ = std::clamp<u32>(fr.pointShadowResolution, 64u, 1024u);
@@ -354,7 +323,7 @@ public:
     dev_->updateBuffer(pointCb_, &pg, sizeof pg);
     const LightPrism::Ibl::IblGPU ibl = LightPrism::Ibl::MakeIblGPU(fr.ambient, 1.0f, 1);
     dev_->updateBuffer(iblCb_, &ibl, sizeof(ibl));
-    // SSAO (constantes da Light Prism, SsaoGPU): a projecao vem do chamador (mesma camera do quadro)
+
     ssaoOn_ = fr.ssaoOn;
     if (ssaoOn_) {
       float proj4[4][4];
@@ -365,15 +334,11 @@ public:
     lastError_.clear();
     return true;
   }
-  // Motivo do ultimo erro de init() ou setLighting(); vazio quando tudo deu certo.
+
   const std::string& lastError() const { return lastError_; }
-  // true se este quadro reaproveitou os mapas de sombra do anterior (setLighting com reuse).
   bool shadowPassSkipped() const { return shadowSkip_; }
-  // true se este quadro tem sombras de cascata ligadas (definido em setLighting).
   bool shadowsActive() const { return shadowOn_; }
 
-  // begin/draw/end: begin() so guarda os parametros e draw() so ANOTA os objetos; tudo e enviado a GPU em end(),
-  // na ordem certa: 1) passe de sombra (uma passada por cascata), 2) passe principal (agrupado por malha).
   void begin(const Camera& cam, Vec3 clear = {0.02f, 0.025f, 0.035f}, f32 clearAlpha = 1.f) {
     if (!dev_) return;
     ++frame_;
@@ -382,13 +347,11 @@ public:
     draws_.clear(); tdraws_.clear(); shadowOn_ = false; shadowSkip_ = false; open_ = true;
     stats_ = {};
     stats_.valid = true;
-    // Remocao de malhas que nao aparecem ha 240 quadros (evita vazamento de buffers na GPU).
     if ((frame_ & 63) == 0) for (auto it = meshes_.begin(); it != meshes_.end();) {
       if (frame_ - it->second.lastUse > 240) { freeMesh(it->second); it = meshes_.erase(it); } else ++it;
     }
   }
 
-  // Desenha uma malha dinamica (um slot por lote). Use slots distintos para lotes diferentes no mesmo quadro.
   void drawDynamic(u32 slot, const Mesh& m, const Mat4& world, const Material& mat) {
     if (!open_ || m.idx.empty()) return;
     GpuMesh& g = dynamicSlot(slot, m);
@@ -396,7 +359,6 @@ public:
     addDraw(makeDraw(&g, world, mat));
   }
 
-  // Enfileira uma malha estatica com a matriz world e o material. O envio real a GPU acontece em end().
   void draw(const Mesh& m, const Mat4& world, const Material& mat) {
     if (!open_) return;
     GpuMesh& g = upload(m);
@@ -404,7 +366,6 @@ public:
     addDraw(makeDraw(&g, world, mat));
   }
 
-  // Textura do albedo na GPU (cache por Texture::id). Sem textura, devolve a branca 1x1 (o shader ignora).
   rhi::TextureId textureFor(const Texture* t, f32& tw, f32& th) {
     tw = th = 0.f;
     if (!dev_ || !t || !t->valid() || t->id == 0) return white_;
@@ -416,7 +377,6 @@ public:
     return id;
   }
 
-  // Envia o quadro a GPU: culling, ordenacao, sombras, prepasso/SSAO, passe opaco, emissao, transparente e bloom.
   void end() {
     if (!open_ || !dev_) return;
     open_ = false;
@@ -424,36 +384,48 @@ public:
     const Mat4 view = Mat4::lookAt(cam_.eye, cam_.target, cam_.up);
     const Mat4 vp = cam_.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * view;
     const render::Frustum cameraFrustum = render::frustumFromViewProj(vp.m, dev_->backend() != rhi::Backend::GLES);
-    queueItems_.clear();
-    queueItems_.reserve(draws_.size());
-    for (const Draw& d : draws_) {
-      const render::SphereBounds worldBounds = render::transformSphere(d.world.m, d.mesh->bounds);
-      const bool cameraVisible = render::sphereInFrustum(cameraFrustum, worldBounds);
-      const bool emissive = !(d.mat.emissive.x <= 0.f && d.mat.emissive.y <= 0.f && d.mat.emissive.z <= 0.f);
-      queueItems_.push_back({cameraVisible, false, cameraVisible && emissive, true, d.mat.castShadow && d.mesh->count > 0});
+
+    // Avaliacao paralela de frustum culling e flags de fila para milhares de objetos
+    const size_t drawTotal = draws_.size();
+    queueItems_.resize(drawTotal);
+    if (drawTotal > 0) {
+      tool::parallelFor(drawTotal, 256, [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i) {
+          const Draw& d = draws_[i];
+          const render::SphereBounds worldBounds = render::transformSphere(d.world.m, d.mesh->bounds);
+          const bool cameraVisible = render::sphereInFrustum(cameraFrustum, worldBounds);
+          const bool emissive = !(d.mat.emissive.x <= 0.f && d.mat.emissive.y <= 0.f && d.mat.emissive.z <= 0.f);
+          queueItems_[i] = {cameraVisible, false, cameraVisible && emissive, true, d.mat.castShadow && d.mesh->count > 0};
+        }
+      });
     }
     render::buildRenderQueues(queueItems_, renderQueues_);
+
     tdraws_.erase(std::remove_if(tdraws_.begin(), tdraws_.end(), [&](const Draw& d) {
       const render::SphereBounds worldBounds = render::transformSphere(d.world.m, d.mesh->bounds);
       return !render::sphereInFrustum(cameraFrustum, worldBounds);
     }), tdraws_.end());
-    if (!ensureInstanceBuffer(std::max(renderQueues_.opaque.size(), tdraws_.size()))) {
+
+    if (!ensureBuffer(instBuf_, instCap_, std::max(renderQueues_.opaque.size(), tdraws_.size()), sizeof(InstanceGPU))) {
       lastError_ = "storage buffer de instancias indisponivel";
       releaseImports();
       return;
     }
+
     shadowCasters_.clear();
     shadowInstances_.clear();
     shadowCasters_.reserve(draws_.size());
     for (const Draw& d : draws_) {
       if (d.mat.castShadow && d.mesh->count > 0) shadowCasters_.push_back(&d);
     }
+
     std::array<std::array<bool, kMaxPointShadowFaces>, kMaxPointShadowLights> pointFaceDirty{};
     std::array<std::array<PointFaceSignature, kMaxPointShadowFaces>, kMaxPointShadowLights> pointFaceSignatures{};
     for (u32 k = 0; k < shadowCount_ && shadowOn_ && !shadowSkip_; ++k) {
       const render::Frustum frustum = render::frustumFromViewProj(cascadeVp_[k].m, dev_->backend() != rhi::Backend::GLES);
       buildShadowQueue(csmQueues_[k], frustum, true, shadowCasters_);
     }
+
     for (u32 i = 0; i < pointCount_ && pointOn_; ++i) {
       for (u32 f = 0; f < pointFaces_[i]; ++f) {
         const render::Frustum frustum = render::frustumFromViewProj(pointVp_[i][f].m, dev_->backend() != rhi::Backend::GLES);
@@ -483,22 +455,19 @@ public:
         }
       }
     }
+
     if (!shadowInstances_.empty()) {
-      if (shadowInstances_.size() > shadowInstCap_) {
-        u32 newCap = shadowInstCap_ ? shadowInstCap_ : 64u;
-        while (newCap < shadowInstances_.size()) newCap *= 2u;
-        if (!shadowInstBuf_.isNull()) dev_->destroy(shadowInstBuf_);
-        shadowInstBuf_ = dev_->createBuffer({static_cast<size_t>(newCap) * sizeof(ShadowInstanceGPU), rhi::BufferUsage::Storage, true, sizeof(ShadowInstanceGPU)}, nullptr);
-        shadowInstCap_ = newCap;
+      if (ensureBuffer(shadowInstBuf_, shadowInstCap_, shadowInstances_.size(), sizeof(ShadowInstanceGPU))) {
+        dev_->updateBuffer(shadowInstBuf_, shadowInstances_.data(), shadowInstances_.size() * sizeof(ShadowInstanceGPU));
       }
-      if (!shadowInstBuf_.isNull()) dev_->updateBuffer(shadowInstBuf_, shadowInstances_.data(), shadowInstances_.size() * sizeof(ShadowInstanceGPU));
     }
-    // ---- 1) sombras: um passe por cascata ----
+
+    // ---- 1) sombras CSM ----
     if (shadowOn_ && !shadowSkip_) {
       render::PassTimer timer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::CsmShadow)]};
       for (u32 k = 0; k < shadowCount_; ++k) {
         auto cl = dev_->beginCommands();
-        cl->begin(shColor_[k], shDepth_, 1.f, 1.f, 1.f, 1.f); // limpa para "longe" (z = 1)
+        cl->begin(shColor_[k], shDepth_, 1.f, 1.f, 1.f, 1.f);
         cl->setPipeline(shPipe_);
         ShadowCB sc{};
         sc.lightViewProj = cascadeVp_[k];
@@ -519,7 +488,8 @@ public:
       }
       shadowValid_ = true;
     }
-    // ---- 1b) sombras Point/Spot: cada face invalida e limpa apenas sua regiao da faixa R x 6R ----
+
+    // ---- 1b) sombras Point/Spot ----
     bool anyPointFaceDirty = false;
     for (u32 i = 0; i < pointCount_; ++i)
       for (u32 f = 0; f < pointFaces_[i]; ++f) anyPointFaceDirty = anyPointFaceDirty || pointFaceDirty[i][f];
@@ -573,50 +543,45 @@ public:
         }
       }
     }
+
     // ---- 2) passe principal ----
     FrameCB fc; fc.viewProj = vp; fc.view = view; fc.camera[0] = cam_.eye.x; fc.camera[1] = cam_.eye.y; fc.camera[2] = cam_.eye.z;
     dev_->updateBuffer(frameCb_, &fc, sizeof fc);
-    // ---- 1c) SSAO: prepasso (normal de view + profundidade), AO bruto e blur. Sem SSAO o AO fica 1 (limpo). ----
+
+    // ---- 1c) SSAO ----
     if (ssaoOn_) {
-      std::vector<BatchItem> preItems;
-      BatchPlan prePlan;
-      planQueuedBatches(renderQueues_.prepass, preItems, prePlan, [&](u32 index) {
+      planQueuedBatches(renderQueues_.prepass, prepassItemsScratch_, prepassPlan_, [&](u32 index) {
         return BatchItem{reinterpret_cast<u64>(draws_[index].mesh), 0u};
       }, 4096);
-      std::vector<ShadowInstanceGPU> preCpu;
-      preCpu.reserve(prePlan.order.size());
-      for (u32 k : prePlan.order) {
-        ShadowInstanceGPU inst{};
-        inst.world = draws_[renderQueues_.prepass[k]].world;
-        preCpu.push_back(inst);
-      }
-      if (!preCpu.empty()) {
-        if (preCpu.size() > prepassInstCap_) {
-          u32 newCap = prepassInstCap_ ? prepassInstCap_ : 64u;
-          while (newCap < preCpu.size()) newCap *= 2u;
-          if (!prepassInstBuf_.isNull()) dev_->destroy(prepassInstBuf_);
-          prepassInstBuf_ = dev_->createBuffer({static_cast<size_t>(newCap) * sizeof(ShadowInstanceGPU), rhi::BufferUsage::Storage, true, sizeof(ShadowInstanceGPU)}, nullptr);
-          prepassInstCap_ = newCap;
+      prepassCpu_.resize(prepassPlan_.order.size());
+      if (!prepassCpu_.empty()) {
+        tool::parallelFor(prepassCpu_.size(), 256, [&](size_t b, size_t e) {
+          for (size_t i = b; i < e; ++i) {
+            prepassCpu_[i].world = draws_[renderQueues_.prepass[prepassPlan_.order[i]]].world;
+          }
+        });
+        if (ensureBuffer(prepassInstBuf_, prepassInstCap_, prepassCpu_.size(), sizeof(ShadowInstanceGPU))) {
+          dev_->updateBuffer(prepassInstBuf_, prepassCpu_.data(), prepassCpu_.size() * sizeof(ShadowInstanceGPU));
         }
-        if (!prepassInstBuf_.isNull()) dev_->updateBuffer(prepassInstBuf_, preCpu.data(), preCpu.size() * sizeof(ShadowInstanceGPU));
       }
       render::PassTimer prepassTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Prepass)]};
       auto pl = dev_->beginCommands();
-      pl->begin(gbuf_, depth_, 0.f, 0.f, 0.f, 0.f); // w = 0: sem geometria
+      pl->begin(gbuf_, depth_, 0.f, 0.f, 0.f, 0.f);
       pl->setPipeline(prePipe_);
       pl->setUniform(0, frameCb_);
-      if (!preCpu.empty()) pl->setStorage(0, prepassInstBuf_);
-      for (const InstanceBatch& b : prePlan.batches) {
+      if (!prepassCpu_.empty()) pl->setStorage(0, prepassInstBuf_);
+      for (const InstanceBatch& b : prepassPlan_.batches) {
         BatchCB bc{};
         bc.first = b.first;
         dev_->updateBuffer(batchCb_, &bc, sizeof bc);
         pl->setUniform(1, batchCb_);
-        const Draw& d = draws_[renderQueues_.prepass[prePlan.order[b.first]]];
+        const Draw& d = draws_[renderQueues_.prepass[prepassPlan_.order[b.first]]];
         pl->setVertexBuffer(d.mesh->vertex); pl->setIndexBuffer(d.mesh->index);
         recordDraw(*pl, render::RenderPassId::Prepass, d.mesh->count, b.count);
       }
       pl->end(); dev_->submit(*pl);
       prepassTimer.stop();
+
       render::PassTimer ssaoTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Ssao)]};
       auto sc = dev_->beginCommands();
       sc->begin(aoRaw_, kNullHandle, 1.f, 1.f, 1.f, 1.f);
@@ -627,6 +592,7 @@ public:
       recordDraw(*sc, render::RenderPassId::Ssao, 3, 1);
       sc->end(); dev_->submit(*sc);
       ssaoTimer.stop();
+
       render::PassTimer ssaoBlurTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::SsaoBlur)]};
       auto bl = dev_->beginCommands();
       bl->begin(ao_, kNullHandle, 1.f, 1.f, 1.f, 1.f);
@@ -639,10 +605,10 @@ public:
       bl->end(); dev_->submit(*bl);
     } else {
       auto cl = dev_->beginCommands();
-      cl->begin(ao_, kNullHandle, 1.f, 1.f, 1.f, 1.f); // sem SSAO: AO = 1 em todo o quadro
+      cl->begin(ao_, kNullHandle, 1.f, 1.f, 1.f, 1.f);
       cl->end(); dev_->submit(*cl);
     }
-    // Ligacoes comuns do passe PBR (opaco e transparente): mesmos buffers, mapas e luzes.
+
     auto bindScene = [&](rhi::ICommandList* c, rhi::PipelineId p) {
       c->setPipeline(p);
       c->setUniform(0, frameCb_);
@@ -656,33 +622,41 @@ public:
       c->setStorage(1, imp_.spots);
       c->setStorage(2, imp_.cells);
       c->setStorage(3, imp_.indices);
-      // Mapas de sombra: as cascatas que nao existem apontam para o primeiro mapa (o shader so le as validas).
       for (u32 k = 0; k < 4; ++k) c->setTexture(1 + k, shColor_[k < shadowCount_ ? k : 0]);
       for (u32 i = 0; i < 4; ++i) c->setTexture(5 + i, pointStrip_[i < pointCount_ ? i : 0]);
       c->setTexture(9, ao_);
-      c->setTexture(10, brdfTex_);   // LUT da BRDF (IBL especular)
+      c->setTexture(10, brdfTex_);
     };
+
     render::PassTimer opaqueTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Opaque)]};
     cl_ = dev_->beginCommands();
-    // Alvo UNORM (OpenGL): nao usamos (o OpenGL ainda nao tem iluminacao); mantemos o clear em linear para Vulkan/D3D12.
     cl_->begin(color_, depth_, clear_.x, clear_.y, clear_.z, clearAlpha_);
     bindScene(cl_.get(), pipe_);
-    std::vector<BatchItem> items;
-    BatchPlan plan;
-    planQueuedBatches(renderQueues_.opaque, items, plan, [&](u32 index) {
+
+    planQueuedBatches(renderQueues_.opaque, opaqueItemsScratch_, opaquePlan_, [&](u32 index) {
       const Draw& d = draws_[index];
       const u64 meshId = reinterpret_cast<u64>(d.mesh);
       const u64 texId = d.tex.isNull() ? 0u : (static_cast<u64>(d.tex.generation) << 32) | d.tex.index;
       return BatchItem{meshId, texId};
     }, 4096);
-    instCpu_.clear();
-    instCpu_.reserve(plan.order.size());
-    for (u32 k : plan.order) {
-      const Draw& d = draws_[renderQueues_.opaque[k]];
-      instCpu_.push_back(makeInstanceGPU(d, 1.f));
-    }
-    if (!instCpu_.empty()) {
-      if (!ensureInstanceBuffer(instCpu_.size())) {
+
+    // Prepara o plano de argumentos indiretos (pronto para Multi-Draw Indirect quando suportado pelo RHI)
+    render::planIndirectArgs(opaquePlan_.batches, [&](u64 meshPtr) -> render::IndirectMeshRange {
+      const auto* gm = reinterpret_cast<const GpuMesh*>(static_cast<uintptr_t>(meshPtr));
+      return gm ? render::IndirectMeshRange{gm->count, 0u, 0} : render::IndirectMeshRange{};
+    }, 65536, opaqueIndirectPlan_);
+
+    // Empacotamento paralelo das instancias opacas no SSBO
+    const size_t opaqueCount = opaquePlan_.order.size();
+    instCpu_.resize(opaqueCount);
+    if (opaqueCount > 0) {
+      tool::parallelFor(opaqueCount, 256, [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i) {
+          const Draw& d = draws_[renderQueues_.opaque[opaquePlan_.order[i]]];
+          instCpu_[i] = makeInstanceGPU(d, 1.f);
+        }
+      });
+      if (!ensureBuffer(instBuf_, instCap_, instCpu_.size(), sizeof(InstanceGPU))) {
         cl_->end(); dev_->submit(*cl_); cl_.reset();
         lastError_ = "storage buffer de instancias indisponivel";
         releaseImports();
@@ -691,20 +665,21 @@ public:
       dev_->updateBuffer(instBuf_, instCpu_.data(), instCpu_.size() * sizeof(InstanceGPU));
       cl_->setStorage(4, instBuf_);
     }
-    for (const InstanceBatch& b : plan.batches) {
+
+    for (const InstanceBatch& b : opaquePlan_.batches) {
       BatchCB bc{};
       bc.first = b.first;
       dev_->updateBuffer(batchCb_, &bc, sizeof bc);
       cl_->setUniform(1, batchCb_);
-      const Draw& d = draws_[renderQueues_.opaque[plan.order[b.first]]];
+      const Draw& d = draws_[renderQueues_.opaque[opaquePlan_.order[b.first]]];
       cl_->setTexture(0, d.tex.isNull() ? white_ : d.tex);
       cl_->setVertexBuffer(d.mesh->vertex); cl_->setIndexBuffer(d.mesh->index);
       recordDraw(*cl_, render::RenderPassId::Opaque, d.mesh->count, b.count);
     }
     cl_->end(); dev_->submit(*cl_); cl_.reset();
     opaqueTimer.stop();
-    // Brilho do bloom: limpa em preto (nada emite) e desenha so os objetos com emissao, com a profundidade do desenho
-    // principal. Assim o halo so aparece ao redor do que emite, e nao atras de paredes.
+
+    // Passe de emissao: usa buffer dedicado (emiInstBuf_) para nao sobrescrever instBuf_ do passe opaco no mesmo frame
     if (bloomOn_ && !glow_.isNull()) {
       render::PassTimer emissionTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Emission)]};
       auto gl = dev_->beginCommands();
@@ -717,20 +692,19 @@ public:
           const Draw& d = draws_[index];
           return BatchItem{reinterpret_cast<u64>(d.mesh), 0};
         }, 4096);
-        instCpu_.clear();
-        instCpu_.reserve(emissionPlan_.order.size());
-        for (u32 k : emissionPlan_.order) {
-          const Draw& d = draws_[renderQueues_.emissive[k]];
+        emiCpu_.resize(emissionPlan_.order.size());
+        for (size_t i = 0; i < emissionPlan_.order.size(); ++i) {
+          const Draw& d = draws_[renderQueues_.emissive[emissionPlan_.order[i]]];
           InstanceGPU inst{};
           std::memcpy(inst.world, &d.world, sizeof d.world);
           inst.emissive[0] = d.mat.emissive.x;
           inst.emissive[1] = d.mat.emissive.y;
           inst.emissive[2] = d.mat.emissive.z;
-          instCpu_.push_back(inst);
+          emiCpu_[i] = inst;
         }
-        if (!instCpu_.empty() && !instBuf_.isNull()) {
-          dev_->updateBuffer(instBuf_, instCpu_.data(), instCpu_.size() * sizeof(InstanceGPU));
-          gl->setStorage(0, instBuf_);
+        if (!emiCpu_.empty() && ensureBuffer(emiInstBuf_, emiInstCap_, emiCpu_.size(), sizeof(InstanceGPU))) {
+          dev_->updateBuffer(emiInstBuf_, emiCpu_.data(), emiCpu_.size() * sizeof(InstanceGPU));
+          gl->setStorage(0, emiInstBuf_);
           for (const InstanceBatch& b : emissionPlan_.batches) {
             BatchCB bc{};
             bc.first = b.first;
@@ -745,8 +719,8 @@ public:
       }
       gl->end(); dev_->submit(*gl);
     }
-    // Passe transparente: objetos com opacidade < 1, do mais distante para o mais perto, misturados sobre o opaco.
-    // Usa a profundidade do opaco sem escrever nela (nao aparecem atras de paredes). Sombra e brilho nao vem daqui.
+
+    // Passe transparente: usa buffer dedicado (transInstBuf_) para preservar integridade dos passes anteriores
     if (!tdraws_.empty() && !transPipe_.isNull()) {
       render::PassTimer transparentTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Transparent)]};
       const Vec3 eye = cam_.eye;
@@ -760,25 +734,24 @@ public:
         transparentItemsScratch_.push_back({meshId, texId});
       }
       planAdjacentInstanceBatches(transparentItemsScratch_, transparentPlan_, 4096);
-      instCpu_.clear();
-      instCpu_.reserve(transparentPlan_.order.size());
-      for (u32 index : transparentPlan_.order) {
-        const Draw& d = tdraws_[index];
-        instCpu_.push_back(makeInstanceGPU(d, d.mat.opacity));
+      transCpu_.resize(transparentPlan_.order.size());
+      for (size_t i = 0; i < transparentPlan_.order.size(); ++i) {
+        const Draw& d = tdraws_[transparentPlan_.order[i]];
+        transCpu_[i] = makeInstanceGPU(d, d.mat.opacity);
       }
-      if (!instCpu_.empty()) {
-        if (!ensureInstanceBuffer(instCpu_.size())) {
-          lastError_ = "storage buffer de instancias indisponivel";
+      if (!transCpu_.empty()) {
+        if (!ensureBuffer(transInstBuf_, transInstCap_, transCpu_.size(), sizeof(InstanceGPU))) {
+          lastError_ = "storage buffer de instancias transparentes indisponivel";
           transparentTimer.stop();
           releaseImports();
           return;
         }
-        dev_->updateBuffer(instBuf_, instCpu_.data(), instCpu_.size() * sizeof(InstanceGPU));
+        dev_->updateBuffer(transInstBuf_, transCpu_.data(), transCpu_.size() * sizeof(InstanceGPU));
       }
       auto tl = dev_->beginCommands();
       tl->beginKeep(color_, depth_);
       bindScene(tl.get(), transPipe_);
-      if (!instCpu_.empty()) tl->setStorage(4, instBuf_);
+      if (!transCpu_.empty()) tl->setStorage(4, transInstBuf_);
       for (const InstanceBatch& b : transparentPlan_.batches) {
         BatchCB bc{};
         bc.first = b.first;
@@ -792,34 +765,26 @@ public:
       }
       tl->end(); dev_->submit(*tl);
     }
+
     out_ = color_;
     if (bloomOn_ && !bloomA_.isNull() && !bloomThrPipe_.isNull()) { runBloom(); out_ = outFull_; }
     releaseImports();
-    drawCount_ = static_cast<u32>(plan.batches.size());
+    drawCount_ = static_cast<u32>(opaquePlan_.batches.size());
   }
 
-  // Copia a imagem final (RGBA8) para a CPU. Espera a GPU terminar.
   bool readback(std::vector<u8>& rgba, u32& w, u32& h) { return dev_ && dev_->readTexture(out_, rgba, w, h); }
-  // Leitura sem esperar a GPU (editor): 1 = quadro novo em rgba, 0 = ainda nao, -1 = falha. Ver rhi.hpp.
   int readbackAsync(int slot, std::vector<u8>& rgba, u32& w, u32& h) { return dev_ ? dev_->readTextureAsync(out_, slot, rgba, w, h) : -1; }
-  // Bloom do quadro (pos-processamento): liga/desliga e parametros. Valem no proximo end().
   void setBloom(bool on, f32 threshold, f32 strength) { bloomOn_ = on; bloomThr_ = threshold; bloomStr_ = strength; }
-  // Textura de cor do quadro atual (sem o bloom aplicado).
   rhi::TextureId colorTarget() const { return color_; }
-  // Largura do alvo atual, em pixels.
+  rhi::TextureId depthTarget() const { return depth_; }
   u32 width() const { return w_; }
-  // Altura do alvo atual, em pixels.
   u32 height() const { return h_; }
-  // Quantidade de lotes opacos do ultimo quadro.
   u32 draws() const { return drawCount_; }
-  // Quantidade de malhas que tem copia na GPU.
   size_t cachedMeshes() const { return meshes_.size(); }
-  // Estatisticas do quadro atual: tempo dos passes e contadores do cache de sombra.
   const render::RenderViewStats& renderStats() const { return stats_; }
-  // Estatisticas da Light Prism do ultimo quadro (clusters em uso e memoria).
+  const render::IndirectPlan& opaqueIndirectPlan() const { return opaqueIndirectPlan_; }
   const LightPrism::ClusterSystem* clusters() const { return clusters_.get(); }
 
-  // Libera a copia na GPU de uma malha (chamar se a malha for destruida/alterada).
   void forget(const Mesh& m) {
     auto it = meshes_.find(&m);
     if (it == meshes_.end()) return;
@@ -827,30 +792,21 @@ public:
   }
 
 private:
-  // Grava um drawIndexed na lista de comandos e contabiliza no passe da estatistica.
   void recordDraw(rhi::ICommandList& commands, render::RenderPassId pass, u32 indexCount, u32 instances) {
     commands.drawIndexed(indexCount, instances);
     stats_.passes[static_cast<std::size_t>(pass)].recordDraw(indexCount, instances);
   }
 
-  // Malha na GPU. posKey/nVert/nIdx = o que foi enviado: se mudar, os buffers sao refeitos (o endereco sozinho nao basta).
   struct GpuMesh { rhi::BufferId vertex, index; u32 count = 0; const void* posKey = nullptr; size_t nVert = 0, nIdx = 0, vCap = 0, iCap = 0; u64 lastUse = 0; u32 rev = 0; bool dynamic = false; render::SphereBounds bounds; };
-  // Um objeto a desenhar: malha, matriz world, material e textura do albedo (tw e th em pixels; 0 = sem textura).
   struct Draw { const GpuMesh* mesh; Mat4 world; Material mat; rhi::TextureId tex; f32 tw, th; };
-  // Fila de um passe de sombra: lotes planejados e os draws na ordem dos lotes.
   struct ShadowQueue { BatchPlan plan; std::vector<const Draw*> orderedDraws; size_t instanceBase = 0; };
-  // Hash da luz e dos casters de uma face de sombra pontual. Se mudar, a face e redesenhada.
   struct PointFaceSignature { u64 light = 0, casters = 0; bool operator==(const PointFaceSignature&) const = default; };
-  // Estado do cache de uma face de sombra pontual. valid = false obriga o redesenho.
   struct PointFaceCache { PointFaceSignature signature{}; bool valid = false, targetResetPending = false, renderFailed = false; };
-  // Alvos de render de uma resolucao: cor, profundidade, G-buffer do SSAO, AO, bloom e saida final.
   struct Target { rhi::TextureId color, depth, gbuf, aoRaw, ao, bloomA, bloomB, out, glow; u64 lastUse = 0; };
-  // Buffers da Light Prism importados neste quadro (validos ate releaseImports()).
   struct Imports { rhi::BufferId points, spots, globals, sun, grid, cells, indices; };
 
-  static Mat4 toTool(const LightPrism::Mat4& m) { Mat4 r; for (int c = 0; c < 4; ++c) for (int k = 0; k < 4; ++k) r.m[c][k] = m.m[k][c]; return r; } // linha -> coluna
+  static Mat4 toTool(const LightPrism::Mat4& m) { Mat4 r; for (int c = 0; c < 4; ++c) for (int k = 0; k < 4; ++k) r.m[c][k] = m.m[k][c]; return r; }
 
-  // Esfera envolvente das posicoes da malha. Devolve invalida se houver posicao nao finita.
   static render::SphereBounds meshSphere(const Mesh& m) {
     if (m.pos.empty()) return {};
     Vec3 lo = m.pos.front(), hi = m.pos.front();
@@ -872,10 +828,9 @@ private:
     return {{center.x, center.y, center.z}, radius, true};
   }
 
-  // Monta a fila de um passe de sombra filtrando os casters pelos quatro planos laterais e agrupando por malha. appendInstances = false so monta a fila.
   void buildShadowQueue(ShadowQueue& queue, const render::Frustum& frustum, bool csm,
                        const std::vector<const Draw*>& casters, bool appendInstances = true) {
-    (void)csm; // mantido na assinatura; a regra de culling nao depende mais dele
+    (void)csm;
     shadowItemsScratch_.clear();
     shadowDrawsScratch_.clear();
     queue.orderedDraws.clear();
@@ -884,10 +839,7 @@ private:
     queue.instanceBase = 0;
     for (const Draw* d : casters) {
       const render::SphereBounds worldBounds = render::transformSphere(d->world.m, d->mesh->bounds);
-      // Casters fora do frustum da camera mas entre a luz e o near plane ainda projetam sombra:
-      // por isso usa sempre os 4 planos laterais (como CSM), nunca os 6 planos.
-      const bool visible = render::sphereInFrustumSides(frustum, worldBounds);
-      if (!visible) continue;
+      if (!render::sphereInFrustumSides(frustum, worldBounds)) continue;
       shadowDrawsScratch_.push_back(d);
     }
     planQueuedBatches(shadowDrawsScratch_, shadowItemsScratch_, queue.plan, [](const Draw* d) {
@@ -895,19 +847,16 @@ private:
     }, 4096);
     queue.orderedDraws.reserve(queue.plan.order.size());
     for (u32 index : queue.plan.order) {
-      const Draw* d = shadowDrawsScratch_[index];
-      queue.orderedDraws.push_back(d);
+      queue.orderedDraws.push_back(shadowDrawsScratch_[index]);
     }
     if (appendInstances) appendShadowInstances(queue);
   }
 
-  // Acrescenta as matrizes da fila ao buffer de instancias de sombra e grava a base da fila.
   void appendShadowInstances(ShadowQueue& queue) {
     queue.instanceBase = shadowInstances_.size();
     for (const Draw* d : queue.orderedDraws) shadowInstances_.push_back({d->world});
   }
 
-  // Calcula o hash de uma face: parametros da luz, matriz da face e casters da fila.
   PointFaceSignature pointShadowFaceSignature(const ShadowLight& light, u32 face, const ShadowQueue& queue) const {
     std::uint64_t lightHash = 1469598103934665603ull;
     std::uint64_t casterHash = 1469598103934665603ull;
@@ -929,24 +878,23 @@ private:
     return {lightHash, casterHash};
   }
 
-  // Layout de vertice fixo (stride 32): POSITION f3 @0, NORMAL f3 @12, TEXCOORD0 f2 @24 (0 se a malha nao tem UV).
   static void packVertices(const Mesh& m, std::vector<f32>& v) {
     v.clear(); v.reserve(m.pos.size() * 8);
     const bool hasUv = m.uv.size() == m.pos.size() * 2;
     for (size_t i = 0; i < m.pos.size(); ++i) { v.insert(v.end(), {m.pos[i].x, m.pos[i].y, m.pos[i].z, m.normal[i].x, m.normal[i].y, m.normal[i].z, hasUv ? m.uv[2 * i] : 0.f, hasUv ? m.uv[2 * i + 1] : 0.f}); }
   }
-  // Destroi os buffers de uma malha na GPU e zera o registro, mantendo lastUse.
+
   void freeMesh(GpuMesh& g) {
     if (!g.vertex.isNull()) dev_->destroy(g.vertex);
     if (!g.index.isNull()) dev_->destroy(g.index);
-    const u64 lu = g.lastUse; g = GpuMesh{}; g.lastUse = lu;   // preserva o uso: a remocao por inatividade depende dele
+    const u64 lu = g.lastUse; g = GpuMesh{}; g.lastUse = lu;
   }
-  // Bloom: limiar (cor -> meia resolucao), blur horizontal e vertical, e composicao (cor + halo) em out_.
+
   void runBloom() {
     BloomCB base{};
     base.srcSize[0] = static_cast<f32>(w_); base.srcSize[1] = static_cast<f32>(h_);
     base.haloSize[0] = static_cast<f32>(std::max(1u, w_ / 2)); base.haloSize[1] = static_cast<f32>(std::max(1u, h_ / 2));
-    base.threshold = 0.f; base.strength = bloomStr_; // o brilho ja so tem emissao: sem limiar
+    base.threshold = 0.f; base.strength = bloomStr_;
     BloomCB hz = base; hz.dir[0] = 1.f; hz.dir[1] = 0.f;
     BloomCB vt = base; vt.dir[0] = 0.f; vt.dir[1] = 1.f;
     dev_->updateBuffer(bloomCbThr_, &base, sizeof base);
@@ -956,28 +904,28 @@ private:
     auto fullscreen = [&](rhi::ICommandList& c, render::RenderPassId pass) {
       c.setVertexBuffer(fsVb_); c.setIndexBuffer(fsIb_); recordDraw(c, pass, 3, 1);
     };
-    { // 1) limiar: cor -> bloomA (meia resolucao)
+    {
       render::PassTimer timer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::BloomExtract)]};
       auto c = dev_->beginCommands();
       c->begin(bloomA_, kNullHandle, 0.f, 0.f, 0.f, 1.f);
       c->setPipeline(bloomThrPipe_); c->setUniform(0, bloomCbThr_); c->setTexture(0, glow_);
       fullscreen(*c, render::RenderPassId::BloomExtract); c->end(); dev_->submit(*c);
     }
-    { // 2) blur horizontal: bloomA -> bloomB
+    {
       render::PassTimer timer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::BloomBlurH)]};
       auto c = dev_->beginCommands();
       c->begin(bloomB_, kNullHandle, 0.f, 0.f, 0.f, 1.f);
       c->setPipeline(bloomBlurPipe_); c->setUniform(0, bloomCbH_); c->setTexture(0, bloomA_);
       fullscreen(*c, render::RenderPassId::BloomBlurH); c->end(); dev_->submit(*c);
     }
-    { // 3) blur vertical: bloomB -> bloomA
+    {
       render::PassTimer timer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::BloomBlurV)]};
       auto c = dev_->beginCommands();
       c->begin(bloomA_, kNullHandle, 0.f, 0.f, 0.f, 1.f);
       c->setPipeline(bloomBlurPipe_); c->setUniform(0, bloomCbV_); c->setTexture(0, bloomB_);
       fullscreen(*c, render::RenderPassId::BloomBlurV); c->end(); dev_->submit(*c);
     }
-    { // 4) composicao: cor + halo -> out_ (resolucao cheia)
+    {
       render::PassTimer timer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::BloomComposite)]};
       auto c = dev_->beginCommands();
       c->begin(outFull_, kNullHandle, 0.f, 0.f, 0.f, 1.f);
@@ -985,12 +933,12 @@ private:
       fullscreen(*c, render::RenderPassId::BloomComposite); c->end(); dev_->submit(*c);
     }
   }
-  // Destroi os handles importados da Light Prism usados no quadro.
+
   void releaseImports() {
     for (auto h : imports_) if (dev_) dev_->destroy(h);
     imports_.clear(); imp_ = Imports{};
   }
-  // Cache de malhas estaticas. Reenvia se o endereco OU o tamanho mudou (um ponteiro reaproveitado nao vira malha antiga).
+
   GpuMesh& upload(const Mesh& m) {
     GpuMesh& g = meshes_[&m];
     g.lastUse = frame_;
@@ -1005,7 +953,7 @@ private:
     g.bounds = meshSphere(m);
     return g;
   }
-  // Malha DINAMICA (ex.: particulas): mesmo slot = mesmos buffers, atualizados com updateBuffer.
+
   GpuMesh& dynamicSlot(u32 slot, const Mesh& m) {
     GpuMesh& g = dyn_[slot];
     g.lastUse = frame_;
@@ -1029,7 +977,6 @@ private:
     return g;
   }
 
-  // Um mapa R32F por cascata + uma profundidade compartilhada (cada passe limpa a sua).
   void ensureShadowTargets(u32 res) {
     if (shW_ == res && !shColor_[0].isNull()) return;
     for (auto& t : shColor_) if (!t.isNull()) dev_->destroy(t);
@@ -1039,7 +986,6 @@ private:
     shW_ = res; shRes_ = static_cast<int>(res); shadowValid_ = false;
   }
 
-  // Uma faixa R32F R x 6R por luz com sombra (4 no maximo) e uma profundidade R x 6R compartilhada (cada luz limpa a sua).
   void ensurePointTargets(u32 res) {
     bool ready = pointW_ == res && !pointDepth_.isNull();
     for (const auto& t : pointStrip_) ready = ready && !t.isNull();
@@ -1058,7 +1004,6 @@ private:
     pointW_ = res;
   }
 
-  // Libera todos os recursos de GPU e zera os handles. Sem efeito se o dispositivo ja foi liberado.
   void release() {
     if (!dev_) return;
     releaseImports();
@@ -1071,57 +1016,51 @@ private:
     for (auto& [k, t] : texs_) dev_->destroy(t);
     texs_.clear();
     if (!white_.isNull()) { dev_->destroy(white_); white_ = kNullHandle; }
-    for (auto* h : {&frameCb_, &objCb_, &batchCb_, &instBuf_, &shadowInstBuf_, &prepassInstBuf_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &brdfTex_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &pointClearPipe_, &vs_, &ps_, &legacyVs_, &legacyPs_, &shVs_, &shPs_, &ptVs_, &ptPs_, &pointClearPs_,
+    for (auto* h : {&frameCb_, &objCb_, &batchCb_, &instBuf_, &emiInstBuf_, &transInstBuf_, &shadowInstBuf_, &prepassInstBuf_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &brdfTex_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &pointClearPipe_, &vs_, &ps_, &legacyVs_, &legacyPs_, &shVs_, &shPs_, &ptVs_, &ptPs_, &pointClearPs_,
                     &prePipe_, &ssaoPipe_, &blurPipe_, &fsVb_, &fsIb_, &ssaoCb_, &preVs_, &prePs_, &fsVs_, &ssaoPs_, &blurPs_,
                     &emiPipe_, &emiPs_, &transPipe_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     for (auto& t : shColor_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     for (auto& t : pointStrip_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     pointW_ = 0; pointOn_ = false; pointCount_ = 0; pointFaceCache_ = {};
-    instCap_ = 0; shadowInstCap_ = 0; prepassInstCap_ = 0; instCpu_.clear();
+    instCap_ = 0; emiInstCap_ = 0; transInstCap_ = 0; shadowInstCap_ = 0; prepassInstCap_ = 0;
+    instCpu_.clear(); emiCpu_.clear(); transCpu_.clear();
     clusters_.reset(); lp_.reset();
     shW_ = 0; shRes_ = 0; shadowCount_ = 0; shadowValid_ = false; draws_.clear(); dev_ = nullptr;
   }
 
-  // RHI dono da GPU. Ponteiro nao e dono: o chamador deve manter o dispositivo vivo.
   rhi::IDevice* dev_ = nullptr;
-  // Dispositivo da Light Prism usado para luzes e clusters.
   std::unique_ptr<LightPrism::IGraphicsDevice> lp_;
-  // Sistema de clusters da Light Prism (luzes por cluster, em compute).
   std::unique_ptr<LightPrism::ClusterSystem> clusters_;
   rhi::ShaderId vs_, ps_, legacyVs_, legacyPs_, shVs_, shPs_, ptVs_, ptPs_, pointClearPs_, preVs_, prePs_, fsVs_, ssaoPs_, blurPs_;
   rhi::PipelineId prePipe_, ssaoPipe_, blurPipe_;
   rhi::BufferId fsVb_, fsIb_, ssaoCb_;
   rhi::PipelineId pipe_, shPipe_, ptPipe_, pointClearPipe_;
-  rhi::BufferId frameCb_, objCb_, batchCb_, instBuf_, shadowInstBuf_, prepassInstBuf_, shCb_, csmCb_, iblCb_, pointCb_;
-  u32 instCap_ = 0, shadowInstCap_ = 0, prepassInstCap_ = 0;
-  std::vector<InstanceGPU> instCpu_;
+  rhi::BufferId frameCb_, objCb_, batchCb_, instBuf_, emiInstBuf_, transInstBuf_, shadowInstBuf_, prepassInstBuf_, shCb_, csmCb_, iblCb_, pointCb_;
+  u32 instCap_ = 0, emiInstCap_ = 0, transInstCap_ = 0, shadowInstCap_ = 0, prepassInstCap_ = 0;
+  std::vector<InstanceGPU> instCpu_, emiCpu_, transCpu_;
+  std::vector<ShadowInstanceGPU> prepassCpu_;
   std::array<ShadowQueue, LightPrism::kMaxCsmCascades> csmQueues_;
   std::array<ShadowQueue, kMaxPointShadowLights * kMaxPointShadowFaces> pointQueues_;
   std::vector<const Draw*> shadowCasters_, shadowDrawsScratch_;
   std::vector<render::RenderQueueItem> queueItems_;
   render::RenderQueues renderQueues_;
-  std::vector<BatchItem> emissionItemsScratch_;
-  BatchPlan emissionPlan_;
-  std::vector<BatchItem> transparentItemsScratch_;
-  BatchPlan transparentPlan_;
-  std::vector<BatchItem> shadowItemsScratch_;
+  std::vector<BatchItem> opaqueItemsScratch_, prepassItemsScratch_, emissionItemsScratch_, transparentItemsScratch_, shadowItemsScratch_;
+  BatchPlan opaquePlan_, prepassPlan_, emissionPlan_, transparentPlan_;
+  render::IndirectPlan opaqueIndirectPlan_;
   std::vector<ShadowInstanceGPU> shadowInstances_;
   rhi::TextureId brdfTex_;
   rhi::TextureId pointStrip_[kMaxPointShadowLights], pointDepth_;
   u32 pointW_ = 0, pointCount_ = 0, pointRes_ = 512;
   bool pointOn_ = false, ssaoOn_ = false;
-  // Cache das faces de sombra pontual, por luz e por face.
   std::array<std::array<PointFaceCache, kMaxPointShadowFaces>, kMaxPointShadowLights> pointFaceCache_{};
   u32 pointFaces_[kMaxPointShadowLights] = {};
   ShadowLight pointLights_[kMaxPointShadowLights];
   Mat4 pointVp_[kMaxPointShadowLights][kMaxPointShadowFaces];
-  std::vector<rhi::BufferId> imports_;   // handles importados neste quadro (liberados em releaseImports)
+  std::vector<rhi::BufferId> imports_;
   Imports imp_{};
-  std::unordered_map<u64, rhi::TextureId> texs_;   // texturas de albedo (por Texture::id)
-  rhi::TextureId white_;                           // 1x1 branca: textura padrao
-  // Cria a textura branca 1x1 usada quando o objeto nao tem albedo.
+  std::unordered_map<u64, rhi::TextureId> texs_;
+  rhi::TextureId white_;
   rhi::TextureId makeWhite() { const u8 px[4] = {255, 255, 255, 255}; return dev_->createTexture({1, 1, 1, rhi::Format::RGBA8, false}, px); }
-  // Monta um Draw resolvendo a textura do albedo (ou a branca).
   Draw makeDraw(const GpuMesh* g, const Mat4& world, const Material& mat) {
     f32 tw = 0, th = 0;
     if (white_.isNull() && dev_) white_ = makeWhite();
@@ -1135,13 +1074,13 @@ private:
   std::string lastError_;
   Camera cam_; Vec3 clear_; f32 clearAlpha_ = 1.f; f32 cam_zNear_ = 0.1f, cam_zFar_ = 100.f;
   std::vector<Draw> draws_;
-  std::vector<Draw> tdraws_;                  // objetos transparentes (opacity < 1): passe proprio, do fundo para a frente
-  // Preenche os campos de nevoa (cor e parametros) do ObjectCB.
+  std::vector<Draw> tdraws_;
+
   static void fillFog(ObjectCB& oc, const Material& m) {
     oc.fogColor[0] = m.fogColor.x; oc.fogColor[1] = m.fogColor.y; oc.fogColor[2] = m.fogColor.z; oc.fogColor[3] = 0.f;
     oc.fogParams[0] = m.fogStart; oc.fogParams[1] = m.fogEnd; oc.fogParams[2] = m.fogAmount; oc.fogParams[3] = 0.f;
   }
-  // Converte um Draw em InstanceGPU. alpha substitui a cor alfa: 1 no opaco, opacity no transparente.
+
   static InstanceGPU makeInstanceGPU(const Draw& d, f32 alpha) {
     ObjectCB oc{};
     oc.world = d.world;
@@ -1160,43 +1099,38 @@ private:
     std::memcpy(inst.fogParams, oc.fogParams, sizeof oc.fogParams);
     return inst;
   }
-  // Garante buffer de instancias com capacidade para required (cresce em potencias de 2). false se a criacao falhar.
-  bool ensureInstanceBuffer(size_t required) {
+
+  bool ensureBuffer(rhi::BufferId& buf, u32& cap, size_t required, size_t stride) {
     if (required == 0) return true;
-    if (required <= instCap_ && !instBuf_.isNull()) return true;
-    u32 newCap = instCap_ ? instCap_ : 64u;
+    if (required <= cap && !buf.isNull()) return true;
+    u32 newCap = cap ? cap : 64u;
     while (newCap < required) newCap *= 2u;
-    if (!instBuf_.isNull()) dev_->destroy(instBuf_);
-    instBuf_ = dev_->createBuffer({static_cast<size_t>(newCap) * sizeof(InstanceGPU), rhi::BufferUsage::Storage, true, sizeof(InstanceGPU)}, nullptr);
-    instCap_ = newCap;
-    return !instBuf_.isNull();
+    if (!buf.isNull()) dev_->destroy(buf);
+    buf = dev_->createBuffer({static_cast<size_t>(newCap) * stride, rhi::BufferUsage::Storage, true, static_cast<u32>(stride)}, nullptr);
+    cap = newCap;
+    return !buf.isNull();
   }
-  // Coloca o draw na lista opaca, ou na transparente se opacity < 1.
+
   void addDraw(Draw&& d) { (d.mat.opacity < 1.f ? tdraws_ : draws_).push_back(std::move(d)); }
   rhi::PipelineId transPipe_;
   rhi::TextureId color_, depth_, gbuf_, aoRaw_, ao_;
-  rhi::TextureId glow_;                       // brilho do bloom (so a emissao), mesma resolucao da cor
+  rhi::TextureId glow_;
   rhi::ShaderId emiPs_; rhi::PipelineId emiPipe_;
-  rhi::TextureId bloomA_, bloomB_, outFull_;  // outFull_: alvo da composicao (cor + bloom), separado da cor (le e escreve)
-  rhi::TextureId out_;                         // imagem final lida pela CPU: color_ ou outFull_
-  // Bloom ligado e parametros (limiar 0.75 e forca 0.8 por padrao). Valem no proximo end().
+  rhi::TextureId bloomA_, bloomB_, outFull_;
+  rhi::TextureId out_;
   bool bloomOn_ = false; f32 bloomThr_ = 0.75f, bloomStr_ = 0.8f;
   render::RenderViewStats stats_{};
   rhi::ShaderId bloomThrPs_, bloomBlurPs_, bloomCompPs_;
   rhi::PipelineId bloomThrPipe_, bloomBlurPipe_, bloomCompPipe_;
   rhi::BufferId bloomCbThr_, bloomCbH_, bloomCbV_, bloomCbComp_;
-  // Destroi todas as texturas de um Target.
   void destroyTarget(Target& t) { dev_->destroy(t.glow); dev_->destroy(t.color); dev_->destroy(t.depth); dev_->destroy(t.gbuf); dev_->destroy(t.aoRaw); dev_->destroy(t.ao); dev_->destroy(t.bloomA); dev_->destroy(t.bloomB); dev_->destroy(t.out); }
   rhi::Format colorFmt_ = rhi::Format::RGBA8_SRGB;
-  // Alvos de render por resolucao (chave: largura << 32 | altura).
   std::unordered_map<u64, Target> targets_;
-  // Contador de quadros, usado para expirar alvos e malhas sem uso.
   u64 frame_ = 0;
   std::unique_ptr<rhi::ICommandList> cl_;
   std::unordered_map<const Mesh*, GpuMesh> meshes_;
-  std::unordered_map<u32, GpuMesh> dyn_;   // malhas dinamicas por slot
+  std::unordered_map<u32, GpuMesh> dyn_;
   std::vector<f32> packBuf_;
-  // Tamanho atual do alvo de desenho, em pixels.
   u32 w_ = 0, h_ = 0, drawCount_ = 0;
 };
 

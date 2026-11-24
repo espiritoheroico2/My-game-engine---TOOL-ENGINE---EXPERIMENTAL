@@ -12,9 +12,11 @@
 //   ScriptComp                 -> script ToolObject (arquivo .tool.js em Assets/Scripts): start/update/OnDelete/DeleteAndReuse
 // A mesma funcao (saveEntity/loadEntity) grava e le cena inteira, entao o formato do arquivo .scene.json
 // e documentado aqui: ver saveEntity().
+// ToolEngine Editor - componentes dos objetos da cena e sua (de)serializacao em JSON.
 #pragma once
 #include "tool/audio/audio.hpp"
 #include "tool/core/json.hpp"
+#include "tool/core/parallel.hpp"
 #include "tool/math/math.hpp"
 #include "tool/render/lighting.hpp"
 #include "tool/render/postfx.hpp"
@@ -27,7 +29,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <vector>
 
 namespace editor {
 
@@ -36,47 +37,40 @@ constexpr float kDeg2Rad = 3.14159265f / 180.f;
 struct Name { char text[40] = "Object"; };
 struct Transform { float pos[3] = {0, 0, 0}, rot[3] = {0, 0, 0}, scale[3] = {1, 1, 1}; };
 
-// shape: 0 cubo, 1 esfera, 2 plano, 3 modelo importado (caminho relativo ao projeto em `model`),
-// 4 cilindro, 5 cone, 6 capsula, 7 roda, 8 prisma triangular, 9 prisma hexagonal.
+// Matriz global pre-calculada para evitar multiplicar 5 matrizes por objeto a cada draw call/culling.
+struct GlobalTransform {
+  tool::Mat4 world = tool::Mat4::identity();
+  bool valid = false;
+};
+
 struct MeshRenderer {
   int shape = 0;
   float color[3] = {0.8f, 0.3f, 0.2f};
   float roughness = 0.5f, metallic = 0.f;
   char model[160] = "";
-  char texture[160] = "";     // textura de albedo (PNG/JPG/BMP/TGA em Assets); vazio = sem textura
-  // Sombras, independentes entre si: um objeto pode projetar sem receber (ex.: um tronco) ou receber sem projetar (ex.: chao).
+  char texture[160] = "";
   bool castShadow = true, receiveShadow = true;
-  // Modelo com hierarquia: node >= 0 e o no do arquivo que este objeto desenha (cada parte com o proprio material).
-  // node = -1 e o modelo antigo, achatado num objeto so.
   int node = -1;
-  // Emissao (qualquer objeto 3D pode emitir): cor x intensidade. Intensidade 0 = nao emite. Com o bloom ligado
-  // (Settings > Lighting), o brilho acima do limiar vira um halo ao redor do objeto.
   float emissive[3] = {1.f, 1.f, 1.f};
   float emissiveIntensity = 0.f;
-  float opacity = 1.f;       // 1 = opaco; menor = transparente (passe de mistura, do fundo para a frente)
-  bool emissionOn = false;   // "Enable emission": so com ele o objeto emite (cor extra e brilho do bloom)
-  // Neblina por distancia (Settings > Lighting > Fog, por objeto): a cor some para a cor da neblina entre start e end.
+  float opacity = 1.f;
+  bool emissionOn = false;
   bool fogOn = false;
   float fogColor[3] = {0.6f, 0.65f, 0.7f};
   float fogStart = 5.f, fogEnd = 50.f;
-  float fogAmount = 1.f;     // 0..1: quanto da cor da neblina entra no objeto a partir de fogEnd
+  float fogAmount = 1.f;
 };
-// Material editado por parte de um modelo (sobrepoe o material que veio do arquivo). `part` = indice em ModelData::parts.
+
 struct PartOverride {
   int part = 0;
   float color[3] = {0.8f, 0.8f, 0.8f};
   float roughness = 0.5f, metallic = 0.f;
-  char texture[160] = "";  // albedo opcional, por parte; vazio preserva a textura do arquivo/modelo
+  char texture[160] = "";
 };
 struct PartOverrides { std::vector<PartOverride> items; };
-// Hierarquia: o Transform de um objeto com Parent e LOCAL (relativo ao pai). Sem Parent, e o mundo. Ver editor_hier.hpp.
 struct Parent { tool::Entity e; };
-// syncRot: a direcao da luz segue a rotacao (eixo -Y local) do objeto de nome `target`; target vazio = este objeto.
 struct LightComp { tool::Light light; bool syncRot = false; char target[40] = ""; };
 
-// Luz global (sol). direcao = (azimute, elevacao) em graus: elevacao 90 = sol a pino, 0 = horizonte.
-// Se `dynamic`, durante o Play o azimute gira `speed` graus/segundo e a intensidade cai quando o sol
-// passa abaixo do horizonte (ciclo dia/noite simples). O valor salvo na cena nao muda.
 struct GlobalLight {
   float color[3] = {1.f, 0.95f, 0.85f};
   float intensity = 2.2f;
@@ -84,29 +78,23 @@ struct GlobalLight {
   float ambient[3] = {0.03f, 0.03f, 0.04f};
   bool dynamic = false;
   float speed = 10.f;
-  bool castShadow = true;  // o sol projeta sombras (se Settings > Lighting tambem estiver ligado)
+  bool castShadow = true;
 };
 
-// Camera do jogo. A camera ativa e a que tem a tag "Principal". Duas Principais = tela dividida.
 struct CameraComp {
   float fovDeg = 55.f, nearZ = 0.1f, farZ = 200.f;
-  bool ortho2D = false;    // 2D: projecao ortografica (sem perspectiva). orthoSize = altura visivel em unidades do mundo
+  bool ortho2D = false;
   float orthoSize = 10.f;
-  bool soundEar = false;   // "ouvido": esta camera e o ouvinte do audio 3D
+  bool soundEar = false;
   float earVolume = 1.f;
-  tool::PostFx post;       // pos-processamento LOCAL (so desta camera); combina com o GLOBAL da cena (ver postfx.hpp)
+  tool::PostFx post;
 };
 
-// Script do objeto. `path` = arquivo relativo ao projeto, sempre dentro de "Assets/" (ver script.hpp).
-// Todo objeto criado no editor ja nasce com um script ToolObject (start/update/OnDelete/DeleteAndReuse).
 struct ScriptComp {
   char path[160] = "";
   bool enabled = true;
 };
 
-// Corpo fisico (Newtoon). body: 0 estatico (parede/chao), 1 dinamico (cai e colide), 2 cinematico (so move por ordem sua).
-// collider: 0 = automatico (pela forma do MeshRenderer), 1 = caixa, 2 = esfera. O tamanho vem da ESCALA do objeto.
-// VECTOR PHYSICS: com `overrideGravity` o objeto usa `gravity` (m/s^2, qualquer direcao) no lugar da gravidade do mundo.
 struct PhysicsComp {
   int body = 1, collider = 0;
   float mass = 1.f, friction = 0.5f, bounciness = 0.f;
@@ -116,84 +104,73 @@ struct PhysicsComp {
   float gravity[3] = {0.f, -9.81f, 0.f};
 };
 
-// Tool = comportamento pronto que se "acopla" ao objeto (como adicionar um addon ao codigo principal dele).
 enum class ToolKind : int { Jump = 0, Move = 1, FollowTarget = 2, Spin = 3, OnCollision = 4, ScriptLib = 5, Count };
 struct ToolItem {
   int kind = 0; bool enabled = true;
-  char action[40] = "";   // Jump/Move: nome da acao do Input Map (ex.: "jump"); ScriptLib: caminho do arquivo .js
-  char target[40] = "";   // FollowTarget: nome do objeto; OnCollision: tag do outro objeto (vazio = qualquer)
-  float a = 0.f, b = 0.f, c = 0.f, d = 0.f;  // parametros (ver a janela Help e docs/planos/10_FISICA.md)
-  int player = 1;         // qual "controle" do Input Map (1 = primeiro)
-  int mode = 0;           // OnCollision: 0 registrar no Console, 1 destruir o outro, 2 destruir este, 3 quicar
+  char action[40] = "";
+  char target[40] = "";
+  float a = 0.f, b = 0.f, c = 0.f, d = 0.f;
+  int player = 1;
+  int mode = 0;
 };
 constexpr int kMaxTools = 8;
 struct ToolsComp { int count = 0; ToolItem items[kMaxTools]; };
 
-// UI de jogo: camada 2D desenhada por cima da imagem de uma camera. Posicao/tamanho em FRACAO da tela (0..1), entao funciona em qualquer resolucao.
 enum class UiKind : int { Text = 0, Panel, Button, Bar, Count };
 struct UiElem {
   int kind = 0; char text[64] = "Text"; float x = 0.05f, y = 0.05f, w = 0.2f, h = 0.08f; float color[4] = {1.f, 1.f, 1.f, 1.f};
-  char action[40] = "";  // Button: nome do evento enviado ao clicar. Bar: nome da variavel mostrada.
-  float maxValue = 100.f; // Bar: valor que enche a barra
+  char action[40] = "";
+  float maxValue = 100.f;
   float fontScale = 1.f;
 };
 constexpr int kMaxUi = 16;
-// Objeto desativado (Inspector > Active, ou acao "setActive" do Narrative): nao desenha, nao simula, nao executa Tools, sem luz/sombra.
 struct Inactive {};
-// Objeto travado (cadeado da Hierarquia): o editor nao deixa mover, girar, escalar, editar no Inspector nem apagar.
-// Nao afeta o jogo: Narrative e scripts continuam podendo alterar o objeto.
 struct Locked {};
 
-// Chunk de blocos (estilo Minecraft): uma entidade com uma grade 16x16x16. Cada bloco guarda um tipo (0 = ar).
-// A malha sai so com as faces visiveis (voxel.hpp) e e desenhada uma vez por tipo de bloco, nao uma vez por bloco.
 constexpr int kChunkSize = 16;
 constexpr int kChunkBlocks = kChunkSize * kChunkSize * kChunkSize;
-constexpr int kBlockTypes = 8;   // tipo 0 = ar; 1..7 = materiais da paleta
+constexpr int kBlockTypes = 8;
 struct VoxelChunk {
   unsigned char blocks[kChunkBlocks] = {};
-  float cell = 1.f;   // tamanho de um bloco, em metros
+  float cell = 1.f;
   float palette[kBlockTypes][3] = {{0, 0, 0}, {0.45f, 0.72f, 0.30f}, {0.52f, 0.37f, 0.22f}, {0.52f, 0.53f, 0.55f},
                                    {0.86f, 0.80f, 0.55f}, {0.30f, 0.55f, 0.85f}, {0.80f, 0.25f, 0.22f}, {0.95f, 0.95f, 0.95f}};
-  unsigned revision = 1;   // sobe a cada edicao: a malha e refeita e a GPU reenvia os buffers
+  unsigned revision = 1;
   static int index(int x, int y, int z) { return (y * kChunkSize + z) * kChunkSize + x; }
   unsigned char at(int x, int y, int z) const { return (x < 0 || y < 0 || z < 0 || x >= kChunkSize || y >= kChunkSize || z >= kChunkSize) ? 0 : blocks[index(x, y, z)]; }
 };
-struct UiCanvas { char camera[40] = ""; bool visible = true; int count = 0; UiElem items[kMaxUi]; }; // camera vazia = todas as cameras Principais
+struct UiCanvas { char camera[40] = ""; bool visible = true; int count = 0; UiElem items[kMaxUi]; };
 
-// Particulas: emissor simples (CPU). Gravidade e quique vem das configuracoes de fisica (Newtoon) da cena.
-// Teste de ECS (comando "test ECS: N" no Console). Estado de execucao: nao vai para o arquivo de cena.
-// Fica no objeto "ECScall": cada esfera criada e filha dele e cai com a fisica Newtoon.
 struct SpawnerComp {
   long long total = 0, spawned = 0; int perFrame = 1;
-  float height = 15.f, area = 20.f;   // altura de queda e lado do quadrado de queda (metros)
+  float height = 15.f, area = 20.f;
   bool armed = false, logged = false;
-  double startedAt = -1.0;            // segundos (relogio real) do inicio da criacao
+  double startedAt = -1.0;
   uint32_t seed = 2463534242u;
 };
 
 struct ParticleComp {
-  bool emitting = true, loop = true; int maxParticles = 200; float rate = 40.f, lifetime = 1.5f, speed = 3.f, spread = 25.f; // spread em graus em torno do eixo +Y do objeto
-  float size = 0.12f, sizeEnd = 0.02f, gravityScale = 1.f, bounce = 0.f, floorY = -1000.f; // bounce>0: quica no plano y=floorY
-  // Cores: 4 paradas ao longo da vida (inicio, 1/3, 2/3, fim), interpoladas suavemente.
+  bool emitting = true, loop = true; int maxParticles = 200; float rate = 40.f, lifetime = 1.5f, speed = 3.f, spread = 25.f;
+  float size = 0.12f, sizeEnd = 0.02f, gravityScale = 1.f, bounce = 0.f, floorY = -1000.f;
   float color[3] = {1.f, 0.6f, 0.2f}, color2[3] = {1.f, 0.42f, 0.12f}, color3[3] = {0.9f, 0.22f, 0.07f}, colorEnd[3] = {0.8f, 0.1f, 0.05f};
   float alpha = 0.9f; bool worldSpace = true;
-  int form = 0;                          // 0 bolinha, 1 quadrado, 2 triangulo, 3 estrela, 4 anel, 5 risco (na direcao do movimento), 6 fumaca
-  int area = 0;                          // onde nasce: 0 ponto, 1 caixa aleatoria, 2 esfera aleatoria
-  float areaSize[3] = {1.f, 0.2f, 1.f};  // caixa: tamanho em X/Y/Z; esfera: X = diametro
-  bool fadeOpacity = true;               // a opacidade cai ate zero no fim da vida
-  float fadeDelay = 0.f;                 // segundos de espera antes de comecar a ficar transparente
-  bool route = false; int routeCount = 0;                       // trajetoria: pontos locais do objeto, curva suave entre eles
+  int form = 0;
+  int area = 0;
+  float areaSize[3] = {1.f, 0.2f, 1.f};
+  bool fadeOpacity = true;
+  float fadeDelay = 0.f;
+  bool route = false; int routeCount = 0;
   float routePts[8][3] = {{0, 0, 0}, {0, 1, 0}, {1, 2, 0}, {1, 3, 1}, {0, 4, 1}, {0, 5, 0}, {0, 0, 0}, {0, 0, 0}};
-  bool tornado = false;                  // gira em torno do eixo +Y, em funil (se a trajetoria estiver ligada, ela tem prioridade)
-  float tornadoSpeed = 1.5f, tornadoRadius = 0.6f, tornadoHeight = 2.f;  // voltas/s, raio da base, altura do funil
+  bool tornado = false;
+  float tornadoSpeed = 1.5f, tornadoRadius = 0.6f, tornadoHeight = 2.f;
 };
 
 struct AudioSource {
-  char clip[160] = "";     // caminho relativo ao projeto (ex.: "Assets/passos.mp3")
+  char clip[160] = "";
   float volume = 1.f;
   bool loop = true, playOnStart = true, spatial = true;
   float minDistance = 1.f, maxDistance = 30.f;
-  tool::VoiceId voice{};   // so em execucao (nao e salvo)
+  tool::VoiceId voice{};
 };
 
 inline tool::Mat4 worldMatrix(const Transform& t) {
@@ -201,7 +178,41 @@ inline tool::Mat4 worldMatrix(const Transform& t) {
          tool::Mat4::rotationZ(t.rot[2] * kDeg2Rad) * tool::Mat4::scale({t.scale[0], t.scale[1], t.scale[2]});
 }
 
-// Direcao "para frente" de um objeto (-Z local girado pela rotacao do Transform).
+// Calcula a matriz global acumulando a cadeia de Parent (protegido contra ciclos de ate 64 niveis).
+inline tool::Mat4 computeWorldMatrixHier(const tool::World& w, tool::Entity e, const Transform& local) {
+  tool::Mat4 m = worldMatrix(local);
+  tool::Entity cur = e;
+  for (int depth = 0; depth < 64; ++depth) {
+    const auto* p = w.get<Parent>(cur);
+    if (!p || !w.alive(p->e)) break;
+    const auto* pt = w.get<Transform>(p->e);
+    if (!pt) break;
+    m = worldMatrix(*pt) * m;
+    cur = p->e;
+  }
+  return m;
+}
+
+// Propaga Transform -> GlobalTransform em paralelo:
+// Via rapida paralela para entidades planas (sem Parent), e propagacao hierarquica apenas onde ha Parent.
+inline void syncTransformsParallel(tool::World& w) {
+  // Garante que todo objeto com Transform tenha GlobalTransform alocado antes de parallelEachDense
+  w.each<Transform>([&](tool::Entity e, Transform&) {
+    if (!w.has<GlobalTransform>(e)) w.add<GlobalTransform>(e, GlobalTransform{});
+  });
+
+  w.parallelEachDense<Transform>([&](tool::Entity e, Transform& t) {
+    auto* gt = w.getByIndex<GlobalTransform>(e.index);
+    if (!gt) return;
+    if (!w.hasByIndex<Parent>(e.index)) {
+      gt->world = worldMatrix(t);
+    } else {
+      gt->world = computeWorldMatrixHier(w, e, t);
+    }
+    gt->valid = true;
+  }, 512);
+}
+
 inline tool::Vec3 forwardOf(const Transform& t) {
   Transform r = t; r.scale[0] = r.scale[1] = r.scale[2] = 1.f; r.pos[0] = r.pos[1] = r.pos[2] = 0.f;
   const tool::Vec4 f = worldMatrix(r).mul({0, 0, -1, 0});
@@ -213,7 +224,6 @@ inline tool::Vec3 upOf(const Transform& t) {
   return tool::normalize({f.x, f.y, f.z});
 }
 
-// Camera do renderizador a partir do Transform + CameraComp do objeto.
 inline tool::Camera cameraOf(const Transform& t, const CameraComp& c) {
   tool::Camera cam;
   cam.eye = {t.pos[0], t.pos[1], t.pos[2]};
@@ -224,36 +234,26 @@ inline tool::Camera cameraOf(const Transform& t, const CameraComp& c) {
   return cam;
 }
 
-// Direcao em que a luz VIAJA (do sol para o chao) a partir de azimute/elevacao.
 inline tool::Vec3 sunDirection(float azimuthDeg, float elevationDeg) {
   const float az = azimuthDeg * kDeg2Rad, el = elevationDeg * kDeg2Rad;
   return tool::normalize({-std::cos(el) * std::sin(az), -std::sin(el), -std::cos(el) * std::cos(az)});
 }
 
-// Luz efetiva do sol neste instante (aplica o ciclo dinamico, se ligado). `runtime` = graus acumulados no Play.
 inline tool::Light sunLight(const GlobalLight& g, float runtimeDeg) {
   tool::Light l; l.type = tool::LightType::Directional;
   const float az = g.azimuth + (g.dynamic ? runtimeDeg : 0.f);
   float el = g.elevation, k = 1.f;
-  if (g.dynamic) { // sobe e desce: elevacao varia com o seno do angulo acumulado
+  if (g.dynamic) {
     el = 15.f + 60.f * std::sin(runtimeDeg * kDeg2Rad * 0.5f + g.elevation * kDeg2Rad);
-    k = std::clamp((el + 5.f) / 20.f, 0.f, 1.f); // anoitece perto do horizonte
+    k = std::clamp((el + 5.f) / 20.f, 0.f, 1.f);
   }
   l.direction = sunDirection(az, el);
   l.color = {g.color[0], g.color[1], g.color[2]};
   l.intensity = g.intensity * k;
-  l.castShadow = g.castShadow;   // o sol projeta sombras em cascatas (LightPrism CSM) quando ligado
+  l.castShadow = g.castShadow;
   return l;
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Serializacao. Formato (um objeto por entrada em "entities"):
-//   { "name": "Cube", "tags": ["Principal"],
-//     "transform": {"pos":[x,y,z], "rot":[x,y,z], "scale":[x,y,z]},
-//     "mesh": {"shape":0, "color":[r,g,b], "roughness":0.5, "metallic":0, "model":"Assets/x.glb", "castShadow":true, "receiveShadow":true},
-//     "light": {...}, "globalLight": {...}, "camera": {..., "post": {...}}, "audio": {...}, "script": {"path": "Assets/Scripts/x.tool.js"} }
-// Componentes ausentes simplesmente nao existem no objeto.
-// ---------------------------------------------------------------------------------------------------------------
 namespace ser {
 
 inline tool::Json vec(const float* v, int n) { tool::Json a = tool::Json::array(); for (int i = 0; i < n; ++i) a.push(static_cast<double>(v[i])); return a; }
@@ -261,9 +261,8 @@ inline void readVec(const tool::Json& j, float* v, int n) { const auto& it = j.i
 inline float num(const tool::Json& j, const char* k, float d) { return j.has(k) ? static_cast<float>(j[k].asNumber(d)) : d; }
 inline bool flag(const tool::Json& j, const char* k, bool d) { return j.has(k) ? j[k].asBool(d) : d; }
 inline void copyStr(char* dst, size_t cap, const std::string& s) { std::snprintf(dst, cap, "%s", s.c_str()); }
-inline float clampNum(const tool::Json& j, const char* k, float d, float lo, float hi) { return std::clamp(num(j, k, d), lo, hi); } // valores vindos de arquivo nunca saem da faixa valida
+inline float clampNum(const tool::Json& j, const char* k, float d, float lo, float hi) { return std::clamp(num(j, k, d), lo, hi); }
 
-// Pos-processamento <-> JSON (usado na camera e na configuracao global da cena).
 inline tool::Json postFx(const tool::PostFx& p) {
   tool::Json o = tool::Json::object();
   o.set("enabled", p.enabled); o.set("exposure", static_cast<double>(p.exposure)); o.set("contrast", static_cast<double>(p.contrast)); o.set("saturation", static_cast<double>(p.saturation));
@@ -347,7 +346,7 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
   if (w.has<Locked>(e)) j.set("locked", true);
   if (auto* vc = w.get<VoxelChunk>(e)) {
     Json o = Json::object(); o.set("cell", static_cast<double>(vc->cell)); o.set("palette", ser::vec(&vc->palette[0][0], kBlockTypes * 3));
-    Json rle = Json::array();   // pares [tipo, quantidade]: um chunk de terreno com muito ar cabe em poucas linhas
+    Json rle = Json::array();
     for (int i = 0; i < kChunkBlocks;) { const unsigned char v = vc->blocks[i]; int n = 1; while (i + n < kChunkBlocks && vc->blocks[i + n] == v) ++n; rle.push(static_cast<int>(v)); rle.push(n); i += n; }
     o.set("rle", rle); j.set("voxels", o);
   }
@@ -385,7 +384,6 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     m.castShadow = ser::flag(o, "castShadow", true); m.receiveShadow = ser::flag(o, "receiveShadow", true);
     m.node = static_cast<int>(o["node"].asNumber(-1));
     ser::readVec(o["emissive"], m.emissive, 3); m.emissiveIntensity = ser::num(o, "emissiveIntensity", 0.f);
-    // Cenas antigas nao tinham o campo: quem ja tinha intensidade acima de 0 continua emitindo.
     m.opacity = ser::clampNum(o, "opacity", 1.f, 0.f, 1.f);
     m.emissionOn = o.has("emissionOn") ? ser::flag(o, "emissionOn", false) : m.emissiveIntensity > 0.f;
     m.fogOn = ser::flag(o, "fogOn", false); ser::readVec(o["fogColor"], m.fogColor, 3);
@@ -480,7 +478,6 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     p.size = ser::clampNum(o, "size", 0.12f, 0.001f, 50.f); p.sizeEnd = ser::clampNum(o, "sizeEnd", 0.02f, 0.f, 50.f); p.gravityScale = ser::clampNum(o, "gravityScale", 1.f, -10.f, 10.f);
     p.bounce = ser::clampNum(o, "bounce", 0.f, 0.f, 1.f); p.floorY = ser::clampNum(o, "floorY", -1000.f, -1e5f, 1e5f);
     ser::readVec(o["color"], p.color, 3); ser::readVec(o["colorEnd"], p.colorEnd, 3); p.alpha = ser::clampNum(o, "alpha", 0.9f, 0.f, 1.f); p.worldSpace = ser::flag(o, "worldSpace", true);
-    // cores 2 e 3: se o arquivo for antigo (so cor inicial e final), ficam nas posicoes 1/3 e 2/3 da interpolacao antiga
     for (int c = 0; c < 3; ++c) { p.color2[c] = p.color[c] + (p.colorEnd[c] - p.color[c]) / 3.f; p.color3[c] = p.color[c] + (p.colorEnd[c] - p.color[c]) * 2.f / 3.f; }
     ser::readVec(o["color2"], p.color2, 3); ser::readVec(o["color3"], p.color3, 3);
     p.form = std::clamp(static_cast<int>(o["form"].asNumber(0)), 0, 6); p.area = std::clamp(static_cast<int>(o["area"].asNumber(0)), 0, 2);
@@ -494,7 +491,6 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
   return e;
 }
 
-// Salva/le a cena inteira. O pai e gravado como o INDICE do pai na lista (ordem de eachEntity), pois handles nao sobrevivem ao arquivo.
 inline tool::Json saveAllEntities(tool::Scene& sc) {
   tool::World& w = sc.world(); std::unordered_map<uint32_t, int> idx; int i = 0;
   w.eachEntity([&](tool::Entity e) { idx[e.index] = i++; });
@@ -506,7 +502,7 @@ inline tool::Json saveAllEntities(tool::Scene& sc) {
   });
   return arr;
 }
-// Cria as entidades de `arr` (no maximo 100000) e resolve os pais. Retorna as entidades na ordem do arquivo (invalidas = entrada ruim).
+
 inline std::vector<tool::Entity> loadAllEntities(tool::Scene& sc, const tool::Json& arr) {
   std::vector<tool::Entity> out; size_t n = 0;
   for (auto& e : arr.items()) { if (++n > 100000) break; out.push_back(e.isObject() ? loadEntity(sc, e) : tool::Entity{}); }

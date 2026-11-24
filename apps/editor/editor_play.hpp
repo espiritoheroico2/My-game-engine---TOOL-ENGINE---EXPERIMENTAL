@@ -5,7 +5,7 @@
 //   1. le teclado/gamepads (InputSampler) e atualiza o InputSystem com o Input Map do projeto;
 //   2. roda os Tools de cada objeto (Jump, Move, Follow, Spin): eles mexem em velocidades/impulsos, nao em posicoes de corpos dinamicos;
 //   3. Newtoon::PhysicsWorld::Simulate (passo fixo interno); gravidade/iteracoes vem de Settings > Physics;
-//   4. copia posicao/rotacao dos corpos dinamicos de volta para o Transform dos objetos;
+//   4. copia posicao/rotacao dos corpos dinamicos de volta para o Transform dos objetos em paralelo;
 //   5. trata eventos de colisao (Tool OnCollision) e apaga objetos pedidos; ao parar o Play a cena volta ao estado de antes.
 #pragma once
 #include "editor_state.hpp"
@@ -39,6 +39,14 @@ inline void Editor::startPhysics() {
   const PhysicsSettings& ps = sceneInfo.physics;
   play.world.gravity = {ps.gravity[0], ps.gravity[1], ps.gravity[2]};
   play.world.solverIterations = ps.solverIterations; play.world.fixedDt = 1.f / static_cast<float>(ps.stepHz);
+
+  const size_t estBodies = w.storageCount<PhysicsComp>();
+  play.ents.reserve(estBodies);
+  play.tf.reserve(estBodies);
+  play.rb.reserve(estBodies);
+  play.col.reserve(estBodies);
+  play.indexOf.reserve(estBodies);
+
   w.each<PhysicsComp, Transform>([&](tool::Entity e, PhysicsComp& p, Transform& t) {
     if (w.has<Inactive>(e)) return;
     Newtoon::Transform nt; nt.position = {t.pos[0], t.pos[1], t.pos[2]}; nt.rotation = eulerToQuat(t.rot);
@@ -59,6 +67,9 @@ inline void Editor::startPhysics() {
   w.each<VoxelChunk, Transform>([&](tool::Entity e, VoxelChunk& chunk, Transform& t) {
     if (w.has<Inactive>(e) || chunk.cell <= 0.f) return;
     const float cell = chunk.cell;
+    const Newtoon::Transform baseNt{ {t.pos[0], t.pos[1], t.pos[2]}, eulerToQuat(t.rot) };
+    Newtoon::Rigidbody staticRb; staticRb.inverseMass = 0.f; staticRb.inverseInertiaLocal = {0, 0, 0};
+
     for (int z = 0; z < kChunkSize; ++z) for (int x = 0; x < kChunkSize; ++x) {
       int y = 0;
       while (y < kChunkSize) {
@@ -67,19 +78,19 @@ inline void Editor::startPhysics() {
         const int first = y;
         while (y < kChunkSize && chunk.at(x, y, z) != 0) ++y;
         const int count = y - first;
-        Newtoon::Transform nt; nt.position = {t.pos[0], t.pos[1], t.pos[2]}; nt.rotation = eulerToQuat(t.rot);
         Newtoon::Collider c; c.type = Newtoon::ShapeType::Box;
         c.extents = {cell * 0.5f * std::fabs(t.scale[0]), cell * count * 0.5f * std::fabs(t.scale[1]), cell * 0.5f * std::fabs(t.scale[2])};
         c.offset = {(x + 0.5f) * cell * t.scale[0],
                     (first + count * 0.5f) * cell * t.scale[1],
                     (z + 0.5f) * cell * t.scale[2]};
-        Newtoon::Rigidbody r; r.inverseMass = 0.f; r.inverseInertiaLocal = {0, 0, 0};
-        play.ents.push_back(e); play.tf.push_back(nt); play.rb.push_back(r); play.col.push_back(c);
+        play.ents.push_back(e); play.tf.push_back(baseNt); play.rb.push_back(staticRb); play.col.push_back(c);
       }
     }
   });
   play.dead.assign(play.ents.size(), 0);
-  play.culled.assign(play.ents.size(), 0); play.culledCount = 0;
+  play.culled.assign(play.ents.size(), 0);
+  play.wasSleeping.assign(play.ents.size(), 0);
+  play.culledCount = 0;
   if (!play.ents.empty() && ps.enabled) { play.world.Rebuild(play.tf, play.rb, play.col); play.built = true; }
 }
 
@@ -108,19 +119,23 @@ inline void Editor::stepPlay(float dt) {
           const float h = it.a > 0.f ? it.a : 1.5f, v = std::sqrt(2.f * gm * h);
           const float cancel = Newtoon::Dot(rb->velocity, up); if (cancel < 0.f) rb->velocity -= up * cancel; // pulo sempre sai com a mesma altura
           rb->AddImpulse(up * (v / rb->inverseMass)); rb->grounded = false;
+          if (bi >= 0) play.wasSleeping[static_cast<size_t>(bi)] = 0;
         } break;
         case ToolKind::Move: { // action = eixo X, target = eixo Y (frente), a = velocidade (m/s), b = 1 vira para a direcao, mode 1 = relativo a camera
           const float ax = inputMap.axis(input, schemeOf(it.player), it.action), ay = inputMap.axis(input, schemeOf(it.player), it.target);
           float mx = ax, mz = -ay; const float len = std::sqrt(mx * mx + mz * mz); if (len > 1.f) { mx /= len; mz /= len; }
           if (it.mode == 1 && !cams.empty()) { if (auto* ct = w.get<Transform>(cams[0])) { const float camYaw = ct->rot[1] * kDeg2Rad, cs = std::cos(camYaw), sn = std::sin(camYaw); const float rx = mx * cs + mz * sn, rz = -mx * sn + mz * cs; mx = rx; mz = rz; } }
           const float speed = it.a > 0.f ? it.a : 5.f;
-          if (dyn) { const float k = std::min(1.f, 12.f * dt); rb->velocity.x += (mx * speed - rb->velocity.x) * k; rb->velocity.z += (mz * speed - rb->velocity.z) * k; if (len > 0.01f) rb->WakeUp(); }
+          if (dyn) { const float k = std::min(1.f, 12.f * dt); rb->velocity.x += (mx * speed - rb->velocity.x) * k; rb->velocity.z += (mz * speed - rb->velocity.z) * k; if (len > 0.01f) { rb->WakeUp(); play.wasSleeping[static_cast<size_t>(bi)] = 0; } }
           else { t.pos[0] += mx * speed * dt; t.pos[2] += mz * speed * dt; if (bi >= 0) { play.tf[static_cast<size_t>(bi)].position = {t.pos[0], t.pos[1], t.pos[2]}; } }
           if (it.b != 0.f && len > 0.1f) t.rot[1] = std::atan2(-mx, -mz) / kDeg2Rad;
           if (it.b != 0.f && dyn && len > 0.1f) { play.tf[static_cast<size_t>(bi)].rotation = eulerToQuat(t.rot); rb->angularVelocity = {}; }
         } break;
         case ToolKind::FollowTarget: { // target = nome do objeto; (a,b,c) = deslocamento; d = suavizacao (0 = grude); mode 1 = tambem olha para o alvo
-          tool::Entity tgt; w.each<Name>([&](tool::Entity o, Name& n) { if (!w.alive(tgt) && o != e && std::strncmp(n.text, it.target, sizeof n.text) == 0) tgt = o; });
+          tool::Entity tgt;
+          w.forEachDense<Name>([&](tool::Entity o, Name& n) {
+            if (!w.alive(tgt) && o != e && std::strncmp(n.text, it.target, sizeof n.text) == 0) tgt = o;
+          });
           const Transform* tt = w.alive(tgt) ? w.get<Transform>(tgt) : nullptr; if (!tt) break;
           const float want[3] = {tt->pos[0] + it.a, tt->pos[1] + it.b, tt->pos[2] + it.c};
           const float k = it.d > 0.f ? 1.f - std::exp(-it.d * dt) : 1.f;
@@ -130,7 +145,7 @@ inline void Editor::stepPlay(float dt) {
           if (bi >= 0 && !dyn) { play.tf[static_cast<size_t>(bi)].position = {t.pos[0], t.pos[1], t.pos[2]}; play.tf[static_cast<size_t>(bi)].rotation = eulerToQuat(t.rot); }
         } break;
         case ToolKind::Spin: { // (a,b,c) = graus por segundo em X/Y/Z
-          if (dyn) { rb->angularVelocity = {it.a * kDeg2Rad, it.b * kDeg2Rad, it.c * kDeg2Rad}; rb->WakeUp(); }
+          if (dyn) { rb->angularVelocity = {it.a * kDeg2Rad, it.b * kDeg2Rad, it.c * kDeg2Rad}; rb->WakeUp(); if (bi >= 0) play.wasSleeping[static_cast<size_t>(bi)] = 0; }
           else { t.rot[0] += it.a * dt; t.rot[1] += it.b * dt; t.rot[2] += it.c * dt; if (bi >= 0) play.tf[static_cast<size_t>(bi)].rotation = eulerToQuat(t.rot); }
         } break;
         default: break; // OnCollision (abaixo, apos a fisica) e ScriptLib (ainda sem VM)
@@ -139,47 +154,31 @@ inline void Editor::stepPlay(float dt) {
   });
   // 3) fisica
   if (play.built) {
-    for (size_t i = 0; i < play.ents.size(); ++i) { // corpos estaticos/cinematicos seguem o Transform do editor (gizmo, tools, narrativa)
-      if (play.dead[i] || !w.alive(play.ents[i]) || play.rb[i].IsDynamic()) continue;
-      if (const Transform* t = w.get<Transform>(play.ents[i])) { play.tf[i].position = {t->pos[0], t->pos[1], t->pos[2]}; play.tf[i].rotation = eulerToQuat(t->rot); }
+    // Apenas corpos cinematicos precisam acompanhar continuamente o Transform do editor;
+    // corpos estaticos puros (incluindo colunas de VoxelChunk) nao mudam de pose por quadro.
+    for (size_t i = 0; i < play.ents.size(); ++i) {
+      if (play.dead[i] || !play.rb[i].isKinematic || !w.alive(play.ents[i])) continue;
+      if (const Transform* t = w.getByIndex<Transform>(play.ents[i].index)) {
+        play.tf[i].position = {t->pos[0], t->pos[1], t->pos[2]};
+        play.tf[i].rotation = eulerToQuat(t->rot);
+      }
     }
-    // Culling de simulacao (Settings > Physics > Simulation radius): corpos DINAMICOS longe da camera principal
-    // param de integrar (isSleeping) e saem da ECS como nao simulados. Histerese de 10%: nao oscila na borda.
-    // Cinematicos e estaticos nao entram: continuam como estavam.
+    // Culling de simulacao em paralelo (Settings > Physics > Simulation radius)
     const float R = sceneInfo.physics.simRadius;
     if (R > 0.f && !cams.empty()) {
       if (const Transform* ct = w.get<Transform>(cams[0])) {
-        const float cx = ct->pos[0], cy = ct->pos[1], cz = ct->pos[2];
-        const float outR2 = R * R, inR2 = (R * 0.9f) * (R * 0.9f);
-        play.culledCount = 0;
-        for (size_t i = 0; i < play.ents.size(); ++i) {
-          if (play.dead[i] || !w.alive(play.ents[i]) || !play.rb[i].IsDynamic()) continue;
-          const float dx = play.tf[i].position.x - cx, dy = play.tf[i].position.y - cy, dz = play.tf[i].position.z - cz;
-          const float d2 = dx * dx + dy * dy + dz * dz;
-          if (!play.culled[i] && d2 > outR2) {
-            play.culled[i] = 1; play.rb[i].isSleeping = true; play.rb[i].velocity = {}; play.rb[i].angularVelocity = {};
-            w.setSimulating(play.ents[i], false);
-          } else if (play.culled[i] && d2 < inR2) {
-            play.culled[i] = 0; play.rb[i].WakeUp(); w.setSimulating(play.ents[i], true);
-          }
-          if (play.culled[i]) ++play.culledCount;
-        }
+        play.updateSimulationRadiusParallel(w, R, ct->pos[0], ct->pos[1], ct->pos[2]);
       }
-    } else if (play.culledCount > 0) { // raio desligado: devolve tudo para a simulacao
-      for (size_t i = 0; i < play.ents.size(); ++i)
-        if (play.culled[i]) { play.culled[i] = 0; play.rb[i].WakeUp(); if (w.alive(play.ents[i])) w.setSimulating(play.ents[i], true); }
-      play.culledCount = 0;
+    } else if (play.culledCount > 0) {
+      play.updateSimulationRadiusParallel(w, 0.f, 0.f, 0.f, 0.f);
     }
     {
       ZoneTimer physicsTimer(prof, Zone::Physics);
       play.world.Simulate(play.tf, play.rb, play.col, dt);
     }
-    // 4) sincroniza
-    for (size_t i = 0; i < play.ents.size(); ++i) {
-      if (play.dead[i] || !play.rb[i].IsDynamic() || !w.alive(play.ents[i])) continue;
-      Transform* t = w.get<Transform>(play.ents[i]); if (!t) continue;
-      t->pos[0] = play.tf[i].position.x; t->pos[1] = play.tf[i].position.y; t->pos[2] = play.tf[i].position.z; quatToEuler(play.tf[i].rotation, t->rot);
-    }
+    // 4) sincroniza em paralelo (somente corpos dinamicos acordados ou recem-adormecidos)
+    play.syncPhysicsToEcsParallel(w, 1.f);
+
     // 5) eventos de colisao -> Tool OnCollision
     for (const auto& ev : play.world.GetCollisionEvents()) {
       if (ev.type != Newtoon::CollisionType::Enter || ev.entityA >= play.ents.size() || ev.entityB >= play.ents.size()) continue;
@@ -194,7 +193,10 @@ inline void Editor::stepPlay(float dt) {
           if (it.mode == 0) tool::logInfo(std::string("Collision: ") + (ns ? ns->text : "?") + " hit " + (no ? no->text : "?"));
           else if (it.mode == 1) play.destroyQueue.push_back(eo);
           else if (it.mode == 2) play.destroyQueue.push_back(es);
-          else if (it.mode == 3 && play.rb[self].IsDynamic()) play.rb[self].AddImpulse({0.f, (it.a > 0.f ? it.a : 5.f) / play.rb[self].inverseMass, 0.f}); // quica: a = velocidade vertical (m/s)
+          else if (it.mode == 3 && play.rb[self].IsDynamic()) {
+            play.rb[self].AddImpulse({0.f, (it.a > 0.f ? it.a : 5.f) / play.rb[self].inverseMass, 0.f}); // quica: a = velocidade vertical (m/s)
+            play.wasSleeping[self] = 0;
+          }
         }
       }
     }

@@ -1,7 +1,6 @@
 #pragma once
-// Planejador puro de argumentos de desenho indireto (docs/planos/02_RENDER_DRAW_CALLS.md 8 e 10.2). Converte lotes em DrawIndexedIndirect,
-// sem RHI. Se a capacidade do buffer nao couber, ou um contador estourar 32 bits, o plano falha (ok = false) e o
-// chamador usa o caminho CPU (um draw por lote). Layout igual ao de D3D12/Vulkan: 5 uint32, 20 bytes por argumento.
+// Planejador puro de argumentos de desenho indireto. Converte lotes em DrawIndexedIndirect,
+// sem RHI. Layout igual ao de D3D12/Vulkan: 5 uint32, 20 bytes por argumento.
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -11,7 +10,6 @@
 
 namespace tool::render {
 
-// Argumentos de um DrawIndexedIndirect (20 bytes), no layout de D3D12 e Vulkan.
 struct DrawIndexedIndirectArgs {
   std::uint32_t indexCount = 0;
   std::uint32_t instanceCount = 0;
@@ -21,33 +19,47 @@ struct DrawIndexedIndirectArgs {
 };
 static_assert(sizeof(DrawIndexedIndirectArgs) == 20, "layout de DrawIndexedIndirect");
 
-// Faixa de indices e vertice base de uma malha, usada para preencher o argumento.
 struct IndirectMeshRange {
   std::uint32_t indexCount = 0;
   std::uint32_t firstIndex = 0;
   std::int32_t baseVertex = 0;
 };
 
-// Plano de desenho indireto: um argumento por lote. ok = false manda o chamador usar o caminho CPU.
 struct IndirectPlan {
-  std::vector<DrawIndexedIndirectArgs> args;  // um por lote (draws nativos)
-  std::uint64_t logicalDraws = 0;             // instancias somadas (draws logicos)
-  bool ok = false;                            // false = usar o caminho CPU
+  std::vector<DrawIndexedIndirectArgs> args;
+  std::uint64_t logicalDraws = 0;
+  bool ok = false;
 };
 
-// lookup(mesh) devolve o intervalo de indices da malha. Falha se args nao couber em maxArgs ou houver overflow.
-inline IndirectPlan planIndirectArgs(const std::vector<InstanceBatch>& batches,
-                                     const std::function<IndirectMeshRange(std::uint64_t)>& lookup,
-                                     std::size_t maxArgs) {
-  IndirectPlan plan;
-  if (batches.size() > maxArgs) return plan;
+// Versao sem alocacoes por frame: reaproveita o vetor interno de `plan`.
+template <typename LookupFn>
+inline void planIndirectArgs(const std::vector<InstanceBatch>& batches,
+                             LookupFn&& lookup,
+                             std::size_t maxArgs,
+                             IndirectPlan& plan) {
+  plan.args.clear();
+  plan.logicalDraws = 0;
+  plan.ok = false;
+  if (batches.size() > maxArgs) return;
   plan.args.reserve(batches.size());
   for (const InstanceBatch& b : batches) {
-    if (b.count == 0) return IndirectPlan{};   // lote vazio nao deve existir; falha em vez de desenhar lixo
+    if (b.count == 0) {
+      plan.args.clear();
+      plan.logicalDraws = 0;
+      return;
+    }
     const std::uint64_t end = static_cast<std::uint64_t>(b.first) + b.count;
-    if (end > 0xFFFFFFFFull) return IndirectPlan{};   // firstInstance + instanceCount estoura 32 bits
+    if (end > 0xFFFFFFFFull) {
+      plan.args.clear();
+      plan.logicalDraws = 0;
+      return;
+    }
     const IndirectMeshRange r = lookup(b.mesh);
-    if (r.indexCount == 0) return IndirectPlan{};
+    if (r.indexCount == 0) {
+      plan.args.clear();
+      plan.logicalDraws = 0;
+      return;
+    }
     DrawIndexedIndirectArgs a;
     a.indexCount = r.indexCount;
     a.instanceCount = b.count;
@@ -58,6 +70,13 @@ inline IndirectPlan planIndirectArgs(const std::vector<InstanceBatch>& batches,
     plan.logicalDraws += b.count;
   }
   plan.ok = true;
+}
+
+inline IndirectPlan planIndirectArgs(const std::vector<InstanceBatch>& batches,
+                                     const std::function<IndirectMeshRange(std::uint64_t)>& lookup,
+                                     std::size_t maxArgs) {
+  IndirectPlan plan;
+  planIndirectArgs(batches, lookup, maxArgs, plan);
   return plan;
 }
 

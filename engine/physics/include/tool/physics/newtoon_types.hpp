@@ -3,21 +3,20 @@
 #pragma once
 #include "newtoon_math.hpp"
 
+#include <algorithm>
+#include <cassert>
 #include <cstdint>
+#include <type_traits>
+#include <vector>
 
 namespace Newtoon {
 
 using Entity = uint32_t;
-// Valor que indica 'nenhuma entidade'.
 constexpr Entity kNoEntity = 0xFFFFFFFFu;
 
-// Forma do collider usada na deteccao de colisao.
 enum class ShapeType : uint8_t { Box, Sphere, Cylinder, CustomConvex };
-// Cylinder/CustomConvex: ainda sem narrow-phase proprio; sao tratados como a caixa envolvente (extents). Ver docs/planos/10_FISICA.md.
-// Como combinar dois coeficientes de material (atrito ou quique) de corpos que colidem.
 enum class CombineMode : uint8_t { Average, Minimum, Maximum, Multiply };
 
-// Material fisico: atrito e quique (bounciness) e como combina-los com o outro material.
 struct PhysicsMaterial {
   float friction = 0.5f;
   float bounciness = 0.0f;
@@ -25,7 +24,6 @@ struct PhysicsMaterial {
   CombineMode bounceCombine = CombineMode::Maximum;
 };
 
-// Combina dois valores a e b conforme o modo m (media, minimo, maximo ou produto).
 inline float Combine(CombineMode m, float a, float b) {
   switch (m) {
     case CombineMode::Minimum: return a < b ? a : b;
@@ -35,18 +33,50 @@ inline float Combine(CombineMode m, float a, float b) {
   }
 }
 
-// Fase do evento de colisao: inicio (Enter), continuacao (Stay) ou fim (Exit).
 enum class CollisionType : uint8_t { Enter, Stay, Exit };
-// Evento de colisao entre duas entidades, com ponto, normal e impacto do contato.
 struct CollisionEvent {
   Entity entityA = kNoEntity, entityB = kNoEntity;
-  Vec3 contactPoint, contactNormal; // normal aponta de A para B
-  float impactForce = 0.f;          // impulso normal total do contato (aprox.)
+  Vec3 contactPoint, contactNormal;
+  float impactForce = 0.f;
   CollisionType type = CollisionType::Enter;
-  bool trigger = false;             // um dos colliders e gatilho (sem resposta fisica)
+  bool trigger = false;
 };
 
-// Resultado de um raycast: se acertou, onde, a normal, a distancia e a entidade atingida.
+enum class MotionType : uint8_t {
+  Static = 0,
+  Kinematic = 1,
+  Dynamic = 2
+};
+
+// ALOCADOR LINEAR POR FRAME (Baseado no TempAllocator do Jolt Physics)
+// Evita alocações dinâmicas (heap) ao gerar pares de colisão e manifolds a cada tick.
+class FrameArenaAllocator {
+public:
+  explicit FrameArenaAllocator(size_t capacityBytes = 16 * 1024 * 1024)
+      : m_buffer(capacityBytes), m_offset(0) {}
+
+  template <typename T>
+  T* allocateArray(size_t count) {
+    static_assert(std::is_trivially_destructible_v<T>,
+                  "FrameArenaAllocator suporta apenas tipos triviais (POD).");
+    if (count == 0) return nullptr;
+    size_t align = alignof(T);
+    size_t alignedOffset = (m_offset + (align - 1)) & ~(align - 1);
+    size_t bytes = sizeof(T) * count;
+    assert(alignedOffset + bytes <= m_buffer.size() && "Estouro da Arena de Fisica!");
+
+    T* ptr = reinterpret_cast<T*>(m_buffer.data() + alignedOffset);
+    m_offset = alignedOffset + bytes;
+    return ptr;
+  }
+
+  void reset() noexcept { m_offset = 0; }
+
+private:
+  std::vector<uint8_t> m_buffer;
+  size_t m_offset;
+};
+
 struct RaycastHit {
   bool hit = false;
   Vec3 point, normal;
@@ -54,67 +84,79 @@ struct RaycastHit {
   Entity entity = kNoEntity;
 };
 
-// Posicao e rotacao de um objeto, lidas pela fisica.
-struct Transform { Vec3 position; Quat rotation; };
+// DADOS QUENTES (Hot Data): Lidos pela Broad Phase e Narrow Phase (64 bytes = 1 cache line).
+struct alignas(64) BodyCore {
+  Vec3 position{0.0f, 0.0f, 0.0f};
+  uint32_t shapeId{0};
 
-// Componente de corpo rigido: massa, velocidades, forcas acumuladas e configuracoes de movimento.
-struct Rigidbody {
-  Vec3 velocity, angularVelocity;
-  Vec3 forceAccumulator, torqueAccumulator;
-  float inverseMass = 1.f;
-  Vec3 inverseInertiaLocal{1, 1, 1};   // 1/I no espaco do corpo (diagonal); preenchido por SetMassFromShape
-  // --- ajustes do Inspector ---
-  float gravityScale = 1.f;            // 0 = flutua, 2 = cai o dobro
-  bool useGravity = true;
-  float linearDamping = 0.01f;         // perda de velocidade por segundo (arrasto simples)
-  float angularDamping = 0.05f;
-  bool isKinematic = false;            // movido so pela velocidade (nao reage a colisoes), empurra os outros
-  bool freezeRotation = false;
-  // --- VECTOR PHYSICS: aceleracao propria que SUBSTITUI a gravidade do mundo para este corpo (ex.: cair para o lado) ---
-  bool overrideGravity = false;
-  Vec3 gravity{0, -9.81f, 0};
-  // --- sono / CCD ---
-  bool isSleeping = false;
-  float sleepTimer = 0.f, sleepThreshold = 0.05f;
-  bool useCCD = false;
-  // --- resultado do ultimo passo (somente leitura) ---
-  bool grounded = false;               // tocando uma superficie "de chao" (normal.y > 0.7 em relacao ao mundo)
-  Vec3 groundNormal{0, 1, 0};
+  Quat rotation{0.0f, 0.0f, 0.0f, 1.0f};
 
-  // Define a massa (0 ou menos = corpo estatico com massa infinita).
-  void SetMass(float mass) { inverseMass = (mass <= 0.f) ? 0.f : (1.f / mass); }
-  // True se o corpo nunca se move (massa infinita e nao cinematico).
-  bool IsStatic() const { return inverseMass == 0.f && !isKinematic; }
-  // True se o corpo e afetado pela fisica (tem massa e nao e cinematico).
-  bool IsDynamic() const { return inverseMass > 0.f && !isKinematic; }
-  // Acorda o corpo da hibernacao e zera o temporizador de sono.
-  void WakeUp() { isSleeping = false; sleepTimer = 0.f; }
-  // Acumula a forca f para o proximo passo (a forca e em newtons; acorda o corpo).
-  void AddForce(const Vec3& f) { forceAccumulator += f; WakeUp(); }
-  // Aplica um impulso instantaneo j: muda a velocidade de acordo com a massa.
-  void AddImpulse(const Vec3& j) { velocity += j * inverseMass; WakeUp(); }          // ex.: pulo = AddImpulse({0, massa*v, 0})
-  // Acumula um torque t para o proximo passo (acorda o corpo).
-  void AddTorque(const Vec3& t) { torqueAccumulator += t; WakeUp(); }
+  uint32_t motionIndex{UINT32_MAX}; // UINT32_MAX se Static
+  Entity entityId{kNoEntity};
+  MotionType motionType{MotionType::Static};
+  uint8_t isSleeping{0};
+  uint16_t sleepCounter{0};
 };
 
-// Forma de colisao do objeto (caixa, esfera, etc.), com material, deslocamento e flag de gatilho.
+// DADOS DE MOVIMENTO: Alocados APENAS para corpos Dynamic ou Kinematic (128 bytes = 2 cache lines).
+struct alignas(64) MotionProperties {
+  Vec3 linearVelocity{0.0f, 0.0f, 0.0f};
+  float invMass{1.0f};
+
+  Vec3 angularVelocity{0.0f, 0.0f, 0.0f};
+  float linearDamping{0.02f};
+
+  Vec3 forceAccumulator{0.0f, 0.0f, 0.0f};
+  float angularDamping{0.05f};
+
+  Vec3 torqueAccumulator{0.0f, 0.0f, 0.0f};
+  float gravityScale{1.0f};
+
+  Vec3 inverseInertiaLocal{1.0f, 1.0f, 1.0f};
+  float sleepTimer{0.0f};
+};
+
+// COMPONENTE PÚBLICO DO ECS (Mantém compatibilidade com a engine e SetMassFromShape)
+struct Rigidbody {
+  MotionType motionType = MotionType::Dynamic;
+  float mass = 1.0f;
+  float inverseMass = 1.0f;
+  Vec3 linearVelocity{0.0f, 0.0f, 0.0f};
+  Vec3 angularVelocity{0.0f, 0.0f, 0.0f};
+  Vec3 force{0.0f, 0.0f, 0.0f};
+  Vec3 torque{0.0f, 0.0f, 0.0f};
+  Vec3 inverseInertiaLocal{1.0f, 1.0f, 1.0f};
+  float linearDamping = 0.02f;
+  float angularDamping = 0.05f;
+  float gravityScale = 1.0f;
+  bool isKinematic = false;
+  bool useGravity = true;
+  bool isSleeping = false;
+
+  void SetMass(float m) {
+    mass = m;
+    if (m <= 0.0f || isKinematic || motionType == MotionType::Static) {
+      inverseMass = 0.0f;
+    } else {
+      inverseMass = 1.0f / m;
+    }
+  }
+};
+
 struct Collider {
   ShapeType type = ShapeType::Box;
   uint16_t materialId = 0;
-  Vec3 extents{0.5f, 0.5f, 0.5f};      // meia-medida da caixa (ja com a escala do objeto)
-  float radius = 0.5f;                 // esfera
-  float height = 1.f;                  // reservado (cilindro)
-  Vec3 offset;                         // deslocamento do centro no espaco do corpo
-  bool isTrigger = false;              // detecta sem empurrar
-  void* customMesh = nullptr;          // reservado
+  Vec3 extents{0.5f, 0.5f, 0.5f};
+  float radius = 0.5f;
+  float height = 1.f;
+  Vec3 offset{0.0f, 0.0f, 0.0f};
+  bool isTrigger = false;
+  void* customMesh = nullptr;
 };
 
-// Calcula massa/inercia a partir da forma (caixa ou esfera solidas). Retorna sem mudar nada se mass <= 0 (corpo estatico).
-// Calcula massa/inercia a partir da forma (caixa ou esfera solidas). Retorna sem mudar nada se mass <= 0 (corpo estatico).
 inline void SetMassFromShape(Rigidbody& rb, const Collider& c, float mass) {
   rb.SetMass(mass);
   if (mass <= 0.f) { rb.inverseInertiaLocal = {0, 0, 0}; return; }
-  // Limita dimensoes minimas para evitar divisao por zero e inercia infinita.
   if (c.type == ShapeType::Sphere) {
     const float r = std::max(c.radius, 1e-4f);
     const float i = 0.4f * mass * r * r;
@@ -122,22 +164,18 @@ inline void SetMassFromShape(Rigidbody& rb, const Collider& c, float mass) {
     return;
   }
   const Vec3 e = {std::max(c.extents.x, 1e-4f), std::max(c.extents.y, 1e-4f), std::max(c.extents.z, 1e-4f)};
-  const float k = mass / 3.f; // (1/12)*m*(w^2+h^2) com w = 2e  ->  m/3 * (e1^2+e2^2)
+  const float k = mass / 3.f;
   rb.inverseInertiaLocal = {1.f / (k * (e.y * e.y + e.z * e.z)), 1.f / (k * (e.x * e.x + e.z * e.z)), 1.f / (k * (e.x * e.x + e.y * e.y))};
 }
 
-// Juntas (estrutura de dados; solver de juntas esta no roteiro - docs/planos/10_FISICA.md).
 enum class JointType : uint8_t { Fixed, Hinge, BallAndSocket };
-// Junta entre dois corpos: tipo, corpos conectados, pontos de ancoragem e eixo da dobradica. So dados; o solver ainda nao existe.
 struct Joint { JointType type = JointType::Fixed; Entity bodyA = kNoEntity, bodyB = kNoEntity; Vec3 anchorPointA, anchorPointB, hingeAxis; };
 
-// Parametros de suspensao de uma roda de veiculo (mola e amortecedor).
 struct WheelCollider {
   float radius = 0.3f, suspensionRestLength = 0.5f, springStiffness = 30000.f, springDamper = 3000.f;
   bool isGrounded = false; float currentSuspensionLength = 0.f;
 };
 
-// Caixa alinhada aos eixos (AABB), definida pelos cantos minimo e maximo.
 struct AABB { Vec3 min, max; };
 
 } // namespace Newtoon

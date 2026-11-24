@@ -1,6 +1,6 @@
-// Passe 4: reexecuta o teste (mesma ordem e mesmo teto do passe de contagem) e grava os índices
-// no offset final = offsetLocal + GroupSums[cluster / 256]. Escreve também a célula (offset, count).
-// Writes além de maxIndices são descartados (overflow reportado por Stats[0] > maxIndices).
+// Passe 4: reexecuta o teste (mesma ordem e mesmo teto do passe de contagem) usando groupshared
+// e grava os índices no offset final = offsetLocal + GroupSums[cluster / 256].
+// Escreve também a célula (offset, count).
 // Dispatch: ceil(clusterCount / 64) x 1 x 1.
 #include "../Common/Cluster.hlsli"
 
@@ -13,30 +13,46 @@ RWStructuredBuffer<ClusterCell> LightGrid      : register(u1);
 RWStructuredBuffer<uint>        ClusterCounts  : register(u2); // offsets locais (saída do ScanLocal)
 RWStructuredBuffer<uint>        GroupSums      : register(u3); // offsets dos grupos (saída do ScanGroupSums)
 
+groupshared ClusterLight gs_Lights[64];
+
 [numthreads(64, 1, 1)]
-void CSMain(uint3 id : SV_DispatchThreadID) {
+void CSMain(uint3 id : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID) {
     uint i = id.x;
-    if (i >= ClusterCountOf(Grid)) return;
+    uint clusterCount = ClusterCountOf(Grid);
+    bool active = i < clusterCount;
 
-    uint offset = ClusterCounts[i] + GroupSums[i / LP_SCAN_GROUP];
-
-    uint3 c = ClusterCoordsOf(Grid, i);
-    ClusterAABB aabb = BuildClusterAABB(Grid, c);
+    uint offset = active ? (ClusterCounts[i] + GroupSums[i / LP_SCAN_GROUP]) : 0u;
+    uint3 c = active ? ClusterCoordsOf(Grid, i) : uint3(0, 0, 0);
+    ClusterAABB aabb = active ? BuildClusterAABB(Grid, c) : (ClusterAABB)0;
     uint total = Grid.numPointLights + Grid.numSpotLights;
 
     uint count = 0;
-    for (uint li = 0; li < total && count < Grid.maxLightsPerCluster; ++li) {
-        ClusterLight L = Lights[li];
-        if (!ClusterInLightRange(L, c)) continue;
-        if (LightIntersectsAABB(L, aabb)) {
-            uint pos = offset + count;
-            if (pos < Grid.maxIndices) LightIndexList[pos] = li;
-            ++count;
+    for (uint base = 0; base < total; base += 64u) {
+        uint loadIdx = base + gtid.x;
+        if (loadIdx < total) {
+            gs_Lights[gtid.x] = Lights[loadIdx];
         }
+        GroupMemoryBarrierWithGroupSync();
+
+        if (active && count < Grid.maxLightsPerCluster) {
+            uint batchLen = min(64u, total - base);
+            for (uint j = 0; j < batchLen && count < Grid.maxLightsPerCluster; ++j) {
+                ClusterLight L = gs_Lights[j];
+                if (!ClusterInLightRange(L, c)) continue;
+                if (LightIntersectsAABB(L, aabb)) {
+                    uint pos = offset + count;
+                    if (pos < Grid.maxIndices) LightIndexList[pos] = base + j;
+                    ++count;
+                }
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
     }
 
-    ClusterCell cell;
-    cell.offset = offset;
-    cell.count = (offset >= Grid.maxIndices) ? 0u : min(count, Grid.maxIndices - offset);
-    LightGrid[i] = cell;
+    if (active) {
+        ClusterCell cell;
+        cell.offset = offset;
+        cell.count = (offset >= Grid.maxIndices) ? 0u : min(count, Grid.maxIndices - offset);
+        LightGrid[i] = cell;
+    }
 }

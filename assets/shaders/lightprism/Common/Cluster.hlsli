@@ -16,7 +16,10 @@ struct ClusterGrid {               // 64 bytes (ClusterGridGPU)
     uint  numPointLights, numSpotLights, maxLightsPerCluster, maxIndices;
 };
 
-struct ClusterAABB { float4 minPoint; float4 maxPoint; };       // 32 bytes
+struct ClusterAABB {
+    float4 minPoint;               // xyz = minPoint, w = boundingSphereRadius
+    float4 maxPoint;               // xyz = maxPoint, w = unused
+};                                 // 32 bytes
 
 struct ClusterLight {              // 80 bytes (ClusterLightGPU)
     float3 boundCenter; float boundRadius;
@@ -55,25 +58,30 @@ uint ClusterIndexForPixel(ClusterGrid g, float2 pixelPos, float depth) {
     return ClusterIndexOf(g, uint3(tile, SliceFromDepth(g, depth)));
 }
 
+// Constrói o AABB do cluster em view space sem loop de 8 vértices e já pré-calcula o raio da esfera envolvente.
 ClusterAABB BuildClusterAABB(ClusterGrid g, uint3 c) {
+    float2 invScreen = 2.0f / g.screenSize;
+    float2 invProj   = 1.0f / g.projScale;
+
     float2 p0 = float2(c.xy * g.tileSizePx);
     float2 p1 = float2((c.xy + 1) * g.tileSizePx);
-    float2 n0 = float2(p0.x / g.screenSize.x * 2.0f - 1.0f, 1.0f - p0.y / g.screenSize.y * 2.0f);
-    float2 n1 = float2(p1.x / g.screenSize.x * 2.0f - 1.0f, 1.0f - p1.y / g.screenSize.y * 2.0f);
+
+    float2 n0 = float2(p0.x * invScreen.x - 1.0f, 1.0f - p0.y * invScreen.y) * invProj;
+    float2 n1 = float2(p1.x * invScreen.x - 1.0f, 1.0f - p1.y * invScreen.y) * invProj;
+
     float dn = SliceNearDepth(g, c.z);
     float df = SliceNearDepth(g, c.z + 1);
 
-    float3 mn = float3(1e30f, 1e30f, 1e30f);
-    float3 mx = float3(-1e30f, -1e30f, -1e30f);
-    [unroll] for (int i = 0; i < 8; ++i) {
-        float2 n = float2((i & 1) ? n1.x : n0.x, (i & 2) ? n1.y : n0.y);
-        float  d = (i & 4) ? df : dn;
-        float3 p = float3(n.x * d / g.projScale.x, n.y * d / g.projScale.y, -d);
-        mn = min(mn, p);
-        mx = max(mx, p);
-    }
+    float2 xy0n = n0 * dn;
+    float2 xy0f = n0 * df;
+    float2 xy1n = n1 * dn;
+    float2 xy1f = n1 * df;
+
+    float3 mn = float3(min(min(xy0n, xy0f), min(xy1n, xy1f)), -df);
+    float3 mx = float3(max(max(xy0n, xy0f), max(xy1n, xy1f)), -dn);
+
     ClusterAABB a;
-    a.minPoint = float4(mn, 0.0f);
+    a.minPoint = float4(mn, length(mx - mn) * 0.5f);
     a.maxPoint = float4(mx, 0.0f);
     return a;
 }
@@ -88,19 +96,16 @@ bool ConeIntersectsSphere(ClusterLight s, float3 c, float r) {
     float3 v = c - s.apex;
     float vlenSq = dot(v, v);
     float v1 = dot(v, s.dir);
+    if (v1 > r + s.range || v1 < -r) return false;
     float distClosest = s.cosOuter * sqrt(max(vlenSq - v1 * v1, 0.0f)) - v1 * s.sinOuter;
-    bool angleCull = distClosest > r;
-    bool frontCull = v1 > r + s.range;
-    bool backCull  = v1 < -r;
-    return !(angleCull || frontCull || backCull);
+    return distClosest <= r;
 }
 
 bool LightIntersectsAABB(ClusterLight l, ClusterAABB a) {
     if (!SphereIntersectsAABB(l.boundCenter, l.boundRadius, a.minPoint.xyz, a.maxPoint.xyz)) return false;
     if (l.kind == 0u) return true;
     float3 center = (a.minPoint.xyz + a.maxPoint.xyz) * 0.5f;
-    float radius = length(a.maxPoint.xyz - a.minPoint.xyz) * 0.5f;
-    return ConeIntersectsSphere(l, center, radius);
+    return ConeIntersectsSphere(l, center, a.minPoint.w);
 }
 
 // Teste barato (só inteiros) antes da interseção exata.

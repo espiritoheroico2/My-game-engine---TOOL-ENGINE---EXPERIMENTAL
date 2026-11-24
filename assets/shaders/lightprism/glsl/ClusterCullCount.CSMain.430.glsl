@@ -1,16 +1,4 @@
 #version 430
-#if defined(GL_EXT_control_flow_attributes)
-#extension GL_EXT_control_flow_attributes : require
-#define SPIRV_CROSS_FLATTEN [[flatten]]
-#define SPIRV_CROSS_BRANCH [[dont_flatten]]
-#define SPIRV_CROSS_UNROLL [[unroll]]
-#define SPIRV_CROSS_LOOP [[dont_unroll]]
-#else
-#define SPIRV_CROSS_FLATTEN
-#define SPIRV_CROSS_BRANCH
-#define SPIRV_CROSS_UNROLL
-#define SPIRV_CROSS_LOOP
-#endif
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct ClusterGrid
@@ -61,89 +49,107 @@ layout(binding = 0, std430) buffer ClusterCounts
     uint _data[];
 } ClusterCounts_1;
 
+shared ClusterLight gs_Lights[64];
+
 void main()
 {
-    do
-    {
-        if (gl_GlobalInvocationID.x >= ((_471.Grid.gridX * _471.Grid.gridY) * _471.Grid.gridZ))
-        {
-            break;
-        }
-        uint _881 = _471.Grid.gridX * _471.Grid.gridY;
-        uint _884 = gl_GlobalInvocationID.x / _881;
-        uint _889 = gl_GlobalInvocationID.x - (_884 * _881);
-        uint _893 = _889 / _471.Grid.gridX;
-        uvec3 _902 = uvec3(_889 - (_893 * _471.Grid.gridX), _893, _884);
-        vec2 _928 = vec2(_902.xy * uvec2(_471.Grid.tileSizePx));
-        vec2 _937 = vec2((_902.xy + uvec2(1u)) * uvec2(_471.Grid.tileSizePx));
-        float _944 = ((_928.x / _471.Grid.screenSize.x) * 2.0) - 1.0;
-        float _951 = 1.0 - ((_928.y / _471.Grid.screenSize.y) * 2.0);
-        float _959 = ((_937.x / _471.Grid.screenSize.x) * 2.0) - 1.0;
-        float _966 = 1.0 - ((_937.y / _471.Grid.screenSize.y) * 2.0);
-        float _1055 = exp2((float(_884) - _471.Grid.sliceBias) / _471.Grid.sliceScale);
-        float _1066 = exp2((float(_884 + 1u) - _471.Grid.sliceBias) / _471.Grid.sliceScale);
-        vec3 _1463;
-        vec3 _1464;
-        _1464 = vec3(-1000000015047466219876688855040.0);
-        _1463 = vec3(1000000015047466219876688855040.0);
-        SPIRV_CROSS_UNROLL
-        for (int _1462 = 0; _1462 < 8; )
-        {
-            float _1004 = ((_1462 & 4) != int(0u)) ? _1066 : _1055;
-            vec3 _1021 = vec3(((((_1462 & 1) != int(0u)) ? _959 : _944) * _1004) / _471.Grid.projScale.x, ((((_1462 & 2) != int(0u)) ? _966 : _951) * _1004) / _471.Grid.projScale.y, -_1004);
-            _1464 = max(_1464, _1021);
-            _1463 = min(_1463, _1021);
-            _1462++;
-            continue;
-        }
-        vec4 _1036 = vec4(_1463, 0.0);
-        vec4 _1042 = vec4(_1464, 0.0);
-        uint _803 = _471.Grid.numPointLights + _471.Grid.numSpotLights;
-        uint _1466;
-        _1466 = 0u;
-        uint _1472;
-        for (uint _1465 = 0u; (_1465 < _803) && (_1466 < _471.Grid.maxLightsPerCluster); _1466 = _1472, _1465++)
-        {
-            ivec3 _1071 = ivec3(_902);
-            if (!((((((_1071.z >= Lights_1._data[_1465].sliceMin) && (_1071.z <= Lights_1._data[_1465].sliceMax)) && (_1071.x >= Lights_1._data[_1465].tileRange.x)) && (_1071.x <= Lights_1._data[_1465].tileRange.z)) && (_1071.y >= Lights_1._data[_1465].tileRange.y)) && (_1071.y <= Lights_1._data[_1465].tileRange.w)))
-            {
-                _1472 = _1466;
-                continue;
-            }
-            bool _1467;
-            do
-            {
-                vec3 _1174 = max(_1036.xyz, min(Lights_1._data[_1465].boundCenter, _1042.xyz)) - Lights_1._data[_1465].boundCenter;
-                if (!(dot(_1174, _1174) <= (Lights_1._data[_1465].boundRadius * Lights_1._data[_1465].boundRadius)))
-                {
-                    _1467 = false;
-                    break;
-                }
-                if (Lights_1._data[_1465].kind == 0u)
-                {
-                    _1467 = true;
-                    break;
-                }
-                float _1155 = length(_1042.xyz - _1036.xyz);
-                float _1156 = _1155 * 0.5;
-                vec3 _1194 = ((_1036.xyz + _1042.xyz) * 0.5) - Lights_1._data[_1465].apex;
-                float _1201 = dot(_1194, Lights_1._data[_1465].dir);
-                _1467 = !(((((Lights_1._data[_1465].cosOuter * sqrt(max(dot(_1194, _1194) - (_1201 * _1201), 0.0))) - (_1201 * Lights_1._data[_1465].sinOuter)) > _1156) || (_1201 > (_1156 + Lights_1._data[_1465].range))) || (_1201 < (_1155 * (-0.5))));
-                break;
-            } while(false);
-            uint _1473;
-            if (_1467)
-            {
-                _1473 = _1466 + uint(1);
-            }
-            else
-            {
-                _1473 = _1466;
-            }
-            _1472 = _1473;
-        }
-        ClusterCounts_1._data[gl_GlobalInvocationID.x] = _1466;
-        break;
-    } while(false);
-}
+    uint idx = gl_GlobalInvocationID.x;
+    uint lidx = gl_LocalInvocationID.x;
+    uint clusterCount = (_471.Grid.gridX * _471.Grid.gridY) * _471.Grid.gridZ;
+    bool activeCluster = idx < clusterCount;
 
+    uvec3 c = uvec3(0u);
+    vec3 aabbMin = vec3(0.0);
+    vec3 aabbMax = vec3(0.0);
+    float aabbRadius = 0.0;
+
+    if (activeCluster)
+    {
+        uint xy = _471.Grid.gridX * _471.Grid.gridY;
+        uint z = idx / xy;
+        uint r = idx - (z * xy);
+        uint y = r / _471.Grid.gridX;
+        c = uvec3(r - (y * _471.Grid.gridX), y, z);
+
+        vec2 invScreen = vec2(2.0) / _471.Grid.screenSize;
+        vec2 invProj = vec2(1.0) / _471.Grid.projScale;
+        vec2 p0 = vec2(c.xy * uvec2(_471.Grid.tileSizePx));
+        vec2 p1 = vec2((c.xy + uvec2(1u)) * uvec2(_471.Grid.tileSizePx));
+
+        vec2 n0 = vec2((p0.x * invScreen.x) - 1.0, 1.0 - (p0.y * invScreen.y)) * invProj;
+        vec2 n1 = vec2((p1.x * invScreen.x) - 1.0, 1.0 - (p1.y * invScreen.y)) * invProj;
+
+        float dn = exp2((float(z) - _471.Grid.sliceBias) / _471.Grid.sliceScale);
+        float df = exp2((float(z + 1u) - _471.Grid.sliceBias) / _471.Grid.sliceScale);
+
+        vec2 xy0n = n0 * dn;
+        vec2 xy0f = n0 * df;
+        vec2 xy1n = n1 * dn;
+        vec2 xy1f = n1 * df;
+
+        aabbMin = vec3(min(min(xy0n, xy0f), min(xy1n, xy1f)), -df);
+        aabbMax = vec3(max(max(xy0n, xy0f), max(xy1n, xy1f)), -dn);
+        aabbRadius = length(aabbMax - aabbMin) * 0.5;
+    }
+
+    uint total = _471.Grid.numPointLights + _471.Grid.numSpotLights;
+    uint count = 0u;
+    ivec3 ci = ivec3(c);
+
+    for (uint base = 0u; base < total; base += 64u)
+    {
+        uint loadIdx = base + lidx;
+        if (loadIdx < total)
+        {
+            gs_Lights[lidx] = Lights_1._data[loadIdx];
+        }
+        barrier();
+
+        if (activeCluster && (count < _471.Grid.maxLightsPerCluster))
+        {
+            uint batchLen = min(64u, total - base);
+            for (uint j = 0u; (j < batchLen) && (count < _471.Grid.maxLightsPerCluster); ++j)
+            {
+                ClusterLight L = gs_Lights[j];
+                if ((ci.z < L.sliceMin) || (ci.z > L.sliceMax) ||
+                    (ci.x < L.tileRange.x) || (ci.x > L.tileRange.z) ||
+                    (ci.y < L.tileRange.y) || (ci.y > L.tileRange.w))
+                {
+                    continue;
+                }
+
+                vec3 d = max(aabbMin, min(L.boundCenter, aabbMax)) - L.boundCenter;
+                if (dot(d, d) > (L.boundRadius * L.boundRadius))
+                {
+                    continue;
+                }
+
+                if (L.kind == 0u)
+                {
+                    ++count;
+                    continue;
+                }
+
+                vec3 center = (aabbMin + aabbMax) * 0.5;
+                vec3 v = center - L.apex;
+                float vlenSq = dot(v, v);
+                float v1 = dot(v, L.dir);
+                if ((v1 > (aabbRadius + L.range)) || (v1 < (-aabbRadius)))
+                {
+                    continue;
+                }
+                float distClosest = (L.cosOuter * sqrt(max(vlenSq - (v1 * v1), 0.0))) - (v1 * L.sinOuter);
+                if (distClosest <= aabbRadius)
+                {
+                    ++count;
+                }
+            }
+        }
+        barrier();
+    }
+
+    if (activeCluster)
+    {
+        ClusterCounts_1._data[idx] = count;
+    }
+}
