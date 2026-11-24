@@ -165,8 +165,9 @@ class SettingsPanel {
                     return true;
                 }
                 if (e.button.button != SDL_BUTTON_LEFT) return inside(e.button.x, e.button.y);
-                // O Up chega mesmo que o botao tenha sido solto fora do painel: senao o controle fica preso.
-                if (capture_.up()) {
+                // Up dentro do painel segue o caminho normal (cabecalhos, paletas, controles) mesmo com a captura aberta:
+                // a captura so muda o caso de soltar fora. Soltar fora solta os controles sem disparar cliques.
+                if (capture_.up() && !inside(e.button.x, e.button.y)) {
                     releasePointer(e.button.x, e.button.y);
                     return true;
                 }

@@ -43,6 +43,7 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "scene_view_panel.hpp"
 #include "game_view_panel.hpp"
 #include "dock_host.hpp"
+#include "input_script.hpp"
 #include "view_overlays.hpp"
 #include "settings_model.hpp"
 #include "ui_style.hpp"
@@ -2409,6 +2410,12 @@ static int runEditorMain(int argc, char** argv) {
   // --screenshot <arquivo.ppm> (com --frames N): grava o ultimo quadro, antes de apresentar. Headless, sem GPU.
   std::string screenshotPath;
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--screenshot") == 0) screenshotPath = argv[i + 1];
+  // --script <roteiro>: eventos de mouse por quadro (input_script.hpp). O tempo de cada quadro vai para o stderr.
+  std::unique_ptr<editor::input_script::Player> scriptPlayer;
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--script") == 0) {
+    scriptPlayer = std::make_unique<editor::input_script::Player>();
+    if (!scriptPlayer->load(argv[i + 1])) { std::fprintf(stderr, "script: nao abriu %s\n", argv[i + 1]); return 2; }
+  }
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--ecs") == 0) ecsCount = std::atoll(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--voxel") == 0) voxelCount = std::atoll(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-frames") == 0) benchFrames = std::clamp(std::atoi(argv[i + 1]), 1, 10000);
@@ -2685,6 +2692,14 @@ static int runEditorMain(int argc, char** argv) {
     if (narrativePanel && ed.showNarrative && narrativePanel->chrome().visible() && !narrativePanel->chrome().minimized()) {   // Narrative: moldura SpriteUI
       const auto nr = narrativePanel->chrome().frameRect();
       gPanelRouter.add(pr::kNarrativeHandle, {nr.position.x, nr.position.y, nr.size.x, nr.size.y}, ToolEngine::SpriteUi::UILayer::Docked);
+    }
+    if (scriptPlayer) {
+      static auto lastStart = std::chrono::steady_clock::now();
+      const auto now = std::chrono::steady_clock::now();
+      const double ms = std::chrono::duration<double, std::milli>(now - lastStart).count();
+      lastStart = now;
+      std::fprintf(stderr, "script: quadro %d %.1f ms\n", frame, ms);
+      scriptPlayer->pump(frame, SDL_GetWindowID(window));
     }
     SDL_Event e;
     // Ocioso: espera ate 16 ms pelo proximo evento (em vez de girar o quadro sem parar). O evento volta para a fila.

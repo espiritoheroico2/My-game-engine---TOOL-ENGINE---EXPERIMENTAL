@@ -1,7 +1,7 @@
 // ToolEngine Editor - dados de execucao do modo Play: mundo de fisica Newtoon + mapeamento entidade <-> corpo.
 // Nada aqui e salvo: e criado em startPlay() e descartado em stopPlay() (a cena e restaurada do snapshot).
 #pragma once
-#include "editor/components.hpp"
+#include "components.hpp"
 #include "tool/core/parallel.hpp"
 #include "tool/ecs/world.hpp"
 #include "tool/physics/newtoon.hpp"
