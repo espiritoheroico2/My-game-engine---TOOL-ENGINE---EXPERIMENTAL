@@ -100,3 +100,21 @@ Resultado com 3000 corpos, 300 quadros:
 Decisão: rejeitado. Não houve ganho de tempo e a simulação mudou (com escala 0,85 os corpos nunca dormem). Não foi commitado; o código foi revertido.
 
 Próximo passo com evidência na física: reduzir o custo de `BVH::Query` (por exemplo, consultar só pares `i < j`, ou evitar consultas de corpos que já dormem) e, depois, medir o solver com menos iterações contra a métrica de qualidade acima.
+
+### Experimento rejeitado: broad-phase por travessia árvore contra árvore
+
+Hipótese: trocar uma consulta por corpo ativo por uma travessia dupla (cada par de folhas visitado uma vez) reduziria o custo da `BVH::Query`, que é ~26% do tempo.
+
+Implementação testada: travessia dupla dividida em 64 tarefas fixas (saída determinística, igual com 1 ou N threads), com um teste de equivalência contra a consulta antiga em cenas aleatórias. Todos os testes de pares e de física passaram.
+
+Resultado (3000 corpos, 300 quadros; 2 núcleos):
+
+| Variante | Tempo médio | Instruções (callgrind, 3000×60) | Corpos dormindo | Velocidade média |
+|---|---:|---:|---:|---:|
+| Consulta por corpo (atual) | ~4,0 ms | ~1,40 bi | 17 | 0,0821 |
+| Travessia dupla sequencial | ~5,3 ms | ~1,20 bi | 26 | 0,0395 |
+| Travessia dupla em 64 tarefas | ~5,0 ms | ~1,21 bi | 59 | 0,0421 |
+
+Decisão: rejeitado nesta rodada. Caiu o número de instruções, mas o tempo de parede piorou em 2 núcleos e a ordem dos pares muda o resultado da simulação (o solver depende da ordem). Antes de voltar a tentar, medir a broad-phase isolada com mais núcleos, e só então aceitar a mudança no comportamento. Código preservado fora do repositório (patch e teste).
+
+Observação de verificação: o alvo `tool_tests` do preset `test` não compila neste checkout, porque `tests/test_spriteui_rhi.cpp` depende de `SpriteUi/Adapters/ToolEngineRhi.hpp`, que não existe mais no `third_party` (removido em `c4e82e8`). Isso já estava assim antes destas mudanças. Os testes de física foram executados com um runner isolado (`tests/main.cpp` + arquivos de física).
