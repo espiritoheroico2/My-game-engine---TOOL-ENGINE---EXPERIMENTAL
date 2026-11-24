@@ -7,7 +7,7 @@
 #include "SpriteUi/Rendering/Sprite.hpp"
 
 #include <array>
-#include <cstdio>
+#include <cstdio>\n#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -151,6 +151,64 @@ void TestCacheHandlesNodeSizeChange() {
     CHECK(items.back().handle.Pack() == (UIHandle{2, 1}).Pack());
 }
 
+
+void TestCacheCommitsMultipleStructuralChangesTogether() {
+    R::RenderListCache cache;
+    std::array<std::size_t, 3> counts{1, 1, 1};
+    const auto builder = [&](std::size_t node, std::vector<R::UIRenderItem>& out) {
+        for (std::size_t i = 0; i < counts[node]; ++i) {
+            out.push_back(R::MakeSolidRect(
+                UIHandle{static_cast<std::uint32_t>(node + 1), 1}, {},
+                {static_cast<float>(node + 1), 0.0f, 0.0f, 1.0f}));
+        }
+    };
+
+    CHECK(cache.Update(builder).size() == 3);
+    counts = {3, 0, 2};
+    cache.MarkDirty(0);
+    cache.MarkDirty(1);
+    cache.MarkDirty(2);
+    const auto& items = cache.Update(builder);
+
+    CHECK(items.size() == 5);
+    CHECK(cache.LastRebuildCount() == 3);
+    CHECK(items[0].handle.Pack() == UIHandle{1, 1}.Pack());
+    CHECK(items[2].handle.Pack() == UIHandle{1, 1}.Pack());
+    CHECK(items[3].handle.Pack() == UIHandle{3, 1}.Pack());
+    CHECK(items[4].handle.Pack() == UIHandle{3, 1}.Pack());
+}
+
+void TestCacheBuilderFailureDoesNotPublishPartialUpdate() {
+    R::RenderListCache cache;
+    cache.Reset(2);
+    float tint = 0.25f;
+    const auto initialBuilder = [&](std::size_t node, std::vector<R::UIRenderItem>& out) {
+        out = NodeItems(node, tint);
+    };
+    const auto& initial = cache.Update(initialBuilder);
+    const float originalTint = initial[0].tintPremultipliedLinear.x;
+
+    tint = 0.9f;
+    cache.MarkDirty(0);
+    cache.MarkDirty(1);
+    bool threw = false;
+    try {
+        cache.Update([&](std::size_t node, std::vector<R::UIRenderItem>& out) {
+            out = NodeItems(node, tint);
+            if (node == 1) throw std::runtime_error("simulated builder failure");
+        });
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+
+    CHECK(threw);
+    CHECK(cache.LastRebuildCount() == 0);
+    CHECK(cache.Update(initialBuilder).size() == 2);
+    CHECK(cache.LastRebuildCount() == 2);
+    CHECK(cache.Update(initialBuilder)[0].tintPremultipliedLinear.x == 0.9f);
+    CHECK(originalTint == 0.25f);
+}
+
 void TestBuildIntoReusesStorageAndClearsData() {
     std::vector<R::UIRenderItem> items;
     for (std::uint32_t i = 0; i < 8; ++i) {
@@ -200,7 +258,7 @@ int main() {
     TestCacheWithoutChangeRebuildsNothing();
     TestCacheRebuildsOnlyDirtyNode();
     TestCacheUpdatesSameSizeInPlace();
-    TestCacheHandlesNodeSizeChange();
+    TestCacheHandlesNodeSizeChange();\n    TestCacheCommitsMultipleStructuralChangesTogether();\n    TestCacheBuilderFailureDoesNotPublishPartialUpdate();
     TestBuildIntoReusesStorageAndClearsData();
     TestBuildIntoPreservesPaintOrder();
 
