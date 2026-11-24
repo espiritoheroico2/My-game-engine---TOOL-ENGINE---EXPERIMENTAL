@@ -27,7 +27,7 @@ Evoluir a arquitetura existente sem reescrever a engine e sem remover subsistema
 
 ### Etapa 0 — Cópia e baseline documental
 
-**Estado:** branch criada; inventário documental iniciado.
+**Estado:** concluída documentalmente; branch criada, SHA inicial registrado e plano versionado. Build/testes de baseline ainda não executados nesta sessão.
 
 - Criar branch isolada a partir da main.
 - Registrar SHA inicial, versão declarada, presets e subsistemas.
@@ -40,6 +40,8 @@ Evoluir a arquitetura existente sem reescrever a engine e sem remover subsistema
 **Limite atual:** a inspeção foi feita via GitHub. Nenhum build ou benchmark é declarado nesta etapa.
 
 ### Etapa 1 — SpriteUI: cache da lista de renderização
+
+**Estado:** implementação e testes de regressão adicionados; compilação/CTest pendentes. Relatório: `docs/engineering/01_ETAPA_SPRITEUI_RENDERLIST.md`.
 
 **Achado:** `RenderListCache` usa `vector::erase/insert` para cada nó cujo número de itens muda. Alterações em vários nós podem provocar múltiplos deslocamentos do restante da lista.
 
@@ -148,8 +150,8 @@ Evoluir a arquitetura existente sem reescrever a engine e sem remover subsistema
 
 | Etapa | Estado | Evidência |
 |---|---|---|
-| 0 — Cópia e baseline documental | Em andamento | Branch criada a partir do SHA registrado |
-| 1 — SpriteUI RenderListCache | Planejada | Testes de regressão serão adicionados |
+| 0 — Cópia e baseline documental | Concluída documentalmente | Branch criada; plano versionado; build baseline pendente |
+| 1 — SpriteUI RenderListCache | Implementada; validação pendente | Staging/commit em duas fases; testes adicionados; sem build/CTest nesta sessão |
 | 2 — SpriteUI LayoutTree | Planejada | Depende da auditoria dos mutadores |
 | 3 — SpriteUI texto e batches | Planejada | Depende do contrato dos adapters |
 | 4 — Editor | Planejada | Migração incremental |
