@@ -118,3 +118,12 @@ Resultado (3000 corpos, 300 quadros; 2 núcleos):
 Decisão: rejeitado nesta rodada. Caiu o número de instruções, mas o tempo de parede piorou em 2 núcleos e a ordem dos pares muda o resultado da simulação (o solver depende da ordem). Antes de voltar a tentar, medir a broad-phase isolada com mais núcleos, e só então aceitar a mudança no comportamento. Código preservado fora do repositório (patch e teste).
 
 Observação de verificação: o alvo `tool_tests` do preset `test` não compila neste checkout, porque `tests/test_spriteui_rhi.cpp` depende de `SpriteUi/Adapters/ToolEngineRhi.hpp`, que não existe mais no `third_party` (removido em `c4e82e8`). Isso já estava assim antes destas mudanças. Os testes de física foram executados com um runner isolado (`tests/main.cpp` + arquivos de física).
+
+## Medição de render: uploads do BatchCB e estado do culling de clusters
+
+Log adicionado ao bench do ECS (`ToolEditor --ecs N --project <pasta> --bench-frames M`):
+
+- `BatchCB uploads/frame X (total T)`: uploads do `BatchCB` por quadro medido. Cada lote desenhado faz um upload (`GpuRenderer::uploadBatchCb`). Esse é o número que o item "firstInstance / remover o upload por lote" precisa reduzir.
+- `clusters requested R / max M, overflow sim|nao`: contagem de índices de luz pedidos pelo culling de clusters (Light Prism), lida com `ClusterSystem::ReadbackStats`. Em modo CPU o dado é imediato; em modo GPU aparece depois de alguns quadros.
+
+Limite: o modo headless não desenha (o log mostra `0 draws` e `GPU render 0.00 ms`), então os valores de upload e de cluster só ficam úteis numa execução com renderização. Para comparar antes e depois de uma mudança, rode o mesmo comando nas duas versões e compare as duas linhas.

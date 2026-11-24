@@ -2541,6 +2541,7 @@ static int runEditorMain(int argc, char** argv) {
   const Uint64 t0 = SDL_GetTicks();
   const bool bench = ecsCount > 0 || voxelCount > 0;
   std::vector<double> benchMs;
+  uint64_t benchUpload0 = 0;   // uploads do BatchCB no primeiro quadro medido
   std::array<double, static_cast<size_t>(editor::Zone::Count)> benchZoneMs{};
   // TOOL_BENCH_CSV=<arquivo>: grava cada quadro medido (ms total e de cada zona) para achar a origem dos picos.
   std::FILE* benchCsv = nullptr;
@@ -3098,6 +3099,7 @@ static int runEditorMain(int argc, char** argv) {
       if (armed) benchArmed = true;
       if (voxelCount > 0 && frame == 10) benchArmed = true;   // chunks nao tem nascimento: mede a partir do 10o quadro
       if (benchArmed && !armed) {   // nascimento terminou: mede os proximos quadros
+        if (benchMs.empty()) benchUpload0 = ed.gpu.batchCbUploads();
         benchMs.push_back(static_cast<double>(SDL_GetTicksNS() - frameStart) / 1e6);
         for (size_t z = 0; z < benchZoneMs.size(); ++z) benchZoneMs[z] += ed.prof.cur[z];
         if (benchCsv) { std::fprintf(benchCsv, "%zu,%.3f", benchMs.size(), benchMs.back()); for (size_t z = 0; z < benchZoneMs.size(); ++z) std::fprintf(benchCsv, ",%.3f", ed.prof.cur[z]); std::fprintf(benchCsv, "\n"); }
@@ -3110,6 +3112,14 @@ static int runEditorMain(int argc, char** argv) {
                       s[s.size() / 2], s[s.size() * 95 / 100], s.back());
           for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::printf("ECS bench:   %-34s %7.2f ms\n", editor::zoneName(static_cast<editor::Zone>(z)), benchZoneMs[static_cast<size_t>(z)] / s.size());
           std::printf("ECS bench:   last frame: %llu draws, %llu triangles, %llu culled\n", static_cast<unsigned long long>(ed.prof.last.draws), static_cast<unsigned long long>(ed.prof.last.tris), static_cast<unsigned long long>(ed.prof.last.culled));
+          // Log para verificacao automatica: uploads do BatchCB por quadro e estado do culling de clusters.
+          const double uploadsPerFrame = s.size() > 1 ? static_cast<double>(ed.gpu.batchCbUploads() - benchUpload0) / static_cast<double>(s.size() - 1) : 0.0;
+          std::printf("ECS bench:   BatchCB uploads/frame %.1f (total %llu)\n", uploadsPerFrame, static_cast<unsigned long long>(ed.gpu.batchCbUploads()));
+          LightPrism::ClusterStats cs;
+          if (ed.gpu.clusters() && ed.gpu.clusters()->ReadbackStats(cs) && cs.valid)
+            std::printf("ECS bench:   clusters requested %llu / max %u, overflow %s\n", static_cast<unsigned long long>(cs.requestedIndices), cs.maxIndices, cs.overflow ? "sim" : "nao");
+          else
+            std::printf("ECS bench:   clusters sem dados (modo CPU imediato ou GPU ainda nao terminou)\n");
           quit = true;
         }
       }
