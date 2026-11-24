@@ -7,7 +7,8 @@
 #include "SpriteUi/Rendering/Sprite.hpp"
 
 #include <array>
-#include <cstdio>\n#include <stdexcept>
+#include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -258,7 +259,9 @@ int main() {
     TestCacheWithoutChangeRebuildsNothing();
     TestCacheRebuildsOnlyDirtyNode();
     TestCacheUpdatesSameSizeInPlace();
-    TestCacheHandlesNodeSizeChange();\n    TestCacheCommitsMultipleStructuralChangesTogether();\n    TestCacheBuilderFailureDoesNotPublishPartialUpdate();
+    TestCacheHandlesNodeSizeChange();
+    TestCacheCommitsMultipleStructuralChangesTogether();
+    TestCacheBuilderFailureDoesNotPublishPartialUpdate();
     TestBuildIntoReusesStorageAndClearsData();
     TestBuildIntoPreservesPaintOrder();
 
