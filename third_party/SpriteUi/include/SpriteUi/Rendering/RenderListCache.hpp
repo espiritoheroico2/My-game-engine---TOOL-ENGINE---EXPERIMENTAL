@@ -77,10 +77,16 @@ public:
         // Fase 2: publicar. Sem alteracao estrutural, enderecos e capacidade permanecem estaveis.
         if (!structuralChange) {
             std::size_t oldOffset = 0;
-            for (const PendingSegment& pending : pendingSegments_) {
-                std::copy_n(pendingItems_.begin() + static_cast<std::ptrdiff_t>(pending.offset),
-                            pending.count,
-                            items_.begin() + static_cast<std::ptrdiff_t>(oldOffsetForNode(pending.node)));
+            std::size_t pendingIndexForCopy = 0;
+            for (std::size_t node = 0; node < segments_.size(); ++node) {
+                const Segment& segment = segments_[node];
+                if (segment.dirty) {
+                    const PendingSegment& pending = pendingSegments_[pendingIndexForCopy++];
+                    std::copy_n(pendingItems_.begin() + static_cast<std::ptrdiff_t>(pending.offset),
+                                pending.count,
+                                items_.begin() + static_cast<std::ptrdiff_t>(oldOffset));
+                }
+                oldOffset += segment.count;
             }
             for (const PendingSegment& pending : pendingSegments_) {
                 segments_[pending.node].dirty = false;
@@ -130,12 +136,6 @@ private:
         std::size_t offset = 0;
         std::size_t count = 0;
     };
-
-    [[nodiscard]] std::size_t oldOffsetForNode(std::size_t node) const noexcept {
-        std::size_t offset = 0;
-        for (std::size_t i = 0; i < node; ++i) offset += segments_[i].count;
-        return offset;
-    }
 
     std::vector<Segment> segments_;
     std::vector<UIRenderItem> items_;
