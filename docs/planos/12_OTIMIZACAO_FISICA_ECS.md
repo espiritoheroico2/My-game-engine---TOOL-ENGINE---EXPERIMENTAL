@@ -67,3 +67,36 @@ O commit `82269d9` tinha `newtoon_world.hpp` usando `Transform`, `velocity` e `I
 - Exceções em qualquer bloco são capturadas e relançadas no chamador depois que todos os blocos terminam.
 - Soft renderer: bandas de 8 para 32 no máximo.
 - Limite: a máquina de desenvolvimento tem 2 núcleos. O ganho com mais núcleos precisa de medição no hardware do usuário. Testes: `ctest` 47/47 repetido 40 vezes, `--selftest` 250/250, teste novo `jobs_splits_into_oversubscribed_blocks`.
+
+## Perfil da física com carga real (medido em 2026-11-24)
+
+Benchmark standalone (pilha de esferas caindo sobre o chão, 300 quadros, `Simulate` por quadro; 2 núcleos). Código do benchmark fora do repositório.
+
+| Corpos | Tempo médio/quadro | Pior quadro | Corpos dormindo | Velocidade média | Altura média |
+|---:|---:|---:|---:|---:|---:|
+| 1000 | ~1,4–1,6 ms | ~4,4–5,0 ms | 175 | 0,0331 | 4,9295 |
+| 3000 | ~3,9–4,1 ms | ~7,6–24 ms | 17 | 0,0821 | 6,5622 |
+
+Perfil com `valgrind --tool=callgrind` (3000 corpos, 60 quadros):
+
+- `SolveSingleContact` (solver por cores, 10 iterações): ~51% do tempo.
+- `BVH::Query` na broad-phase, dentro de `Step`: ~26%.
+- `PreSolve`, `Step` e `Prepare`: ~10%. `MakeShape` e alocação: ~2%.
+
+Observação: a medição `--ecs 500 --play` (0,04 ms) usa uma cena com poucos contatos. Ela não representa carga de pilha.
+
+### Experimento rejeitado: warm starting dos impulsos
+
+Hipótese: reaplicar os impulsos do quadro anterior (por par e posição do ponto de contato) reduziria as iterações necessárias.
+
+Resultado com 3000 corpos, 300 quadros:
+
+| Variante | Tempo médio | Corpos dormindo | Velocidade média | Altura média |
+|---|---:|---:|---:|---:|
+| Linha de base | ~4,0 ms | 17 | 0,0821 | 6,5622 |
+| Escala 0,85 | ~4,0 ms | 0 | 0,1107 | 6,6282 |
+| Escala 0,5 | ~4,2 ms | 105 | 0,0486 | 6,5994 |
+
+Decisão: rejeitado. Não houve ganho de tempo e a simulação mudou (com escala 0,85 os corpos nunca dormem). Não foi commitado; o código foi revertido.
+
+Próximo passo com evidência na física: reduzir o custo de `BVH::Query` (por exemplo, consultar só pares `i < j`, ou evitar consultas de corpos que já dormem) e, depois, medir o solver com menos iterações contra a métrica de qualidade acima.
