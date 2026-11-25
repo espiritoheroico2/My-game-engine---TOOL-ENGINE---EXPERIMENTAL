@@ -193,6 +193,7 @@ class InspectorPanel {
         overlay_.setFontScale(editor::ui_style::textScale());
         width_ = std::max(140.f, width);
         controls_.clear();
+        clampScroll();   // limite calculado no quadro anterior (o corpo visivel e o conteudo ja medido)
         frames_.clear();
         canvas_.clear();
         overlay_.clear();
@@ -202,11 +203,13 @@ class InspectorPanel {
         ctrlW_ = std::max(60.f, width_ - Metrics::kPad - ctrlX_);
         keySeq_ = 1;
         disabled_ = ctx.locked;
-        y_ = Metrics::kPad;
+        y_ = Metrics::kPad - scrollY_;   // a rolagem sobe o conteudo; o recorte do corpo esconde o que sai
         if (!ctx.hasObject) {
             closePopups();
             canvas_.addText(Metrics::kPad, y_, T("no object selected"), Metrics::kFont, theme_.textDim, width_ - 2.f * Metrics::kPad);
             y_ += Metrics::kRowH;
+            contentH_ = y_ + scrollY_;
+            addScrollbar();
             return y_ + Metrics::kPad;
         }
         const unsigned id = (ctx.entityGeneration << 20) ^ ctx.entityIndex;
@@ -232,11 +235,31 @@ class InspectorPanel {
         resources();
         script();
         tags();
+        contentH_ = y_ + scrollY_ + Metrics::kPad;   // altura do conteudo sem a rolagem, com a folga de baixo
+        addScrollbar();
         return y_ + Metrics::kPad;
     }
 
     // Abre ou fecha todas as secoes.
     void setAllSections(bool open) { expanders_.SetAll(open); }
+
+    // Rolagem: a roda do mouse sobre o corpo move o conteudo. Limite = altura do conteudo menos o corpo visivel.
+    void scrollBy(float dy) {
+        scrollY_ += dy;
+        clampScroll();
+    }
+    [[nodiscard]] float scrollY() const { return scrollY_; }
+
+    // Barra de rolagem no canto direito do corpo, so quando o conteudo nao cabe. Coordenadas locais do canvas.
+    void addScrollbar() {
+        const float trackH = visible_.h;
+        if (trackH <= 0.f || contentH_ <= trackH + 0.5f) return;
+        const float maxScroll = contentH_ - trackH;
+        const float thumbH = std::max(Metrics::kRowH * 0.75f, trackH * trackH / contentH_);
+        const float top = visible_.y - origin_.y;
+        const float thumbY = top + (trackH - thumbH) * (scrollY_ / maxScroll);
+        canvas_.addSolid(width_ - 6.f, thumbY, 4.f, thumbH, theme_.textDim, Metrics::kZField);
+    }
 
     // Desenha o bloco. origin = canto superior esquerdo do bloco na tela; visible = area de recorte (corpo da moldura)
     // (o bloco e cortado por esse retangulo).
@@ -298,6 +321,10 @@ class InspectorPanel {
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 if (e.button.button != SDL_BUTTON_LEFT) return false;
                 return pointer(Elm::PointerPhase::Up, e.button.x, e.button.y, e.button.windowID);
+            case SDL_EVENT_MOUSE_WHEEL:
+                if (!sui::Box{visible_.x, visible_.y, visible_.w, visible_.h}.contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
+                scrollBy(-e.wheel.y * kWheelStep);
+                return true;
             case SDL_EVENT_MOUSE_MOTION:
                 if (!captured_) return false;
                 return pointer(Elm::PointerPhase::Move, e.motion.x, e.motion.y, e.motion.windowID);
@@ -1793,6 +1820,13 @@ class InspectorPanel {
     Context ctx_;
     Hooks hooks_;
     float width_ = 0.f, y_ = 0.f, labelW_ = 0.f, innerX_ = 0.f, ctrlX_ = 0.f, ctrlW_ = 0.f, groupTop_ = 0.f;
+    static constexpr float kWheelStep = 40.f;   // pixels por giro da roda
+    float scrollY_ = 0.f;     // quanto o conteudo subiu (>= 0)
+    float contentH_ = 0.f;    // altura total do conteudo medida no ultimo layout (sem a rolagem)
+    void clampScroll() {
+        const float maxScroll = std::max(0.f, contentH_ - visible_.h);
+        scrollY_ = std::clamp(scrollY_, 0.f, maxScroll);
+    }
     std::uint32_t keySeq_ = 1;
     bool disabled_ = false;
     unsigned lastObject_ = 0;

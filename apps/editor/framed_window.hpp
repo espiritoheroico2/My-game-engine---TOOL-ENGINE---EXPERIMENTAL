@@ -75,43 +75,15 @@ class Chrome {
   [[nodiscard]] bool minimized() const { return frame_.minimized(); }
   [[nodiscard]] bool visible() const { return visible_; }
 
-  // Eventos do SDL: X, "?", minimizar e arraste pelo cabecalho. True quando a moldura consumiu o evento.
-  // O grip nao chega aqui: o host de docking o trata antes.
+  // Eventos do SDL: so os botoes da moldura (X, "?", minimizar). Arraste e redimensionamento sao do host do dock,
+  // que e o unico dono do ponteiro. True quando um botao consumiu o clique.
   bool handleEvent(const SDL_Event& e) {
     if (!visible_) return false;
-    switch (e.type) {
-      case SDL_EVENT_MOUSE_MOTION:
-        if (frame_.dragging() || frame_.resizing()) {
-          frame_.pointerMove({e.motion.x, e.motion.y});
-          return true;
-        }
-        setEdgeCursor(frame_.edgeAt({e.motion.x, e.motion.y}));   // so muda o cursor; nao consome o evento
-        return false;
-      case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-        if (e.button.button != SDL_BUTTON_LEFT) return false;
-        const window_frame::Event ev = frame_.pointerDown({e.button.x, e.button.y});
-        if (ev == window_frame::Event::Close) closeRequested_ = true;
-        if (ev == window_frame::Event::Help) helpRequested_ = true;
-        return ev != window_frame::Event::None;
-      }
-      case SDL_EVENT_MOUSE_BUTTON_UP:
-        frame_.pointerUp();
-        return false;
-      default: return false;
-    }
-  }
-
-  // Cursor de redimensionar sobre as bordas (horizontal, vertical ou diagonal). Mascara 0 volta ao normal.
-  static void setEdgeCursor(int mask) {
-    static int shown = 0;
-    if (mask == shown) return;
-    shown = mask;
-    static SDL_Cursor* cursors[5] = {};   // 0 normal, 1 horizontal, 2 vertical, 3 diagonal \, 4 diagonal /
-    const int kind = mask == 0 ? 0 : (mask == 1 || mask == 2 || mask == 3) ? 1 : (mask == 4 || mask == 8 || mask == 12) ? 2 : (mask == 5 || mask == 10) ? 3 : 4;
-    const SDL_SystemCursor sys[5] = {SDL_SYSTEM_CURSOR_DEFAULT, SDL_SYSTEM_CURSOR_EW_RESIZE, SDL_SYSTEM_CURSOR_NS_RESIZE,
-                                     SDL_SYSTEM_CURSOR_NWSE_RESIZE, SDL_SYSTEM_CURSOR_NESW_RESIZE};
-    if (!cursors[kind]) cursors[kind] = SDL_CreateSystemCursor(sys[kind]);
-    if (cursors[kind]) SDL_SetCursor(cursors[kind]);
+    if (e.type != SDL_EVENT_MOUSE_BUTTON_DOWN || e.button.button != SDL_BUTTON_LEFT) return false;
+    const window_frame::Event ev = frame_.buttonAt({e.button.x, e.button.y});
+    if (ev == window_frame::Event::Close) closeRequested_ = true;
+    if (ev == window_frame::Event::Help) helpRequested_ = true;
+    return ev != window_frame::Event::None;
   }
 
   // Pedidos da moldura: o X fecha, o "?" abre a ajuda. Cada pedido vale uma vez.

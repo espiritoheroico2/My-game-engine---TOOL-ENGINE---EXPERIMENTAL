@@ -1,5 +1,6 @@
 #pragma once
 
+#include "file_panel_colors.hpp"
 #include "ui_style.hpp"
 
 // Janela "Assets" feita com SpriteUI. Estado e regras: assets_model.hpp.
@@ -78,27 +79,13 @@ struct Theme {
   static constexpr double kDoubleClickSeconds = 0.4;
 };
 
+using Colors = editor::file_panel_colors::Colors;
+inline Colors PaletteColors() { return editor::file_panel_colors::FromPalette(); }
+
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
 }
 
-// Cores: mesmas da janela Scenes (tema escuro).
-struct Colors {
-  SU::Vec4 field = Srgb(0.165f, 0.165f, 0.176f);
-  SU::Vec4 fieldFocus = Srgb(0.196f, 0.196f, 0.216f);
-  SU::Vec4 rowSelected = Srgb(0.200f, 0.330f, 0.520f);
-  SU::Vec4 button = Srgb(0.200f, 0.345f, 0.588f);
-  SU::Vec4 buttonHover = Srgb(0.263f, 0.420f, 0.690f);
-  SU::Vec4 buttonDanger = Srgb(0.520f, 0.220f, 0.220f);
-  SU::Vec4 buttonActive = Srgb(0.263f, 0.420f, 0.690f);   // modo de lista/icones em uso
-  SU::Vec4 help = Srgb(0.250f, 0.400f, 0.700f);
-  SU::Vec4 disabled = Srgb(0.150f, 0.150f, 0.160f);
-  SU::Vec4 text = Srgb(0.910f, 0.918f, 0.933f);
-  SU::Vec4 textDim = Srgb(0.560f, 0.565f, 0.600f);
-  SU::Vec4 caret = Srgb(0.930f, 0.930f, 0.950f);
-  SU::Vec4 warning = Srgb(1.000f, 0.800f, 0.300f);
-  SU::Vec4 ink = Srgb(0.080f, 0.080f, 0.100f);            // letras sobre os icones
-};
 
 // Entrada do quadro (ponteiro, foco e relogio), ja lida do SDL pelo host.
 struct FrameInput {
@@ -378,11 +365,19 @@ class View {
     return nullptr;
   }
 
+  // Cores do tema para a moldura, o conteudo e os botoes. Chamada na montagem e em cada desenho: a paleta
+  // escolhida em Configuracoes > Appearance vale no quadro seguinte.
+  void applyPalette() {
+    frameColors_ = editor::window_palette::Standard();
+    panelColor_ = frameColors_.body;
+    colors_ = PaletteColors();
+  }
+
   // ---------- Arvore de layout ----------
   void buildTree() {
     metrics_.headerHeight = 30.f;
     metrics_.cornerRadius = editor::ui_style::windowRadius();
-    panelColor_ = frameColors_.body;   // o conteudo tem a mesma cor do corpo da moldura
+    applyPalette();   // a arvore usa as cores do tema ja aqui (antes, o conteudo saia com a cor padrao: cinza)
 
     SU::FlexItem panel;
     panel.width = {SU::SizeMode::Fixed, Theme::kPanelWidth};
@@ -816,8 +811,7 @@ class View {
     state.active = true;
     state.dragging = dragging_;
     state.docked = docked_;
-    frameColors_ = editor::window_palette::Standard();
-    panelColor_ = frameColors_.body;
+    applyPalette();
     auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_, metrics_, state, frameColors_, -2.f, paint);
     paint += frameItems.size() + 1;
     out.insert(out.end(), frameItems.begin(), frameItems.end());

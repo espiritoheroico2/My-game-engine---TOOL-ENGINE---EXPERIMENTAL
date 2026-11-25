@@ -2867,14 +2867,6 @@ static int runEditorMain(int argc, char** argv) {
       if (hierPanel && hierPanel->consumeHelp()) editor::openHelp("hierarchy");   // ? da moldura
       applyHierarchyRequests(ed, requests);
     }
-    if (inspPanel) {   // Inspector: componentes do objeto, no bloco SpriteUI deste quadro
-      const bool shown = ed.showInspector && gInspectorFrame;
-      if (!inspPanel->draw(renderer, gInspectorOrigin, gInspectorVisible, shown)) {
-        tool::logError(std::string("Inspector SpriteUI render failed: ") + SDL_GetError());
-        inspPanel.reset();
-        gInspectorPanel = nullptr;
-      }
-    }
     if (codingPanel) {   // moldura da janela Coding (SpriteUI): titulo, X, "?" e grip
       if (!codingPanel->chrome().draw(renderer, T("Coding"))) tool::logError(std::string("Coding frame render failed: ") + SDL_GetError());
       if (codingPanel->chrome().consumeClose()) ed.showCoding = false;
@@ -2952,11 +2944,6 @@ static int runEditorMain(int argc, char** argv) {
         else applyEditorInfoActions(ed, *editorInfoPanel, eiActs);
       }
     }
-    if (inspPanel) {   // moldura do Inspector (SpriteUI): titulo, X, "?" e grip
-      if (!inspPanel->chrome().draw(renderer, T("Inspector"))) tool::logError(std::string("Inspector frame render failed: ") + SDL_GetError());
-      if (inspPanel->chrome().consumeClose()) ed.showInspector = false;
-      if (inspPanel->chrome().consumeHelp()) editor::openHelp("objects");
-    }
     if (settingsPanel) {   // moldura do Settings (SpriteUI)
       if (!settingsPanel->chrome().draw(renderer, T("Settings"))) tool::logError(std::string("Settings frame render failed: ") + SDL_GetError());
       if (settingsPanel->chrome().consumeClose()) ed.showSettings = false;
@@ -2972,6 +2959,20 @@ static int runEditorMain(int argc, char** argv) {
       }
       SettingsEditorTarget target{ed};
       editor::settings_changes::ApplyChanges(target, requests);
+    }
+    // Inspector por cima das Configuracoes (ordem de desenho: quem desenha por ultimo fica na frente).
+    if (inspPanel) {   // moldura do Inspector (SpriteUI): titulo, X, "?" e grip
+      if (!inspPanel->chrome().draw(renderer, T("Inspector"))) tool::logError(std::string("Inspector frame render failed: ") + SDL_GetError());
+      if (inspPanel->chrome().consumeClose()) ed.showInspector = false;
+      if (inspPanel->chrome().consumeHelp()) editor::openHelp("objects");
+    }
+    if (inspPanel) {   // Inspector: componentes do objeto, no bloco SpriteUI deste quadro
+      const bool shown = ed.showInspector && gInspectorFrame;
+      if (!inspPanel->draw(renderer, gInspectorOrigin, gInspectorVisible, shown)) {
+        tool::logError(std::string("Inspector SpriteUI render failed: ") + SDL_GetError());
+        inspPanel.reset();
+        gInspectorPanel = nullptr;
+      }
     }
     if (menuPanel) {
       std::vector<editor::mainmenu::Request> menuRequests;
