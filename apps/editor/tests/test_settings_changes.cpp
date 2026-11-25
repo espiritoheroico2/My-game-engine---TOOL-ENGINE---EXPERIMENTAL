@@ -51,6 +51,8 @@ struct RecordingTarget {
   void setTab(int i) { tab = i; ++calls; }
   void setResMode(int) { ++calls; }
   void setCustomW(int) { ++calls; }
+  void setCustomColor(int, float) { ++calls; }
+  void setThemeFile(int) { ++calls; }
   void setCustomH(int) { ++calls; }
   void setRenderScale(float s) { renderScale = s; ++calls; }
   void setUpscale(int) { ++calls; }

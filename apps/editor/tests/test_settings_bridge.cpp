@@ -3,6 +3,7 @@
 // (marca ou cor), radio e combo com dados tem itens. Sem janela. Roda no ctest como Editor.SettingsBridge.
 // Exemplo: num jogo com so CPU e Vulkan, o radio mostra 2 botoes e o de Vulkan vem marcado se a API pedida for 1.
 #include "settings_bridge.hpp"
+#include "settings_model.hpp"
 
 #include <cstdio>
 
@@ -79,7 +80,7 @@ void TestCheckboxFollowsValue() {
 void TestTabsUseModelNamesAndActiveTab() {
   Elm::TabBar tabs;
   SyncTabs(tabs, 2);
-  CHECK(tabs.control.labels.size() == 6);
+  CHECK(tabs.control.labels.size() == static_cast<std::size_t>(editor::settings_model::kTabCount));
   CHECK(tabs.control.activeIndex == 2);
   SyncTabs(tabs, 42);   // indice invalido: nenhuma aba ativa escolhida
   CHECK(tabs.control.activeIndex == 0);

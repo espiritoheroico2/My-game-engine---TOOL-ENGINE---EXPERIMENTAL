@@ -196,7 +196,7 @@ int main() {
     const float cut = 1000.f * dl::kSideRatio;
     Check(d.dividerAt({cut, 300.f}) != nullptr, "ponteiro sobre o corte acha a divisoria");
     Check(d.dividerAt({cut + 100.f, 300.f}) == nullptr, "ponteiro longe do corte nao acha divisoria");
-    SU::UIDockNode* node = d.dividerAt({cut, 300.f});
+    SW::UIDockNode* node = d.dividerAt({cut, 300.f});
     Check(d.moveDivider(node, {300.f, 300.f}), "move a divisoria");
     d.setArea(area);
     Check(Near(d.leafRect(hier)->size.x, 300.f), "a lateral acompanha a divisoria movida");
