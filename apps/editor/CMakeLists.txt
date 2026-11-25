@@ -253,6 +253,11 @@ add_executable(editor_settings_changes_tests tests/test_settings_changes.cpp)
 target_include_directories(editor_settings_changes_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME Editor.SettingsChanges COMMAND editor_settings_changes_tests)
 
+# Campo numerico dos deslizantes (slider_value_edit.hpp): texto digitado, arredondamento e limites.
+add_executable(editor_slider_value_edit_tests tests/test_slider_value_edit.cpp)
+target_include_directories(editor_slider_value_edit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.SliderValueEdit COMMAND editor_slider_value_edit_tests)
+
 # Modelo da janela Hierarchy (hierarchy_model.hpp): arvore, selecao por id, teclas e faixa visivel.
 add_executable(editor_hierarchy_model_tests tests/test_hierarchy_model.cpp)
 target_include_directories(editor_hierarchy_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
