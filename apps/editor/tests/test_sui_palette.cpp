@@ -41,7 +41,7 @@ int main() {
   P::activeIndex() = 0;
   Check(std::string_view(P::active().name) == "Dark blue", "padrao e o Azul escuro");
   P::activeIndex() = 999;
-  Check(&P::active() == &P::kPresets[0], "indice invalido cai no padrao");
+  Check(std::string_view(P::active().name) == std::string_view(P::kPresets[0].name), "indice invalido cai no padrao");
   P::activeIndex() = 0;
 
   // 2. Cada preset: nome, cores validas e fundos distintos.

@@ -12,6 +12,7 @@
 // Eventos do ponteiro: onEvent antes das janelas; quando devolve true, a janela nao recebe o evento.
 
 #include "dock_layout.hpp"
+#include "resize_hover.hpp"
 #include "spriteui_host.hpp"
 #include "view_painter.hpp"
 #include "view_shapes.hpp"
@@ -54,6 +55,8 @@ inline constexpr float kCloseReserve = 8.f;   // margem a direita da barra agrup
 inline constexpr float kTabX = 18.f;          // botao X de cada aba (fecha a janela da aba)
 inline constexpr float kTabMaxWidth = 120.f;
 inline constexpr float kTabGripW = 14.f;     // grip de cada aba (seis pontos), antes do nome
+inline constexpr float kTabEdge = 4.f;       // folga da barra de abas a esquerda (ela ocupa o cabecalho inteiro)
+inline constexpr float kEdgeHighlightW = 4.f;   // espessura do destaque da borda sob o mouse (ou redimensionada)
 
 // O que o host precisa de cada janela. As funcoes sao preenchidas pelo main.cpp com os paineis ja criados.
 struct Window {
@@ -86,6 +89,7 @@ class Host {
     winH_ = static_cast<float>(winH);
     model_.setArea(area);
     if (model_.empty()) buildDefault();
+    applyPendingGestures();
     for (Window& w : windows_) {
       if (!w.open()) {
         if (model_.contains(w.id)) model_.remove(w.id);
@@ -111,6 +115,8 @@ class Host {
   }
 
   // Eventos do ponteiro, antes das janelas. True quando o host consumiu o clique (faixa de abas ou grip).
+  // Dono unico do ponteiro para as janelas: arraste, redimensionamento, divisorias, cursor e destaque da borda.
+  // Movimento so guarda a posicao; o redimensionamento e aplicado uma vez por quadro (applyPendingGestures).
   bool onEvent(const SDL_Event& e) {
     switch (e.type) {
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -118,16 +124,24 @@ class Host {
         return false;
       case SDL_EVENT_MOUSE_MOTION:
         pointer_ = {e.motion.x, e.motion.y};
-        if (drag_.IsPressed()) drag_.Move(pointer_);
-        if (resizing_) {
-          if (Window* w = find(resizeWin_)) {
-            if (window_frame::Frame* f = w->frameState ? w->frameState() : nullptr) f->pointerMove(pointer_);
-          }
+        // Sem botao apertado, um gesto em andamento ficou sem soltura (ex.: soltou fora da janela): encerra agora.
+        if (gestureActive() && e.motion.state == 0) {
+          cancelGestures(pointer_);
+          return false;
         }
-        if (divider_) model_.moveDivider(divider_, pointer_);
-        return false;
+        if (drag_.IsPressed()) drag_.Move(pointer_);
+        if (resizing_) pendingResize_ = true;
+        if (divider_) pendingDivider_ = true;
+        if (!gestureActive()) {
+          updateHover();
+          return false;
+        }
+        return true;   // gesto do host em andamento: o movimento nao chega aos paineis
       case SDL_EVENT_MOUSE_BUTTON_UP:
         if (e.button.button == SDL_BUTTON_LEFT) return released({e.button.x, e.button.y});
+        return false;
+      case SDL_EVENT_WINDOW_FOCUS_LOST:
+        cancelGestures(pointer_);
         return false;
       default: return false;
     }
@@ -142,12 +156,7 @@ class Host {
     const std::size_t n = model_.tabsOf(leaf.leaf).size();
     if (n < 2) return std::nullopt;
     const float right = leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve;
-    float left = leaf.bounds.position.x + kHelpReserve;
-    for (const Window& w : windows_) {
-      if (!(w.id == leaf.leaf)) continue;
-      const SU::Rect g = w.grip();
-      if (g.size.x > 0.f) left = g.position.x + g.size.x + kHelpReserve;
-    }
+    const float left = leaf.bounds.position.x + kTabEdge;
     const float tabW = std::min(kTabMaxWidth, std::max(0.f, right - left) / static_cast<float>(n));
     return TabCells{left, left + tabW * static_cast<float>(n), tabW};
   }
@@ -162,7 +171,7 @@ class Host {
       const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
       const float y = leaf.bounds.position.y;
       // Limpa o nome da janela ativa na barra e pinta as abas no lugar dele.
-      shapes.rectFilled({c->x0 - 4.f, y}, {leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve, y + kHeaderH},
+      shapes.rectFilled({leaf.bounds.position.x, y}, {leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve, y + kHeaderH},
                         view::Rgba(31, 41, 59));
       // O grip do cabecalho da janela ativa deixa de valer aqui: o desenho dele e apagado e cada aba tem o seu.
       for (const Window& w : windows_) {
@@ -206,6 +215,7 @@ class Host {
       const SU::Vec2 a{pointer_.x - grabOffset_.x, pointer_.y - grabOffset_.y};
       shapes.rectFilled(px(a), px({a.x + grabSize_.x, a.y + grabSize_.y}), view::Rgba(74, 130, 200, 40));
     }
+    addResizeHighlight(shapes);
     if (shapes.shapes().empty()) return true;
     const std::vector<SR::ClipRectGPU> clips{{0.f, 0.f, winW_, winH_}};
     view::PaintList list;
@@ -316,6 +326,7 @@ class Host {
       if (!w.open() || !visibleNow(w) || model_.contains(w.id)) continue;
       window_frame::Frame* state = w.frameState ? w.frameState() : nullptr;
       if (state && state->beginResize(p)) {
+        resizeMask_ = state->edgeAt(p);
         resizing_ = true;
         resizeWin_ = w.id;
         activeWin_ = w.id;
@@ -366,10 +377,12 @@ class Host {
         if (window_frame::Frame* f = w->frameState ? w->frameState() : nullptr) f->pointerUp();
       }
       resizing_ = false;
+      pendingResize_ = false;   // o movimento ja acumulado nao pode ser aplicado depois da soltura
       return true;
     }
     if (divider_) {
       divider_ = nullptr;
+      pendingDivider_ = false;
       return true;
     }
     if (!drag_.IsPressed()) return false;
@@ -388,6 +401,105 @@ class Host {
       if (!model_.apply(w->id, r)) w->floatAt(at);          // alvo sumiu: a janela fica solta
     }
     return true;
+  }
+
+  bool gestureActive() const { return drag_.IsPressed() || resizing_ || divider_ != nullptr; }
+
+  // Aplica no quadro o movimento acumulado: a moldura redimensionada e a divisoria movida.
+  void applyPendingGestures() {
+    if (pendingResize_) {
+      pendingResize_ = false;
+      if (Window* w = find(resizeWin_)) {
+        if (window_frame::Frame* f = w->frameState ? w->frameState() : nullptr) f->pointerMove(pointer_);
+      }
+    }
+    if (pendingDivider_) {
+      pendingDivider_ = false;
+      if (divider_) model_.moveDivider(divider_, pointer_);
+    }
+  }
+
+  // Encerra qualquer gesto de redimensionamento. Solta todas as molduras, para nenhuma continuar seguindo o mouse.
+  void endGestures() {
+    for (Window& w : windows_) {
+      if (window_frame::Frame* f = w.frameState ? w.frameState() : nullptr) f->pointerUp();
+    }
+    resizing_ = false;
+    pendingResize_ = false;
+    pendingDivider_ = false;
+    divider_ = nullptr;
+  }
+
+  // Gesto interrompido (soltura perdida ou janela sem foco): termina o arraste na posicao atual e solta os gestos.
+  void cancelGestures(SU::Vec2 p) {
+    pointer_ = p;
+    if (drag_.IsPressed()) (void)released(p);
+    endGestures();
+  }
+
+  // Cursor e destaque sob o mouse, sem gesto: divisoria do dock ou borda de janela flutuante.
+  void updateHover() {
+    hoverWin_ = {};
+    hoverMask_ = 0;
+    hoverDivider_ = nullptr;
+    resize_hover::CursorShape shape = resize_hover::CursorShape::Arrow;
+    if (SW::UIDockNode* d = model_.dividerAt(pointer_)) {
+      hoverDivider_ = d;
+      shape = resize_hover::DividerCursor(d->splitDirection == SU::LayoutDirection::Row);
+    } else {
+      for (Window& w : windows_) {
+        if (!w.open() || !visibleNow(w) || model_.contains(w.id)) continue;
+        window_frame::Frame* f = w.frameState ? w.frameState() : nullptr;
+        const int m = f ? f->edgeAt(pointer_) : 0;
+        if (m == 0) continue;
+        hoverWin_ = w.id;
+        hoverMask_ = m;
+        shape = resize_hover::EdgeCursor(m);
+        break;
+      }
+    }
+    setCursor(shape);
+  }
+
+  // Troca o cursor do SDL so quando a forma muda (cache dos cursores de sistema).
+  void setCursor(resize_hover::CursorShape shape) {
+    if (shape == cursor_) return;
+    cursor_ = shape;
+    static SDL_Cursor* cache[5] = {};
+    const auto i = static_cast<std::size_t>(shape);
+    static constexpr SDL_SystemCursor kSys[5] = {SDL_SYSTEM_CURSOR_DEFAULT, SDL_SYSTEM_CURSOR_EW_RESIZE, SDL_SYSTEM_CURSOR_NS_RESIZE,
+                                                 SDL_SYSTEM_CURSOR_NWSE_RESIZE, SDL_SYSTEM_CURSOR_NESW_RESIZE};
+    if (!cache[i]) cache[i] = SDL_CreateSystemCursor(kSys[i]);
+    if (cache[i]) SDL_SetCursor(cache[i]);
+  }
+
+  // Destaque: a borda sob o mouse (ou a que esta sendo redimensionada) e a divisoria sob o mouse (ou a movida)
+  // ficam com uma faixa mais grossa e brilhante.
+  void addResizeHighlight(view::ShapeList& shapes) {
+    const view::Color bright = view::Rgba(120, 170, 235, 235);
+    if (resizing_) {
+      if (Window* w = find(resizeWin_)) {
+        if (const std::optional<SU::Rect> f = w->frame()) {
+          const resize_hover::Highlight h = resize_hover::EdgeHighlight(*f, resizeMask_, kEdgeHighlightW);
+          for (std::size_t i = 0; i < h.count; ++i) shapes.rectFilled(px(h.rects[i].position), px({h.rects[i].position.x + h.rects[i].size.x, h.rects[i].position.y + h.rects[i].size.y}), bright);
+        }
+      }
+    } else if (hoverMask_ != 0 && !gestureActive()) {
+      if (Window* w = find(hoverWin_)) {
+        if (const std::optional<SU::Rect> f = w->frame()) {
+          const resize_hover::Highlight h = resize_hover::EdgeHighlight(*f, hoverMask_, kEdgeHighlightW);
+          for (std::size_t i = 0; i < h.count; ++i) shapes.rectFilled(px(h.rects[i].position), px({h.rects[i].position.x + h.rects[i].size.x, h.rects[i].position.y + h.rects[i].size.y}), bright);
+        }
+      }
+    }
+    SW::UIDockNode* d = divider_ ? divider_ : (gestureActive() ? nullptr : hoverDivider_);
+    if (d && d->isSplit) {
+      const bool row = d->splitDirection == SU::LayoutDirection::Row;
+      const float r = std::clamp(d->splitRatio, 0.05f, 0.95f);
+      const float at = row ? d->bounds.position.x + d->bounds.size.x * r : d->bounds.position.y + d->bounds.size.y * r;
+      const SU::Rect hl = resize_hover::DividerHighlight(d->bounds, row, at, kEdgeHighlightW);
+      shapes.rectFilled(px(hl.position), px({hl.position.x + hl.size.x, hl.position.y + hl.size.y}), bright);
+    }
   }
 
   // Layout padrao: Hierarquia (em cima) e Scenes (embaixo) a esquerda; Scene e Game em abas no centro, em cima;
@@ -445,8 +557,15 @@ class Host {
   SU::UIHandle activeWin_{};
   SU::UIHandle lastActive_{};   // ultimo grupo tocado: janela nova entra nele
   SU::UIHandle resizeWin_{};    // janela flutuante sendo redimensionada pela borda
+  int resizeMask_ = 0;          // bordas que o redimensionamento em curso move (mascara de Frame::edgeAt)
   bool resizing_ = false;
+  bool pendingResize_ = false;  // o ponteiro andou: a moldura e atualizada uma vez no proximo quadro
+  bool pendingDivider_ = false;
   SW::UIDockNode* divider_ = nullptr;   // divisoria entre folhas sendo arrastada
+  SU::UIHandle hoverWin_{};     // janela cuja borda esta sob o mouse (sem gesto)
+  int hoverMask_ = 0;
+  SW::UIDockNode* hoverDivider_ = nullptr;   // divisoria sob o mouse (sem gesto)
+  resize_hover::CursorShape cursor_ = resize_hover::CursorShape::Arrow;
   SU::Vec2 grabOffset_{};
   SU::Vec2 grabSize_{};
   SU::Vec2 pointer_{};

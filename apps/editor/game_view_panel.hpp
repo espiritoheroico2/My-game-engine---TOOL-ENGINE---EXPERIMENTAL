@@ -102,10 +102,6 @@ public:
   bool handleEvent(const SDL_Event& e) {
     switch (e.type) {
       case SDL_EVENT_MOUSE_MOTION:
-        if (frame_.dragging()) {
-          frame_.pointerMove({e.motion.x, e.motion.y});
-          return true;
-        }
         queue_.push_back({In::Kind::Move, 0, e.motion.x, e.motion.y});
         break;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -115,7 +111,6 @@ public:
         }
         break;
       case SDL_EVENT_MOUSE_BUTTON_UP:
-        frame_.pointerUp();
         if (e.button.button == SDL_BUTTON_LEFT) queue_.push_back({In::Kind::Up, 0, e.button.x, e.button.y});
         break;
       default: break;
@@ -300,7 +295,7 @@ private:
 
   // Clique na moldura: X e "?" viram pedidos do proximo draw; o grip inicia o arraste. True: foi da moldura.
   bool frameDown(float x, float y) {
-    const window_frame::Event ev = frame_.pointerDown({x, y});
+    const window_frame::Event ev = frame_.buttonAt({x, y});
     if (ev == window_frame::Event::Close) closeRequested_ = true;
     if (ev == window_frame::Event::Help) helpRequested_ = true;
     return ev != window_frame::Event::None;

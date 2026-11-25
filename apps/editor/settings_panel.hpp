@@ -21,6 +21,7 @@
 #include "settings_bridge.hpp"
 #include "settings_changes.hpp"
 #include "settings_form.hpp"
+#include "slider_value_edit.hpp"
 #include "pointer_capture.hpp"
 #include "settings_model.hpp"
 #include "sui_panel.hpp"
@@ -132,6 +133,14 @@ class SettingsPanel {
     SettingsPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
         : strip_{text}, canvas_{text}, overlay_{text}, sdl_{sdl}, chrome_{text, sdl} {
         overlay_.setTextZ(Metrics::kPopupTextZ);
+        for (FormSlot& s : fixed_) s.kind = settings_form::RowKind::Slider;
+        fixed_[kFixedButtonRadius].field = sc::Field::ButtonRadius;
+        fixed_[kFixedWindowRadius].field = sc::Field::WindowRadius;
+        fixed_[kFixedTextScale].field = sc::Field::TextScale;
+        for (int ch = 0; ch < 3; ++ch) {   // cor personalizada: index = canal; o slot da cor sai na hora do pedido
+            fixed_[kFixedCustomR + static_cast<std::size_t>(ch)].field = sc::Field::CustomColor;
+            fixed_[kFixedCustomR + static_cast<std::size_t>(ch)].index = ch;
+        }
     }
     SettingsPanel(const SettingsPanel&) = delete;
     // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e desenhado pelo painel, abaixo do cabecalho.
@@ -420,11 +429,11 @@ class SettingsPanel {
             }
             y += Metrics::kGap;
         }
-        y = styleRow(buttonRadius_, v.buttonRadius, "Button corner radius", y, 0.f, sm::kButtonRadiusMax, 1.f, true,
+        y = styleRow(kFixedButtonRadius, v.buttonRadius, "Button corner radius", y, 0.f, sm::kButtonRadiusMax, 1.f, true,
                      std::to_string(static_cast<int>(v.buttonRadius + 0.5f)) + " px");
-        y = styleRow(windowRadius_, v.windowRadius, "Window corner radius", y, 0.f, sm::kWindowRadiusMax, 1.f, true,
+        y = styleRow(kFixedWindowRadius, v.windowRadius, "Window corner radius", y, 0.f, sm::kWindowRadiusMax, 1.f, true,
                      std::to_string(static_cast<int>(v.windowRadius + 0.5f)) + " px");
-        y = styleRow(textScale_, v.textScale, "Interface text size", y, sm::kTextScaleMin, sm::kTextScaleMax, 0.05f, false,
+        y = styleRow(kFixedTextScale, v.textScale, "Interface text size", y, sm::kTextScaleMin, sm::kTextScaleMax, 0.05f, false,
                      std::to_string(static_cast<int>(v.textScale * 100.f + 0.5f)) + "%");
         return y;
     }
@@ -459,54 +468,72 @@ class SettingsPanel {
         // Sliders R, G, B da cor escolhida (valor de 0 a 1 com duas casas).
         const int slot = std::clamp(colorSlot_, 0, 12);
         const char* names[3] = {"Red", "Green", "Blue"};
-        Elm::Slider* sliders[3] = {&customR_, &customG_, &customB_};
         for (int ch = 0; ch < 3; ++ch) {
             const float value = v.customColor[static_cast<std::size_t>(slot * 3 + ch)];
             char shown[16];
             std::snprintf(shown, sizeof shown, "%.2f", static_cast<double>(value));
-            y = styleRow(*sliders[ch], value, names[ch], y, 0.f, 1.f, 0.01f, false, shown);
+            y = styleRow(kFixedCustomR + static_cast<std::size_t>(ch), value, names[ch], y, 0.f, 1.f, 0.01f, false, shown);
         }
         return y + Metrics::kGap;
     }
 
-    // Um slider com rotulo e valor na linha: a faixa do controle fica em `s.border` (coordenadas locais).
-    float styleRow(Elm::Slider& s, float value, const char* label, float y, float lo, float hi, float step, bool integer,
+    struct FormSlot;   // definido com as linhas genericas, abaixo
+
+    // Um slider com rotulo e valor na linha de Appearance (slot fixo k). A faixa fica em `s.slider.border`.
+    float styleRow(std::size_t k, float value, const char* label, float y, float lo, float hi, float step, bool integer,
                    const std::string& shown) {
+        FormSlot& s = fixed_[k];
         canvas_.addText(Metrics::kPad, y + 5.f, std::string(T(label)), Metrics::kFont, theme_.text, labelW_ - 8.f);
-        s.range = Elm::SliderRange{lo, hi, step, integer};
-        s.SetValue(value);
-        s.border = rectOf(Metrics::kPad + labelW_, y, controlW_ - Metrics::kValueW, Metrics::kRowH);
-        canvas_.addText(Metrics::kPad + labelW_ + controlW_ - Metrics::kValueW + 6.f, y + 5.f, shown, Metrics::kFont,
-                        theme_.textDim, Metrics::kValueW - 6.f);
+        s.slider.range = Elm::SliderRange{lo, hi, step, integer};
+        s.slider.SetValue(value);
+        s.slider.border = rectOf(Metrics::kPad + labelW_, y, controlW_ - Metrics::kValueW, Metrics::kRowH);
+        s.lo = lo;
+        s.hi = hi;
+        s.step = step;
+        s.isInt = integer;
+        layoutValueBox(s, kFixedSection, k, y, shown);
         return y + Metrics::kRowH + Metrics::kGap;
+    }
+
+    // Campo do valor de um deslizante (a direita da faixa). Sem foco mostra `shown`; com foco mostra o texto digitado
+    // e o caret. Clique nele abre a digitacao (sliderPointer).
+    void layoutValueBox(FormSlot& s, std::size_t section, std::size_t k, float y, const std::string& shown) {
+        const bool focused = isFocused(section, k);
+        const float vx = Metrics::kPad + labelW_ + controlW_ - Metrics::kValueW + 4.f;
+        const float vw = Metrics::kValueW - 4.f;
+        const SU::Rect box = rectOf(vx, y, vw, Metrics::kRowH);
+        s.box = box;
+        s.shown = shown;
+        canvas_.addSolid(box.position.x, box.position.y, box.size.x, box.size.y, focused ? theme_.surface : btnColor_, 0.2f,
+                         editor::ui_style::buttonRadius());
+        if (!focused) {
+            canvas_.addText(box.position.x + 6.f, y + 5.f, shown, Metrics::kFont, theme_.textDim, vw - 8.f);
+            return;
+        }
+        const std::string& typed = s.edit.Text();
+        canvas_.addText(box.position.x + 6.f, y + 5.f, typed, Metrics::kFont, theme_.text, vw - 8.f);
+        const float cx = box.position.x + 6.f + canvas_.layout(typed.substr(0, s.edit.Caret()), Metrics::kFont).size.x;
+        canvas_.addSolid(cx, y + 4.f, 1.5f, Metrics::kRowH - 8.f, theme_.text, 0.25f);
     }
 
     void appendAppearance(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint) {
         constexpr float z = Metrics::kControlZ;
-        append(items, paint, Elm::BuildSliderItems(buttonRadius_, sliderStyle_, z, paint), kContentClip);
-        append(items, paint, Elm::BuildSliderItems(windowRadius_, sliderStyle_, z, paint), kContentClip);
-        append(items, paint, Elm::BuildSliderItems(textScale_, sliderStyle_, z, paint), kContentClip);
+        append(items, paint, Elm::BuildSliderItems(fixed_[kFixedButtonRadius].slider, sliderStyle_, z, paint), kContentClip);
+        append(items, paint, Elm::BuildSliderItems(fixed_[kFixedWindowRadius].slider, sliderStyle_, z, paint), kContentClip);
+        append(items, paint, Elm::BuildSliderItems(fixed_[kFixedTextScale].slider, sliderStyle_, z, paint), kContentClip);
         if (static_cast<int>(editor::palette::kCustomIndex) == palette_) {
-            append(items, paint, Elm::BuildSliderItems(customR_, sliderStyle_, z, paint), kContentClip);
-            append(items, paint, Elm::BuildSliderItems(customG_, sliderStyle_, z, paint), kContentClip);
-            append(items, paint, Elm::BuildSliderItems(customB_, sliderStyle_, z, paint), kContentClip);
+            for (std::size_t k = kFixedCustomR; k <= kFixedCustomB; ++k) {
+                append(items, paint, Elm::BuildSliderItems(fixed_[k].slider, sliderStyle_, z, paint), kContentClip);
+            }
         }
     }
 
     // Arrasto dos sliders de Appearance: cada valor vai pelo mesmo caminho dos outros campos (pedido -> main.cpp).
     bool appearanceSliderPointer(Elm::PointerPhase phase, const SU::Vec2& p) {
         if (!appearanceOpen_) return false;
-        struct Slide {
-            Elm::Slider* slider;
-            sc::Field field;
-        };
-        const Slide slides[] = {{&buttonRadius_, sc::Field::ButtonRadius},
-                                {&windowRadius_, sc::Field::WindowRadius},
-                                {&textScale_, sc::Field::TextScale}};
-        for (const Slide& s : slides) {
-            const Elm::SliderEvents ev = s.slider->OnPointer(event(phase, p, s.slider->border));
-            if (ev.valueChanged) pending_.push_back({s.field, 0, s.slider->Value(), false});
-            if (ev.pressStarted || ev.valueChanged || ev.pressEnded) return true;
+        const std::size_t sliders[] = {kFixedButtonRadius, kFixedWindowRadius, kFixedTextScale};
+        for (std::size_t k : sliders) {
+            if (sliderPointer(kFixedSection, k, fixed_[k], phase, p)) return true;
         }
         return false;
     }
@@ -728,9 +755,14 @@ class SettingsPanel {
         Elm::Dropdown dropdown;
         Elm::RadioGroup radio;
         Elm::Button button;
-        W::TextEditState edit;       // Text: edicao (texto e caret). Sem foco, espelha o valor da janela
-        std::string known;           // Text: ultimo valor recebido; o pedido so sai se o texto mudou
-        SU::Rect box;                // Text: o campo; Check: a linha inteira (hover e clique)
+        W::TextEditState edit;       // Text e Slider (campo do valor): edicao (texto e caret). Text sem foco espelha a janela
+        std::string known;           // Text: ultimo valor recebido; o pedido so sai se o texto mudou. Slider: texto ao abrir
+        std::string shown;           // Slider: texto do valor sem foco (ex.: "4 px")
+        SU::Rect box;                // Text: o campo; Slider: caixa do valor; Check: a linha inteira (hover e clique)
+        float lo = 0.f, hi = 1.f, step = 0.f;   // Slider: intervalo, passo e se e inteiro (valor digitado)
+        bool isInt = false;
+        sc::Field field = sc::Field::Form;      // Slider: pedido. Form (linha generica) usa id; os demais sao campos fixos
+        int index = 0;                          // Slider de campo fixo: canal (cor personalizada: 0, 1 ou 2)
     };
 
     // Linhas de uma secao, depois do conteudo fixo. Devolve o y final.
@@ -823,9 +855,12 @@ class SettingsPanel {
                 s.slider.states.disabled = !row.enabled;
                 s.slider.border = rectOf(x, y, controlW_ - Metrics::kValueW, Metrics::kRowH);
                 canvas_.addText(Metrics::kPad, y + 5.f, row.label, Metrics::kFont, ink, labelW_ - 8.f);
+                s.lo = row.lo;
+                s.hi = row.hi;
+                s.step = asInt ? 1.f : 0.f;
+                s.isInt = asInt;
                 const std::string shown = row.note.empty() ? Elm::SliderValueText(s.slider) : row.note;
-                canvas_.addText(x + controlW_ - Metrics::kValueW + 6.f, y + 5.f, shown, Metrics::kFont, theme_.textDim,
-                                Metrics::kValueW - 6.f);
+                layoutValueBox(s, i, k, y, shown);
                 return y + Metrics::kRowH + Metrics::kGap;
             }
             case RowKind::Check: {
@@ -874,10 +909,50 @@ class SettingsPanel {
 
     [[nodiscard]] bool isFocused(std::size_t i, std::size_t k) const { return focusSection_ == i && focusIndex_ == k; }
 
-    // Campo de texto com foco, ou nullptr.
+    // Campo de texto com foco, ou nullptr. Os sliders fixos de Appearance usam a secao kFixedSection.
     [[nodiscard]] FormSlot* focusedSlot() {
+        if (focusSection_ == kFixedSection) return focusIndex_ < kFixedCount ? &fixed_[focusIndex_] : nullptr;
         if (focusSection_ == npos || focusIndex_ >= formPool_[focusSection_].size()) return nullptr;
         return formPool_[focusSection_][focusIndex_].get();
+    }
+
+    // Digitar o valor de um slider: o texto vira o valor do Slider (mesmos limites e passo do arraste) e so grava
+    // quando o valor muda. Texto invalido nao muda nada.
+    void commitSliderEdit(FormSlot& s) {
+        const float typed = slider_edit::CommitSliderText(s.edit.Text(), s.slider.Value(), s.lo, s.hi, s.step, s.isInt);
+        if (s.slider.SetValue(typed)) sliderChanged(s);
+    }
+
+    // Um slider mudou (arraste ou digitado): o pedido segue o mesmo caminho para os dois casos.
+    void sliderChanged(FormSlot& s) {
+        const float value = s.slider.Value();
+        if (s.field == sc::Field::Form) {
+            pending_.push_back(formChange(s.id, value, false, 0, ""));
+            return;
+        }
+        const int index = s.field == sc::Field::CustomColor ? std::clamp(colorSlot_, 0, 12) * 3 + s.index : s.index;
+        pending_.push_back(sc::Change{s.field, index, value, false});
+    }
+
+    // Clique no campo do valor abre a digitacao; o texto de partida e o valor atual (Esc volta a ele).
+    void focusSlider(std::size_t i, std::size_t k, FormSlot& s) {
+        if (isFocused(i, k)) return;
+        commitText();
+        s.known = Elm::SliderValueText(s.slider);
+        s.edit = W::TextEditState(s.known);
+        focusText(i, k, s);
+    }
+
+    // Ponteiro de um slider (linha generica ou fixo): Down na caixa do valor abre a digitacao; o arraste de sempre
+    // continua na faixa. Devolve true se o slider consumiu o evento.
+    bool sliderPointer(std::size_t i, std::size_t k, FormSlot& s, Elm::PointerPhase phase, const SU::Vec2& p) {
+        if (phase == Elm::PointerPhase::Down && !s.slider.states.disabled && contains(s.box, p)) {
+            focusSlider(i, k, s);
+            return true;
+        }
+        const Elm::SliderEvents ev = s.slider.OnPointer(event(phase, p, s.slider.border));
+        if (ev.valueChanged) sliderChanged(s);
+        return ev.pressStarted || ev.valueChanged || ev.pressEnded;
     }
 
     // Foco no campo de texto: o caret vai para o fim e o SDL passa a mandar o texto digitado.
@@ -902,7 +977,11 @@ class SettingsPanel {
     void commitText() {
         FormSlot* s = focusedSlot();
         if (!s) return;
-        if (s->edit.Text() != s->known) pending_.push_back(formChange(s->id, 0.f, false, 0, std::string(s->edit.Text())));
+        if (s->kind == settings_form::RowKind::Slider) {
+            commitSliderEdit(*s);
+        } else if (s->edit.Text() != s->known) {
+            pending_.push_back(formChange(s->id, 0.f, false, 0, std::string(s->edit.Text())));
+        }
         dropFocus();
     }
 
@@ -994,11 +1073,8 @@ class SettingsPanel {
     bool formSlotPointer(std::size_t i, std::size_t k, FormSlot& s, Elm::PointerPhase phase, const SU::Vec2& p) {
         using settings_form::RowKind;
         switch (s.kind) {
-            case RowKind::Slider: {
-                const Elm::SliderEvents ev = s.slider.OnPointer(event(phase, p, s.slider.border));
-                if (ev.valueChanged) pending_.push_back(formChange(s.id, s.slider.Value(), false, 0, ""));
-                return ev.pressStarted || ev.valueChanged || ev.pressEnded;
-            }
+            case RowKind::Slider:
+                return sliderPointer(i, k, s, phase, p);
             case RowKind::Check: {
                 const Elm::CheckboxEvents ev = s.check.OnPointer(event(phase, p, s.check.border));
                 if (ev.valueChanged) pending_.push_back(formChange(s.id, 0.f, s.check.checked, 0, ""));
@@ -1192,11 +1268,8 @@ class SettingsPanel {
     // Sliders R, G, B da cor escolhida: cada movimento vai como Field::CustomColor (index = slot * 3 + canal).
     bool customSliderPointer(Elm::PointerPhase phase, const SU::Vec2& p) {
         if (palette_ != static_cast<int>(editor::palette::kCustomIndex)) return false;
-        Elm::Slider* sliders[3] = {&customR_, &customG_, &customB_};
-        for (int ch = 0; ch < 3; ++ch) {
-            const Elm::SliderEvents ev = sliders[ch]->OnPointer(event(phase, p, sliders[ch]->border));
-            if (ev.valueChanged) pending_.push_back({sc::Field::CustomColor, std::clamp(colorSlot_, 0, 12) * 3 + ch, sliders[ch]->Value(), false});
-            if (ev.pressStarted || ev.valueChanged || ev.pressEnded) return true;
+        for (std::size_t k = kFixedCustomR; k <= kFixedCustomB; ++k) {
+            if (sliderPointer(kFixedSection, k, fixed_[k], phase, p)) return true;
         }
         return false;
     }
@@ -1378,8 +1451,13 @@ class SettingsPanel {
     Elm::RadioGroup apis_;
     Elm::Dropdown resolution_;
     Elm::Slider scale_;
-    Elm::Slider buttonRadius_, windowRadius_, textScale_;   // Appearance: raios e escala do texto
-    Elm::Slider customR_, customG_, customB_;               // Appearance > Custom: cor escolhida
+    // Sliders fixos (Appearance): raios, escala do texto e a cor personalizada (R, G, B). Cada um tem a caixa do valor
+    // digitavel. Ficam fora das secoes de linhas; o foco deles usa a secao kFixedSection.
+    static constexpr std::size_t kFixedSection = npos - 1;
+    static constexpr std::size_t kFixedButtonRadius = 0, kFixedWindowRadius = 1, kFixedTextScale = 2;
+    static constexpr std::size_t kFixedCustomR = 3, kFixedCustomG = 4, kFixedCustomB = 5;
+    static constexpr std::size_t kFixedCount = 6;
+    std::array<FormSlot, kFixedCount> fixed_;
     std::array<sui::Box, editor::palette::kBaseCount> baseBtns_{};   // cores-base (botoes)
     sui::Box tokenPrev_{}, tokenNext_{};                             // lista avancada (< e >)
     std::vector<sui::Box> themeRows_;                                // arquivos de tema (clique aplica)

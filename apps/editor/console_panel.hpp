@@ -167,14 +167,9 @@ class ConsolePanel {
         onMouseDown(e);
         return false;
       case SDL_EVENT_MOUSE_BUTTON_UP:
-        frame_.pointerUp();
         onMouseUp(e);
         return false;
       case SDL_EVENT_MOUSE_MOTION:
-        if (frame_.dragging()) {
-          frame_.pointerMove({e.motion.x, e.motion.y});
-          return true;
-        }
         if (draggingSelection_) moveCaretFromPointer(e.motion.x, e.motion.y, true);
         return false;
       case SDL_EVENT_TEXT_INPUT:
@@ -274,7 +269,7 @@ class ConsolePanel {
   // Clique na moldura: X pede o fechamento (vai em Requests::close no proximo draw); grip inicia o arraste.
   // Devolve true quando o clique foi da moldura, para ele nao chegar ao conteudo.
   bool frameDown(float x, float y) {
-    const wf::Event ev = frame_.pointerDown({x, y});
+    const wf::Event ev = frame_.buttonAt({x, y});
     if (ev == wf::Event::Close) closeRequested_ = true;
     if (ev == wf::Event::Help) helpRequested_ = true;
     return ev != wf::Event::None;

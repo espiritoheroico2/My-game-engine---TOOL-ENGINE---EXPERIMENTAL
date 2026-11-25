@@ -34,6 +34,7 @@
 #include "inspector_bridge.hpp"
 #include "inspector_model.hpp"
 #include "project.hpp"
+#include "slider_value_edit.hpp"
 #include "sui_panel.hpp"
 #include "ui_style.hpp"
 
@@ -192,6 +193,7 @@ class InspectorPanel {
         overlay_.setFontScale(editor::ui_style::textScale());
         width_ = std::max(140.f, width);
         controls_.clear();
+        clampScroll();   // limite calculado no quadro anterior (o corpo visivel e o conteudo ja medido)
         frames_.clear();
         canvas_.clear();
         overlay_.clear();
@@ -201,11 +203,13 @@ class InspectorPanel {
         ctrlW_ = std::max(60.f, width_ - Metrics::kPad - ctrlX_);
         keySeq_ = 1;
         disabled_ = ctx.locked;
-        y_ = Metrics::kPad;
+        y_ = Metrics::kPad - scrollY_;   // a rolagem sobe o conteudo; o recorte do corpo esconde o que sai
         if (!ctx.hasObject) {
             closePopups();
             canvas_.addText(Metrics::kPad, y_, T("no object selected"), Metrics::kFont, theme_.textDim, width_ - 2.f * Metrics::kPad);
             y_ += Metrics::kRowH;
+            contentH_ = y_ + scrollY_;
+            addScrollbar();
             return y_ + Metrics::kPad;
         }
         const unsigned id = (ctx.entityGeneration << 20) ^ ctx.entityIndex;
@@ -231,11 +235,31 @@ class InspectorPanel {
         resources();
         script();
         tags();
+        contentH_ = y_ + scrollY_ + Metrics::kPad;   // altura do conteudo sem a rolagem, com a folga de baixo
+        addScrollbar();
         return y_ + Metrics::kPad;
     }
 
     // Abre ou fecha todas as secoes.
     void setAllSections(bool open) { expanders_.SetAll(open); }
+
+    // Rolagem: a roda do mouse sobre o corpo move o conteudo. Limite = altura do conteudo menos o corpo visivel.
+    void scrollBy(float dy) {
+        scrollY_ += dy;
+        clampScroll();
+    }
+    [[nodiscard]] float scrollY() const { return scrollY_; }
+
+    // Barra de rolagem no canto direito do corpo, so quando o conteudo nao cabe. Coordenadas locais do canvas.
+    void addScrollbar() {
+        const float trackH = visible_.h;
+        if (trackH <= 0.f || contentH_ <= trackH + 0.5f) return;
+        const float maxScroll = contentH_ - trackH;
+        const float thumbH = std::max(Metrics::kRowH * 0.75f, trackH * trackH / contentH_);
+        const float top = visible_.y - origin_.y;
+        const float thumbY = top + (trackH - thumbH) * (scrollY_ / maxScroll);
+        canvas_.addSolid(width_ - 6.f, thumbY, 4.f, thumbH, theme_.textDim, Metrics::kZField);
+    }
 
     // Desenha o bloco. origin = canto superior esquerdo do bloco na tela; visible = area de recorte (corpo da moldura)
     // (o bloco e cortado por esse retangulo).
@@ -297,6 +321,10 @@ class InspectorPanel {
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 if (e.button.button != SDL_BUTTON_LEFT) return false;
                 return pointer(Elm::PointerPhase::Up, e.button.x, e.button.y, e.button.windowID);
+            case SDL_EVENT_MOUSE_WHEEL:
+                if (!sui::Box{visible_.x, visible_.y, visible_.w, visible_.h}.contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
+                scrollBy(-e.wheel.y * kWheelStep);
+                return true;
             case SDL_EVENT_MOUSE_MOTION:
                 if (!captured_) return false;
                 return pointer(Elm::PointerPhase::Move, e.motion.x, e.motion.y, e.motion.windowID);
@@ -329,6 +357,7 @@ class InspectorPanel {
         im::Section section = im::Section::Transform;   // Header
         float value = 0.f;                                // Slider, Num
         int decimals = 2;                                 // Num
+        bool sliderValue = false;                         // Num: campo do valor de um deslizante (confirma ao sair)
         im::Range range{-std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
         bool checked = false;                             // Check
         std::size_t index = 0;                            // Drop
@@ -396,7 +425,8 @@ class InspectorPanel {
 
     void nextRow() { y_ += Metrics::kRowH + Metrics::kGap; }
 
-    // Deslizante: limites do modelo; o valor vem do objeto e so muda ao arrastar.
+    // Deslizante: limites do modelo; o valor vem do objeto. Arrastar grava na hora; o campo ao lado aceita um numero
+    // digitado (Enter ou sair do campo confirma, com o mesmo limite do deslizante; Esc cancela).
     void slider(const char* text, float* target, im::Range range, bool enabled = true) {
         label(y_, text);
         const float sw = ctrlW_ - Metrics::kValueW;
@@ -405,8 +435,20 @@ class InspectorPanel {
         c.value = *target;
         c.range = range;
         c.setF = [target](float v) { *target = v; };
-        canvas_.addText(ctrlX_ + sw + 4.f, y_ + 5.f, im::FormatNumber(*target, 2), Metrics::kSmallFont + 1.f, theme_.textDim,
-                        Metrics::kValueW - 4.f);
+        const float vx = ctrlX_ + sw + 4.f;
+        const float vw = Metrics::kValueW - 4.f;
+        Control& v = add(Kind::Num, rect(vx, y_, vw, Metrics::kRowH), nextKey());
+        v.disabled = c.disabled;
+        v.sliderValue = true;
+        v.value = *target;
+        v.decimals = 2;
+        v.range = range;
+        v.text = im::FormatNumber(*target, 2);
+        v.setF = [target](float x) { *target = x; };
+        if (!editing(v.key)) {
+            canvas_.addSolid(vx, y_, vw, Metrics::kRowH, v.disabled ? fieldDisabled_ : fieldColor_, Metrics::kZField);
+            canvas_.addText(vx + 4.f, y_ + 5.f, v.text, Metrics::kFont, v.disabled ? theme_.textDim : theme_.text, vw - 8.f);
+        }
         nextRow();
     }
 
@@ -1525,6 +1567,11 @@ class InspectorPanel {
             }
             if (phase == Elm::PointerPhase::Down) closePopups();
         }
+        // Clique fora do campo de valor de um deslizante: confirma o digitado e solta o campo antes do clique.
+        if (phase == Elm::PointerPhase::Down && field_slider_ && !contains(field_box_, p)) {
+            commitSliderField();
+            endEdit(window);
+        }
         bool any = false;
         for (Control& c : controls_) {
             if (c.disabled && c.kind != Kind::Header) continue;
@@ -1664,6 +1711,8 @@ class InspectorPanel {
         field_ = Edit::TextField(c.text);
         field_.SetFocus(true);
         field_kind_ = c.kind == Kind::Num ? FieldKind::Number : FieldKind::Text;
+        field_slider_ = c.sliderValue;
+        edit_value_ = c.value;
         field_box_ = c.box;
         edit_range_ = c.range;
         edit_set_f_ = c.setF;
@@ -1685,6 +1734,7 @@ class InspectorPanel {
         if (field_kind_ == FieldKind::None) return;
         field_.SetFocus(false);
         field_kind_ = FieldKind::None;
+        field_slider_ = false;
         field_key_ = 0;
         edit_set_f_ = nullptr;
         edit_set_text_ = nullptr;
@@ -1694,7 +1744,15 @@ class InspectorPanel {
     }
 
     // Escreve o texto digitado no objeto. Numero invalido ou fora do texto nao escreve nada.
+    // Valor de um deslizante digitado: so grava ao confirmar (Enter ou clique fora), com o mesmo limite do arraste.
+    void commitSliderField() {
+        const float out = slider_edit::CommitSliderText(field_.Edit().Text(), edit_value_, edit_range_.min, edit_range_.max,
+                                                        0.f, false);
+        if (out != edit_value_ && edit_set_f_) edit_set_f_(out);
+    }
+
     void commitField() {
+        if (field_slider_) return;   // digitar so muda o texto; o valor entra em commitSliderField
         const std::string text = field_.Edit().Text();
         if (field_kind_ == FieldKind::Number) {
             float out = 0.f;
@@ -1725,6 +1783,7 @@ class InspectorPanel {
             return;
         }
         if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+            if (field_slider_) commitSliderField();
             const std::function<void()> enter = edit_on_enter_;
             endEdit(window);
             if (enter) enter();
@@ -1761,6 +1820,13 @@ class InspectorPanel {
     Context ctx_;
     Hooks hooks_;
     float width_ = 0.f, y_ = 0.f, labelW_ = 0.f, innerX_ = 0.f, ctrlX_ = 0.f, ctrlW_ = 0.f, groupTop_ = 0.f;
+    static constexpr float kWheelStep = 40.f;   // pixels por giro da roda
+    float scrollY_ = 0.f;     // quanto o conteudo subiu (>= 0)
+    float contentH_ = 0.f;    // altura total do conteudo medida no ultimo layout (sem a rolagem)
+    void clampScroll() {
+        const float maxScroll = std::max(0.f, contentH_ - visible_.h);
+        scrollY_ = std::clamp(scrollY_, 0.f, maxScroll);
+    }
     std::uint32_t keySeq_ = 1;
     bool disabled_ = false;
     unsigned lastObject_ = 0;
@@ -1798,6 +1864,8 @@ class InspectorPanel {
     std::uint32_t field_key_ = 0;
     SU::Rect field_box_{};   // caixa local do campo em edicao (Number, Text)
     im::Range edit_range_{};
+    bool field_slider_ = false;   // o campo em edicao e o valor de um deslizante (ver commitSliderField)
+    float edit_value_ = 0.f;      // valor do objeto quando a edicao comecou (base do Esc e do "sem mudanca")
     std::function<void(float)> edit_set_f_;
     std::function<void(const std::string&)> edit_set_text_;
     std::function<void()> edit_on_enter_, edit_on_cancel_;

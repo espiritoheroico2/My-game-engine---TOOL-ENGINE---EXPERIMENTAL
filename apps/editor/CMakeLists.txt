@@ -84,6 +84,12 @@ if(TOOL_WITH_SPRITEUI)
   target_link_libraries(editor_dock_layout_tests PRIVATE SpriteUi::SpriteUI)
   add_test(NAME Editor.DockLayout COMMAND editor_dock_layout_tests)
 
+  # Cursor e destaque da borda ao redimensionar (resize_hover.hpp): regras puras.
+  add_executable(editor_resize_hover_tests tests/test_resize_hover.cpp)
+  target_include_directories(editor_resize_hover_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_resize_hover_tests PRIVATE SpriteUi::SpriteUI)
+  add_test(NAME Editor.ResizeHover COMMAND editor_resize_hover_tests)
+
   # Captura headless da janela Editor info (SpriteUI). Nao e um teste do ctest: gera PPM para conferir visualmente.
   add_executable(editor_info_capture tools/editor_info_capture.cpp)
   target_include_directories(editor_info_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -252,6 +258,11 @@ add_test(NAME Editor.PointerCapture COMMAND editor_pointer_capture_tests)
 add_executable(editor_settings_changes_tests tests/test_settings_changes.cpp)
 target_include_directories(editor_settings_changes_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME Editor.SettingsChanges COMMAND editor_settings_changes_tests)
+
+# Campo numerico dos deslizantes (slider_value_edit.hpp): texto digitado, arredondamento e limites.
+add_executable(editor_slider_value_edit_tests tests/test_slider_value_edit.cpp)
+target_include_directories(editor_slider_value_edit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.SliderValueEdit COMMAND editor_slider_value_edit_tests)
 
 # Modelo da janela Hierarchy (hierarchy_model.hpp): arvore, selecao por id, teclas e faixa visivel.
 add_executable(editor_hierarchy_model_tests tests/test_hierarchy_model.cpp)

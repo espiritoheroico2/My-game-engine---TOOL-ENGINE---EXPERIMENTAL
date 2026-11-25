@@ -166,15 +166,10 @@ class HierarchyPanel {
         if (!visible_) return false;
         // Moldura primeiro: X fecha, so o grip arrasta. Soltar o botao encerra o arraste.
         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) {
-            const wf::Event ev = frame_.pointerDown({e.button.x, e.button.y});
+            const wf::Event ev = frame_.buttonAt({e.button.x, e.button.y});
             if (ev == wf::Event::Close) closeRequested_ = true;
             if (ev == wf::Event::Help) helpRequested_ = true;
             if (ev != wf::Event::None) return true;
-        }
-        if (e.type == SDL_EVENT_MOUSE_BUTTON_UP) frame_.pointerUp();
-        if (e.type == SDL_EVENT_MOUSE_MOTION && frame_.dragging()) {
-            frame_.pointerMove({e.motion.x, e.motion.y});
-            return true;
         }
         switch (e.type) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:

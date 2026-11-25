@@ -135,6 +135,20 @@ class Frame {
     return Event::None;
   }
 
+  // Botoes da moldura (X, minimizar, "?"), sem iniciar arraste nem redimensionamento. Quem decide os gestos e o host
+  // do dock; a moldura so responde aos botoes que ficam no proprio cabecalho.
+  Event buttonAt(SU::Vec2 p) {
+    if (!placed_) return Event::None;
+    const SW::WindowFramePart part = SW::WindowFramePartAt(frame_, metrics_, false, p);
+    if (part == SW::WindowFramePart::Close) return Event::Close;
+    if (part == SW::WindowFramePart::Minimize) {
+      toggleMinimized();
+      return Event::Minimize;
+    }
+    if (inside(helpRect(), p)) return Event::Help;
+    return Event::None;
+  }
+
   // Inicia o redimensionamento quando o ponteiro esta numa borda (faixa de fora ou de dentro da moldura). Os botoes
   // Minimizar e X do cabecalho nunca iniciam redimensionamento. O host segue com pointerMove e solta com pointerUp.
   bool beginResize(SU::Vec2 p) {

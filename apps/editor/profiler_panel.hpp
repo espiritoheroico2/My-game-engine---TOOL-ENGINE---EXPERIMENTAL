@@ -182,17 +182,12 @@ class ProfilerPanel {
         }
         return false;
       case SDL_EVENT_MOUSE_BUTTON_UP:
-        frame_.pointerUp();
         if (e.button.button == SDL_BUTTON_LEFT && exportPressed_) {
           exportPressed_ = false;
           if (insideRect(exportBox_, e.button.x, e.button.y)) exportRequested_ = true;
         }
         return false;
       case SDL_EVENT_MOUSE_MOTION:
-        if (frame_.dragging()) {
-          frame_.pointerMove({e.motion.x, e.motion.y});
-          return true;
-        }
         return false;
       case SDL_EVENT_MOUSE_WHEEL:
         if (!contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
@@ -282,7 +277,7 @@ class ProfilerPanel {
  private:
   // ---------- Moldura, barra do topo e botao (por quadro) ----------
   bool frameDown(float x, float y) {
-    const wf::Event ev = frame_.pointerDown({x, y});
+    const wf::Event ev = frame_.buttonAt({x, y});
     if (ev == wf::Event::Close) closeRequested_ = true;
     if (ev == wf::Event::Help) helpRequested_ = true;
     return ev != wf::Event::None;
