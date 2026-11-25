@@ -155,6 +155,7 @@ void TestCacheHandlesNodeSizeChange() {
 
 void TestCacheCommitsMultipleStructuralChangesTogether() {
     R::RenderListCache cache;
+    cache.Reset(3);
     std::array<std::size_t, 3> counts{1, 1, 1};
     const auto builder = [&](std::size_t node, std::vector<R::UIRenderItem>& out) {
         for (std::size_t i = 0; i < counts[node]; ++i) {
@@ -221,7 +222,8 @@ void TestBuildIntoReusesStorageAndClearsData() {
     R::FramePacket packet;
     R::RenderExtractionScratch scratch;
     R::RenderExtractor extractor;
-    extractor.BuildInto(packet, 1, items, nullptr, {R::ClipRectGPU{0, 0, 10, 10}}, &scratch);
+    const std::vector<R::ClipRectGPU> clips{R::ClipRectGPU{0, 0, 10, 10}};
+    extractor.BuildInto(packet, 1, items, nullptr, clips, &scratch);
     const auto instanceCapacity = packet.instances.capacity();
     const auto batchCapacity = packet.batches.capacity();
     const auto clipCapacity = packet.clipRects.capacity();
