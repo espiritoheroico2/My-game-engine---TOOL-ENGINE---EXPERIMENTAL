@@ -34,7 +34,7 @@ engine/scene    Scene, ToolObject, Blueprint, DeleteAndReuse (pool)
 engine/input, platform, audio   entrada/gamepad, janela, mixer de audio
 engine/math, rhi, render        matematica, interface de GPU, iluminacao, SoftRenderer (CPU)
 engine/narrative, mod, net, pack   Controlador Narrativo, ModTool, NetTool, pacotes .tpak
-apps/editor     editor ImGui + painel experimental SpriteUI (preset editor)   fuzz/  fuzzers   tools/  compilador de shaders   assets/shaders/hlsl e glsl
+apps/editor     editor (SpriteUI, preset editor)   fuzz/  fuzzers   tools/  compilador de shaders   assets/shaders/hlsl e glsl
 apps/sandbox    jogo de teste
 tests           testes automatizados (sem dependências)
 docs/           notas de construção

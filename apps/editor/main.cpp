@@ -852,10 +852,6 @@ editor::sui::Box framedBody(editor::framed::Chrome* chrome, bool shown, int winW
 
 
 
-// LEGADO (nao chamado desde a migracao do Console para a moldura SpriteUI). Pode ser removido depois da
-// aprovacao visual do usuario.
-bool gConsoleFrame = false;
-editor::sui::Box gConsoleRect;
 
 
 // Clicar numa linha "[Nome] ..." seleciona o objeto Nome na cena (nome vazio: nada).
@@ -1374,20 +1370,20 @@ std::array<bool, editor::settings_bridge::kApiCount> settingsApiBuilt() {
 // controle e uma linha de settings_form.hpp: os
 // construtores buildXRows leem o Editor, e applyFormRequest (chamado por SettingsEditorTarget::setForm) grava o pedido
 // com a regra do controle. Inventario (controle: tipo, faixa, efeito). Nenhum controle ficou de fora.
-//  Game (drawGameTab):
+//  Game:
 //    Grid and gizmos: 3 caixas (grade da Scene, grade do Game, gizmos) e nota da grade.
 //    Split screen: combo de 2 opcoes (splitVertical); caixa Fill each half (splitFill); duas notas.
 //    Skybox: caixa (sky.enabled); com ela ligada, 6 combos de imagem (um por lado; "(none)" = cor solida),
 //      cor solida em 3 deslizantes R/G/B (0 a 1, no lugar do seletor de cor) e nota.
 //    Audio: nota com o estado da saida de audio.
-//  Optimizing (drawSettingsTabBody, aba 4): combo Frame rate limit (fpsMode); deslizante Mesh chunk cache (256 a
+//  Optimizing (aba 4): combo Frame rate limit (fpsMode); deslizante Mesh chunk cache (256 a
 //    32768, inteiro); deslizante UI scale (0,70 a 2,00); caixa Idle rendering.
 //  Language (drawLanguageTab): radio dos pacotes; notas de traducao e da pasta; botoes Reload packs e Export
 //    template; nota de status.
-//  Physics (drawPhysicsTab, extra_ui.hpp): caixa Physics enabled; gravidade X/Y/Z (-1000 a 1000, no lugar do
+//  Physics: caixa Physics enabled; gravidade X/Y/Z (-1000 a 1000, no lugar do
 //    DragFloat3); 7 botoes de gravidade pronta; Solver iterations (1 a 30); Steps per second (15 a 240); caixa Draw
 //    colliders; Simulation radius (0 a 1000); notas; no Play, o bloco Live com 2 notas de estatisticas.
-//  Lighting (drawLightingTab): Frustum culling, Occlusion culling e Draw distance (com as dicas); Sun: cor (3
+//  Lighting: Frustum culling, Occlusion culling e Draw distance (com as dicas); Sun: cor (3
 //    deslizantes), Intensity, Direction, Height, Ambient (3), Sun casts shadows; Light Prism: Quality preset,
 //    Custom values e, com custom, Shadow cascades, Shadow map resolution, Edge softness, Max lights per cluster,
 //    Light indices per cluster, Auto radius cutoff (o resto fica apagado sem custom); Light budget (2); Shadows:
@@ -1395,7 +1391,7 @@ std::array<bool, editor::settings_bridge::kApiCount> settingsApiBuilt() {
 //    Ray tracing (caixa, dica), RT AO (caixa, dica, rays, raio); Bloom (caixa, dica, forca); Ambient intensity;
 //    Pre-exposure; Global post-processing: Enable, Exposure, Contrast, Saturation, Tint (3), Tint strength,
 //    Vignette, Vignette size (so com vinheta), Sharpen e Reset effect.
-//  Tags (drawTagsTab): lista de tags internas (notas); ligacoes (uma nota e um botao Remove link cada); campo da tag,
+//  Tags: lista de tags internas (notas); ligacoes (uma nota e um botao Remove link cada); campo da tag,
 //    combo do alvo e botao Link; tags do projeto com contagem, botao Rename (campo New name e cancel, so ao renomear);
 //    mensagem de erro; nota final.
 //  Project (drawProjectTab): campo Editor command (texto, com dica); notas de exemplos e de exportacao.
@@ -1503,7 +1499,7 @@ std::vector<std::string> skyFaceOptions(Editor& ed, int face) {
     return opts;
 }
 
-// Linhas da secao Game (drawGameTab).
+// Linhas da secao Game.
 void addGameRows(Editor& ed, editor::settings_form::Rows& rows) {
     using namespace formrow;
     rows.push_back(Head(T("Grid and gizmos")));
@@ -1538,7 +1534,7 @@ void addGameRows(Editor& ed, editor::settings_form::Rows& rows) {
     rows.push_back(Note(F("Audio output: %s", ed.audioTried ? (ed.audioOk ? "ready" : "not available") : "starts on Play")));
 }
 
-// Linhas da secao Optimizing (aba 4 do drawSettingsTabBody).
+// Linhas da secao Optimizing (aba 4).
 void addOptimizingRows(Editor& ed, editor::settings_form::Rows& rows) {
     using namespace formrow;
     rows.push_back(Head(T("Frame and cache")));
@@ -1577,7 +1573,7 @@ void addLanguageRows(Editor& ed, editor::settings_form::Rows& rows) {
     if (!ed.langStatus.empty()) rows.push_back(Dim(ed.langStatus));
 }
 
-// Linhas da secao Physics (drawPhysicsTab, extra_ui.hpp). Nao marca nada como sujo.
+// Linhas da secao Physics. Nao marca nada como sujo.
 void addPhysicsRows(Editor& ed, editor::settings_form::Rows& rows) {
     using namespace formrow;
     const auto& ps = ed.sceneInfo.physics;
@@ -1605,7 +1601,7 @@ void addPhysicsRows(Editor& ed, editor::settings_form::Rows& rows) {
     }
 }
 
-// Linhas da secao Lighting (drawLightingTab). O que fica desabilitado vira
+// Linhas da secao Lighting. O que fica desabilitado vira
 // enabled = false (mostrado apagado, sem interacao).
 void addLightingRows(Editor& ed, editor::settings_form::Rows& rows) {
     using namespace formrow;
@@ -1728,7 +1724,7 @@ void addLightingRows(Editor& ed, editor::settings_form::Rows& rows) {
     rows.push_back(Dim(T("Applies to every camera. A camera can add to it or replace it (Inspector > Camera).")));
 }
 
-// Linhas da secao Tags (drawTagsTab). Tags internas, ligacoes, criar ligacao, tags do projeto e renomeacao.
+// Linhas da secao Tags. Tags internas, ligacoes, criar ligacao, tags do projeto e renomeacao.
 void addTagsRows(Editor& ed, editor::settings_form::Rows& rows) {
     using namespace formrow;
     rows.push_back(Head(T("Built-in tags (used by the engine)")));

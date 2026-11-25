@@ -1,5 +1,7 @@
 # Trocar janelas ImGui por SpriteUI: processo padrão
 
+> **Status: concluído (2026-11-24).** O ImGui foi removido do editor. Ver `06_REMOCAO_IMGUI_CONCLUIDA.md`. Este documento fica como registro do processo; a tabela da seção 4.6 não reflete mais o código.
+
 Objetivo: remover o Dear ImGui do editor e usar só SpriteUI. Este documento é o processo a repetir,
 janela por janela, e a lista do que falta. Quem for fazer o backend de uma janela segue a seção 2.
 

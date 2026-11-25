@@ -119,23 +119,10 @@ Envie uma lista com:
 
 ---
 
-## 6. Remover o ImGui: plano em etapas (não é uma etapa só)
+## 6. Remoção do ImGui: concluída
 
-O ImGui ainda desenha a maior parte do editor. Para medir o que resta, rode na raiz:
-```
-grep -c "ImGui::Begin" apps/editor/main.cpp
-```
-
-Ordem proposta (cada etapa só entra depois do teste visual da anterior):
-
-1. **Configurações completas em SpriteUI**: abas Aparência, Configurações, Jogo, Iluminação, Otimização e Idioma. Já existe a ponte `settings_bridge.hpp`. Só remova o ImGui dessa janela quando a paridade estiver testada (T-3 sem falhas).
-2. **Janela Console** (já tem `console_panel`). Teste: `test ECS`, filtros, Copiar, clique que seleciona objeto.
-3. **Janela Profiler** (já tem `profiler_panel`). Teste: seção Priority em negrito, gráfico de frame time.
-4. **Hierarchy e Inspector** (são as mais complexas). Teste: selecionar, renomear, arrastar para pai, adicionar componente.
-5. **Assets, Projeto e Narrative**.
-6. **Remover o ImGui de vez**: só depois de todas as etapas acima passarem nos testes visuais. Aí sai o `imgui` do build, do `main` e do `CMakeLists.txt`.
-
-Para cada etapa, eu faço: modelo e teste automático primeiro, depois a janela SpriteUI com o roteador, depois você testa visualmente, e só então eu removo o ImGui daquela janela.
+A remoção foi feita em 2026-11-24. O registro está em `docs/planos/06_REMOCAO_IMGUI_CONCLUIDA.md`.
+O editor é todo SpriteUI, sem Dear ImGui nem imnodes no build. O plano antigo (`docs/planos/05_REMOVER_IMGUI.md`) fica como histórico.
 
 ---
 
