@@ -35,8 +35,9 @@ class Chrome {
   Chrome(const Chrome&) = delete;
   Chrome& operator=(const Chrome&) = delete;
 
-  // Corpo ImGui: a moldura nao pinta corpo nem borda (a borda, que e a caixa inteira, apareceria por baixo do ImGui).
-  // O ImGui desenha o proprio fundo e o contorno dentro da area do corpo.
+  // Corpo desenhado pelo painel: a moldura nao pinta corpo nem borda (a borda, que e a caixa inteira, apareceria
+  // por baixo do painel).
+  // O painel desenha o proprio fundo e o contorno dentro da area do corpo.
   void setBodyFill(bool on) {
     bodyFill_ = on;
     applyPalette();
@@ -144,7 +145,7 @@ class Chrome {
   }
 
  private:
-  // Cores da moldura = paleta em uso; sem corpo (ImGui desenha por dentro), corpo e borda ficam transparentes.
+  // Cores da moldura = paleta em uso; sem corpo (o painel desenha por dentro), corpo e borda ficam transparentes.
   void applyPalette() {
     colors_ = editor::window_palette::Standard();
     const palette::Palette& p = palette::active();

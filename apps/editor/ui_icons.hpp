@@ -5,7 +5,7 @@
 // painel SpriteUI so transforma cada pixel aceso num quadrado solido (forEachPixel).
 //
 // Exemplo: Icon::Gear tem 12 linhas; a linha 0 ".....##....." acende dois pixels no topo, no meio da largura.
-// Sem SDL, sem ImGui e sem SpriteUI: roda no ctest como Editor.UiIcons.
+// Sem SDL e sem SpriteUI: roda no ctest como Editor.UiIcons.
 
 #include <array>
 #include <cstddef>

@@ -2,7 +2,7 @@
 
 #include "ui_style.hpp"
 
-// Janela "Scenes" feita com SpriteUI (sem Dear ImGui). Estado e regras: scenes_model.hpp.
+// Janela "Scenes" feita com SpriteUI. Estado e regras: scenes_model.hpp.
 // Esta view so desenha e reporta cliques e digitacao. Quem salva, abre, apaga, cria, renomeia e atribui assets e o
 // host (scenes_panel.hpp e main.cpp, via Action). Moldura: grip, "?" (abre a Help na secao Scenes), titulo em negrito,
 // minimizar e X.

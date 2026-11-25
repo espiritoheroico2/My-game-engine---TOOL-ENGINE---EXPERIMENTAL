@@ -1,5 +1,5 @@
 #pragma once
-// Estado das janelas de ajuda e de teste (sem ImGui): qual topico do Help esta aberto e a janela Test map.
+// Estado das janelas de ajuda e de teste: qual topico do Help esta aberto e a janela Test map.
 // Quem desenha: help_panel.hpp e test_map_panel.hpp (SpriteUI). Quem abre: o "?" de cada moldura, F1 e a linha de comando.
 #include "i18n.hpp"
 

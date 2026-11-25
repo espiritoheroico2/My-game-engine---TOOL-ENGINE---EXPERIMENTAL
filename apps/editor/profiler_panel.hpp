@@ -1,6 +1,6 @@
 #pragma once
 
-// Conteudo do Profiler feito com SpriteUI e hospedado na janela dockavel ImGui do editor.
+// Conteudo do Profiler feito com SpriteUI e hospedado na janela dockavel do editor.
 //
 // O que aparece vem do modelo (profiler_model.hpp): ele decide as linhas, os numeros, a escala dos graficos e a
 // taxa de atualizacao. Este arquivo so faz layout, medida de texto e retangulos.
@@ -15,7 +15,7 @@
 // Ligacao com o SDL: spriteui_host.hpp (SpriteUiSdlRenderer, LoadTextAtlas). Fonte: assets/fonts/Xmind-Regular.ttf.
 // Padrao de uso da SpriteUI: start_screen_spriteui.hpp (LayoutTree para os nos com clique; addDecorations para texto e retangulos).
 //
-// A roda sobre o conteudo rola a lista. Eventos de ponteiro seguem para o ImGui para foco e docking funcionarem.
+// A roda sobre o conteudo rola a lista.
 #include "window_palette.hpp"
 #include "i18n.hpp"
 #include "profiler.hpp"

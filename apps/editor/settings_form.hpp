@@ -3,7 +3,7 @@
 // Linhas genericas das secoes de Configuracoes em SpriteUI (Lighting, Physics, Game, Optimizing, Language, Tags e
 // Project). O main.cpp monta as linhas a partir do Editor (rotulo, valor, faixa e opcoes); o painel as desenha e,
 // quando o usuario mexe, devolve um pedido Field::Form com o id da linha. O main.cpp grava o valor no Editor.
-// Sem SDL e sem ImGui: os tipos ficam fora do painel para poderem ser usados nos testes.
+// Sem SDL: os tipos ficam fora do painel para poderem ser usados nos testes.
 
 #include <algorithm>
 #include <cmath>

@@ -1,5 +1,5 @@
 // Modelo do Console feito com SpriteUI: o que aparece no log, filtros, contagens, historico de comandos e
-// modo de rolagem. Nao usa SDL, ImGui nem SpriteUI. O painel (console_panel.hpp) so desenha e repassa teclas.
+// modo de rolagem. Nao usa SDL nem SpriteUI. O painel (console_panel.hpp) so desenha e repassa teclas.
 //
 // Dados: o Editor guarda as linhas em um std::deque<pair<LogLevel, string>> (ed.console). O modelo le esse
 // deque e nao o copia. Os filtros, o campo de texto e o historico ficam aqui.

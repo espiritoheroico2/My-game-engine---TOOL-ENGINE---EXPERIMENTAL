@@ -302,7 +302,7 @@
   "Scene view render": "Render de la ventana Scene",
   "Game view render": "Render de la ventana Game",
   "Post-processing": "Posprocesado",
-  "UI draw (ImGui)": "Dibujo de la UI (ImGui)",
+  "UI draw": "Dibujo de la UI",
   "Present + frame limiter": "Presentar + limitador de FPS",
   "Rendering": "Renderizado",
   "Scene and memory": "Escena y memoria",

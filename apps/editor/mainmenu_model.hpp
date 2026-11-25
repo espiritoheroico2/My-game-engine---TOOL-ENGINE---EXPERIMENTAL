@@ -2,7 +2,7 @@
 
 // Modelo da barra de menus principal (Arquivo, Editar, Janela, Interface, Opcoes) e dos botoes Play, Pausa e Parar.
 // Diz o que cada menu mostra (texto, atalho, marca, desabilitado) e qual pedido cada item dispara. Nao depende de
-// SDL, ImGui nem SpriteUI: mainmenu_panel.hpp desenha e main.cpp executa os pedidos.
+// SDL nem SpriteUI: mainmenu_panel.hpp desenha e main.cpp executa os pedidos.
 // Roda no ctest como Editor.MainMenuModel.
 
 #include <cstddef>
@@ -201,7 +201,7 @@ inline std::optional<bool> toggleValue(const MenuState& s, Command c) {
   }
 }
 
-// Desfazer e refazer ficam cinza sem nada para desfazer e com o jogo rodando (como no ImGui).
+// Desfazer e refazer ficam cinza sem nada para desfazer e com o jogo rodando.
 inline bool isDisabled(const MenuState& s, Command c) {
   if (c == Command::Undo) return !s.canUndo || s.playing;
   if (c == Command::Redo) return !s.canRedo || s.playing;

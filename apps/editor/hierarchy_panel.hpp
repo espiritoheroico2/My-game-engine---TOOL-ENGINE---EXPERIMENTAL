@@ -1,6 +1,6 @@
 #pragma once
 
-// Janela Hierarchy feita com SpriteUI. Substitui drawHierarchy do ImGui (ver kHierarchyUsesSpriteUi em main.cpp).
+// Janela Hierarchy feita com SpriteUI.
 //
 // A arvore, a selecao e a expansao vem de hierarchy_model.hpp. Este arquivo faz so o desenho (linhas, icones,
 // botoes, rolagem), o clique, o arraste e as teclas. O que precisa mexer na cena (criar, apagar, renomear, mudar
@@ -14,7 +14,7 @@
 //   handleEvent: clique (seta, olho, cadeado, selecao, arraste), roda do mouse, teclas e texto do renomear.
 //                Os pedidos ficam em pending_ e saem no proximo draw.
 //
-// Eventos dentro da janela nao chegam ao ImGui. Teclas so sao consumidas com o foco na janela (clique dentro).
+// Teclas so sao consumidas com o foco na janela (clique dentro).
 //
 // Icones: a bolinha do tipo, o olho (V) e o cadeado (L) sao sprites de um atlas. Os PNGs assets/icons/eye.png e
 // lock.png sobem uma vez, na primeira vez que a janela desenha, e todos os icones saem num lote so.
@@ -79,7 +79,7 @@ struct Source {
     hm::Id selected = hm::NoId;
 };
 
-// Itens do menu "+ Create", na ordem do menu do ImGui. O main.cpp cria o objeto pelo indice.
+// Itens do menu "+ Create", na ordem exibida. O main.cpp cria o objeto pelo indice.
 inline constexpr const char* kCreateLabels[] = {"Empty object", "Cube", "Sphere", "Plane", "Camera",
                                                 "Main Camera (Principal)", "Global Light", "Point Light", "Audio Source"};
 inline constexpr int kCreateCount = 9;
@@ -161,7 +161,7 @@ class HierarchyPanel {
         return v;
     }
 
-    // true quando o evento e da janela (o editor nao o passa ao ImGui).
+    // true quando o evento e da janela 
     bool handleEvent(const SDL_Event& e) {
         if (!visible_) return false;
         // Moldura primeiro: X fecha, so o grip arrasta. Soltar o botao encerra o arraste.

@@ -1,7 +1,6 @@
 #pragma once
 
-// Janela Configuracoes em SpriteUI. Nesta rodada, a faixa de abas e a aba Graficos sao SpriteUI; as outras abas
-// continuam no ImGui, logo abaixo da faixa (main.cpp: drawSettings).
+// Janela Configuracoes em SpriteUI: faixa de abas e conteudo das abas.
 //
 // Regras e nomes vem de settings_model.hpp. Os elementos (abas, radio, combo, deslizante, caixa) sao ligados por
 // settings_bridge.hpp. Os pedidos do usuario saem em settings_changes::Requests e o main.cpp grava no Editor.
@@ -12,7 +11,7 @@
 //
 // Como funciona:
 //   draw:        monta a faixa de abas e, na aba Graficos, os controles de cima para baixo com a rolagem atual;
-//                sincroniza cada elemento com Values e desenha. Fora da aba Graficos, o ImGui desenha o conteudo.
+//                sincroniza cada elemento com Values e desenha.
 //                As linhas genericas (Values::form) de cada secao aberta vem depois do conteudo fixo.
 //   handleEvent: clique, arrasto da barra e roda. Clique num combo aberto fecha os outros. Texto e teclas vao ao
 //                campo de texto com foco. Pedidos vao para pending_.
@@ -117,7 +116,7 @@ struct Metrics {
     static constexpr float kValueW = 56.f;    // espaco do valor ao lado do deslizante
     static constexpr float kScrollW = 8.f;    // largura da barra de rolagem do conteudo
     static constexpr float kWheelStep = 40.f; // pixels por tique da roda do mouse
-    static constexpr int kCustomStep = 16;    // passo do ImGui (InputInt) para largura e altura
+    static constexpr int kCustomStep = 16;    // passo para largura e altura
     static constexpr float kPopupTextZ = 0.97f;
     static constexpr float kPopupZ = 0.95f;
     static constexpr float kControlZ = 0.3f;
@@ -135,7 +134,7 @@ class SettingsPanel {
         overlay_.setTextZ(Metrics::kPopupTextZ);
     }
     SettingsPanel(const SettingsPanel&) = delete;
-    // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e a janela ImGui posicionada sobre ela.
+    // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e desenhado pelo painel, abaixo do cabecalho.
     framed::Chrome& chrome() { return chrome_; }
     SettingsPanel& operator=(const SettingsPanel&) = delete;
 
@@ -710,7 +709,7 @@ class SettingsPanel {
         sb::SyncCheckbox(rayTracing_, v.rayTracing);
         sb::SyncCheckbox(rtAo_, v.rayTracing && v.rtAo);
         rayTracingEnabled_ = v.rayTracing;
-        scaleEnabled_ = v.resMode == 0;   // a escala so vale com a resolucao de janela (igual ao ImGui)
+        scaleEnabled_ = v.resMode == 0;   // a escala so vale com a resolucao de janela
     }
 
     static std::vector<std::string> resolutionOptions() {
@@ -1219,7 +1218,7 @@ class SettingsPanel {
     }
 
     // Roda sobre a faixa rola as abas; sobre o conteudo rola o conteudo (todas as secoes ficam na mesma lista
-    // rolavel). Fora da janela, o ImGui fica com a roda (false).
+    // rolavel). Fora da janela, a roda nao e consumida (false).
     bool wheel(float x, float y, float dy) {
         if (!inside(x, y)) return false;
         const float delta = -dy * Metrics::kWheelStep;

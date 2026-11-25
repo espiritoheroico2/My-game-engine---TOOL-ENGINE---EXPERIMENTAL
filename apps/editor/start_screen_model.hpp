@@ -1,7 +1,7 @@
 #pragma once
 
 // Tela de inicio (criar ou abrir projeto), parte SEM desenho: estado dos campos, foco e acoes.
-// Substitui o estado de project_dialog.hpp (ProjectDialog) para a versao SpriteUI. Nao usa SDL nem ImGui,
+// Nao usa SDL,
 // assim pode ser testada sem janela (apps/editor/tests/test_start_screen_model.cpp).
 //
 // Regras:

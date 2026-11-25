@@ -1,5 +1,5 @@
 // ToolEngine editor - politica de remocao do cache de malhas de chunks (F-08).
-// Funcoes puras, sem ImGui, GPU ou cena: podem ser testadas isoladamente.
+// Funcoes puras, sem GPU ou cena: podem ser testadas isoladamente.
 #pragma once
 #include <algorithm>
 #include <cstddef>

@@ -40,7 +40,7 @@ inline std::string Lower(std::string_view s) {
   return out;
 }
 
-// Pastas primeiro, depois por nome (sem diferenciar maiusculas), como na lista ImGui.
+// Pastas primeiro, depois por nome (sem diferenciar maiusculas).
 inline void Sort(std::vector<Item>& items) {
   std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
     if (a.dir != b.dir) return a.dir;

@@ -4,7 +4,7 @@
 // COMO O EDITOR DESENHA UM QUADRO
 //   1. As janelas "Scene" e "Game" pedem uma imagem: renderView(camera, largura, altura).
 //   2. renderView escolhe o caminho: GPU (Diligent -> readback) ou CPU (SoftRenderer, multithread).
-//   3. A imagem vira uma textura SDL e o ImGui a mostra. O grid do Game e geometria 3D com teste de profundidade;
+//   3. A imagem vira uma textura SDL e a SpriteUI a mostra (elemento Image). O grid do Game e geometria 3D com teste de profundidade;
 //      ferramentas da Scene permanecem como sobreposicoes projetadas.
 #pragma once
 #include "components.hpp"

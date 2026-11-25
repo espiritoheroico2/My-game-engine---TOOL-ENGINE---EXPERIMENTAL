@@ -1,4 +1,4 @@
-// Teste dos sistemas de UI sem janela: pacotes de idioma e temas (escolha, escala e arquivo). Sem ImGui.
+// Teste dos sistemas de UI sem janela: pacotes de idioma e temas (escolha, escala e arquivo).
 // Teste dos sistemas de UI do editor: pacotes de idioma e temas (sem abrir janela).
 #include "i18n.hpp"
 #include "theme.hpp"

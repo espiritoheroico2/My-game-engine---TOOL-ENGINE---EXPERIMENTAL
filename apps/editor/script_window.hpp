@@ -1,4 +1,4 @@
-// script_window.hpp - Janela de edicao de script, em SpriteUI (sem ImGui).
+// script_window.hpp - Janela de edicao de script, em SpriteUI.
 //
 // "Edit script" no Inspector abre esta janela flutuante. O corpo tem:
 //  - barra: Save (Ctrl+S), Complete (Ctrl+Espaco), Snippets (lista de exemplos do Help) e Close;
@@ -7,7 +7,7 @@
 //  - verificador de scripts: OK ou a lista de erros e avisos, com a linha de cada um.
 //
 // A moldura vem de framed::Chrome; o corpo e desenhado com view::ShapeList e os itens do campo. Eventos chegam por
-// handleEvent (antes do ImGui). Nada aqui inclui imgui.h.
+// handleEvent.
 #pragma once
 
 #include "editor_state.hpp"

@@ -1,7 +1,7 @@
 #pragma once
 
-// Barra de status feita com SpriteUI (substitui a barra ImGui "##status"; ver kStatusUsesSpriteUi em main.cpp).
-// Os textos vem do statusbar_model.hpp. A faixa fica no pe da janela, desenhada depois do ImGui no mesmo renderer.
+// Barra de status feita com SpriteUI.
+// Os textos vem do statusbar_model.hpp. A faixa fica no pe da janela, no mesmo renderer.
 // Sem interacao: so mostra os textos. Remonta o conteudo so quando o modelo muda ou a largura da janela muda.
 
 #include "sui_panel.hpp"

@@ -310,7 +310,7 @@ Panels (hierarchy, inspector...)	Painéis (hierarquia, inspetor...)	Paneles (jer
 Scene view render	Render da janela Scene	Render de la ventana Scene
 Game view render	Render da janela Game	Render de la ventana Game
 Post-processing	Pós-processamento	Posprocesado
-UI draw (ImGui)	Desenho da UI (ImGui)	Dibujo de la UI (ImGui)
+UI draw	Desenho da UI	Dibujo de la UI
 Present + frame limiter	Apresentar + limitador de FPS	Presentar + limitador de FPS
 Rendering	Renderização	Renderizado
 Scene and memory	Cena e memória	Escena y memoria

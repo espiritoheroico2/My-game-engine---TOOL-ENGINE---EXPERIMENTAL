@@ -1,4 +1,4 @@
-// UI-CONTRATO: a interface do editor e toda SpriteUI (sem Dear ImGui). Catalogo e regras em ui_contract.hpp.
+// UI-CONTRATO: a interface do editor e toda SpriteUI. Regras e mapa em ui_contract.hpp.
 // Janelas: Hierarchy, Inspector, Scene, Game, Assets, Scenes, Console, Profiler, Narrative Controller, Settings,
 // Coding, Input Map, Export game e Help. Quem faz o quadro: o laco SDL deste arquivo (eventos, dock_host, paineis).
 // O estado esta em editor_state.hpp; Assets/Scenes em assets_panel.hpp; componentes em components.hpp.
@@ -107,10 +107,8 @@ using editor::issueSummary;
 
 
 
-// Janela Hierarchy em SpriteUI (hierarchy_panel.hpp). O ImGui so cria a moldura da janela (titulo, X e posicao);
+// Janela Hierarchy em SpriteUI (hierarchy_panel.hpp). A moldura da janela (titulo, X e posicao) e a SpriteUI (framed::Chrome);
 // a lista, a selecao e o arraste sao do painel. Os pedidos do painel sao aplicados aqui, na cena.
-bool gHierarchySpriteOn = false;   // o painel SpriteUI existe
-bool gHierarchyFrame = false;      // a janela ImGui esta aberta neste quadro
 editor::sui::Box gHierarchyRect;   // area do conteudo, em pixels da janela
 
 // Id do objeto para o modelo: geracao e indice juntos (um objeto apagado e recriado tem outro id).
@@ -154,7 +152,7 @@ editor::hierarchy_panel::Source hierarchySource(Editor& ed) {
   return src;
 }
 
-// Menu "+ Create": mesmos objetos do menu do ImGui, na mesma ordem de editor::hierarchy_panel::kCreateLabels.
+// Menu "+ Create": os objetos na ordem de editor::hierarchy_panel::kCreateLabels.
 void createFromHierarchyMenu(Editor& ed, int kind) {
   switch (kind) {
     case 0: ed.selected = ed.make("Empty"); break;
@@ -213,8 +211,8 @@ void applyHierarchyRequests(Editor& ed, const editor::hierarchy_panel::Requests&
 
 // --- Inspetor --------------------------------------------------------------------------------------------------
 // Componentes do objeto (nome, Transform, Mesh Renderer, Light, Global Light, Camera, Audio Source) em SpriteUI
-// (inspector_panel.hpp). Logo abaixo, no mesmo ImGui, seguem as secoes que ainda sao ImGui (fisica, voxel, UI,
-// particulas, recursos, script, tags) e o rodape. O bloco SpriteUI reserva a sua altura com um Dummy do ImGui.
+// (inspector_panel.hpp). Logo abaixo seguem, no mesmo painel, as secoes de fisica, voxel, UI,
+// particulas, recursos, script, tags) e o rodape, todos em SpriteUI.
 // --- janela Scenes (SpriteUI) -------------------------------------------------------------------------------
 // Copia o estado do Editor para o modelo da janela antes de cada quadro (lista, cena atual, assets, candidato).
 void syncScenesPanel(Editor& ed, editor::scenesui::Panel& panel) {
@@ -321,7 +319,7 @@ void syncAssetsPanel(Editor& ed, editor::assetsui::Panel& panel) {
   static double listedAt = -1e9;
   static std::filesystem::path kitRoot;
   ed.project.ensure();
-  // Arquivos de apoio do VS Code: uma vez por raiz de projeto (mesmo passo do ImGui).
+  // Arquivos de apoio do VS Code: uma vez por raiz de projeto.
   if (kitRoot != ed.project.root) {
     kitRoot = ed.project.root;
     ed_::ensureScriptKit(kitRoot);
@@ -532,11 +530,9 @@ void applyAssetsActions(Editor& ed, editor::assetsui::Panel& panel, const std::v
 editor::scenesui::Panel* gScenesPanel = nullptr;   // o painel existe (dono: main); usado pelo atalho "Nova cena"
 
 editor::inspector_panel::InspectorPanel* gInspectorPanel = nullptr;   // o painel existe (dono: main)
-bool gInspectorSpriteOn = false;     // o painel SpriteUI existe
-bool gInspectorFrame = false;        // a janela ImGui do Inspector esta aberta neste quadro
+bool gInspectorFrame = false;        // a janela do Inspector esta aberta neste quadro
 editor::sui::Box gInspectorOrigin;   // canto do bloco SpriteUI na tela (preenchido no quadro)
-editor::sui::Box gInspectorVisible;  // parte do bloco que cabe na janela ImGui (a janela rola e corta)
-bool gProfilerFrame = false;         // a janela ImGui do Profiler esta visivel neste quadro
+editor::sui::Box gInspectorVisible;  // parte do bloco que cabe na janela (a janela rola e corta)
 editor::sui::Box gProfilerRect;       // area de conteudo da janela dockavel Profiler
 bool gProfilerExportRequested = false;
 bool gProfilerExportActive = false;
@@ -627,11 +623,11 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   return c;
 }
 
-// Acoes com efeito fora do objeto. Cada uma faz o mesmo que o ImGui fazia antes da troca.
+// Acoes com efeito fora do objeto.
 editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   editor::inspector_panel::Hooks h;
   h.assets = [&ed](ed_::AssetKind k) { return assetsOfKind(ed, k); };
-  h.assetChosen = [&ed](ed_::AssetKind, const std::string& rel) {   // mesma regra do assetField do ImGui
+  h.assetChosen = [&ed](ed_::AssetKind, const std::string& rel) {
     if (!rel.empty()) ed.assignAsset(rel);
     ed.lib.invalidate(rel);
   };
@@ -650,7 +646,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   };
   h.setPrincipal = [&ed](bool on) { ed.setPrincipal(ed.selected, on); };
   h.setSplitVertical = [&ed](bool vertical) { ed.sceneInfo.splitVertical = vertical; };
-  h.addTagNamed = [&ed](const std::string& name) {   // mesma regra do "Add tag" do ImGui
+  h.addTagNamed = [&ed](const std::string& name) {
     const tool::TagId id = ed.scene.tag(name.c_str());
     if (id == tool::kInvalidIndex) return false;
     ed.scene.world().addTag(ed.selected, id);
@@ -659,13 +655,13 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   h.addTagIndex = [&ed](std::size_t i) { ed.scene.world().addTag(ed.selected, static_cast<tool::TagId>(i)); };
   h.removeTagIndex = [&ed](std::size_t i) { ed.scene.world().removeTag(ed.selected, static_cast<tool::TagId>(i)); };
   h.renameTagIndex = [&ed](std::size_t i, const std::string& to) { return ed.renameTag(static_cast<tool::TagId>(i), to); };
-  h.openScriptHelp = [] { editor::openHelp("script_examples"); };   // mesmas acoes do scriptUi (ImGui)
+  h.openScriptHelp = [] { editor::openHelp("script_examples"); };
   h.addScript = [&ed] { ed.attachScript(ed.selected); };
   h.openScriptExternal = [&ed](const std::string& rel) { editor::openInExternalEditor(ed, rel); };
   h.openScriptWindow = [&ed] { if (gScriptPanel) gScriptPanel->open(ed); };
   h.reloadScripts = [&ed] { ed.startScripts(); };
   h.removePhysics = [&ed] { ed.scene.world().remove<ed_::PhysicsComp>(ed.selected); };
-  h.actionNames = [&ed](int player, int kind) {   // mesma lista do combo de acao do ImGui (scheme do jogador)
+  h.actionNames = [&ed](int player, int kind) {   // lista do combo de acao (scheme do jogador)
     std::vector<std::string> out;
     const std::size_t si = static_cast<std::size_t>(std::clamp(player, 1, 8) - 1);
     if (si < ed.inputMap.schemes.size()) {
@@ -681,7 +677,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     if (auto* vc = ed.scene.world().get<ed_::VoxelChunk>(ed.selected)) editor::setBlock(*vc, x, layer, z, static_cast<unsigned char>(brush));
     ed.undoTick(false);
   };
-  h.voxelFill = [&ed] {   // mesmo calculo do ImGui: o terreno acompanha a posicao do objeto
+  h.voxelFill = [&ed] {   // o terreno acompanha a posicao do objeto
     ed.undoTick(true);
     auto& w = ed.scene.world();
     auto* vc = w.get<ed_::VoxelChunk>(ed.selected);
@@ -698,7 +694,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     ed.undoTick(false);
   };
   h.removeUi = [&ed] { ed.scene.world().remove<ed_::UiCanvas>(ed.selected); };
-  h.addResource = [&ed](int id) {   // mesmas regras do menu "+ Add Resource" do ImGui
+  h.addResource = [&ed](int id) {   // regras do menu "+ Add Resource"
     using R = editor::inspector_model::Resource;
     tool::World& w = ed.scene.world();
     const tool::Entity sel = ed.selected;
@@ -748,7 +744,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
       }
     }
   };
-  h.removeResource = [&ed](int id) {   // mesmas regras do menu "- Remove Resource" do ImGui
+  h.removeResource = [&ed](int id) {   // regras do menu "- Remove Resource"
     using R = editor::inspector_model::Resource;
     tool::World& w = ed.scene.world();
     const tool::Entity sel = ed.selected;
@@ -774,7 +770,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     if (auto* p = ed.scene.world().get<ed_::ParticleComp>(ed.selected)) editor::applySmokePreset(*p);
   };
   h.removeParticles = [&ed] { ed.scene.world().remove<ed_::ParticleComp>(ed.selected); };
-  h.addUiElem = [&ed](int kind) {   // valores iniciais de cada tipo: os mesmos do botao "+" do ImGui
+  h.addUiElem = [&ed](int kind) {   // valores iniciais de cada tipo: do botao "+"
     auto* u = ed.scene.world().get<ed_::UiCanvas>(ed.selected);
     if (!u || u->count >= ed_::kMaxUi) return;
     ed_::UiElem& e = u->items[u->count++];
@@ -797,13 +793,13 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
       e.text[0] = 0;
     }
   };
-  h.removeUiElem = [&ed](std::size_t i) {   // desloca os elementos seguintes, como o ImGui fazia
+  h.removeUiElem = [&ed](std::size_t i) {   // desloca os elementos seguintes
     auto* u = ed.scene.world().get<ed_::UiCanvas>(ed.selected);
     if (!u || static_cast<int>(i) >= u->count) return;
     for (int k = static_cast<int>(i); k + 1 < u->count; ++k) u->items[k] = u->items[k + 1];
     --u->count;
   };
-  h.removeTool = [&ed](std::size_t i) {   // desloca os itens seguintes, como o ImGui fazia
+  h.removeTool = [&ed](std::size_t i) {   // desloca os itens seguintes
     auto* tl = ed.scene.world().get<ed_::ToolsComp>(ed.selected);
     if (!tl || static_cast<int>(i) >= tl->count) return;
     for (int k = static_cast<int>(i); k + 1 < tl->count; ++k) tl->items[k] = tl->items[k + 1];
@@ -840,7 +836,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   return h;
 }
 
-// Bloco SpriteUI: prepara os controles, reserva a altura no ImGui e guarda a parte visivel dentro da janela.
+// Bloco SpriteUI: prepara os controles, reserva a altura e guarda a parte visivel dentro da janela.
 bool gDockSaveRequested = false;   // Janela > Salvar layout: o host salva no proximo quadro
 constexpr const char* kDockLayoutFile = "editor_dock_layout.txt";
 editor::sui::Box gInspectorBody{}, gSettingsBody{}, gCodingBody{};   // corpo (abaixo do cabecalho) da moldura SpriteUI neste quadro
@@ -856,8 +852,8 @@ editor::sui::Box framedBody(editor::framed::Chrome* chrome, bool shown, int winW
 
 
 
-// LEGADO (nao chamado desde a migracao do Console para a moldura SpriteUI). Remover na etapa 7 do
-// docs/planos/05_REMOVER_IMGUI.md, so depois da aprovacao visual do usuario.
+// LEGADO (nao chamado desde a migracao do Console para a moldura SpriteUI). Pode ser removido depois da
+// aprovacao visual do usuario.
 bool gConsoleFrame = false;
 editor::sui::Box gConsoleRect;
 
@@ -931,8 +927,8 @@ editor::profiler_model::Extras fillProfilerExtras(Editor& ed) {
 // --- Janelas de visualizacao (Scene e Game) -------------------------------------------------------------------
 
 
-// Janelas Scene e Jogo em SpriteUI (scene_view_panel.hpp, game_view_panel.hpp). O ImGui cria a janela (titulo, foco,
-// docking, o "?") e mede a area; o painel desenha imagem, barra e sobreposicoes depois do ImGui. Sem a fonte, a
+// Janelas Scene e Jogo em SpriteUI (scene_view_panel.hpp, game_view_panel.hpp). O dock_host encaixa as janelas e
+// mede a area; o painel desenha imagem, barra e sobreposicoes. Sem a fonte, a
 // janela nao aparece (como as outras janelas SpriteUI).
 //
 // Exemplo: a Scene calcula a selecao e a grade no quadro, o painel desenha e devolve o que o usuario pediu
@@ -972,7 +968,7 @@ void addDockWindow(editor::dock_host::Host& host, editor::dock_host::Kind k, std
 }
 editor::sui::Box gSceneRect;   // area da janela (pixels da janela)
 editor::sui::Box gGameRect;
-scene_panel::Values gSceneValues;   // montado no quadro, desenhado depois do ImGui
+scene_panel::Values gSceneValues;   // montado no quadro, desenhado em drawViewPanels
 game_panel::Values gGameValues;
 
 void beginViewsFrame() { gSceneFrame = gGameFrame = false; }
@@ -1311,7 +1307,7 @@ void drawGameWindow(Editor& ed, SDL_Renderer* sdl, bool player) {
 void drawViewPanels(Editor& ed, SDL_Renderer* sdl) {
   const scene_panel::Values noScene;
   const game_panel::Values noGame;
-  if (gGamePanel) {   // Jogo primeiro: a janela Scene desenha por cima dela (como as janelas ImGui)
+  if (gGamePanel) {   // Jogo primeiro: a janela Scene desenha por cima dela
     game_panel::Requests req;
     if (!gGamePanel->draw(sdl, gGameFrame ? gGameValues : noGame, req)) tool::logError(std::string("Game SpriteUI render failed: ") + SDL_GetError());
     applyGameRequests(ed, req);
@@ -1323,7 +1319,7 @@ void drawViewPanels(Editor& ed, SDL_Renderer* sdl) {
   }
 }
 
-// Eventos: os paineis veem tudo, sem consumir (o ImGui continua recebendo o mouse e o teclado).
+// Eventos: Scene e Jogo recebem o evento; devolve true se algum deles o tratou.
 bool forwardViewEvent(const SDL_Event& e, bool sceneShown, bool gameShown) {
   const bool sceneFrame = sceneShown && gScenePanel && gScenePanel->handleEvent(e);
   const bool gameFrame = gameShown && gGamePanel && gGamePanel->handleEvent(e);
@@ -1337,10 +1333,8 @@ bool forwardViewEvent(const SDL_Event& e, bool sceneShown, bool gameShown) {
 
 
 
-// Janela Configuracoes em SpriteUI (settings_panel.hpp): a faixa de abas e a aba Graficos. As outras abas seguem
-// no ImGui, abaixo da faixa. Os pedidos do painel sao gravados no Editor aqui (mesmas regras da aba no ImGui).
-bool gSettingsSpriteOn = false;   // o painel SpriteUI existe
-bool gSettingsFrame = false;      // a janela ImGui esta aberta neste quadro
+// Janela Configuracoes em SpriteUI (settings_panel.hpp). Os pedidos do painel sao gravados no Editor aqui.
+bool gSettingsFrame = false;      // a janela Configuracoes esta aberta neste quadro
 editor::sui::Box gSettingsRect;   // area da janela (faixa e conteudo), em pixels
 editor::panel_router::PanelRouter gPanelRouter;   // quem recebe ponteiro quando paineis SpriteUI se sobrepoem
 
@@ -1377,9 +1371,9 @@ std::array<bool, editor::settings_bridge::kApiCount> settingsApiBuilt() {
 
 // ====================================================================================================== LINHAS DAS SECOES
 // Secoes Game, Physics, Optimizing, Language, Lighting, Tags e Project da janela Configuracoes em SpriteUI. Cada
-// controle do ImGui antigo (drawGameTab, drawLightingTab, drawTagsTab...) virou uma linha de settings_form.hpp: os
+// controle e uma linha de settings_form.hpp: os
 // construtores buildXRows leem o Editor, e applyFormRequest (chamado por SettingsEditorTarget::setForm) grava o pedido
-// com a mesma regra que o ImGui usava. Inventario (controle: tipo, faixa, efeito). Nenhum controle ficou de fora.
+// com a regra do controle. Inventario (controle: tipo, faixa, efeito). Nenhum controle ficou de fora.
 //  Game (drawGameTab):
 //    Grid and gizmos: 3 caixas (grade da Scene, grade do Game, gizmos) e nota da grade.
 //    Split screen: combo de 2 opcoes (splitVertical); caixa Fill each half (splitFill); duas notas.
@@ -1481,7 +1475,7 @@ enum FormId : int {
     kLitPostTintB, kLitPostTintStrength, kLitPostVignette, kLitPostVignetteSize, kLitPostSharpen, kLitPostReset,
 };
 
-// Estado que o ImGui guardava em variaveis static na aba Tags (alias digitado, alvo, renomeacao, mensagem).
+// Estado da aba Tags (alias digitado, alvo, renomeacao, mensagem).
 struct TagsFormState {
     std::string msg;
     std::string alias;
@@ -1491,7 +1485,7 @@ struct TagsFormState {
 };
 TagsFormState gTagsForm;
 
-// Caminho do Sol (Global Light) desta cena, ou nullptr. Mesma busca do ImGui: a primeira entidade com o componente.
+// Caminho do Sol (Global Light) desta cena, ou nullptr: a primeira entidade com o componente.
 ed_::GlobalLight* settingsSunLight(Editor& ed) {
     tool::Entity sun;
     ed.scene.world().each<ed_::GlobalLight>([&](tool::Entity e, ed_::GlobalLight&) { if (!ed.scene.world().alive(sun)) sun = e; });
@@ -1509,7 +1503,7 @@ std::vector<std::string> skyFaceOptions(Editor& ed, int face) {
     return opts;
 }
 
-// Linhas da secao Game (drawGameTab). O ImGui marcava settingsDirty em quase tudo.
+// Linhas da secao Game (drawGameTab).
 void addGameRows(Editor& ed, editor::settings_form::Rows& rows) {
     using namespace formrow;
     rows.push_back(Head(T("Grid and gizmos")));
@@ -1583,7 +1577,7 @@ void addLanguageRows(Editor& ed, editor::settings_form::Rows& rows) {
     if (!ed.langStatus.empty()) rows.push_back(Dim(ed.langStatus));
 }
 
-// Linhas da secao Physics (drawPhysicsTab, extra_ui.hpp). Como o ImGui, nao marca nada como sujo.
+// Linhas da secao Physics (drawPhysicsTab, extra_ui.hpp). Nao marca nada como sujo.
 void addPhysicsRows(Editor& ed, editor::settings_form::Rows& rows) {
     using namespace formrow;
     const auto& ps = ed.sceneInfo.physics;
@@ -1611,7 +1605,7 @@ void addPhysicsRows(Editor& ed, editor::settings_form::Rows& rows) {
     }
 }
 
-// Linhas da secao Lighting (drawLightingTab). A ordem e a mesma do ImGui; o que ficava dentro de BeginDisabled vira
+// Linhas da secao Lighting (drawLightingTab). O que fica desabilitado vira
 // enabled = false (mostrado apagado, sem interacao).
 void addLightingRows(Editor& ed, editor::settings_form::Rows& rows) {
     using namespace formrow;
@@ -1784,7 +1778,7 @@ void addProjectRows(Editor& ed, editor::settings_form::Rows& rows) {
     rows.push_back(Dim(T("Fill in File > Editor info, then use File > Export game.")));
 }
 
-// Aplica um pedido de linha (settings_form.hpp) no Editor: grava o que o ImGui gravava no mesmo controle.
+// Aplica um pedido de linha (settings_form.hpp) no Editor: grava o valor do controle.
 // Slider usa value; Check usa on; Dropdown e Radio usam index; Text usa text; Button ignora os outros campos.
 void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const std::string& text) {
     auto& r = ed.sceneInfo.render;
@@ -1804,7 +1798,7 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
         case kGameSkyRed: ed.sceneInfo.sky.solid[0] = value; ed.settingsDirty = true; break;
         case kGameSkyGreen: ed.sceneInfo.sky.solid[1] = value; ed.settingsDirty = true; break;
         case kGameSkyBlue: ed.sceneInfo.sky.solid[2] = value; ed.settingsDirty = true; break;
-        // Physics (sem marca de sujo, como o ImGui)
+        // Physics (sem marca de sujo)
         case kPhysEnabled: ed.sceneInfo.physics.enabled = on; break;
         case kPhysGravX: ed.sceneInfo.physics.gravity[0] = value; break;
         case kPhysGravY: ed.sceneInfo.physics.gravity[1] = value; break;
@@ -1860,7 +1854,7 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
         case kTagLink:
             if (gTagsForm.alias.empty()) break;
             {
-                const std::string alias = gTagsForm.alias.substr(0, 47);   // o ImGui tinha um campo de 48 bytes
+                const std::string alias = gTagsForm.alias.substr(0, 47);   // alias limitado a 47 bytes
                 const int target = ::editor::settings_model::ClampChoice(gTagsForm.target, static_cast<int>(ed_::kBuiltinTags.size()));
                 if (ed.projSettings.link(alias, ed_::kBuiltinTags[static_cast<size_t>(target)].name)) {
                     ed.scene.tag(alias);
@@ -2056,8 +2050,8 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   return v;
 }
 
-// Alvo dos pedidos da janela Configuracoes (settings_changes.hpp): cada metodo grava um campo no Editor com a mesma
-// regra que a aba tinha no ImGui (marca o modo de janela como sujo, troca de API pelo applyApi etc.).
+// Alvo dos pedidos da janela Configuracoes (settings_changes.hpp): cada metodo grava um campo no Editor
+// (marca o modo de janela como sujo, troca de API pelo applyApi etc.).
 // Cor-base da paleta Custom para o tema do editor (editor_theme.json), que guarda as 5 cores-base.
 void syncThemeBaseFrom(Editor& ed) {
   const auto& c = editor::palette::custom();
@@ -2076,7 +2070,7 @@ struct SettingsEditorTarget {
     editor::palette::activeIndex() = static_cast<std::size_t>(std::clamp(i, 0, static_cast<int>(editor::palette::kCustomIndex)));
     ed.settingsDirty = true;
   }
-  // Grava uma cor da paleta Custom. Trocar uma cor-base recalcula os tokens (como o ImGui); trocar um token so muda ele.
+  // Grava uma cor da paleta Custom. Trocar uma cor-base recalcula os tokens; trocar um token so muda ele.
   void setCustomColor(int index, float value) {
     auto& c = editor::palette::custom();
     const int slot = std::clamp(index / 3, 0, 12);
@@ -2551,7 +2545,7 @@ static int runEditorMain(int argc, char** argv) {
   }
   bool benchArmed = false;
   editor::SpriteUiDiagnostics spriteUiDiagnostics;
-  // Fonte e renderizador unicos das janelas SpriteUI. Sem a fonte, as janelas ficam na versao ImGui.
+  // Fonte e renderizador unicos das janelas SpriteUI.
   editor::sui::TextAtlasSet uiText;   // atlas de glifos por tamanho (texto nitido em qualquer tamanho)
   editor::sui::SpriteUiSdlRenderer uiRenderer;
   // O modo --player tambem carrega a fonte: a janela do jogo desenha o texto da UI com ela (mesma fonte do editor).
@@ -2560,7 +2554,7 @@ static int runEditorMain(int argc, char** argv) {
       uiText.load("assets/fonts/Xmind-Regular.ttf", SDL_GetWindowDisplayScale(window));
   uiRenderer.setTextSet(&uiText);
   const bool uiReady = fontReady && !playerMode;
-  // Janelas do editor em SpriteUI. Sem a fonte, elas nao aparecem (nao ha caminho ImGui de reserva).
+  // Janelas do editor em SpriteUI. Sem a fonte, elas nao aparecem.
   std::unique_ptr<editor::profiler_panel::ProfilerPanel> profPanel;
   if (uiReady) profPanel = std::make_unique<editor::profiler_panel::ProfilerPanel>(uiText, uiRenderer);
   std::unique_ptr<editor::statusbar::StatusBarPanel> statusPanel;
@@ -2601,10 +2595,8 @@ static int runEditorMain(int argc, char** argv) {
   if (uiReady && !spriteTextCursor) tool::logWarn(std::string("Could not create text cursor: ") + SDL_GetError());
   std::unique_ptr<editor::hierarchy_panel::HierarchyPanel> hierPanel;
   if (uiReady) hierPanel = std::make_unique<editor::hierarchy_panel::HierarchyPanel>(uiText, uiRenderer);
-  gHierarchySpriteOn = hierPanel != nullptr;
   std::unique_ptr<editor::settings_panel::SettingsPanel> settingsPanel;
   if (uiReady) settingsPanel = std::make_unique<editor::settings_panel::SettingsPanel>(uiText, uiRenderer);
-  gSettingsSpriteOn = settingsPanel != nullptr;
   std::unique_ptr<editor::inspector_panel::InspectorPanel> inspPanel;
   if (uiReady) inspPanel = std::make_unique<editor::inspector_panel::InspectorPanel>(uiText, uiRenderer);
   std::unique_ptr<editor::coding::Panel> codingPanel;
@@ -2626,7 +2618,7 @@ static int runEditorMain(int argc, char** argv) {
   std::unique_ptr<editor::infoui::Panel> editorInfoPanel;   // Editor info em SpriteUI (rascunho em editor_info_model.hpp)
   if (uiReady) editorInfoPanel = std::make_unique<editor::infoui::Panel>(uiText, uiRenderer);
   bool editorInfoWasOpen = false;
-  std::unique_ptr<editor::assetsui::Panel> assetsPanel;   // Assets em SpriteUI (sem a fonte, a versao ImGui)
+  std::unique_ptr<editor::assetsui::Panel> assetsPanel;   // Assets em SpriteUI
   if (uiReady) assetsPanel = std::make_unique<editor::assetsui::Panel>(uiText, uiRenderer);
   std::unique_ptr<editor::scene_view_panel::ScenePanel> scenePanel;
   std::unique_ptr<editor::game_view_panel::GamePanel> gamePanel;
@@ -2652,7 +2644,6 @@ static int runEditorMain(int argc, char** argv) {
     addDockWindow(*dockOwner, Kind::Narrative, [] { return std::string(T("Narrative Controller")); }, [&ed]() -> bool& { return ed.showNarrative; }, [&] { return narrativePanel ? &narrativePanel->chrome() : nullptr; });
     dockOwner->load(kDockLayoutFile);   // organizacao salva na sessao anterior (se houver e for valida)
   }
-  gInspectorSpriteOn = inspPanel != nullptr;
   while (!quit) {
     const Uint64 frameStart = SDL_GetTicksNS();
     ed.applyPendingApi();   // troca de API pedida no quadro anterior (com o aviso ja desenhado)
@@ -2676,17 +2667,17 @@ static int runEditorMain(int argc, char** argv) {
     if (settingsPanel && ed.showSettings && gSettingsFrame)
       gPanelRouter.add(pr::kSettingsHandle, {gSettingsRect.x, gSettingsRect.y, gSettingsRect.w, gSettingsRect.h},
                        ToolEngine::SpriteUi::UILayer::Docked);
-    if (assetsPanel && ed.showAssets) {   // Assets: idem; cobre o ponteiro por cima do ImGui
+    if (assetsPanel && ed.showAssets) {   // Assets: idem; cobre o ponteiro por cima dos outros paineis
       const auto ar = assetsPanel->rect();
       gPanelRouter.add(pr::kAssetsHandle, {ar.position.x, ar.position.y, ar.size.x, ar.size.y},
                        ToolEngine::SpriteUi::UILayer::Docked);
     }
-    if (scenesPanel && ed.showScenes) {   // Scenes: a janela SpriteUI cobre o ponteiro por cima do ImGui
+    if (scenesPanel && ed.showScenes) {   // Scenes: a janela SpriteUI cobre o ponteiro por cima dos outros paineis
       const auto sr = scenesPanel->rect();
       gPanelRouter.add(pr::kScenesHandle, {sr.position.x, sr.position.y, sr.size.x, sr.size.y},
                        ToolEngine::SpriteUi::UILayer::Docked);
     }
-    if (codingPanel && ed.showCoding && gCodingBody.h > 0.f) {   // Coding: corpo SpriteUI cobre o ponteiro por cima do ImGui
+    if (codingPanel && ed.showCoding && gCodingBody.h > 0.f) {   // Coding: corpo SpriteUI cobre o ponteiro por cima dos outros paineis
       gPanelRouter.add(pr::kCodingHandle, {gCodingBody.x, gCodingBody.y, gCodingBody.w, gCodingBody.h},
                        ToolEngine::SpriteUi::UILayer::Docked);
     }
@@ -2727,7 +2718,7 @@ static int runEditorMain(int argc, char** argv) {
       const bool helpHandled = helpPanel && helpPanel->handleEvent(e, window, editor::helpState().open);   // janela Help SpriteUI
       const editor::testmap::Action testMapAction = testMapPanel ? testMapPanel->handleEvent(e, editor::testMapState().open, editor::testMapState().side) : editor::testmap::Action::None;
       if (testMapAction == editor::testmap::Action::Generate) testMapGenerate = true;
-      const bool inputHandled = inputPanel && inputPanel->handleEvent(e, ed);   // Input Map (SpriteUI) antes do ImGui
+      const bool inputHandled = inputPanel && inputPanel->handleEvent(e, ed);   // Input Map (SpriteUI)
       const editor::exportui::Action exportAction = exportPanel ? exportPanel->handleEvent(e, ed.showExport, ed.projSettings.exportPreset.platform) : editor::exportui::Action::None;
       if (exportAction == editor::exportui::Action::Platform) ed.projSettings.save(ed.project);   // a escolha de plataforma vai para o projeto
       if (exportAction == editor::exportui::Action::Export) exportRequested = true;
@@ -2740,8 +2731,8 @@ static int runEditorMain(int argc, char** argv) {
       const float ptrY = pointerEvt ? pointerY(e) : 0.f;
       const bool settingsMayReceive = !pointerEvt || gPanelRouter.mayReceive(editor::panel_router::kSettingsHandle, ptrX, ptrY);
       // Teclas com Ctrl, Alt ou Gui (atalhos) nunca vao ao campo de texto da janela: o painel consome toda tecla com o
-      // campo em foco, e o atalho precisa chegar ao ImGui e aos outros paineis. Texto digitado (TEXT_INPUT) passa
-      // sempre: sem campo em foco, o painel devolve false e o ImGui recebe.
+      // campo em foco, e o atalho precisa chegar aos outros paineis. Texto digitado (TEXT_INPUT) passa
+      // sempre: sem campo em foco, o painel devolve false e o evento segue.
       const bool shortcutKey = e.type == SDL_EVENT_KEY_DOWN && (e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0;
       // Editor info (janela flutuante): recebe teclado e ponteiro enquanto esta aberta e ativa o campo clicado.
       const bool eiHandled = !dockHandled && editorInfoPanel && ed.showEditorInfo && editorInfoPanel->handleEvent(e, true);
@@ -2762,7 +2753,7 @@ static int runEditorMain(int argc, char** argv) {
 
       if (ed.logKeys && (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP))
         tool::logInfo(std::string("[keys] ") + (e.type == SDL_EVENT_KEY_DOWN ? "down " : "up ") + SDL_GetKeyName(e.key.key) + (e.key.repeat ? " (repeat)" : "") + (SDL_TextInputActive(window) ? " [text field]" : ""));
-      // Atalhos globais (antes vinham do ImGui): so quando nenhum campo de texto esta digitando.
+      // Atalhos globais: so quando nenhum campo de texto esta digitando.
       if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && !SDL_TextInputActive(window)) {
         const bool ctrl = (e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0, shift = (e.key.mod & SDL_KMOD_SHIFT) != 0;
         if (playerMode && e.key.key == SDLK_ESCAPE) quit = true;   // jogo exportado: Esc fecha
@@ -2845,7 +2836,7 @@ static int runEditorMain(int argc, char** argv) {
     SDL_RenderClear(renderer);
     drawViewPanels(ed, renderer);   // Scene e Jogo em SpriteUI
     const double nowSec = static_cast<double>(SDL_GetTicksNS()) * 1e-9;
-    if (profPanel) {   // Profiler: moldura SpriteUI com o botao Exportar (sem janela ImGui)
+    if (profPanel) {   // Profiler: moldura SpriteUI com o botao Exportar
       if (profPanel->consumeExportRequest()) profPanel->beginExport(nowSec);
       const bool profilerVisible = dockShown(editor::dock_host::Kind::Profiler, ed.showProfiler);
       if (profilerVisible || profPanel->exporting()) {
@@ -2859,26 +2850,24 @@ static int runEditorMain(int argc, char** argv) {
       if (profPanel->consumeClose()) ed.showProfiler = false;   // X da moldura
       if (profPanel->consumeHelp()) editor::openHelp("profiler");   // ? da moldura
     }
-    if (hierPanel) {   // Hierarchy: janela SpriteUI com moldura propria (sem janela ImGui)
+    if (hierPanel) {   // Hierarchy: janela SpriteUI com moldura propria
       const bool shown = dockShown(editor::dock_host::Kind::Hierarchy, ed.showHierarchy);
       editor::hierarchy_panel::Requests requests;
       const editor::hierarchy_panel::Source source = shown ? hierarchySource(ed) : editor::hierarchy_panel::Source{};
       if (!hierPanel->draw(renderer, window, shown, source, requests)) {
         tool::logError(std::string("Hierarchy SpriteUI render failed: ") + SDL_GetError());
         hierPanel.reset();
-        gHierarchySpriteOn = false;
       }
       if (hierPanel && hierPanel->consumeClose()) ed.showHierarchy = false;   // X da moldura
       if (hierPanel && hierPanel->consumeHelp()) editor::openHelp("hierarchy");   // ? da moldura
       applyHierarchyRequests(ed, requests);
     }
-    if (inspPanel) {   // Inspector: componentes do objeto, no bloco reservado pelo ImGui (drawInspectorBlock)
+    if (inspPanel) {   // Inspector: componentes do objeto, no bloco SpriteUI deste quadro
       const bool shown = ed.showInspector && gInspectorFrame;
       if (!inspPanel->draw(renderer, gInspectorOrigin, gInspectorVisible, shown)) {
         tool::logError(std::string("Inspector SpriteUI render failed: ") + SDL_GetError());
         inspPanel.reset();
         gInspectorPanel = nullptr;
-        gInspectorSpriteOn = false;
       }
     }
     if (codingPanel) {   // moldura da janela Coding (SpriteUI): titulo, X, "?" e grip
@@ -2903,7 +2892,7 @@ static int runEditorMain(int argc, char** argv) {
         applyAssetsActions(ed, *assetsPanel, assetsActs);
       }
     }
-    if (scenesPanel && dockShown(editor::dock_host::Kind::Scenes, ed.showScenes)) {   // Scenes: janela SpriteUI flutuante; o ImGui antigo fica so como legado
+    if (scenesPanel && dockShown(editor::dock_host::Kind::Scenes, ed.showScenes)) {   // Scenes: janela SpriteUI flutuante
       syncScenesPanel(ed, *scenesPanel);
       std::vector<editor::scenesui::View::Action> scenesActs;
       int winW = 0, winH = 0;
@@ -2968,14 +2957,13 @@ static int runEditorMain(int argc, char** argv) {
       if (settingsPanel->chrome().consumeClose()) ed.showSettings = false;
       if (settingsPanel->chrome().consumeHelp()) editor::openHelp("profiler");
     }
-    if (settingsPanel) {   // Configuracoes: faixa de abas e aba Graficos por cima da janela ImGui
+    if (settingsPanel) {   // Configuracoes: faixa de abas e conteudo da janela
       const bool shown = ed.showSettings && gSettingsFrame;
       editor::settings_changes::Requests requests;
       const editor::settings_panel::Values values = shown ? settingsValues(ed) : editor::settings_panel::Values{};
       if (!settingsPanel->draw(renderer, gSettingsRect, shown, values, requests)) {
         tool::logError(std::string("Settings SpriteUI render failed: ") + SDL_GetError());
         settingsPanel.reset();
-        gSettingsSpriteOn = false;
       }
       SettingsEditorTarget target{ed};
       editor::settings_changes::ApplyChanges(target, requests);

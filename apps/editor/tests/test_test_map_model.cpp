@@ -1,5 +1,5 @@
 // Modelo da janela "Test map of chunks" (SpriteUI): contagens, aviso de mapa grande e cursor do lado do mapa.
-// Nao usa SDL nem ImGui. Roda no ctest como Editor.TestMapModel.
+// Nao usa SDL. Roda no ctest como Editor.TestMapModel.
 #include "test_map_model.hpp"
 
 #include <cstdio>

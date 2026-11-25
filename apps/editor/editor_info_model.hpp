@@ -1,10 +1,10 @@
 #pragma once
 
-// Janela "Editor info" (SpriteUI): modelo SEM desenho e SEM ImGui. Mesmas regras da janela ImGui de export_ui.hpp:
+// Janela "Editor info" (SpriteUI): modelo SEM desenho. Regras:
 //  - Um rascunho com um campo por informacao; nada vai para o projeto antes de "Save info" (applyTo).
 //  - Campos obrigatorios faltando vem de ProjectSettings::missingInfo() (mesmas chaves em ingles, use T()).
 //  - Copyright vazio nao e obrigatorio: o pacote gera "Copyright (c) <ano> <estudio>".
-//  - Limites de tamanho iguais aos do ImGui (bytes UTF-8).
+//  - Limites de tamanho em bytes (UTF-8).
 // Testado sem janela em apps/editor/tests/test_editor_info_model.cpp.
 #include "SpriteUi/Widgets/TextEdit.hpp"
 #include "project_settings.hpp"
@@ -20,7 +20,7 @@ namespace editor::info {
 
 namespace Edit = ToolEngine::SpriteUi::Widgets;
 
-// Mesma ordem do formulario ImGui (Jogo; Quem fez; ...). Tab percorre nesta ordem.
+// Ordem do formulario (Jogo; Quem fez; ...). Tab percorre nesta ordem.
 enum class Field : std::size_t {
   Product = 0,
   Version,
@@ -35,7 +35,7 @@ enum class Field : std::size_t {
 };
 inline constexpr std::size_t kFieldCount = static_cast<std::size_t>(Field::Count);
 
-// Limite em bytes de cada campo (o ImGui usava char[n+1] com estes valores).
+// Limite em bytes de cada campo.
 [[nodiscard]] constexpr std::size_t maxBytes(Field f) {
   switch (f) {
     case Field::Product: return 100;

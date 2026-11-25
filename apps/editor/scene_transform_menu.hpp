@@ -1,8 +1,7 @@
 #pragma once
 
 // Menu flutuante da janela Scene: regras do modo, do espaco e do passo do ima que nao dependem de janela. A janela
-// (scene_view_panel.hpp) mostra o menu e manda a acao; quem decide o novo estado e este arquivo. Sem ImGui e sem
-// SpriteUI: roda no ctest como Editor.SceneTransformMenu.
+// (scene_view_panel.hpp) mostra o menu e manda a acao; quem decide o novo estado e este arquivo. Sem SpriteUI: roda no ctest como Editor.SceneTransformMenu.
 //
 // Exemplo: com a Caixa azul selecionada, o jogador aperta E e o gizmo vira o anel de girar. Apertar Q troca o
 // espaco para Local: a seta de mover da Caixa passa a seguir a frente dela, mesmo que ela esteja girada. O passo

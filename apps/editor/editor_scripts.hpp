@@ -4,7 +4,7 @@
 // -> fisica/Tools. Os pedidos dos scripts (fila ScriptHost::cmds) sao aplicados DEPOIS de cada chamada de script,
 // no maximo 8 passadas por quadro (um evento pode disparar outro evento; passou disso, o resto e descartado).
 // Um objeto desativado (Inactive) nao roda update; o start acontece na primeira vez que ele fica ativo.
-// Teclas: mapa de entrada (input_map.hpp) lido com frame_input.hpp (SDL). Sem ImGui.
+// Teclas: mapa de entrada (input_map.hpp) lido com frame_input.hpp (SDL).
 #pragma once
 
 #include "frame_input.hpp"

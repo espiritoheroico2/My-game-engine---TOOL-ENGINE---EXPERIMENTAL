@@ -1,7 +1,7 @@
 #pragma once
 
-// Entrada do quadro lida do SDL. Substitui o que a UI pegava do ImGui (ImGui::GetIO, IsKeyPressed, IsMouseClicked,
-// IsMouseDragging, MouseWheel): o laco principal alimenta com cada evento (onEvent) e o painel de cena le aqui.
+// Entrada do quadro lida do SDL (mouse, roda, teclas e modificadores) para a Scene e o Jogo: o laco principal
+// alimenta com cada evento (onEvent) e o painel de cena le aqui.
 // Ciclo: eventos do quadro -> onEvent; os consumidores leem; no fim do quadro, endFrame() limpa as bordas (pressed,
 // clicked, roda e movimento). Estado mantido (held, modificadores) vem direto do SDL.
 

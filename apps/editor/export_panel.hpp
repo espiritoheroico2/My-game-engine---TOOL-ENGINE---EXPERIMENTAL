@@ -1,6 +1,6 @@
 #pragma once
 
-// Janela "Export game" em SpriteUI (troca drawExport de export_ui.hpp, que era Dear ImGui).
+// Janela "Export game" em SpriteUI.
 // Caixa centralizada com titulo e X, lista de plataformas (as indisponiveis ficam apagadas e nao clicam), a pasta de
 // saida, os campos faltantes do Editor info, o botao "Export game" e o resultado. A exportacao em si fica em runExport
 // (mesmos passos de antes: para a cena se estiver tocando, salva a cena, grava o projeto e chama xp::exportGame).
@@ -100,7 +100,7 @@ class Panel {
     resultOk_ = out.ok;
   }
 
-  // Eventos do SDL antes do ImGui. `open` = janela aberta; `platform` = indice escolhido (muda ao clicar).
+  // Eventos do SDL. `open` = janela aberta; `platform` = indice escolhido (muda ao clicar).
   Action handleEvent(const SDL_Event& e, bool& open, int& platform) {
     if (!open) return Action::None;
     switch (e.type) {

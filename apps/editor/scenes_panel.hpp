@@ -30,7 +30,7 @@ class Panel {
   // Comeca a criar uma cena (atalho do menu "Nova cena").
   void beginNew() { scenes_model::BeginName(model_, scenes_model::NameMode::New); }
 
-  // Eventos do SDL. Devolve true quando a janela usou o evento (o ImGui por baixo nao deve receber).
+  // Eventos do SDL. Devolve true quando a janela usou o evento.
   bool handleEvent(const SDL_Event& e, bool shown) {
     if (!shown) return false;
     switch (e.type) {

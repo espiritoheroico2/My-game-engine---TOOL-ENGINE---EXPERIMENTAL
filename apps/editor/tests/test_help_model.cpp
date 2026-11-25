@@ -1,5 +1,5 @@
 // Modelo da janela Help (SpriteUI): blocos do texto, busca por idioma, topico aberto e edicao da busca.
-// Nao usa SDL nem ImGui. Roda no ctest como Editor.HelpModel.
+// Nao usa SDL. Roda no ctest como Editor.HelpModel.
 #include "help_model.hpp"
 
 #include <cstdio>

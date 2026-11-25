@@ -36,11 +36,11 @@ enum class Resource : std::uint8_t {
     Mesh, PointLight, Camera, Audio, Particles, Script, GameUi, Voxel, ToolsAll, GlobalLight
 };
 
-// Estado de aberto e fechado de cada secao (como o DefaultOpen do ImGui).
+// Estado de aberto e fechado de cada secao.
 struct Expanders {
     std::array<bool, kSectionCount> open{};
 
-    // Tudo aberto, menos os que o ImGui abria fechados (pos-processamento, trajetoria e tornado: TreeNode sem padrao).
+    // Tudo aberto, menos pos-processamento, trajetoria e tornado (fechados por padrao).
     Expanders() {
         open.fill(true);
         open[static_cast<std::size_t>(Section::PostFx)] = false;
@@ -54,7 +54,7 @@ struct Expanders {
     void SetAll(bool isOpen) noexcept { open.fill(isOpen); }
 };
 
-// Limites de um slider (ou de um numero prendido). Os valores vem da janela ImGui que existia antes.
+// Limites de um slider (ou de um numero prendido).
 struct Range {
     float min;
     float max;
@@ -134,7 +134,7 @@ struct Range {
     return buf;
 }
 
-// Objeto travado: o resto do Inspector so mostra. O checkbox "Locked" continua funcionando (regra do ImGui).
+// Objeto travado: o resto do Inspector so mostra. O checkbox "Locked" continua funcionando.
 [[nodiscard]] inline bool EditAllowed(bool locked) noexcept {
     return !locked;
 }

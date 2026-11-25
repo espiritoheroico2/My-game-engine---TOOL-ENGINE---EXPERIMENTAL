@@ -1,6 +1,6 @@
 // Modelo do painel do Profiler feito com SpriteUI: decide QUAIS numeros aparecem e como eles se formatam.
 //
-// Nao usa SDL, ImGui nem SpriteUI. Le editor::FrameProfiler (profiler.hpp) e o SysSnapshot (sysmon.hpp) e
+// Nao usa SDL nem SpriteUI. Le editor::FrameProfiler (profiler.hpp) e o SysSnapshot (sysmon.hpp) e
 // produz uma lista fixa de linhas (Row) e os dois historicos dos graficos. O painel so desenha o resultado.
 //
 // Regras que o modelo garante (testadas em tests/test_profiler_model.cpp):

@@ -6,7 +6,7 @@
 //   Escalar (R):  arraste a ponta de um eixo -> escala so nele; arraste o quadrado central -> escala uniforme (Ctrl = passos de 0.1).
 //   Mover com Ctrl = passos de 0.25 m.
 // Tudo e feito em espaco de tela (sem raycast 3D): barato, estavel e independente da API grafica.
-// Sem ImGui: selecao por raio e snap usam so tipos do editor (Px). A janela Scene desenha em SpriteUI.
+// Selecao por raio e snap usam so tipos do editor (Px). A janela Scene desenha em SpriteUI.
 // Os valores sao gravados direto no Transform do objeto (os mesmos campos do Inspector).
 #pragma once
 #include "editor_state.hpp"

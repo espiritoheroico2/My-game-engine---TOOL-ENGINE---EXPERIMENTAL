@@ -1,6 +1,6 @@
 #pragma once
 
-// Paleta da interface SpriteUI: tokens de cor em um lugar so. Sem dependencia de SpriteUI nem de ImGui, para o
+// Paleta da interface SpriteUI: tokens de cor em um lugar so. Sem dependencia de SpriteUI, para o
 // teste (tests/test_sui_palette.cpp) rodar sem janela. sui_panel.hpp converte para o espaco de cor da SpriteUI.
 //
 // Padrao: "Azul escuro" (tom das referencias em docs/imagens). A troca pelo usuario vai na aba
@@ -48,7 +48,7 @@ inline constexpr std::array<Palette, kCount> kPresets{{
      {0.350f, 0.560f, 1.000f}, {0.350f, 0.560f, 1.000f}, {0.120f, 0.130f, 0.165f}, {1.000f, 0.450f, 0.400f}},
 }};
 
-// Paleta personalizada (Configuracoes > Appearance > Custom). Como no ImGui antigo: 5 cores-base geram os 8 tokens;
+// Paleta personalizada (Configuracoes > Appearance > Custom). 5 cores-base geram os 8 tokens;
 // a lista avancada troca um token sem mexer nos outros. Trocar uma cor-base recalcula todos os tokens.
 inline constexpr std::size_t kCustomIndex = kCount;   // indice da paleta Custom (depois das prontas)
 inline constexpr std::size_t kTokenCount = 8;

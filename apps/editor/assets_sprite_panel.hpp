@@ -27,7 +27,7 @@ class Panel {
   // Retangulo da janela no ultimo quadro (para o roteador de paineis).
   [[nodiscard]] ToolEngine::SpriteUi::Rect rect() const { return view_.frameRect(); }
 
-  // Eventos do SDL. Devolve true quando a janela usou o evento (o ImGui por baixo nao deve receber).
+  // Eventos do SDL. Devolve true quando a janela usou o evento.
   bool handleEvent(const SDL_Event& e, bool shown) {
     if (!shown) return false;
     switch (e.type) {

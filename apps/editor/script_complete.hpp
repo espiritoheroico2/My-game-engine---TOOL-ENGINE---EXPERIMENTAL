@@ -1,4 +1,4 @@
-// script_complete.hpp - Logica pura do editor de script (sem ImGui, testavel pelo selftest):
+// script_complete.hpp - Logica pura do editor de script (testavel pelo selftest):
 //  * apiItems():        nomes da API de script (funcoes, metodos e propriedades), lidos do proprio toolengine.d.ts;
 //  * completionWord():  a palavra (com pontos, ex.: "input.do") antes do cursor;
 //  * completionsFor():  sugestoes que comecam com essa palavra;
