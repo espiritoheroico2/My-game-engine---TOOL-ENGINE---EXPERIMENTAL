@@ -54,6 +54,7 @@ inline constexpr float kHelpReserve = 30.f;   // grip + "?" (quando nao ha grip 
 inline constexpr float kCloseReserve = 8.f;   // margem a direita da barra agrupada
 inline constexpr float kTabX = 18.f;          // botao X de cada aba (fecha a janela da aba)
 inline constexpr float kTabMaxWidth = 120.f;
+inline constexpr float kTabPadX = 6.f;       // folga horizontal interna de cada aba (grip e X ficam afastados da borda)
 inline constexpr float kTabGripW = 14.f;     // grip de cada aba (seis pontos), antes do nome
 inline constexpr float kTabEdge = 4.f;       // folga da barra de abas a esquerda (ela ocupa o cabecalho inteiro)
 inline constexpr float kEdgeHighlightW = 4.f;   // espessura do destaque da borda sob o mouse (ou redimensionada)
@@ -185,19 +186,20 @@ class Host {
         shapes.rectFilled({x, y}, {x + c->tabW - 1.f, y + kHeaderH},
                           on ? view::Rgba(52, 68, 96) : view::Rgba(24, 31, 46));
         if (on) shapes.rectFilled({x, y + kHeaderH - 2.f}, {x + c->tabW - 1.f, y + kHeaderH}, view::Rgba(74, 130, 200));
-        // Grip da aba: seis pontos (duas colunas, tres linhas).
-        const float gx = x + 4.f, gy = y + (kHeaderH - 12.f) * 0.5f;
+        // Grip da aba: seis pontos (duas colunas, tres linhas), com folga de kTabPadX da borda da aba.
+        const float gx = x + kTabPadX, gy = y + (kHeaderH - 12.f) * 0.5f;
         for (int col = 0; col < 2; ++col) {
           for (int row = 0; row < 3; ++row) {
             const float dx = gx + static_cast<float>(col) * 4.f, dy = gy + static_cast<float>(row) * 4.f;
             shapes.rectFilled({dx, dy}, {dx + 2.f, dy + 2.f}, view::Rgba(120, 132, 150));
           }
         }
-        // Nome e X da aba, depois do grip.
-        shapes.text({x + kTabGripW, y + (kHeaderH - kStripFont) * 0.5f}, titleOf(tabs[i]), kStripFont,
-                    view::Rgba(233, 234, 238), true, std::max(0.f, c->tabW - kTabGripW - kTabX - kStripPad));
-        shapes.text({x + c->tabW - kTabX * 0.5f - 4.f, y + (kHeaderH - kStripFont) * 0.5f}, "X", kStripFont,
-                    view::Rgba(170, 178, 194), true, kTabX);
+        // Nome alinhado a esquerda, depois do grip, e X centrado na sua faixa a direita; os dois no centro vertical da aba.
+        const float midY = y + kHeaderH * 0.5f;
+        const float nameX = x + kTabPadX + kTabGripW;
+        const float nameW = std::max(0.f, c->tabW - (nameX - x) - kTabX - kTabPadX);
+        shapes.textMiddle({nameX, midY}, titleOf(tabs[i]), kStripFont, view::Rgba(233, 234, 238), false, nameW);
+        shapes.textMiddle({x + c->tabW - kTabPadX - kTabX * 0.5f, midY}, "X", kStripFont, view::Rgba(170, 178, 194), true, kTabX);
       }
     }
     if (drag_.IsDragging()) {

@@ -71,7 +71,7 @@ public:
   void append(const ShapeList& list, std::uint32_t clip, PaintList& out) {
     for (const Shape& s : list.shapes()) {
       switch (s.kind) {
-        case ShapeKind::Text: text_.addText(textX(s), s.a.y, s.text, s.size, premultiplied(s.color), textWidth(s)); break;
+        case ShapeKind::Text: text_.addText(textX(s), textY(s), s.text, s.size, premultiplied(s.color), textWidth(s)); break;
         case ShapeKind::Triangle: addTriangle(s, clip, out); break;
         case ShapeKind::Panel:
           flushText(clip, out);
@@ -92,6 +92,8 @@ private:
 
   // Texto centrado: a largura medida desloca o ponto de ancoragem para a esquerda.
   float textX(const Shape& s) const { return s.centered ? s.a.x - text_.layout(s.text, s.size).size.x * 0.5f : s.a.x; }
+  // Texto com middle: o topo da linha desce metade da altura medida, assim o centro vertical cai em a.y.
+  float textY(const Shape& s) const { return s.middle ? s.a.y - text_.layout(s.text, s.size).size.y * 0.5f : s.a.y; }
   static float textWidth(const Shape& s) { return s.r > 0.f ? s.r : 1e6f; }
 
   // Linha, retangulo, circulo (ou anel de linhas): um item por forma, todos com a mesma cor e o mesmo recorte.

@@ -53,6 +53,7 @@ struct Shape {
   Color color = 0;
   std::string text;
   Color edge = 0;
+  bool middle = false;   // texto: a/y e o centro vertical da linha (a altura medida da fonte), nao o topo
 };
 
 class ShapeList {
@@ -72,6 +73,10 @@ public:
   // Texto com a fonte `size`. maxWidth > 0 corta o texto com "..." para caber (pixels).
   void text(Pixel at, std::string s, float size, Color col, bool centered = false, float maxWidth = 0.f) {
     add({ShapeKind::Text, at, {}, {}, maxWidth, 0.f, 0.f, size, centered, col, std::move(s)});
+  }
+  // Texto com o centro vertical em at.y: a linha fica centrada na altura medida, qualquer que seja a fonte.
+  void textMiddle(Pixel at, std::string s, float size, Color col, bool centered = false, float maxWidth = 0.f) {
+    add({ShapeKind::Text, at, {}, {}, maxWidth, 0.f, 0.f, size, centered, col, std::move(s), 0, true});
   }
 
   // Acrescenta as formas de outra lista, no fim (ordem de pintura preservada).
