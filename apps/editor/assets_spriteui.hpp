@@ -2,13 +2,13 @@
 
 #include "ui_style.hpp"
 
-// Janela "Assets" feita com SpriteUI (sem Dear ImGui). Estado e regras: assets_model.hpp.
+// Janela "Assets" feita com SpriteUI. Estado e regras: assets_model.hpp.
 // Esta view so desenha e reporta cliques, digitacao e rolagem. Quem lista a pasta, cria, renomeia, apaga, importa,
 // abre e salva e o host (assets_sprite_panel.hpp e main.cpp, via Action). Moldura: grip, "?" (abre a Help na secao
 // Assets), titulo em negrito, minimizar e X.
 //
 // Limites desta primeira versao: o editor de texto so digita no fim do arquivo (sem mover o caret); os menus de
-// contexto do ImGui viraram botoes na barra de acoes.
+// contexto sao botoes na barra de acoes.
 #include "window_palette.hpp"
 #include "assets_model.hpp"
 #include "i18n.hpp"

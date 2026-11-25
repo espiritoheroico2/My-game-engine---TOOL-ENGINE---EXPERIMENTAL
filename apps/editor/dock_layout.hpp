@@ -107,16 +107,16 @@ class Model {
     return false;
   }
 
-  // Janela recem-aberta: entra como aba do grupo onde esta `near` (ou da primeira folha, se `near` nao esta no dock)
+  // Janela recem-aberta: entra como aba do grupo onde esta `anchor` (ou da primeira folha, se `anchor` nao esta no dock)
   // e fica ativa. Dock vazio: vira a raiz. Falso se ja esta no dock.
-  bool attach(SU::UIHandle w, SU::UIHandle near) {
+  bool attach(SU::UIHandle w, SU::UIHandle anchor) {
     if (contains(w) || !w.IsValid()) return false;
     if (empty()) {
       root_.content = w;
       root_.Layout(area_);
       return true;
     }
-    SU::UIHandle target = visibleOf(near);
+    SU::UIHandle target = visibleOf(anchor);
     if (!target.IsValid()) {
       const std::vector<SW::DockLeafRect> items = leaves();
       if (items.empty()) return false;

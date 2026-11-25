@@ -234,7 +234,7 @@ inline void buildGrid(const tool::Camera& cam, const vm::Projection& proj, view:
   labelAt(proj, {0, 0, 6.4f}, "Z", view::Rgba(100, 140, 255, 255), out);
 }
 
-// Circulo no plano XZ (24 lados), como o circleXZ do ImGui.
+// Circulo no plano XZ (24 lados).
 inline void circleXZ(const vm::Projection& proj, tool::Vec3 c, float r, view::Color col, view::ShapeList& out) {
   constexpr int kSides = 24;
   for (int i = 0; i < kSides; ++i) {

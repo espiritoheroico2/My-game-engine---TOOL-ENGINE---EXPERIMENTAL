@@ -1,6 +1,6 @@
 #pragma once
 
-// Janela Jogo em SpriteUI (tambem o modo --player, sem barra). A moldura e do ImGui, como na Scene. Cada camera
+// Janela Jogo em SpriteUI (tambem o modo --player, sem barra). A moldura e a SpriteUI, como na Scene. Cada camera
 // principal vira uma celula: a imagem sai pelo elemento Image da biblioteca (Conter no letterbox, Preencher ou
 // Esticar), e por cima vao as particulas, a grade e a UI do jogo. Os retangulos das celulas vem do
 // game_view_model.hpp; o Editor monta as formas de cada celula e passa em Values. O painel desenha, trata os cliques
@@ -98,7 +98,7 @@ public:
   GamePanel& operator=(const GamePanel&) = delete;
 
   // Eventos do SDL. A moldura (X, "?", minimizar, grip) e tratada aqui; o resto vai para a fila do jogo.
-  // Devolve true quando o evento foi da moldura: o host nao repassa esse clique ao ImGui.
+  // Devolve true quando o evento foi da moldura.
   bool handleEvent(const SDL_Event& e) {
     switch (e.type) {
       case SDL_EVENT_MOUSE_MOTION:

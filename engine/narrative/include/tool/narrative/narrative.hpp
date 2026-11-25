@@ -1,6 +1,6 @@
 // ToolEngine - Controlador Narrativo (plugin de scripts visuais por nos).
 //   grafo (.json, formato nativo)  --compile-->  Program (IR compacto)  --run-->  NarrativeRuntime
-// O editor visual (imgui-node-editor) edita o mesmo .json. O jogo exportado so carrega o Program.
+// O editor visual (painel Narrative) edita o mesmo .json. O jogo exportado so carrega o Program.
 // Gatilhos: evento nomeado ou variavel observada (com histerese). Modos: OneShot, Session, Reactivable.
 #pragma once
 #include "tool/core/json.hpp"

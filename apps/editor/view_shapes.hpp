@@ -1,8 +1,7 @@
 #pragma once
 
 // Formas da Scene e do Jogo antes de desenhar. Quem monta a vista (grade, gizmo, particulas, objetos cortados,
-// formas de fisica, UI do jogo) so grava formas numa ShapeList, em pixels da janela. Nao toca em ImGui nem em
-// SpriteUI: o painel (view_painter.hpp) le a lista e desenha tudo em um lote por textura. A ordem de gravacao e a
+// formas de fisica, UI do jogo) so grava formas numa ShapeList, em pixels da janela. O painel (view_painter.hpp) le a lista e desenha tudo em um lote por textura. A ordem de gravacao e a
 // ordem de pintura: o que e gravado depois fica por cima.
 //
 // Exemplo: o eixo vermelho do objeto Caixa azul selecionado e uma linha de (300, 200) a (340, 200), grossa de 2 px.
@@ -32,7 +31,7 @@ inline constexpr Color Rgba(int r, int g, int b, int a = 255) {
                             (static_cast<unsigned>(a) << 24));
 }
 
-// Cor a partir de canais 0..1 (valores fora da faixa sao presos), como ImGui::GetColorU32.
+// Cor a partir de canais 0..1 (valores fora da faixa sao presos), 
 inline Color rgbaF(float r, float g, float b, float a) {
   auto q = [](float v) { return static_cast<int>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f); };
   return Rgba(q(r), q(g), q(b), q(a));

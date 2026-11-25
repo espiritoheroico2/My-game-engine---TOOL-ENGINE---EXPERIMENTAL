@@ -2,7 +2,7 @@
 
 // Janela Scene: regras que nao dependem de janela. Projeta pontos 3D na tela, monta a geometria do gizmo (mover,
 // girar, escalar), descobre qual alca esta sob o mouse e calcula o novo Transform durante o arrasto. A janela
-// SpriteUI (scene_view_panel.hpp) so desenha o que este modelo devolve e repassa o mouse. Sem ImGui e sem SpriteUI:
+// SpriteUI (scene_view_panel.hpp) so desenha o que este modelo devolve e repassa o mouse. Sem SpriteUI:
 // roda no ctest como Editor.SceneViewModel.
 //
 // Exemplo: o gizmo de mover segue a Caixa azul. Se a Caixa esta em (2, 0, 0), a ponta do eixo X sai dela para a

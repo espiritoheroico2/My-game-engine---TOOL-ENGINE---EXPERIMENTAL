@@ -1,5 +1,5 @@
 // Acoes de Editor que nao sao janelas: abrir arquivo no editor externo e o preset de fumaca das particulas.
-// Sem ImGui. Estado do Help e do Test map: help_state.hpp.
+// Estado do Help e do Test map: help_state.hpp.
 #pragma once
 #include "editor_state.hpp"
 #include "help_state.hpp"

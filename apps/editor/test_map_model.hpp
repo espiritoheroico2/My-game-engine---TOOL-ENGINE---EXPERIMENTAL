@@ -1,7 +1,7 @@
 #pragma once
 
 // Modelo da janela "Test map of chunks" (SpriteUI): limites do lado do mapa, contagens e aviso de mapa grande.
-// Nao usa SDL, ImGui nem desenho; roda no ctest (tests/test_test_map_model.cpp).
+// Nao usa SDL nem desenho; roda no ctest (tests/test_test_map_model.cpp).
 
 #include <algorithm>
 #include <cmath>

@@ -1,5 +1,5 @@
 // Modelo da barra de status (SpriteUI): textos, tons, limite de 4 refreshes por segundo e troca de idioma.
-// Nao usa SDL nem ImGui. Roda no ctest como Editor.StatusBarModel.
+// Nao usa SDL. Roda no ctest como Editor.StatusBarModel.
 #include "statusbar_model.hpp"
 
 #include <cstdio>

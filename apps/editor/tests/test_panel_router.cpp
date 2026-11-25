@@ -45,7 +45,7 @@ int main() {
     CHECK(r.mayReceive(kMenuBarHandle, 500.f, 100.f));         // fundo: o menu recebe para fechar-se
   }
 
-  // Fora de qualquer area registrada: ninguem bloqueia (ImGui e paineis decidem).
+  // Fora de qualquer area registrada: ninguem bloqueia (os paineis decidem).
   {
     PanelRouter r;
     r.beginFrame();

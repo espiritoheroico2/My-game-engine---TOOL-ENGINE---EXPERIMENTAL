@@ -7,7 +7,7 @@
 // Exemplo: a API pedida e 1 (Vulkan) e so Software e Vulkan estao compiladas. SyncRadio deixa dois botoes e
 // marca o segundo. Se a API pedida nao esta compilada, nenhum botao fica marcado.
 //
-// Sem SDL, sem ImGui e sem o Editor: so a SpriteUI e settings_model.hpp. Roda no ctest como Editor.SettingsBridge.
+// Sem SDL e sem o Editor: so a SpriteUI e settings_model.hpp. Roda no ctest como Editor.SettingsBridge.
 
 #include "settings_model.hpp"
 
@@ -29,12 +29,12 @@ namespace editor::settings_bridge {
 namespace Elm = ToolEngine::SpriteUi::Elements;
 namespace Wd = ToolEngine::SpriteUi::Widgets;
 
-// APIs de renderizacao, na ordem do radio do ImGui. O indice e o id do botao.
+// APIs de renderizacao, na ordem do radio. O indice e o id do botao.
 inline constexpr int kApiCount = 5;
 inline constexpr std::array<const char*, kApiCount> kApiLabels{
     "Software (CPU)", "Vulkan", "OpenGL", "Direct3D 12", "Direct3D 11"};
 
-// Escala de renderizacao da aba Graficos (o mesmo intervalo do slider do ImGui).
+// Escala de renderizacao da aba Graficos.
 inline constexpr float kRenderScaleMin = 0.25f;
 inline constexpr float kRenderScaleMax = 2.0f;
 

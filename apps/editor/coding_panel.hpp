@@ -1,12 +1,12 @@
-// coding_panel.hpp - Janela Coding, em SpriteUI (sem ImGui).
+// coding_panel.hpp - Janela Coding, em SpriteUI.
 //
 // Duas partes: a lista dos codigos-fonte do projeto (esquerda, fonte fixa de 12) e o editor do codigo escolhido
 // (direita, multilinha, com numeros de linha). A barra do topo tem Save, o nome do arquivo, um slider do tamanho do
 // codigo e o botao que mostra ou oculta a lista.
 //
 // A moldura vem de framed::Chrome (dock). O corpo e desenhado aqui com view::ShapeList e os itens do campo
-// (Elements::TextField). Eventos chegam por handleEvent (antes do ImGui). Clicar num codigo salva o que estava aberto e
-// abre o clicado. Ctrl+S salva. Nada aqui inclui imgui.h.
+// (Elements::TextField). Eventos chegam por handleEvent. Clicar num codigo salva o que estava aberto e
+// abre o clicado. Ctrl+S salva.
 #pragma once
 
 #include "framed_window.hpp"

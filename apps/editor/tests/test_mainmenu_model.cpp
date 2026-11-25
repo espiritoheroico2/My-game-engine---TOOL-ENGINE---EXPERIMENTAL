@@ -1,5 +1,5 @@
 // Modelo da barra de menus principal: titulos, itens, marcas, habilitado, pedidos e botoes Play/Pausa.
-// Nao usa SDL nem ImGui. Roda no ctest como Editor.MainMenuModel.
+// Nao usa SDL. Roda no ctest como Editor.MainMenuModel.
 #include "mainmenu_model.hpp"
 
 #include <cstdio>

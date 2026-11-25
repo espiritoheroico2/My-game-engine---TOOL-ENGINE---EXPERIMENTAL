@@ -1,8 +1,8 @@
 #pragma once
 
-// Janela Help com SpriteUI (troca o drawHelp de extra_ui.hpp; ver kHelpUsesSpriteUi em main.cpp).
+// Janela Help com SpriteUI.
 // Assunto, busca e blocos do texto: help_model.hpp. Aqui: geometria, desenho e cliques. A janela fica no centro,
-// sobre o ImGui, no mesmo renderer.
+// no mesmo SDL_Renderer das outras janelas SpriteUI.
 //
 // Teclado: com o foco na busca, o painel recebe as teclas e o editor nao as recebe (W/E/R e Delete nao agem).
 // Esc tira o foco da busca. Fora da busca, as teclas seguem para o editor.
@@ -84,7 +84,7 @@ class HelpPanel {
     dirty_ = true;
   }
 
-  // Chamar para cada evento do SDL, antes do ImGui. Retorna true quando o evento e da janela (o ImGui nao o recebe).
+  // Chamar para cada evento do SDL. Retorna true quando o evento e da janela.
   // `open` = ed.showHelp: o X fecha a janela.
   bool handleEvent(const SDL_Event& e, SDL_Window* window, bool& open) {
     if (!open) {

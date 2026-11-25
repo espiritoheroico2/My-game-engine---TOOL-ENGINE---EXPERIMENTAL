@@ -70,7 +70,7 @@ class SpriteUiDiagnostics {
     pointerCancelled_ = false;
   }
 
-  // Retorna true quando o evento pertence ao painel (o editor nao o passa ao ImGui).
+  // Retorna true quando o evento pertence ao painel.
   bool handleEvent(const SDL_Event& event, bool& visible) {
     if (!visible) return false;
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE && !event.key.repeat) {

@@ -160,7 +160,7 @@ int main() {
   IP::InspectorPanel routePanel(text, renderer);
   const float hRouteClosed = routePanel.prepare(withParticles, hooks, 300.f);
   IP::InspectorPanel routeOpen(text, renderer);
-  routeOpen.setAllSections(true);   // abre a trajetoria (fechada por padrao, como no ImGui)
+  routeOpen.setAllSections(true);   // abre a trajetoria (fechada por padrao)
   const float hRouteOpen = routeOpen.prepare(withParticles, hooks, 300.f);
   Check(hRouteOpen > hRouteClosed, "a trajetoria com pontos ocupa altura quando aberta");
 

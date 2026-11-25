@@ -1,6 +1,6 @@
 #pragma once
 
-// Janela "Test map of chunks" com SpriteUI (troca testMapWindow de extra_ui.hpp; ver kTestMapUsesSpriteUi em main.cpp).
+// Janela "Test map of chunks" com SpriteUI.
 // Limites e contagens: test_map_model.hpp. Aqui: caixa centralizada, trilho do lado (arrasta com o mouse), contagens,
 // aviso de mapa grande e o botao "Generate map". A geracao em si fica no editor: handleEvent devolve Action::Generate.
 
@@ -53,7 +53,7 @@ class TestMapPanel {
   TestMapPanel(const TestMapPanel&) = delete;
   TestMapPanel& operator=(const TestMapPanel&) = delete;
 
-  // Eventos do SDL antes do ImGui. `open` = janela aberta; `side` = lado do mapa (o arraste muda). Chamar antes do ImGui.
+  // Eventos do SDL. `open` = janela aberta; `side` = lado do mapa (o arraste muda).
   Action handleEvent(const SDL_Event& e, bool& open, int& side) {
     if (!open) return Action::None;
     switch (e.type) {

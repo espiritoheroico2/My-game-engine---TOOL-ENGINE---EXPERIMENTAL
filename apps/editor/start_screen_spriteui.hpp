@@ -1,6 +1,6 @@
 #pragma once
 
-// UI-CONTRATO: tela de inicio (criar ou abrir projeto) feita com SpriteUI, sem Dear ImGui.
+// UI-CONTRATO: tela de inicio (criar ou abrir projeto) feita com SpriteUI.
 // Estado e acoes: start_screen_model.hpp. Catalogo e regras: ui_contract.hpp (secoes 2, 3 e 4).
 // Ligacao com o SDL_Renderer: SpriteUiSdlRenderer (no fim deste arquivo). Fonte: assets/fonts/Xmind-Regular.ttf.
 //
@@ -54,7 +54,7 @@ inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
 }
 
-// Fundo e cores do tema escuro (mesmos valores aproximados do ImGui atual).
+// Fundo e cores do tema escuro.
 struct Colors {
   SU::Vec4 background = Srgb(0.094f, 0.094f, 0.106f);
   SU::Vec4 panel = Srgb(0.125f, 0.125f, 0.137f);
@@ -547,8 +547,8 @@ using sui::SpriteUiSdlRenderer;
 // closed = true quando a janela foi fechada antes disso (nada foi criado).
 inline bool RunStartScreen(SDL_Window* window, SDL_Renderer* renderer, Model& model,
                            const sui::TextAtlasSet& text, const std::string& defaultLocation, bool& closed) {
-  // Texto digitado chega como SDL_EVENT_TEXT_INPUT so com a entrada de texto ligada. O ImGui liga isso sozinho;
-  // este laco nao usa o ImGui, entao liga aqui e desliga ao sair para o editor decidir depois.
+  // Texto digitado chega como SDL_EVENT_TEXT_INPUT so com a entrada de texto ligada.
+  // este laco liga aqui e desliga ao sair para o editor decidir depois.
   struct TextInputScope {
     SDL_Window* w;
     explicit TextInputScope(SDL_Window* win) : w{win} { SDL_StartTextInput(w); }

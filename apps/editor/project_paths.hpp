@@ -1,6 +1,6 @@
 // ToolEngine Editor - resolucao segura de caminhos relativos dentro da pasta do projeto (F-12).
 //
-// Header SEM dependencias do editor (sem ImGui, render ou audio), para que os testes possam
+// Header SEM dependencias do editor (sem render ou audio), para que os testes possam
 // valida-lo diretamente. Project::resolve() em project.hpp delega para resolveInside().
 //
 // Defesa em duas camadas:

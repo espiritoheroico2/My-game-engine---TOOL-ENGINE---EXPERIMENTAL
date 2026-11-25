@@ -4,7 +4,7 @@
 // Segue o padrao de theme.hpp: um arquivo .json por preset, numa pasta, lido com tool::Json.
 //
 // Regras:
-//  - Parte SEM SpriteUI e SEM ImGui: so dados e E/S de arquivo. Assim pode ser testada sem janela
+//  - Parte SEM SpriteUI: so dados e E/S de arquivo. Assim pode ser testada sem janela
 //    (apps/editor/tests/test_ui_presets.cpp). A tela converte UiPreset em TextFieldStyle.
 //  - Leitura tolerante: chave ausente usa o padrao; chave de tipo errado tambem; valores fora da faixa
 //    sao limitados (clamp). Chaves desconhecidas sao ignoradas (arquivos de versoes novas continuam abrindo).

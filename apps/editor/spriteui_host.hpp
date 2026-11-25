@@ -4,7 +4,7 @@
 // o mesmo caminho de desenho (FramePacket -> SDL_RenderGeometry) e o mesmo carregamento de fonte.
 //
 // Regras:
-//  - Nada daqui depende de ImGui nem de tipos do editor: so SpriteUI, SDL e a biblioteca padrao.
+//  - Nada daqui depende de tipos do editor: so SpriteUI, SDL e a biblioteca padrao.
 //  - A SpriteUI continua independente da engine; quem liga os dois e o editor (este arquivo e apps/editor).
 #include "SpriteUi/Rendering/DrawList.hpp"
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"

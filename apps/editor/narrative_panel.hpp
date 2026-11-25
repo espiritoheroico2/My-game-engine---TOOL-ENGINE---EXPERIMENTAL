@@ -1,5 +1,5 @@
 #pragma once
-// Janela do Controlador Narrativo em SpriteUI (sem Dear ImGui). Dados e regras: narrative_model.hpp.
+// Janela do Controlador Narrativo em SpriteUI. Dados e regras: narrative_model.hpp.
 //
 // Layout do corpo (coordenadas locais, a partir do canto superior esquerdo do corpo):
 //   - barra: New, Save, Compile, Open, campo de caminho e status;

@@ -3,7 +3,7 @@
 // Janela Jogo: regras de enquadramento que nao dependem de janela. Encaixa a imagem da camera de jogo na area da
 // janela (letterbox: proporcao mantida, barras nas laterais ou em cima e embaixo), divide a area entre duas
 // cameras principais e calcula o recorte da textura no modo preencher. A janela SpriteUI (game_view_panel.hpp)
-// so desenha. Sem ImGui e sem SpriteUI: roda no ctest como Editor.GameViewModel.
+// so desenha. Sem SpriteUI: roda no ctest como Editor.GameViewModel.
 //
 // Exemplo: a camera do jogo renderiza 16:9 e a janela tem 800 x 800. A imagem fica com 800 x 450, centrada, e
 // sobram 175 px de barra preta em cima e 175 px embaixo. Se a janela ficar 1600 x 900, a imagem vira 1600 x 900 e

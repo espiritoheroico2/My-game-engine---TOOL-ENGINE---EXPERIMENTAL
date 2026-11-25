@@ -1,4 +1,4 @@
-// Janela Editor info (SpriteUI): modelo sem janela. Regras da janela ImGui antiga, sem perder nenhuma.
+// Janela Editor info (SpriteUI): modelo sem janela.
 #include "editor_info_model.hpp"
 
 #include <cstdio>

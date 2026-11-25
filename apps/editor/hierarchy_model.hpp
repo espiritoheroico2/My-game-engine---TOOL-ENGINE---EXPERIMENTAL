@@ -1,7 +1,7 @@
 #pragma once
 
-// Modelo da janela Hierarchy: a arvore de objetos da cena, a selecao e a expansao, sem janela, sem SDL e sem
-// ImGui. A janela (hierarchy_panel.hpp) so traduz clique, tecla e arraste em chamadas daqui.
+// Modelo da janela Hierarchy: a arvore de objetos da cena, a selecao e a expansao, sem janela e sem SDL.
+// A janela (hierarchy_panel.hpp) so traduz clique, tecla e arraste em chamadas daqui.
 //
 // A arvore e a TreeControl da SpriteUI. A selecao e guardada pelo id do objeto (nao pela posicao na lista), entao
 // um objeto criado ou apagado no meio da lista nao faz a selecao pular para outro.

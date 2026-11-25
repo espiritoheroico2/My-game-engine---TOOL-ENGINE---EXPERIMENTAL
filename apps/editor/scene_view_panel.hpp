@@ -1,7 +1,7 @@
 #pragma once
 
-// Janela Scene em SpriteUI. A moldura (titulo, foco, docking e o "?") e do ImGui, como nas outras janelas; a area
-// da cena e da SpriteUI. A imagem sai pelo elemento Image da biblioteca (modo Esticar); por cima, a grade, os objetos
+// Janela Scene em SpriteUI. A moldura (titulo, foco, docking e o "?") e a SpriteUI (window_frame.hpp), como nas outras
+// janelas. A area da cena tambem e SpriteUI: a imagem sai pelo elemento Image da biblioteca (modo Esticar); por cima, a grade, os objetos
 // cortados, o gizmo, a barra de ferramentas, a barra flutuante e o menu de contexto do objeto. Regras e contas ficam
 // em scene_view_model.hpp; o que o painel precisa do Editor chega em Values (um quadro) e o que ele pede volta em
 // Requests. O painel nunca grava na cena.
@@ -11,8 +11,7 @@
 // desfaz como antes.
 //
 // Os eventos de mouse e teclado entram em uma fila (handleEvent) e sao tratados em draw, com os dados do quadro
-// atual. handleEvent nunca consome o evento: o ImGui continua recebendo tudo (arrastar do painel Assets, navegacao
-// com o botao direito e do meio, roda do mouse).
+// atual. handleEvent devolve true so para o que e da moldura (X, "?", minimizar, grip); o resto segue para a fila.
 //
 // Como funciona:
 //   handleEvent: guarda o evento na fila (mouse, Esc para fechar o menu).
@@ -70,7 +69,7 @@ inline constexpr float kMenuW = 210.f;
 inline constexpr float kClickSlop = 4.f;   // botao direito sem arrastar (px): abre o menu de contexto
 inline constexpr std::uint32_t kSceneSlot = 0;   // slot de textura da cena (SpriteUiSdlRenderer::setView)
 
-// Cores (mesmos valores do ImGui antigo, em RGBA 0..255).
+// Cores em RGBA 0..255.
 inline constexpr view::Color kPanelFill = view::Rgba(14, 19, 28, 250);
 inline constexpr view::Color kPanelEdge = view::Rgba(51, 61, 77);
 inline constexpr view::Color kButtonFill = view::Rgba(33, 41, 54);
@@ -146,7 +145,7 @@ public:
   ScenePanel& operator=(const ScenePanel&) = delete;
 
   // Eventos do SDL. A moldura (X, "?", minimizar, grip) e tratada aqui; o resto vai para a fila da cena.
-  // Devolve true quando o evento foi da moldura: o host nao repassa esse clique ao ImGui.
+  // Devolve true quando o evento foi da moldura.
   bool handleEvent(const SDL_Event& e) {
     switch (e.type) {
       case SDL_EVENT_MOUSE_MOTION:
@@ -254,7 +253,7 @@ public:
     return view::drawPaintList(renderer, sdl_, extractor_, packet_, frameId_, clips, list);
   }
 
-  // Ponteiro sobre a imagem da cena no ultimo quadro (o ImGui nao sabe mais disso).
+  // Ponteiro sobre a imagem da cena no ultimo quadro.
   [[nodiscard]] bool hovered() const { return visible_ && imageArea(rect_).contains(mouse_.x, mouse_.y); }
   [[nodiscard]] bool dragging() const { return dragging_; }
 

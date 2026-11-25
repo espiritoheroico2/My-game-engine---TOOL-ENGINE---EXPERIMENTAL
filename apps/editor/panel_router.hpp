@@ -4,7 +4,7 @@
 // zOrder, ordem de pintura), a mesma do clique. Cada painel SpriteUI registra a sua area no quadro. Um clique que cai
 // numa area registrada so vai ao painel que a cobre por cima: menu aberto (Popup) bloqueia as janelas de tras.
 //
-// Pontos fora de qualquer area registrada continuam com o comportamento antigo (ImGui e os paineis decidem sozinhos).
+// Pontos fora de qualquer area registrada ficam com os paineis, que decidem sozinhos.
 // Por isso `mayReceive` devolve true quando nada registrado cobre o ponto.
 
 #include "SpriteUi/Input/InputRouter.hpp"
@@ -55,7 +55,7 @@ class PanelRouter {
     return !top.IsValid() || top == handle;
   }
 
-  // true quando um painel SpriteUI registrado cobre o ponto. Nesse caso o ImGui nao deve receber o clique.
+  // true quando um painel SpriteUI registrado cobre o ponto. Nesse caso os outros paineis nao devem receber o clique.
   [[nodiscard]] bool coveredBySui(float x, float y) const {
     return SU::Input::UIEventRouter::TopmostAt(targets_, {x, y}).IsValid();
   }

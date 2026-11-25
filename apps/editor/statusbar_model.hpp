@@ -1,7 +1,7 @@
 #pragma once
 
 // Modelo da barra de status do editor: decide os textos (API, FPS, cena, entidades, erros, linha de status e idioma).
-// Nao usa SDL, ImGui nem SpriteUI, e roda no ctest (tests/test_statusbar_model.cpp).
+// Nao usa SDL nem SpriteUI, e roda no ctest (tests/test_statusbar_model.cpp).
 //
 // Regras:
 //  - Os textos so mudam no maximo 4 vezes por segundo (kRefreshSec). Entre dois refreshes o modelo nao muda.

@@ -1,5 +1,5 @@
 // Modelo do Console (SpriteUI): niveis, filtro de texto, contagens, copia, campo de linha, historico e rolagem.
-// Nao usa SDL nem ImGui nem SpriteUI. Roda no ctest como Editor.ConsoleModel.
+// Nao usa SDL nem SpriteUI. Roda no ctest como Editor.ConsoleModel.
 #include "console_model.hpp"
 
 #include <cstdio>

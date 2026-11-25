@@ -1,7 +1,6 @@
 #pragma once
 
 // Pasta padrao dos projetos novos, usada pela tela de inicio SpriteUI (start_screen_spriteui.hpp) e pelo host (main.cpp).
-// Sem Dear ImGui: antes este codigo ficava em project_dialog.hpp, junto do dialogo ImGui que foi removido.
 
 #include "project_settings.hpp"
 

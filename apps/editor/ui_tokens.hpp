@@ -5,7 +5,7 @@
 // a aplicacao visual e a persistencia ainda nao estao ligados a este modelo.
 //
 // Regras: cores ficam em sRGB reto (0 a 1), como o seletor mostra; a conversao para o espaco linear da SpriteUI e
-// feita no adaptador da SpriteUI. Valores fora da faixa sao presos (Clamp*). Sem SDL, sem ImGui e sem JSON; roda no
+// feita no adaptador da SpriteUI. Valores fora da faixa sao presos (Clamp*). Sem SDL e sem JSON; roda no
 // ctest como Editor.UiTokens.
 //
 // Exemplo: Tokens::setColor(Color::Accent, {0.9f, 0.4f, 0.1f, 1.f}) altera o modelo do token de destaque.

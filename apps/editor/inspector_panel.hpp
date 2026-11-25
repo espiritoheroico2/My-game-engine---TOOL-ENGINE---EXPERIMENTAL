@@ -7,17 +7,16 @@
 //
 // Secoes em SpriteUI: nome, ativo e travado; Transform; Mesh Renderer (com as partes de modelo importado); Light
 // source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; Voxel; Game UI; Particles; ToolObject Script
-// e Tags. Recursos (Add / Remove) entram neste painel; o rodape (Add Component, Collapse All, Open All) ainda fica
-// no host ImGui logo abaixo do bloco (main.cpp: drawInspector).
+// e Tags. Recursos (Add / Remove) entram neste painel.
 //
 // Exemplo: a Luz do sol tem cor, intensidade e sombra. Clicar na amostra da cor abre o seletor; arrastar a area
 // de saturacao muda a cor do objeto na hora. Digitar "2,5" na intensidade grava 2.5 quando o numero e valido.
 //
 // Como funciona:
 //   prepare:     monta a lista de controles do quadro (posicoes locais ao bloco) e devolve a altura. O main.cpp
-//                reserva essa altura no ImGui antes das secoes que continuam la.
+//                chama antes de draw.
 //   draw:        desenha grupos, controles, campo em edicao e listas abertas, recortados na parte visivel da janela.
-//   handleEvent: roteia clique, arrasto, teclas e texto. A roda do mouse fica com o ImGui (a janela rola o bloco).
+//   handleEvent: roteia clique, arrasto, teclas e texto.
 
 #include "SpriteUi/Elements/Button.hpp"
 #include "SpriteUi/Elements/Checkbox.hpp"
@@ -105,7 +104,7 @@ struct Context {
     std::vector<int> removable;          // recursos (im::Resource) que o objeto tem
 };
 
-// Acoes com efeito fora do objeto (o Editor, no main.cpp). Cada uma faz o que o ImGui fazia.
+// Acoes com efeito fora do objeto (o Editor, no main.cpp).
 struct Hooks {
     std::function<std::vector<std::string>(editor::AssetKind)> assets;        // caminhos relativos ao projeto
     std::function<void(editor::AssetKind, const std::string&)> assetChosen;     // assignAsset + invalidate
@@ -177,15 +176,15 @@ class InspectorPanel {
   public:
     InspectorPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : canvas_{text}, overlay_{text}, sdl_{sdl}, chrome_{text, sdl} {
         overlay_.setTextZ(Metrics::kZPopupText);
-        chrome_.setBodyFill(false);   // o corpo e renderizado pelo painel por cima do fundo do ImGui
+        chrome_.setBodyFill(false);   // o corpo e desenhado pelo painel, sem fundo da moldura
     }
     InspectorPanel(const InspectorPanel&) = delete;
-    // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e o bloco ImGui posicionado sobre ela.
+    // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e o bloco do Inspector posicionado sobre ela.
     framed::Chrome& chrome() { return chrome_; }
     InspectorPanel& operator=(const InspectorPanel&) = delete;
 
-    // Monta os controles do quadro e devolve a altura do bloco (em pixels, sem a janela). Chamar antes de reservar
-    // a altura no ImGui; depois, draw. Ler o objeto aqui nao muda nada.
+    // Monta os controles do quadro e devolve a altura do bloco (em pixels, sem a janela). Chamar antes de draw.
+    // Ler o objeto aqui nao muda nada.
     float prepare(const Context& ctx, const Hooks& hooks, float width) {
         ctx_ = ctx;             // copia: os ponteiros dentro dele valem neste quadro, e o painel os usa em draw e eventos
         hooks_ = hooks;
@@ -235,11 +234,11 @@ class InspectorPanel {
         return y_ + Metrics::kPad;
     }
 
-    // Abre ou fecha todas as secoes (rodape do Inspector: Open All / Collapse All).
+    // Abre ou fecha todas as secoes.
     void setAllSections(bool open) { expanders_.SetAll(open); }
 
-    // Desenha o bloco. origin = canto superior esquerdo do bloco na tela; visible = parte que cabe na janela ImGui
-    // (a janela rola e corta o bloco por esse retangulo).
+    // Desenha o bloco. origin = canto superior esquerdo do bloco na tela; visible = area de recorte (corpo da moldura)
+    // (o bloco e cortado por esse retangulo).
     bool draw(SDL_Renderer* renderer, sui::Box origin, sui::Box visible, bool shown) {
       theme_ = sui::Theme{};   // cores da paleta em uso (Configuracoes > Appearance)
         origin_ = origin;
@@ -277,7 +276,7 @@ class InspectorPanel {
         return sdl_.draw(renderer, packet_);
     }
 
-    // Eventos do SDL, antes do ImGui. true quando o evento e do Inspector. A roda fica com o ImGui (a janela rola).
+    // true quando o ponteiro esta sobre um campo que pede cursor de texto.
     [[nodiscard]] bool wantsTextCursor(float x, float y) const {
         if (!shown_ || !sui::Box{visible_.x, visible_.y, visible_.w, visible_.h}.contains(x, y)) return false;
         const SU::Vec2 p{x - origin_.x, y - origin_.y};
@@ -972,7 +971,7 @@ class InspectorPanel {
         endSection();
     }
 
-    // Nomes dos recursos (ordem de im::Resource), como aparecem no menu do ImGui.
+    // Nomes dos recursos (ordem de im::Resource), como aparecem na lista.
     static const char* resourceLabel(int id) {
         static const char* names[] = {
             "Physics body (Newtoon)", "Tool: Jump", "Tool: Move", "Tool: Follow Target", "Tool: Spin", "Tool: On Collision",
@@ -982,7 +981,7 @@ class InspectorPanel {
         return i < std::size(names) ? names[i] : "";
     }
 
-    // Adicionar e remover recursos: duas listas (o menu popup do ImGui virou lista). Cada lista mostra so o que cabe
+    // Adicionar e remover recursos: duas listas. Cada lista mostra so o que cabe
     // no objeto. Os recursos planejados aparecem em texto, sem opcao.
     void resources() {
         if (!beginSection(im::Section::Resources, T("Resources"))) return;
@@ -1074,7 +1073,7 @@ class InspectorPanel {
         endSection();
     }
 
-    // Escolha de acao do Input Map (mesma regra do combo do ImGui): "(none)" limpa; uma acao fora da lista aparece
+    // Escolha de acao do Input Map: "(none)" limpa; uma acao fora da lista aparece
     // com o nome que ja estava gravado.
     void actionRow(const char* text, char* buf, std::size_t cap, int player, int kind) {
         std::vector<std::string> options{T("(none)")};
@@ -1767,7 +1766,7 @@ class InspectorPanel {
     unsigned lastObject_ = 0;
     char newTag_[48] = "";        // campo "New tag" (buffer do componente; sobrevive entre quadros)
     std::string tagMsg_;          // aviso da secao Tags (limite de tags)
-    int voxelBrush_ = 1;          // pincel do voxel (0 = apagar); guardado entre quadros, como o static do ImGui
+    int voxelBrush_ = 1;          // pincel do voxel (0 = apagar); guardado entre quadros
     int voxelLayer_ = 0;          // camada (y) mostrada na grade
 
     sui::Canvas canvas_;

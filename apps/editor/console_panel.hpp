@@ -1,6 +1,6 @@
 #pragma once
 
-// Painel do Console feito com SpriteUI. Substitui a janela ImGui "Console" (kConsoleUsesSpriteUi em main.cpp).
+// Painel do Console feito com SpriteUI.
 //
 // O que aparece, filtra e conta vem do modelo (console_model.hpp). Este arquivo faz o layout, a medida de texto,
 // as caixas de clique e o desenho. Nada aqui conhece o Editor: o que precisa ser feito fora (limpar, rodar scripts,
@@ -13,7 +13,7 @@
 //                aplicado no draw, onde o log esta disponivel.
 //   draw:        aplica o clique pendente, monta os itens e envia o quadro pelo SpriteUiSdlRenderer.
 //
-// Eventos que caem no painel nao chegam ao ImGui (handleEvent devolve true). Teclado so e consumido com um campo
+// Eventos que caem no painel ficam com ele (handleEvent devolve true). Teclado so e consumido com um campo
 // focado; o campo liga o texto do SDL (SDL_StartTextInput) e desliga ao perder o foco.
 #include "window_frame.hpp"
 #include "window_help_icon.hpp"
@@ -88,7 +88,7 @@ struct Colors {
   SU::Vec4 caret = Srgb(0.91f, 0.918f, 0.933f);
   SU::Vec4 rowHover = Srgb(0.12f, 0.15f, 0.20f);
   SU::Vec4 infoText = Srgb(0.91f, 0.918f, 0.933f);
-  SU::Vec4 warnText = Srgb(1.f, 0.85f, 0.3f);       // mesmas cores do Console ImGui
+  SU::Vec4 warnText = Srgb(1.f, 0.85f, 0.3f);
   SU::Vec4 errorText = Srgb(1.f, 0.4f, 0.4f);
   SU::Vec4 scroll = Srgb(0.45f, 0.48f, 0.55f, 0.75f);
 };
@@ -150,7 +150,7 @@ class ConsolePanel {
     frame_.undock(at);
   }
 
-  // Eventos de ponteiro tambem chegam ao ImGui para a janela hospedeira continuar focavel e dockavel.
+  // Eventos de ponteiro passam antes pelo dock_host, que cuida de foco e docking.
   bool handleEvent(const SDL_Event& e, bool visible) {
     if (!visible) return false;
     switch (e.type) {

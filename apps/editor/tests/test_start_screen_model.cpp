@@ -1,5 +1,5 @@
 // Camada L4b (tela de inicio, sem janela): estado dos campos, foco, selecao e acoes do modelo.
-// Nao usa SDL nem ImGui. Roda no ctest como EditorStartScreenModel.
+// Nao usa SDL. Roda no ctest como EditorStartScreenModel.
 #include "start_screen_model.hpp"
 
 #include <cstdio>

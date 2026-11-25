@@ -1,5 +1,5 @@
 // Modelo do painel do Profiler (SpriteUI): largura fixa dos numeros, taxa de atualizacao, escala estavel e NaN.
-// Nao usa SDL nem ImGui nem SpriteUI. Roda no ctest como Editor.ProfilerModel.
+// Nao usa SDL nem SpriteUI. Roda no ctest como Editor.ProfilerModel.
 #include "profiler_model.hpp"
 
 #include <cmath>

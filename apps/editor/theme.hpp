@@ -1,4 +1,4 @@
-// ToolEngine Editor - temas de cores e escala da interface (sem ImGui).
+// ToolEngine Editor - temas de cores e escala da interface.
 // Um tema = 5 cores-base (fundo, superficie, texto, destaque, borda) + arredondamento + escala. Quem desenha as cores e
 // a SpriteUI, pela paleta de sui_palette.hpp (Configuracoes > Appearance). Este arquivo guarda a escolha, a escala e o
 // arquivo de tema (assets/themes/*.json e editor_theme.json). Temas do usuario ficam em assets/themes/*.json.

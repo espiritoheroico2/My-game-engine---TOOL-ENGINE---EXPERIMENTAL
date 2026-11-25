@@ -1,10 +1,10 @@
 #pragma once
 
-// Janela "Input Map" em SpriteUI (troca drawInputMap de extra_ui.hpp, que era Dear ImGui).
+// Janela "Input Map" em SpriteUI.
 // Dados e regras: input_map.hpp (o mapa salvo em Project/input_map.json). Aqui: desenho, cliques, digitacao e a
 // captura "Listen" (proxima tecla, botao ou movimento do analogico vira a vinculacao).
 //
-// Mudancas em relacao a versao ImGui (decisoes de design):
+// Regras de uso (decisoes de design):
 //  - Combos de tecla e de botao viram "Listen": clique no campo e pressione a tecla/botao. Esc cancela; Backspace/Delete limpa.
 //  - Combo de botao do gamepad: "Listen" + "x" (limpa). Eixo do gamepad: clique no nome cicla os eixos.
 //  - Nomes de mapa e de acao sao editados com clique + digitacao; Enter ou clique fora termina.
@@ -88,7 +88,7 @@ class Panel {
   Panel(const Panel&) = delete;
   Panel& operator=(const Panel&) = delete;
 
-  // Eventos do SDL antes do ImGui (ver main.cpp). Devolve true quando a janela usou o evento.
+  // Eventos do SDL (ver main.cpp). Devolve true quando a janela usou o evento.
   bool handleEvent(const SDL_Event& e, Editor& ed) {
     if (!ed.showInputMap) return false;
     switch (e.type) {
@@ -124,7 +124,7 @@ class Panel {
     syncTextInput(window);
     applyTyping(ed);
 
-    // Leitura ao vivo (indicadores ON/valor) e captura "Listen": o mesmo que a janela ImGui fazia.
+    // Leitura ao vivo (indicadores ON/valor) e captura "Listen".
     if (!ed.playing) {
       ed.sampler.sample(ed.rawInput, focus_.kind == Text::None);
       ed.input.update(ed.rawInput);

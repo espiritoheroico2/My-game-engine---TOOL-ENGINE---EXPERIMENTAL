@@ -2,12 +2,11 @@
 
 #include "ui_style.hpp"
 
-// Janela "Editor info" feita com SpriteUI (sem Dear ImGui). Estado e regras: editor_info_model.hpp.
+// Janela "Editor info" feita com SpriteUI. Estado e regras: editor_info_model.hpp.
 // Ligacao com o SDL_Renderer: editor::sui::SpriteUiSdlRenderer (spriteui_host.hpp). Fonte: assets/fonts/Xmind-Regular.ttf.
 //
 // Esta view so desenha e reporta cliques. Quem grava o projeto e o laço do host (Action::Save), para o modelo continuar
-// testavel sem janela. Ainda NAO esta ligada ao menu: a janela ImGui em export_ui.hpp continua a usada pelo editor
-// ate o teste visual aprovar esta.
+// testavel sem janela.
 #include "window_palette.hpp"
 #include "editor_info_model.hpp"
 #include "i18n.hpp"
@@ -64,7 +63,7 @@ struct Theme {
       kButtonHeight + 2.f * kLineHeight + 20.f * kGap;
 };
 
-// Rotulo de cada campo, na ordem de editor::info::Field (mesmas chaves do formulario ImGui).
+// Rotulo de cada campo, na ordem de editor::info::Field.
 inline const char* FieldLabel(Field f) {
   switch (f) {
     case Field::Product: return "Product name *";
@@ -470,7 +469,7 @@ class View {
            model_.saved() ? colors_.ok : colors_.textDim, 0.9f);
     }
 
-    // Campos obrigatorios que faltam (amarelo, como no ImGui).
+    // Campos obrigatorios que faltam (amarelo).
     const std::vector<std::string> miss = model_.missing();
     if (!miss.empty()) {
       std::string list;

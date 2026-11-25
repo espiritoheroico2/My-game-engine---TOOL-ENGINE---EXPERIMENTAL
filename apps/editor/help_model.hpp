@@ -1,6 +1,6 @@
 #pragma once
 
-// Modelo da janela Help (SpriteUI): topico aberto, busca, idioma e blocos do texto. Nao usa SDL, ImGui nem desenho,
+// Modelo da janela Help (SpriteUI): topico aberto, busca, idioma e blocos do texto. Nao usa SDL nem desenho,
 // e roda no ctest (tests/test_help_model.cpp). Os textos vem de help_content.hpp.
 //
 // Regras:

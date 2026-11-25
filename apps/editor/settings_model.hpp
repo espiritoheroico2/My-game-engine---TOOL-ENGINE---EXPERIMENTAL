@@ -2,7 +2,7 @@
 
 // Regras da janela Configuracoes que nao dependem de janela: abas, limites de cada controle e a conversao entre
 // o indice de um combo e o valor que ele representa (resolucao do jogo, qualidade de sombra, divisao de tela).
-// Nao usa SDL nem ImGui. A janela (ImGui hoje, SpriteUI depois) so chama estas funcoes, para a regra ficar em
+// Nao usa SDL. A janela (SpriteUI) so chama estas funcoes, para a regra ficar em
 // um lugar so. Roda no ctest como Editor.SettingsModel.
 
 #include <algorithm>
