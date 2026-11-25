@@ -63,6 +63,7 @@ struct Window {
   std::function<SU::Rect()> grip;                             // grip no ultimo quadro
   std::function<void(std::optional<SU::Rect>)> setDock;       // area da folha, ou nullopt (flutuante)
   std::function<void(SU::Vec2)> floatAt;                      // sai do dock no ponto dado
+  bool wasOpen = false;                                       // estava aberta no quadro anterior (host)
 };
 
 class Host {
@@ -85,8 +86,13 @@ class Host {
     for (Window& w : windows_) {
       if (!w.open()) {
         if (model_.contains(w.id)) model_.remove(w.id);
+        w.wasOpen = false;
         continue;
       }
+      // Janela que acabou de abrir entra no grupo de abas (nao flutua por cima das outras). Flutuar e escolha do
+      // usuario, feita arrastando; uma janela que ja estava aberta e fora do dock continua onde esta.
+      if (!w.wasOpen && !model_.contains(w.id)) model_.attach(w.id, lastActive_);
+      w.wasOpen = true;
       if (!model_.contains(w.id)) {
         w.setDock(std::nullopt);
         continue;
@@ -263,6 +269,7 @@ class Host {
         }
       }
       model_.select(tabs[index]);
+      lastActive_ = tabs[index];
       return true;
     }
     for (Window& w : windows_) {
@@ -271,6 +278,7 @@ class Host {
       if (!f || !inside(w.grip(), p)) continue;
       drag_.BeginPress(w.id, p, model_.contains(w.id));
       activeWin_ = w.id;
+      lastActive_ = w.id;
       grabOffset_ = {p.x - f->position.x, p.y - f->position.y};
       grabSize_ = f->size;
       return true;
@@ -353,6 +361,7 @@ class Host {
   SW::DockInteractionConfig cfg_{};
   SW::DockDragController drag_{};
   SU::UIHandle activeWin_{};
+  SU::UIHandle lastActive_{};   // ultimo grupo tocado: janela nova entra nele
   SU::Vec2 grabOffset_{};
   SU::Vec2 grabSize_{};
   SU::Vec2 pointer_{};
