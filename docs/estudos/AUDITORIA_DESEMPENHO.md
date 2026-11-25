@@ -20,7 +20,7 @@ Escopo desta etapa: núcleo (ECS, GPU, paralelismo), editor (cena e jogo), siste
 | A7 | GPU a ~70% com editor quase vazio (ociosa) | Alto (percebido) | **Corrigido em etapa anterior** (renderização só quando há mudança) |
 | A8 | **Readback GPU → CPU a cada quadro** antes do `SDL_UpdateTexture` | Alto (sincronização CPU/GPU) | **Pendente**: exige apresentação direta da textura (zero-copy) no ImGui/RHI |
 | A9 | `ecs.each<...>` copia a lista de índices a cada chamada | Médio com muitas entidades (uma alocação por sistema por quadro) | **Pendente**: `each` sem cópia quando a função não cria nem apaga entidades |
-| A10 | Hierarquia percorre todas as entidades a cada quadro | Médio com milhares de filhos | **Pendente** (medir com `test ECS: 100000` e o Profiler) |
+| A10 | Hierarquia percorre todas as entidades a cada quadro | Médio com milhares de filhos | **Parcial**: `HierarchyModel::Sync` não refaz mais o índice id→posição a cada quadro, só quando a ordem dos ids muda. Medido com 10 mil itens (benchmark isolado): `Sync` de 0,28–0,48 ms para 0,07–0,09 ms por quadro. Falta: montar os itens (uma string por entidade) a cada quadro no `hierarchySource`, que ainda custa ~0,5 ms com 10 mil itens. Testes: `Editor.HierarchyIndex`, `Editor.HierarchyModel`. |
 | A11 | `eachTagged` percorre até o maior índice usado | Baixo/médio | **Pendente**: índice por tag |
 | A12 | Upscaling por software: custo por quadro na CPU | Médio (só quando ativo) | **Implementado** com paralelismo por linha; "Off (SDL linear)" é o padrão do caminho rápido |
 | A13 | Contexto QuickJS por objeto com script | Alto com muitos objetos com script | **Pendente**: um contexto por arquivo + tabela de estado (ver `../referencia/ECS.md` §6) |
