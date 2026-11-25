@@ -259,6 +259,12 @@ target_include_directories(editor_hierarchy_model_tests PRIVATE ${CMAKE_CURRENT_
 target_link_libraries(editor_hierarchy_model_tests PRIVATE SpriteUi::SpriteUI)
 add_test(NAME Editor.HierarchyModel COMMAND editor_hierarchy_model_tests)
 
+# Indice id -> posicao do Sync (mesmos ids, reordenados, removidos, novos, rotulo alterado).
+add_executable(editor_hierarchy_index_tests tests/test_hierarchy_index.cpp)
+target_include_directories(editor_hierarchy_index_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_hierarchy_index_tests PRIVATE SpriteUi::SpriteUI)
+add_test(NAME Editor.HierarchyIndex COMMAND editor_hierarchy_index_tests)
+
 # Modelo do Inspector (inspector_model.hpp): expansores, limites de slider, NaN, numero digitado e cor HEX. Sem janela.
 add_executable(editor_inspector_model_tests tests/test_inspector_model.cpp)
 target_include_directories(editor_inspector_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

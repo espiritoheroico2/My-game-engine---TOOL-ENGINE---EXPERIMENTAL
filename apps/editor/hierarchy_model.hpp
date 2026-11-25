@@ -72,9 +72,15 @@ class HierarchyModel {
     bool Sync(std::vector<Item> items) {
         const std::size_t signature = structureSignature(items);
         const bool changed = !built_ || signature != signature_;
+        // O indice (id -> posicao) so muda se a sequencia de ids mudar. Comparar os ids e barato e nao aloca;
+        // refazer o indice a cada quadro (clear + N insercoes) custava N alocacoes por quadro com o painel aberto.
+        bool sameIds = !changed && items.size() == items_.size();
+        for (std::size_t i = 0; sameIds && i < items.size(); ++i) sameIds = items[i].id == items_[i].id;
         items_ = std::move(items);
-        index_.clear();
-        for (std::size_t i = 0; i < items_.size(); ++i) index_[items_[i].id] = i;
+        if (!sameIds) {
+            index_.clear();
+            for (std::size_t i = 0; i < items_.size(); ++i) index_[items_[i].id] = i;
+        }
         if (changed) {
             signature_ = signature;
             built_ = true;
