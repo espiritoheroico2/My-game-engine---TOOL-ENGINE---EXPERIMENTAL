@@ -128,6 +128,7 @@ public:
   [[nodiscard]] bool docked() const { return frame_.docked(); }
   [[nodiscard]] ToolEngine::SpriteUi::Rect frameRect() const { return frame_.rect(); }
   [[nodiscard]] ToolEngine::SpriteUi::Rect gripRect() const { return frame_.gripRect(); }
+  window_frame::Frame* frameState() { return &frame_; }
   [[nodiscard]] window_frame::Frame& frame() { return frame_; }
   [[nodiscard]] const window_frame::Frame& frame() const { return frame_; }
   // Sai do dock na posicao `at` (flutuante). A janela segue o ponteiro depois disso.

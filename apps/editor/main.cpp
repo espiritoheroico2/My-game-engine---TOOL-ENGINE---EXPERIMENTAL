@@ -960,6 +960,15 @@ void addDockWindow(editor::dock_host::Host& host, editor::dock_host::Kind k, std
   w.grip = [get]() { auto* p = get(); return p ? p->gripRect() : ToolEngine::SpriteUi::Rect{}; };
   w.setDock = [get](std::optional<ToolEngine::SpriteUi::Rect> d) { if (auto* p = get()) p->setDock(d); };
   w.floatAt = [get](ToolEngine::SpriteUi::Vec2 at) { if (auto* p = get()) p->floatAt(at); };
+  // Janelas com moldura propria expoem frameState(); as demais (Scenes, Assets) nao redimensionam pela borda.
+  w.frameState = [get]() -> editor::window_frame::Frame* {
+    auto* p = get();
+    if constexpr (requires { p->frameState(); }) {
+      return p ? p->frameState() : nullptr;
+    } else {
+      return nullptr;
+    }
+  };
   host.add(std::move(w));
 }
 editor::sui::Box gSceneRect;   // area da janela (pixels da janela)

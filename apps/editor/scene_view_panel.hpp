@@ -177,6 +177,8 @@ public:
   [[nodiscard]] bool docked() const { return frame_.docked(); }
   [[nodiscard]] SU::Rect frameRect() const { return frame_.rect(); }
   [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
+  // Moldura de posicao e tamanho: o host do dock a usa para redimensionar pelas bordas.
+  window_frame::Frame* frameState() { return &frame_; }
   void floatAt(SU::Vec2 at) {
     dock_.reset();
     frame_.undock(at);

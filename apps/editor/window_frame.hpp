@@ -135,6 +135,21 @@ class Frame {
     return Event::None;
   }
 
+  // Inicia o redimensionamento quando o ponteiro esta numa borda (faixa de fora ou de dentro da moldura). Os botoes
+  // Minimizar e X do cabecalho nunca iniciam redimensionamento. O host segue com pointerMove e solta com pointerUp.
+  bool beginResize(SU::Vec2 p) {
+    if (!placed_) return false;
+    const SW::WindowFramePart part = SW::WindowFramePartAt(frame_, metrics_, false, p);
+    if (part == SW::WindowFramePart::Close || part == SW::WindowFramePart::Minimize) return false;
+    const int edge = edgeAt(p);
+    if (edge == 0) return false;
+    resizing_ = true;
+    resizeMask_ = edge;
+    startRect_ = frame_;
+    startPointer_ = p;
+    return true;
+  }
+
   // Redimensionar: mascara das bordas sob o ponteiro (1 esquerda, 2 direita, 4 topo, 8 base); 0 = nenhuma.
   // Acoplada e minimizada nao redimensionam: o tamanho vem do dock ou do cabecalho.
   [[nodiscard]] int edgeAt(SU::Vec2 p) const {

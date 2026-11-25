@@ -15,6 +15,7 @@
 #include "spriteui_host.hpp"
 #include "view_painter.hpp"
 #include "view_shapes.hpp"
+#include "window_frame.hpp"
 
 #include "SpriteUi/Widgets/DockInteraction.hpp"
 
@@ -52,6 +53,7 @@ inline constexpr float kHelpReserve = 30.f;   // grip + "?" (quando nao ha grip 
 inline constexpr float kCloseReserve = 8.f;   // margem a direita da barra agrupada
 inline constexpr float kTabX = 18.f;          // botao X de cada aba (fecha a janela da aba)
 inline constexpr float kTabMaxWidth = 120.f;
+inline constexpr float kTabGripW = 14.f;     // grip de cada aba (seis pontos), antes do nome
 
 // O que o host precisa de cada janela. As funcoes sao preenchidas pelo main.cpp com os paineis ja criados.
 struct Window {
@@ -63,6 +65,7 @@ struct Window {
   std::function<SU::Rect()> grip;                             // grip no ultimo quadro
   std::function<void(std::optional<SU::Rect>)> setDock;       // area da folha, ou nullopt (flutuante)
   std::function<void(SU::Vec2)> floatAt;                      // sai do dock no ponto dado
+  std::function<window_frame::Frame*()> frameState;           // moldura: redimensiona pelas bordas (nullptr: nao)
   bool wasOpen = false;                                       // estava aberta no quadro anterior (host)
 };
 
@@ -116,6 +119,12 @@ class Host {
       case SDL_EVENT_MOUSE_MOTION:
         pointer_ = {e.motion.x, e.motion.y};
         if (drag_.IsPressed()) drag_.Move(pointer_);
+        if (resizing_) {
+          if (Window* w = find(resizeWin_)) {
+            if (window_frame::Frame* f = w->frameState ? w->frameState() : nullptr) f->pointerMove(pointer_);
+          }
+        }
+        if (divider_) model_.moveDivider(divider_, pointer_);
         return false;
       case SDL_EVENT_MOUSE_BUTTON_UP:
         if (e.button.button == SDL_BUTTON_LEFT) return released({e.button.x, e.button.y});
@@ -155,15 +164,29 @@ class Host {
       // Limpa o nome da janela ativa na barra e pinta as abas no lugar dele.
       shapes.rectFilled({c->x0 - 4.f, y}, {leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve, y + kHeaderH},
                         view::Rgba(31, 41, 59));
+      // O grip do cabecalho da janela ativa deixa de valer aqui: o desenho dele e apagado e cada aba tem o seu.
+      for (const Window& w : windows_) {
+        if (!(w.id == leaf.leaf) || !w.grip) continue;
+        const SU::Rect g = w.grip();
+        if (g.size.x > 0.f) shapes.rectFilled(px(g.position), px({g.position.x + g.size.x, g.position.y + g.size.y}), view::Rgba(31, 41, 59));
+      }
       for (std::size_t i = 0; i < tabs.size(); ++i) {
         const float x = c->x0 + c->tabW * static_cast<float>(i);
         const bool on = tabs[i] == leaf.leaf;
         shapes.rectFilled({x, y}, {x + c->tabW - 1.f, y + kHeaderH},
                           on ? view::Rgba(52, 68, 96) : view::Rgba(24, 31, 46));
         if (on) shapes.rectFilled({x, y + kHeaderH - 2.f}, {x + c->tabW - 1.f, y + kHeaderH}, view::Rgba(74, 130, 200));
-        // Padrao da barra: nome + X dentro de cada aba.
-        shapes.text({x + (c->tabW - kTabX) * 0.5f, y + (kHeaderH - kStripFont) * 0.5f}, titleOf(tabs[i]), kStripFont,
-                    view::Rgba(233, 234, 238), true, std::max(0.f, c->tabW - kTabX - kStripPad));
+        // Grip da aba: seis pontos (duas colunas, tres linhas).
+        const float gx = x + 4.f, gy = y + (kHeaderH - 12.f) * 0.5f;
+        for (int col = 0; col < 2; ++col) {
+          for (int row = 0; row < 3; ++row) {
+            const float dx = gx + static_cast<float>(col) * 4.f, dy = gy + static_cast<float>(row) * 4.f;
+            shapes.rectFilled({dx, dy}, {dx + 2.f, dy + 2.f}, view::Rgba(120, 132, 150));
+          }
+        }
+        // Nome e X da aba, depois do grip.
+        shapes.text({x + kTabGripW, y + (kHeaderH - kStripFont) * 0.5f}, titleOf(tabs[i]), kStripFont,
+                    view::Rgba(233, 234, 238), true, std::max(0.f, c->tabW - kTabGripW - kTabX - kStripPad));
         shapes.text({x + c->tabW - kTabX * 0.5f - 4.f, y + (kHeaderH - kStripFont) * 0.5f}, "X", kStripFont,
                     view::Rgba(170, 178, 194), true, kTabX);
       }
@@ -254,6 +277,22 @@ class Host {
   // Clique: faixa de abas troca a aba ativa; grip inicia o gesto de arraste. Devolve true se consumiu o clique.
   bool pressed(SU::Vec2 p) {
     pointer_ = p;
+    // Cada aba tem o seu grip: arrastar por ele tira so aquela aba do grupo.
+    for (const SW::DockLeafRect& leaf : model_.leaves()) {
+      const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
+      const std::optional<TabCells> c = tabCells(leaf);
+      if (!c) continue;
+      for (std::size_t i = 0; i < tabs.size(); ++i) {
+        const float x = c->x0 + c->tabW * static_cast<float>(i);
+        if (!inside(tabGripRect(leaf, x), p)) continue;
+        drag_.BeginPress(tabs[i], p, true);
+        activeWin_ = tabs[i];
+        lastActive_ = tabs[i];
+        grabOffset_ = {p.x - leaf.bounds.position.x, p.y - leaf.bounds.position.y};
+        grabSize_ = leaf.bounds.size;
+        return true;
+      }
+    }
     for (const SW::DockLeafRect& leaf : model_.leaves()) {
       const std::optional<TabCells> c = tabCells(leaf);
       if (!c) continue;
@@ -272,10 +311,27 @@ class Host {
       lastActive_ = tabs[index];
       return true;
     }
+    // Bordas de janela flutuante (vem antes de tudo que esta embaixo dela).
+    for (Window& w : windows_) {
+      if (!w.open() || !visibleNow(w) || model_.contains(w.id)) continue;
+      window_frame::Frame* state = w.frameState ? w.frameState() : nullptr;
+      if (state && state->beginResize(p)) {
+        resizing_ = true;
+        resizeWin_ = w.id;
+        activeWin_ = w.id;
+        lastActive_ = w.id;
+        return true;
+      }
+    }
+    // Divisoria entre folhas do dock.
+    if (SW::UIDockNode* d = model_.dividerAt(p)) {
+      divider_ = d;
+      return true;
+    }
     for (Window& w : windows_) {
       if (!w.open() || !visibleNow(w)) continue;
       const std::optional<SU::Rect> f = w.frame();
-      if (!f || !inside(w.grip(), p)) continue;
+      if (!f || inGroup(w.id) || !inside(w.grip(), p)) continue;   // grip de aba agrupada fica oculto
       drag_.BeginPress(w.id, p, model_.contains(w.id));
       activeWin_ = w.id;
       lastActive_ = w.id;
@@ -286,10 +342,36 @@ class Host {
     return false;
   }
 
+  // Area do grip de uma aba (a faixa inteira da aba responde ao grip, para ser facil de acertar).
+  [[nodiscard]] SU::Rect tabGripRect(const SW::DockLeafRect& leaf, float x) const {
+    return {{x, leaf.bounds.position.y}, {kTabGripW, kHeaderH}};
+  }
+
+  // A janela esta numa folha com duas ou mais abas: o grip do cabecalho dela nao vale (o da aba vale).
+  [[nodiscard]] bool inGroup(SU::UIHandle id) const {
+    if (!model_.contains(id)) return false;
+    for (const SW::DockLeafRect& leaf : model_.leaves()) {
+      const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
+      if (tabs.size() >= 2 && std::find(tabs.begin(), tabs.end(), id) != tabs.end()) return true;
+    }
+    return false;
+  }
+
   // Solta: o controlador escolhe Dock, Tab ou Float. Float tira a janela do dock e a deixa no ponto de soltura.
   // Devolve true quando havia um arraste (o clique de soltura nao vai para as janelas).
   bool released(SU::Vec2 p) {
     pointer_ = p;
+    if (resizing_) {
+      if (Window* w = find(resizeWin_)) {
+        if (window_frame::Frame* f = w->frameState ? w->frameState() : nullptr) f->pointerUp();
+      }
+      resizing_ = false;
+      return true;
+    }
+    if (divider_) {
+      divider_ = nullptr;
+      return true;
+    }
     if (!drag_.IsPressed()) return false;
     const bool wasDragging = drag_.IsDragging();
     const SW::DockDropResult r = model_.release(drag_, p);   // encerra o gesto
@@ -362,6 +444,9 @@ class Host {
   SW::DockDragController drag_{};
   SU::UIHandle activeWin_{};
   SU::UIHandle lastActive_{};   // ultimo grupo tocado: janela nova entra nele
+  SU::UIHandle resizeWin_{};    // janela flutuante sendo redimensionada pela borda
+  bool resizing_ = false;
+  SW::UIDockNode* divider_ = nullptr;   // divisoria entre folhas sendo arrastada
   SU::Vec2 grabOffset_{};
   SU::Vec2 grabSize_{};
   SU::Vec2 pointer_{};
