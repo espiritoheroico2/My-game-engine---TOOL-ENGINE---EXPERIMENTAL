@@ -186,6 +186,25 @@ int main() {
     Check(a.active(profiler) && a.contains(profiler), "a ultima janela aberta fica visivel");
   }
 
+  // 10. Divisoria: acha o corte sob o ponteiro e move a proporcao (entre 10% e 90%).
+  {
+    dl::Model d;
+    d.place(scene);
+    d.setArea(area);
+    d.split(scene, SW::DockSlot::Left, dl::kSideRatio, hier);
+    d.setArea(area);
+    const float cut = 1000.f * dl::kSideRatio;
+    Check(d.dividerAt({cut, 300.f}) != nullptr, "ponteiro sobre o corte acha a divisoria");
+    Check(d.dividerAt({cut + 100.f, 300.f}) == nullptr, "ponteiro longe do corte nao acha divisoria");
+    SU::UIDockNode* node = d.dividerAt({cut, 300.f});
+    Check(d.moveDivider(node, {300.f, 300.f}), "move a divisoria");
+    d.setArea(area);
+    Check(Near(d.leafRect(hier)->size.x, 300.f), "a lateral acompanha a divisoria movida");
+    Check(d.moveDivider(node, {5.f, 300.f}) && Near(d.leafRect(hier)->size.x, 100.f),
+          "divisoria nao passa de 10% da area");
+    Check(!d.moveDivider(nullptr, {300.f, 300.f}), "sem divisoria nao move nada");
+  }
+
   std::printf("Editor.DockLayout: %d checks, %d failed\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
 }

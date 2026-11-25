@@ -37,6 +37,7 @@ inline constexpr float kSideRatio = 0.22f;       // lateral padrao (Hierarquia, 
 inline constexpr float kBottomRatio = 0.28f;     // faixa inferior padrao (Console, Profiler)
 
 class Model {
+
  public:
   Model() = default;
   Model(const Model&) = delete;
@@ -197,7 +198,6 @@ class Model {
     return true;
   }
 
- private:
   static std::string handleText(SU::UIHandle h) {
     return std::to_string(h.index) + ":" + std::to_string(h.generation);
   }
@@ -268,10 +268,45 @@ class Model {
     return n.tabs.SelectTab(sel);
   }
 
+ public:
+  // Divisoria entre duas folhas sob o ponteiro (faixa de 4 px). Nullptr se nao ha nenhuma.
+  [[nodiscard]] SW::UIDockNode* dividerAt(SU::Vec2 p) { return dividerIn(root_, p); }
+
+  // Move a divisoria `node` para o ponteiro: muda a proporcao do corte (entre 10% e 90% da area do no).
+  bool moveDivider(SW::UIDockNode* node, SU::Vec2 p) {
+    if (!node || !node->isSplit) return false;
+    const SU::Rect b = node->bounds;
+    const bool row = node->splitDirection == SU::LayoutDirection::Row;
+    const float size = row ? b.size.x : b.size.y;
+    if (size <= 0.f) return false;
+    const float along = row ? p.x - b.position.x : p.y - b.position.y;
+    node->splitRatio = std::clamp(along / size, 0.1f, 0.9f);
+    root_.Layout(area_);
+    return true;
+  }
+
   // Janela que aparece na folha de `w` (a ativa). Invalida se `w` nao esta no dock.
   [[nodiscard]] SU::UIHandle visibleOf(SU::UIHandle w) const {
     const SW::UIDockNode* leaf = find(root_, w);
     return leaf ? leaf->VisibleContent() : SU::UIHandle{};
+  }
+
+ private:
+  // Acha o corte (no dividido) cuja linha de divisao passa sob o ponteiro. Usa a mesma proporcao do Layout.
+  static SW::UIDockNode* dividerIn(SW::UIDockNode& n, SU::Vec2 p) {
+    if (!n.isSplit) return nullptr;
+    constexpr float kBand = 4.f;
+    const SU::Rect b = n.bounds;
+    const float r = std::clamp(n.splitRatio, 0.05f, 0.95f);
+    if (n.splitDirection == SU::LayoutDirection::Row) {
+      const float x = b.position.x + b.size.x * r;
+      if (std::abs(p.x - x) <= kBand && p.y >= b.position.y && p.y <= b.position.y + b.size.y) return &n;
+    } else {
+      const float y = b.position.y + b.size.y * r;
+      if (std::abs(p.y - y) <= kBand && p.x >= b.position.x && p.x <= b.position.x + b.size.x) return &n;
+    }
+    if (SW::UIDockNode* hit = n.firstChild ? dividerIn(*n.firstChild, p) : nullptr) return hit;
+    return n.secondChild ? dividerIn(*n.secondChild, p) : nullptr;
   }
 
   // Procura a folha que tem a janela como conteudo unico ou como aba.
