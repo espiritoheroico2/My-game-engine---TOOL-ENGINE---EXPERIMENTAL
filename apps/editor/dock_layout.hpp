@@ -6,6 +6,7 @@
 //
 // Regras:
 //  - Uma janela esta no dock (folha ou aba) ou fora dele (flutuante). Nunca nos dois.
+//  - Janela recem-aberta entra como aba do grupo ativo (attach). So o usuario, ao arrastar, pode deixa-la flutuando.
 //  - Folha com mais de uma janela mostra so a aba ativa; as abas ficam na propria barra da moldura (sem faixa nova).
 //  - Solta na borda de uma folha divide a folha; solta no centro junta como aba; solta fora vira flutuante.
 //  - Remover a ultima janela de um lado colapsa o pai (sem folhas vazias).
@@ -104,6 +105,28 @@ class Model {
       return true;
     }
     return false;
+  }
+
+  // Janela recem-aberta: entra como aba do grupo onde esta `near` (ou da primeira folha, se `near` nao esta no dock)
+  // e fica ativa. Dock vazio: vira a raiz. Falso se ja esta no dock.
+  bool attach(SU::UIHandle w, SU::UIHandle near) {
+    if (contains(w) || !w.IsValid()) return false;
+    if (empty()) {
+      root_.content = w;
+      root_.Layout(area_);
+      return true;
+    }
+    SU::UIHandle target = visibleOf(near);
+    if (!target.IsValid()) {
+      const std::vector<SW::DockLeafRect> items = leaves();
+      if (items.empty()) return false;
+      target = items.front().leaf;
+    }
+    SW::DockDropResult drop;
+    drop.action = SW::DockAction::Tab;
+    drop.targetLeaf = target;
+    if (!apply(w, drop)) return false;
+    return select(w);
   }
 
   // Divide a folha de `target` no lado `slot` e coloca `w` no novo filho. Usado pelo layout padrao.
@@ -243,6 +266,12 @@ class Model {
       if (!n.tabs.AddTab("", h)) return false;
     }
     return n.tabs.SelectTab(sel);
+  }
+
+  // Janela que aparece na folha de `w` (a ativa). Invalida se `w` nao esta no dock.
+  [[nodiscard]] SU::UIHandle visibleOf(SU::UIHandle w) const {
+    const SW::UIDockNode* leaf = find(root_, w);
+    return leaf ? leaf->VisibleContent() : SU::UIHandle{};
   }
 
   // Procura a folha que tem a janela como conteudo unico ou como aba.

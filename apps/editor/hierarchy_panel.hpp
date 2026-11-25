@@ -100,6 +100,9 @@ struct Metrics {
     static constexpr float kBtnGap = 6.f;
     static constexpr float kMenuW = 200.f;
     static constexpr float kContextMenuW = 190.f;
+    static constexpr float kMenuZ = 0.95f;       // fundo do menu: acima de linhas, selecao e texto da lista
+    static constexpr float kMenuHoverZ = 0.955f; // destaque da linha: acima do fundo do menu
+    static constexpr float kMenuTextZ = 0.97f;   // texto do menu: acima do fundo e do destaque
     static constexpr float kFont = 12.f;
     static constexpr float kSmallFont = 11.f;
     static constexpr float kWheelRows = 3.f;      // linhas por giro da roda
@@ -137,6 +140,9 @@ class HierarchyPanel {
  public:
     HierarchyPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
         : toolbar_{text}, list_{text}, overlay_{text}, chrome_{text}, sdl_{sdl} {
+        // Menus (+ Create e o do botao direito) ficam acima do texto da lista. Sem isso, o texto das linhas
+        // aparecia por cima do menu e as duas listas se misturavam.
+        overlay_.setTextZ(Metrics::kMenuTextZ);
         // Moldura: mesmo visual do Console e do Profiler.
     }
     HierarchyPanel(const HierarchyPanel&) = delete;
@@ -836,11 +842,11 @@ class HierarchyPanel {
         overlay_.clear();
         if (menuOpen_) {
             const sui::Box menu = menuBox();
-            overlay_.addSolid(menu.x, menu.y, menu.w, menu.h, colors_.menu, 0.6f);
+            overlay_.addSolid(menu.x, menu.y, menu.w, menu.h, colors_.menu, Metrics::kMenuZ);
             for (int i = 0; i < kCreateCount; ++i) {
                 const float y = menu.y + static_cast<float>(i) * Metrics::kRowH;
                 if (i == hoverCreateItem_) {
-                    overlay_.addSolid(menu.x + 2.f, y + 1.f, menu.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, 0.72f);
+                    overlay_.addSolid(menu.x + 2.f, y + 1.f, menu.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, Metrics::kMenuHoverZ);
                 }
                 const float textY = y + (Metrics::kRowH - overlay_.lineHeight(Metrics::kFont)) * 0.5f;
                 overlay_.addText(menu.x + Metrics::kPad, textY, T(kCreateLabels[i]), Metrics::kFont, theme_.text,
@@ -851,11 +857,11 @@ class HierarchyPanel {
             static constexpr const char* labels[kContextCount] = {"Focus", "Rename", "Duplicate", "Delete", "Hide / Show",
                                                                   "Lock / Unlock"};
             const sui::Box menu = contextMenuBox();
-            overlay_.addSolid(menu.x, menu.y, menu.w, menu.h, colors_.menu, 0.7f);
+            overlay_.addSolid(menu.x, menu.y, menu.w, menu.h, colors_.menu, Metrics::kMenuZ);
             for (int i = 0; i < kContextCount; ++i) {
                 const float y = menu.y + static_cast<float>(i) * Metrics::kRowH;
                 if (i == hoverContextItem_) {
-                    overlay_.addSolid(menu.x + 2.f, y + 1.f, menu.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, 0.72f);
+                    overlay_.addSolid(menu.x + 2.f, y + 1.f, menu.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, Metrics::kMenuHoverZ);
                 }
                 const float textY = y + (Metrics::kRowH - overlay_.lineHeight(Metrics::kFont)) * 0.5f;
                 overlay_.addText(menu.x + Metrics::kPad, textY, T(labels[i]), Metrics::kFont, theme_.text,

@@ -165,6 +165,27 @@ int main() {
     Check(bad.deserialize("E", known) && bad.empty(), "dock vazio e lido como vazio");
   }
 
+  // 9. Janela recem-aberta (attach): vira aba do grupo de `near`, fica ativa e nao flutua.
+  {
+    dl::Model a;
+    Check(a.attach(scene, SU::UIHandle{}), "attach no dock vazio poe a janela na raiz");
+    a.setArea(area);
+    Check(a.contains(scene) && a.active(scene), "a raiz fica ativa");
+    Check(a.split(scene, SW::DockSlot::Left, dl::kSideRatio, hier), "monta a Hierarquia ao lado da Scene");
+    a.setArea(area);
+    Check(a.attach(console, hier), "attach com `near` no dock junta a janela ao grupo dele");
+    a.setArea(area);
+    Check(a.contains(console) && a.active(console), "a janela nova fica ativa como aba");
+    Check(a.tabsOf(hier).size() == 2, "a Hierarquia e a janela nova compartilham a barra de abas");
+    Check(!a.active(hier), "a aba anterior deixa de ser a visivel");
+    Check(!a.attach(console, scene), "janela ja no dock nao entra de novo");
+    Check(a.leafRect(scene)->size.x < 1000.f, "o grupo da Scene nao muda de tamanho ao juntar abas");
+    Check(a.attach(profiler, SU::UIHandle{}) && a.tabsOf(profiler).size() == 3,
+          "sem `near` valido, a janela entra na primeira folha");
+    a.setArea(area);
+    Check(a.active(profiler) && a.contains(profiler), "a ultima janela aberta fica visivel");
+  }
+
   std::printf("Editor.DockLayout: %d checks, %d failed\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
 }
