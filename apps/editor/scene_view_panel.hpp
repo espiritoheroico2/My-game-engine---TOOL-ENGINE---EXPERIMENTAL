@@ -21,6 +21,7 @@
 #include "i18n.hpp"
 #include "scene_transform_menu.hpp"
 #include "canvas_edit.hpp"
+#include "canvas_division.hpp"
 #include "scene_view_model.hpp"
 #include "spriteui_host.hpp"
 #include "sui_panel.hpp"
@@ -123,10 +124,13 @@ struct Values {
     tool::canvas::Screen ref;
     bool selected = false;
     bool visible = true;
+    std::vector<canvas_division::Point> divisions;   // pontos de divisao (cruzes)
   };
   std::vector<CanvasBox> canvases;
   bool selCanvas = false;    // a selecao e um Canvas: mostra o botao Edit canvas
   bool canvasEdit = false;   // modo Edit canvas: clicar e arrastar move ou redimensiona o canvas
+  bool divisionAdd = false;  // modo Adicionar ponto: o clique dentro do canvas selecionado coloca uma cruz
+  int selDivision = -1;      // ponto de divisao selecionado no canvas selecionado (-1: nenhum)
   view::ShapeList below;
   view::ShapeList grid;   // vazio quando a grade esta desligada
   view::ShapeList above;
@@ -151,6 +155,17 @@ struct Requests {
   };
   std::optional<bool> canvasEdit;
   std::optional<CanvasDrag> canvasDrag;
+  // Pontos de divisao do canvas: colocar (Add), arrastar (Move) ou apagar (Remove). Fracao do canvas, 0..1.
+  enum class DivisionOp : std::uint8_t { Add, Move, Remove };
+  struct DivisionEdit {
+    std::uint64_t id = 0;
+    DivisionOp op = DivisionOp::Add;
+    std::size_t index = 0;
+    float x = 0.f, y = 0.f;
+  };
+  std::optional<DivisionEdit> division;
+  std::optional<bool> divisionAdd;
+  std::optional<int> selDivision;
   bool close = false, help = false;                       // X e "?" da moldura (o host fecha ou abre a Help)
 };
 
@@ -241,6 +256,12 @@ public:
       }
     }
 
+    if (divisionDragging_ && !minimized && divisionBox_.w > 0.f && divisionBox_.h > 0.f) {
+      const float fx = canvas_division::clamp01((mouse_.x - divisionBox_.x) / divisionBox_.w);
+      const float fy = canvas_division::clamp01((mouse_.y - divisionBox_.y) / divisionBox_.h);
+      out.division = Requests::DivisionEdit{divisionId_, Requests::DivisionOp::Move, divisionIndex_, fx, fy};
+    }
+
     view::ShapeList overlay;
     if (!minimized && img.w >= 1.f && img.h >= 1.f) {
       const vm::Projection proj = vm::Projection::make(v.cam, areaOf(img));
@@ -297,7 +318,7 @@ private:
   };
 
   // Botoes da barra e da barra flutuante. O id diz o que o clique faz.
-  enum class Btn : std::uint8_t { PlayStop, Pause, Step, Grid, Gizmos, Culled, PostFx, Mode0, Mode1, Mode2, Magnet, Space, SnapContact, EditCanvas };
+  enum class Btn : std::uint8_t { PlayStop, Pause, Step, Grid, Gizmos, Culled, PostFx, Mode0, Mode1, Mode2, Magnet, Space, SnapContact, EditCanvas, AddPoint, RemovePoint };
   struct Button {
     sui::Box box;
     Btn id;
@@ -336,6 +357,7 @@ private:
           sliderDrag_ = false;
           floatDragging_ = false;
           if (canvasDragging_) canvasUp_ = true;
+          divisionDragging_ = false;
         }
         if (ev.button == SDL_BUTTON_RIGHT && rightDown_) {
           rightDown_ = false;
@@ -421,6 +443,29 @@ private:
   // o arrasto. True: o clique foi do canvas (nao vai para o objeto da cena).
   bool startCanvas(vm::Pixel p, const Values& v, const sui::Box& img, Requests& out) {
     for (const Values::CanvasBox& c : v.canvases) {
+      if (!c.visible || !c.selected) continue;
+      const canvas_edit::Box b = canvas_edit::boxFor(c.layout, img.w, img.h, c.ref);
+      const canvas_edit::Box win{img.x + b.x, img.y + b.y, b.w, b.h};
+      // Pontos de divisao do canvas selecionado: pegar um arrasta; no modo Adicionar, clicar dentro coloca um.
+      const canvas_division::Rect rect{win.x, win.y, win.w, win.h};
+      const int hit = canvas_division::hitAt(c.divisions, rect, p.x, p.y);
+      if (hit >= 0) {
+        out.selDivision = hit;
+        divisionDragging_ = true;
+        divisionId_ = c.id;
+        divisionIndex_ = static_cast<std::size_t>(hit);
+        divisionBox_ = win;
+        return true;
+      }
+      if (v.divisionAdd && win.contains(p.x, p.y) && win.w > 0.f && win.h > 0.f) {
+        const float fx = canvas_division::clamp01((p.x - win.x) / win.w);
+        const float fy = canvas_division::clamp01((p.y - win.y) / win.h);
+        out.division = Requests::DivisionEdit{c.id, Requests::DivisionOp::Add, c.divisions.size(), fx, fy};
+        out.selDivision = static_cast<int>(c.divisions.size());
+        return true;
+      }
+    }
+    for (const Values::CanvasBox& c : v.canvases) {
       if (!c.visible) continue;
       const canvas_edit::Box b = canvas_edit::boxFor(c.layout, img.w, img.h, c.ref);
       const canvas_edit::Box win{img.x + b.x, img.y + b.y, b.w, b.h};
@@ -454,6 +499,16 @@ private:
       out.line(z, {a.x, z.y}, 1.f, edge);
       out.line({a.x, z.y}, a, 1.f, edge);
       out.text({a.x + 4.f, a.y + 4.f}, T("Canvas"), kFont, edge);
+      // Pontos de divisao: cruz e nome (viewpoint). O ponto selecionado fica em destaque.
+      for (std::size_t i = 0; i < c.divisions.size(); ++i) {
+        float px = 0.f, py = 0.f;
+        canvas_division::toPixels(c.divisions[i], {a.x, a.y, b.w, b.h}, px, py);
+        const bool sel = c.selected && static_cast<int>(i) == v.selDivision;
+        const view::Color cross = sel ? kHighlight : edge;
+        out.line({px - 6.f, py}, {px + 6.f, py}, 1.f, cross);
+        out.line({px, py - 6.f}, {px, py + 6.f}, 1.f, cross);
+        out.text({px + 8.f, py - 8.f}, canvas_division::displayName(c.divisions[i], i), kFont, cross);
+      }
       if (c.selected && v.canvasEdit) {
         // Alcas do modo Edit canvas: a ancora (canto superior esquerdo, move) e o canto inferior direito (redimensiona).
         out.rectFilled({a.x - 4.f, a.y - 4.f}, {a.x + 4.f, a.y + 4.f}, kHighlight, 1.f);
@@ -478,6 +533,14 @@ private:
       case Btn::Space: out.localSpace = !v.localSpace; break;
       case Btn::SnapContact: out.snapToContact = true; break;
       case Btn::EditCanvas: out.canvasEdit = !v.canvasEdit; break;
+      case Btn::AddPoint: out.divisionAdd = !v.divisionAdd; break;
+      case Btn::RemovePoint:
+        for (const Values::CanvasBox& c : v.canvases) {
+          if (!c.selected || v.selDivision < 0) continue;
+          out.division = Requests::DivisionEdit{c.id, Requests::DivisionOp::Remove, static_cast<std::size_t>(v.selDivision), 0.f, 0.f};
+          out.selDivision = -1;
+        }
+        break;
     }
   }
 
@@ -705,6 +768,8 @@ private:
     x += 4.f;
     addButton(bar, x, by, kBtnH, v.localSpace ? T("Local (Q)") : T("World (Q)"), Btn::Space, v.localSpace, true, 8.f);
     if (v.selCanvas) addButton(bar, x, by, kBtnH, T("Edit canvas"), Btn::EditCanvas, v.canvasEdit, true, 8.f);
+    if (v.selCanvas && v.canvasEdit) addButton(bar, x, by, kBtnH, T("Add point"), Btn::AddPoint, v.divisionAdd, true, 8.f);
+    if (v.selCanvas && v.canvasEdit && v.selDivision >= 0) addButton(bar, x, by, kBtnH, T("Remove point"), Btn::RemovePoint, false, true, 8.f);
     x += 4.f;
     sliderBox_ = {x, y + (kFloatH - 8.f) * 0.5f, kSliderW, 8.f};
     const float t = stm::sliderFromSnapStep(v.snapStep);
@@ -740,6 +805,8 @@ private:
     cursor += 4.f;
     addWidth(v.localSpace ? T("Local (Q)") : T("World (Q)"), 8.f);
     if (v.selCanvas) addWidth(T("Edit canvas"), 8.f);
+    if (v.selCanvas && v.canvasEdit) addWidth(T("Add point"), 8.f);
+    if (v.selCanvas && v.canvasEdit && v.selDivision >= 0) addWidth(T("Remove point"), 8.f);
     cursor += 4.f + kSliderW + 6.f;
     char val[32];
     std::snprintf(val, sizeof val, "%.2f m", static_cast<double>(v.snapStep));
@@ -787,6 +854,10 @@ private:
 
   bool dragging_ = false;
   bool canvasDragging_ = false;   // arrasto de canvas em curso (Edit canvas)
+  bool divisionDragging_ = false; // arrasto de um ponto de divisao em curso
+  std::uint64_t divisionId_ = 0;
+  std::size_t divisionIndex_ = 0;
+  canvas_edit::Box divisionBox_{};   // caixa do canvas (em pixels de janela) no inicio do arrasto
   bool canvasUp_ = false;         // soltou no meio do quadro: o arrasto acaba depois de mandar o ultimo delta
   std::uint64_t canvasId_ = 0;
   canvas_edit::Grip canvasGrip_ = canvas_edit::Grip::None;

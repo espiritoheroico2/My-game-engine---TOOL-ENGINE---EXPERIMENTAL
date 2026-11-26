@@ -14,6 +14,7 @@
 // e documentado aqui: ver saveEntity().
 // ToolEngine Editor - componentes dos objetos da cena e sua (de)serializacao em JSON.
 #pragma once
+#include "canvas_division.hpp"
 #include "tool/audio/audio.hpp"
 #include "tool/canvas/canvas_layout.hpp"
 #include "tool/core/json.hpp"
@@ -147,6 +148,7 @@ struct CanvasComp {
   bool showInScene = true;    // "Mostrar na Scene": previa (caixa e elementos) sobre a cena do editor
   float bg[4] = {0.f, 0.f, 0.f, 0.f};       // fundo RGBA 0..1 (alfa 0 = transparente)
   float edge[4] = {1.f, 1.f, 1.f, 1.f};    // cor da borda RGBA 0..1
+  std::vector<canvas_division::Point> divisions;   // pontos de divisao (cruzes), em fracao do canvas
   int count = 0;
   UiElem items[kMaxUi];
 };
@@ -280,6 +282,25 @@ inline tool::Json itemsJson(const CanvasComp& c) {
   }
   return arr;
 }
+inline tool::Json divisionsJson(const CanvasComp& c) {
+  tool::Json arr = tool::Json::array();
+  for (const canvas_division::Point& p : c.divisions) {
+    tool::Json q = tool::Json::object();
+    q.set("x", static_cast<double>(p.x)); q.set("y", static_cast<double>(p.y)); q.set("name", p.name);
+    arr.push(q);
+  }
+  return arr;
+}
+inline void readDivisions(const tool::Json& arr, CanvasComp& c) {
+  const auto& it = arr.items();
+  for (size_t i = 0; i < it.size() && c.divisions.size() < 64; ++i) {
+    canvas_division::Point p;
+    p.x = canvas_division::clamp01(static_cast<float>(it[i]["x"].asNumber(0.5)));
+    p.y = canvas_division::clamp01(static_cast<float>(it[i]["y"].asNumber(0.5)));
+    p.name = it[i]["name"].asString();
+    c.divisions.push_back(p);
+  }
+}
 inline void readItems(const tool::Json& arr, CanvasComp& c) {
   for (const auto& q : arr.items()) {
     if (c.count >= kMaxUi || !q.isObject()) break;
@@ -371,6 +392,7 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     o.set("bg", ser::vec(c->bg, 4)); o.set("bc", ser::vec(c->edge, 4));
     o.set("camera", std::string(c->camera)); o.set("visible", c->visible); o.set("scene", c->showInScene);
     o.set("items", itemsJson(*c));
+    o.set("divisions", divisionsJson(*c));
     j.set("canvas", o);
   }
   if (auto* p = w.get<ParticleComp>(e)) {
@@ -494,6 +516,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     ser::copyStr(c.camera, sizeof c.camera, o["camera"].asString()); c.visible = ser::flag(o, "visible", true);
     c.showInScene = ser::flag(o, "scene", true);
     readItems(o["items"], c);
+    readDivisions(o["divisions"], c);
     w.add<CanvasComp>(e, c);
   }
   if (j.has("particles")) {

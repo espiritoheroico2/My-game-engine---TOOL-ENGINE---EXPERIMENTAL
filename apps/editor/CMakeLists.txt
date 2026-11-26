@@ -101,6 +101,10 @@ if(TOOL_WITH_SPRITEUI)
   target_include_directories(editor_pointer_guard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME Editor.PointerGuard COMMAND editor_pointer_guard_tests)
 
+  add_executable(editor_canvas_division_tests tests/test_canvas_division.cpp)
+  target_include_directories(editor_canvas_division_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME Editor.CanvasDivision COMMAND editor_canvas_division_tests)
+
   # Captura headless da janela Editor info (SpriteUI). Nao e um teste do ctest: gera PPM para conferir visualmente.
   add_executable(editor_info_capture tools/editor_info_capture.cpp)
   target_include_directories(editor_info_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
