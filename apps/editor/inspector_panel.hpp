@@ -1103,11 +1103,12 @@ class InspectorPanel {
             UiElem& it = ui.items[i];
             const std::size_t idx = static_cast<std::size_t>(i);
             const int k = std::clamp(it.kind, 0, 3);
-            canvas_.addText(innerX_, y_ + 5.f, F("%s: %s", T(kinds[k]), it.text), Metrics::kFont, headingColor_, ctrlX_ - innerX_ - 6.f);
+            canvas_.addText(innerX_, y_ + 5.f, F("%s: %s  (%s %d)", T(kinds[k]), it.text, T("Region"), it.region), Metrics::kFont, headingColor_, ctrlX_ - innerX_ - 6.f);
             button(ctrlX_, T("Remove"), [this, idx] { hooks_.removeUiElem(idx); }, Metrics::kButtonW);
             nextRow();
             drop(T("Type"), tr({"Text", "Panel", "Button", "Bar"}), static_cast<std::size_t>(k), [&it](std::size_t t) { it.kind = static_cast<int>(t); });
             textRow(T("Text (use {variable})"), it.text, sizeof it.text);
+            textRow(T("Id"), it.id, sizeof it.id);
             if (it.kind == 2) textRow(T("Event name (on click)"), it.action, sizeof it.action);
             if (it.kind == 3) {
                 textRow(T("Variable"), it.action, sizeof it.action);

@@ -115,6 +115,8 @@ struct ToolsComp { int count = 0; ToolItem items[kMaxTools]; };
 
 enum class UiKind : int { Text = 0, Panel, Button, Bar, Count };
 struct UiElem {
+  char id[32] = "";   // identificador do elemento no canvas (para o jogo e os scripts)
+  int region = 0;     // regiao do canvas onde o elemento esta (calculada pelo editor, ver canvas_regions.hpp)
   int kind = 0; char text[64] = "Text"; float x = 0.05f, y = 0.05f, w = 0.2f, h = 0.08f; float color[4] = {1.f, 1.f, 1.f, 1.f};
   char action[40] = "";
   float maxValue = 100.f;
@@ -279,6 +281,7 @@ inline tool::Json itemsJson(const CanvasComp& c) {
     const UiElem& it = c.items[i];
     tool::Json q = tool::Json::object();
     q.set("kind", it.kind); q.set("text", std::string(it.text)); q.set("action", std::string(it.action));
+    q.set("id", std::string(it.id)); q.set("region", static_cast<double>(it.region));
     q.set("rect", ser::vec(&it.x, 4)); q.set("color", ser::vec(it.color, 4));
     q.set("max", static_cast<double>(it.maxValue)); q.set("font", static_cast<double>(it.fontScale));
     arr.push(q);
@@ -329,6 +332,7 @@ inline void readItems(const tool::Json& arr, CanvasComp& c) {
     UiElem& it = c.items[c.count++];
     it.kind = std::clamp(static_cast<int>(q["kind"].asNumber(0)), 0, static_cast<int>(UiKind::Count) - 1);
     ser::copyStr(it.text, sizeof it.text, q["text"].asString()); ser::copyStr(it.action, sizeof it.action, q["action"].asString());
+    ser::copyStr(it.id, sizeof it.id, q["id"].asString());
     float r[4] = {it.x, it.y, it.w, it.h}; ser::readVec(q["rect"], r, 4);
     it.x = std::clamp(r[0], -2.f, 3.f); it.y = std::clamp(r[1], -2.f, 3.f); it.w = std::clamp(r[2], 0.f, 4.f); it.h = std::clamp(r[3], 0.f, 4.f);
     ser::readVec(q["color"], it.color, 4); it.maxValue = ser::clampNum(q, "max", 100.f, 0.0001f, 1e9f); it.fontScale = ser::clampNum(q, "font", 1.f, 0.3f, 8.f);

@@ -89,6 +89,20 @@ int main() {
     Check(!cr::centerOf(r, 9, cx, cy), "regiao inexistente nao tem centro");
   }
 
+  {
+    // Elemento: a regiao vem do centro dele. Linha vertical no meio: elemento a esquerda e 1, a direita e 2.
+    cr::Regions r;
+    std::vector<cd::Point> pts;
+    std::vector<cd::Line> lines;
+    cd::add(pts, 0.5f, 0.0f);
+    cd::add(pts, 0.5f, 1.0f);
+    cd::addLine(pts, lines, 0, 1, false);
+    cr::refresh(r, pts, lines);
+    Check(cr::regionOfBox(r, 0.1f, 0.1f, 0.2f, 0.1f) == cr::regionAt(r, 0.2f, 0.15f), "elemento a esquerda: regiao do centro dele");
+    Check(cr::regionOfBox(r, 0.7f, 0.4f, 0.2f, 0.2f) == 2, "elemento a direita: regiao 2");
+    Check(cr::regionOfBox(r, 0.4f, 0.4f, 0.2f, 0.2f) == 0, "elemento com o centro sobre a linha: sem regiao (0)");
+  }
+
   std::printf("%s\n", gFailures == 0 ? "CanvasRegions OK" : "CanvasRegions FALHOU");
   return gFailures == 0 ? 0 : 1;
 }

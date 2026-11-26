@@ -115,6 +115,11 @@ inline void refresh(Regions& r, const std::vector<canvas_division::Point>& point
   return r.cell[static_cast<std::size_t>(cy * kGrid + cx)];
 }
 
+// Regiao de um elemento: a do centro do retangulo (x, y, w, h em fracao do canvas). 0 se o centro cai numa parede.
+[[nodiscard]] inline int regionOfBox(const Regions& r, float x, float y, float w, float h) {
+  return regionAt(r, x + w * 0.5f, y + h * 0.5f);
+}
+
 // Centro (fracao do canvas) de uma regiao, para desenhar o numero. Falso quando a regiao nao existe.
 [[nodiscard]] inline bool centerOf(const Regions& r, int id, float& outX, float& outY) {
   double sx = 0.0, sy = 0.0;
