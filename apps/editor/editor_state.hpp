@@ -469,7 +469,7 @@ struct Editor {
     if (principal) { scene.world().addTag(e, scene.tag("Principal")); scene.world().get<CameraComp>(e)->soundEar = true; }
     return e;
   }
-  tool::Entity makeCanvas() { tool::Entity e = make("Canvas"); scene.world().add<CanvasComp>(e, CanvasComp{}); return e; }
+  tool::Entity makeCanvas() { tool::Entity e = make("Canvas"); scene.world().add<CanvasComp>(e, FullCanvas()); return e; }
   tool::Entity makeGlobalLight() { tool::Entity e = make("Global Light"); scene.world().get<Transform>(e)->pos[1] = 6.f; scene.world().add<GlobalLight>(e); return e; }
   tool::Entity makePointLight() {
     tool::Entity e = make("Point Light"); scene.world().get<Transform>(e)->pos[1] = 2.5f;
@@ -532,11 +532,11 @@ struct Editor {
     makeCamera(true);
     { tool::Entity cubeE = makeMesh("Cube", 0, 0, 0.5f, 0); scene.world().add<PhysicsComp>(cubeE, PhysicsComp{}); } // cai e colide ao apertar Play
     { tool::Entity fx = make("Particles"); scene.world().get<Transform>(fx)->pos[0] = 3.f; scene.world().get<Transform>(fx)->pos[1] = 0.2f; scene.world().add<ParticleComp>(fx); } // exemplo: fogo
-    { tool::Entity ui = make("UI"); UiCanvas u; // exemplo de UI: texto com variavel, barra e botao (camada sobre a camera Principal)
+    { tool::Entity ui = make("UI"); CanvasComp u = FullCanvas(); // exemplo de UI: texto com variavel, barra e botao (canvas sobre a camera Principal)
       UiElem& t = u.items[u.count++]; ser::copyStr(t.text, sizeof t.text, "Score: {score}"); t.x = 0.03f; t.y = 0.03f; t.fontScale = 1.4f;
       UiElem& b = u.items[u.count++]; b.kind = 3; b.x = 0.03f; b.y = 0.1f; b.w = 0.25f; b.h = 0.03f; ser::copyStr(b.action, sizeof b.action, "score"); b.maxValue = 10.f; b.color[0] = 0.9f; b.color[1] = 0.2f; b.color[2] = 0.2f;
       UiElem& k = u.items[u.count++]; k.kind = 2; k.x = 0.03f; k.y = 0.16f; k.w = 0.16f; k.h = 0.06f; ser::copyStr(k.text, sizeof k.text, "Add score"); ser::copyStr(k.action, sizeof k.action, "add_score"); k.color[0] = 0.9f; k.color[1] = 0.8f; k.color[2] = 0.3f;
-      scene.world().add<UiCanvas>(ui, u); }
+      scene.world().add<CanvasComp>(ui, u); }
     selected = {};
   }
 

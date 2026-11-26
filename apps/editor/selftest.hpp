@@ -668,12 +668,12 @@ inline int runSelfTest(const std::string& samplesDir) {
   }
   { // particulas e UI
     tool::World& w = ed.scene.world(); const tool::Entity pe = ed.make("FxP"); ParticleComp pc; pc.rate = 100.f; pc.maxParticles = 50; w.add<ParticleComp>(pe, pc);
-    UiCanvas u; UiElem& el = u.items[u.count++]; el.kind = 3; ser::copyStr(el.action, sizeof el.action, "health"); ser::copyStr(el.text, sizeof el.text, "HP {health}"); w.add<UiCanvas>(pe, u);
+    CanvasComp u = FullCanvas(); UiElem& el = u.items[u.count++]; el.kind = 3; ser::copyStr(el.action, sizeof el.action, "health"); ser::copyStr(el.text, sizeof el.text, "HP {health}"); w.add<CanvasComp>(pe, u);
     for (int i = 0; i < 30; ++i) ed.updateParticles(1.f / 30.f);
     const size_t n = ed.particles[pe.index].list.size(); check(n > 0 && n <= 50, "particles: emitter spawns and respects the max count");
     ed.vars["health"] = 42.f; check(uiFormat(ed, "HP {health}") == "HP 42", "ui: {variable} text substitution");
     const UndoState st2 = ed.captureState(); ed.restoreState(st2); bool okUi = false, okFx = false;
-    w.each<UiCanvas>([&](tool::Entity, UiCanvas& uc) { if (uc.count == 1 && std::string(uc.items[0].action) == "health") okUi = true; }); w.each<ParticleComp>([&](tool::Entity, ParticleComp& pq) { if (pq.maxParticles == 50) okFx = true; });
+    w.each<CanvasComp>([&](tool::Entity, CanvasComp& uc) { if (uc.count == 1 && std::string(uc.items[0].action) == "health") okUi = true; }); w.each<ParticleComp>([&](tool::Entity, ParticleComp& pq) { if (pq.maxParticles == 50) okFx = true; });
     check(okUi && okFx, "ui + particles survive save/load");
     ed.particles.clear();
   }

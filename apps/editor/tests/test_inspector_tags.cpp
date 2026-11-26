@@ -138,9 +138,9 @@ int main() {
   voxelPanel.setAllSections(true);
 
   // 9. Secao Game UI. Cada elemento acrescenta o seu bloco (titulo, Remove, tipo, textos, posicao, cor).
-  editor::UiCanvas ui{};
+  editor::CanvasComp ui{};
   IP::Context withUi = base;
-  withUi.ui = &ui;
+  withUi.cv = &ui;
   IP::InspectorPanel uiEmpty(text, renderer);
   const float hUiEmpty = uiEmpty.prepare(withUi, hooks, 300.f);
   ui.count = 1;
