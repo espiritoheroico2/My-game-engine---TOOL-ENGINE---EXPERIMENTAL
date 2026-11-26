@@ -11,6 +11,7 @@
 #include "i18n.hpp"
 #include "scenes_model.hpp"
 #include "spriteui_host.hpp"
+#include "window_frame.hpp"
 #include "window_help_icon.hpp"
 
 #include "SpriteUi/Input/InputRouter.hpp"
@@ -110,45 +111,25 @@ class View {
 
   // Calcula um quadro e devolve o pacote para desenhar. `actions` recebe o que foi clicado neste quadro.
   SR::FramePacket Frame(float windowWidth, float windowHeight, const FrameInput& in, std::vector<Action>& actions) {
-    metrics_.cornerRadius = editor::ui_style::windowRadius();
+    frame_.refreshStyle();
     actions.clear();
     removed_ = kNone;
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
 
     const float panelWidth = dock_ ? dock_->size.x : std::min(Theme::kPanelWidth, windowWidth - 32.f);
-    const float frameHeight = frameHeightNow();
-    if (dock_) {   // acoplada: a area vem do dock; o arraste nao a move
-      windowPos_ = dock_->position;
-      dragging_ = false;
-      placed_ = true;
-    } else if (docked_) {   // saiu do dock: continua no lugar em que estava
-      windowPos_ = frame_.position;
-      placed_ = true;
-    }
-    docked_ = dock_.has_value();
-    if (!placed_) {   // primeira vez: centralizada
-      windowPos_ = {std::floor((windowWidth - panelWidth) * 0.5f),
-                    std::max(0.f, std::floor((windowHeight - Theme::kPanelHeight - metrics_.headerHeight) * 0.5f))};
-      placed_ = true;
-    }
-    if (!docked_) {
-      windowPos_.x = std::clamp(windowPos_.x, 0.f, std::max(0.f, windowWidth - panelWidth));
-      windowPos_.y = std::clamp(windowPos_.y, 0.f, std::max(0.f, windowHeight - frameHeight));
-    }
-    frame_ = SU::Rect{windowPos_, {panelWidth, docked_ ? dock_->size.y : frameHeight}};
-
+    const float frameHeight = Theme::kPanelHeight + frame_.metrics().headerHeight + 2.f * frame_.metrics().borderWidth;
+    frame_.placeIn(windowWidth, windowHeight, dock_, panelWidth, frameHeight);   // posicao, dock e minimizar: moldura padrao
     handleFrameInput(in, actions);
-    frame_ = SU::Rect{windowPos_, {panelWidth, docked_ ? (minimized_ ? metrics_.headerHeight : dock_->size.y) : frameHeightNow()}};
 
     // Minimizada: so a moldura (cabecalho). O conteudo nao aparece nem recebe cliques.
-    if (minimized_) {
+    if (frame_.minimized()) {
       std::vector<SR::UIRenderItem> items;
       std::uint64_t paint = 1000;
       addFrame(items, paint);
       return extractor_.Build(in.frameId, items, nullptr, {});
     }
 
-    const SU::Rect content = SW::WindowFrameContent(frame_, metrics_);
+    const SU::Rect content = frame_.content();
     content_ = content;
     scroll_ = std::clamp(scroll_, 0.f, std::max(0.f, naturalH_ - content.size.y));
     setPanelSize(content.size.x);   // altura natural: as linhas de botoes quebram conforme a largura; o excesso rola
@@ -213,22 +194,22 @@ class View {
 
   // Estado para testes e para o host.
   [[nodiscard]] std::size_t removedIndex() const { return removed_; }
-  [[nodiscard]] SU::Rect frameRect() const { return frame_; }
-  [[nodiscard]] SU::Vec2 windowPos() const { return windowPos_; }
+  [[nodiscard]] SU::Rect frameRect() const { return frame_.rect(); }
+  [[nodiscard]] SU::Vec2 windowPos() const { return frame_.position(); }
   // Area dada pelo dock (folha, sem a faixa de abas). nullopt: a janela flutua.
   void setDock(std::optional<SU::Rect> dock) { dock_ = dock; }
-  [[nodiscard]] bool docked() const { return docked_; }
-  [[nodiscard]] SU::Rect gripRect() const { return SW::WindowGripRect(SW::WindowFrameHeader(frame_, metrics_, docked_), Theme::kGripWidth); }
-  // Sai do dock na posicao `at`: a janela segue o ponteiro (o arraste da moldura volta a valer).
+  [[nodiscard]] bool docked() const { return frame_.docked(); }
+  [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
+  // Redimensionar pela borda e arrastar pelo grip sao do host do dock (unico dono do ponteiro): ele usa esta moldura.
+  window_frame::Frame* frameState() { return &frame_; }
+  // Sai do dock na posicao `at`: a janela segue flutuante a partir dali.
   void floatAt(SU::Vec2 at) {
     dock_.reset();
-    windowPos_ = at;
-    placed_ = true;
-    docked_ = false;
+    frame_.undock(at);
   }
-  [[nodiscard]] bool dragging() const { return dragging_; }
-  [[nodiscard]] bool minimized() const { return minimized_; }
-  [[nodiscard]] const SW::WindowFrameMetrics& frameMetrics() const { return metrics_; }
+  [[nodiscard]] bool dragging() const { return frame_.dragging(); }
+  [[nodiscard]] bool minimized() const { return frame_.minimized(); }
+  [[nodiscard]] const SW::WindowFrameMetrics& frameMetrics() const { return frame_.metrics(); }
   [[nodiscard]] SU::UIHandle rowHandle(std::size_t i) const { return rows_h_[i]; }
   [[nodiscard]] SU::UIHandle assetRemoveHandle(std::size_t i) const { return assetRemove_[i]; }
   [[nodiscard]] SU::UIHandle saveHandle() const { return save_; }
@@ -257,48 +238,18 @@ class View {
            p.y < r.position.y + r.size.y;
   }
 
-  float frameHeightNow() const {
-    return minimized_ ? metrics_.headerHeight + 2.f * metrics_.borderWidth
-                      : Theme::kPanelHeight + metrics_.headerHeight + 2.f * metrics_.borderWidth;
-  }
 
   // "?" logo depois do grip; o titulo comeca depois dele.
-  SU::Rect helpRectNow() const {
-    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, docked_);
-    const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
-    return SU::Rect{{grip.position.x + grip.size.x + Theme::kHelpGap, bar.position.y + (bar.size.y - Theme::kHelpSize) * 0.5f},
-                    {Theme::kHelpSize, Theme::kHelpSize}};
-  }
+  SU::Rect helpRectNow() const { return frame_.helpRect(); }
 
-  // Moldura: X fecha; minimizar recolhe ao cabecalho; "?" pede a Help; so o grip arrasta a janela.
+  // Botoes da moldura: X fecha, "?" pede a Help, minimizar recolhe (a propria moldura). Arraste e redimensionamento
+  // nao passam por aqui: o host do dock decide o gesto e move a moldura.
   void handleFrameInput(const FrameInput& in, std::vector<Action>& actions) {
-    const SU::Vec2 p{in.pointerX, in.pointerY};
-    if (dragging_) {
-      if (in.pointerDown) {
-        windowPos_ = {p.x - grab_.x, p.y - grab_.y};
-      } else {
-        dragging_ = false;
-      }
-      return;
-    }
     if (!in.pointerPressed) return;
-    const SW::WindowFramePart part = SW::WindowFramePartAt(frame_, metrics_, false, p);
-    if (part == SW::WindowFramePart::Close) {
-      actions.push_back(Action::Close);
-      return;
-    }
-    if (part == SW::WindowFramePart::Minimize) {
-      minimized_ = !minimized_;
-      return;
-    }
-    if (inside(helpRectNow(), p)) {
-      actions.push_back(Action::Help);
-      return;
-    }
-    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, docked_);
-    if (!docked_ && inside(SW::WindowGripRect(bar, Theme::kGripWidth), p)) {
-      dragging_ = true;
-      grab_ = {p.x - windowPos_.x, p.y - windowPos_.y};
+    switch (frame_.buttonAt({in.pointerX, in.pointerY})) {
+      case window_frame::Event::Close: actions.push_back(Action::Close); break;
+      case window_frame::Event::Help: actions.push_back(Action::Help); break;
+      default: break;
     }
   }
 
@@ -312,8 +263,6 @@ class View {
 
   // ---------- Arvore de layout ----------
   void buildTree() {
-    metrics_.headerHeight = 30.f;
-    metrics_.cornerRadius = editor::ui_style::windowRadius();
     applyPalette();   // a arvore usa as cores do tema ja aqui (antes, o conteudo saia com a cor padrao: cinza)
 
     SU::FlexItem panel;
@@ -619,16 +568,15 @@ class View {
 
     SW::WindowFrameState state;
     state.active = true;
-    state.dragging = dragging_;
-    state.docked = docked_;
+    state.dragging = frame_.dragging();
+    state.docked = frame_.docked();
     applyPalette();
-    auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_, metrics_, state, frameColors_, -2.f, paint);
+    auto frameItems = SW::BuildWindowFrameItems(panelHandle_, frame_.rect(), frame_.metrics(), state, frameColors_, -2.f, paint);
     paint += frameItems.size() + 1;
     out.insert(out.end(), frameItems.begin(), frameItems.end());
 
     // Grip (pontos).
-    const SU::Rect bar = SW::WindowFrameHeader(frame_, metrics_, docked_);
-    const SU::Rect grip = SW::WindowGripRect(bar, Theme::kGripWidth);
+    const SU::Rect grip = frame_.gripRect();
     const float cx = grip.position.x + grip.size.x * 0.5f, cy = grip.position.y + grip.size.y * 0.5f;
     for (int c = 0; c < 2; ++c) {
       for (int r = 0; r < 3; ++r) {
@@ -648,6 +596,7 @@ class View {
     // Titulo em negrito (duas passadas de 0,7 px, como o Profiler). Comeca depois do "?".
     const Shaped title = shape(T("Scenes"), Theme::kTitleSize);
     const float tx = help.position.x + help.size.x + Theme::kHelpGap;
+    const SU::Rect bar = frame_.header();
     const float ty = bar.position.y + (bar.size.y - title.layout.lineHeight) * 0.5f;
     text(panelHandle_, title, {tx, ty}, colors_.text, 0.95f);
     text(panelHandle_, title, {tx + 0.7f, ty}, colors_.text, 0.95f);
@@ -772,17 +721,10 @@ class View {
   std::size_t removed_ = kNone;
   float lastX_ = 0.f, lastY_ = 0.f;
 
-  // Moldura: geometria e cores (SpriteUI). Definidas em buildTree.
-  SW::WindowFrameMetrics metrics_{};
+  // Moldura: cores (SpriteUI, definidas em buildTree) e geometria padrao (window_frame::Frame).
   SW::WindowFrameColors frameColors_{};
-  SU::Rect frame_{};
-  SU::Vec2 windowPos_{};
+  window_frame::Frame frame_;
   std::optional<SU::Rect> dock_;
-  bool docked_ = false;
-  SU::Vec2 grab_{};
-  bool placed_ = false;
-  bool dragging_ = false;
-  bool minimized_ = false;
 };
 
 }  // namespace editor::scenesui
