@@ -265,6 +265,30 @@ class Host {
     return "";
   }
 
+  // Z-order: a camada do dock fica embaixo; janelas flutuantes ficam por cima dela, e entre elas a tocada por ultimo
+  // fica no topo. A busca de grip e de borda segue essa ordem, para pegar a janela que o usuario ve.
+  [[nodiscard]] std::vector<Window*> hitOrder() {
+    std::vector<Window*> order;
+    order.reserve(windows_.size());
+    for (Window& w : windows_) order.push_back(&w);
+    auto rank = [this](const Window* w) -> std::size_t {
+      const auto it = std::find(raised_.begin(), raised_.end(), w->id);
+      return it == raised_.end() ? 0 : static_cast<std::size_t>(it - raised_.begin()) + 1;
+    };
+    std::stable_sort(order.begin(), order.end(), [&](const Window* a, const Window* b) {
+      const bool floatA = !model_.contains(a->id), floatB = !model_.contains(b->id);
+      if (floatA != floatB) return floatA;   // flutuante fica por cima do dock
+      return rank(a) > rank(b);              // entre iguais, a tocada por ultimo primeiro
+    });
+    return order;
+  }
+
+  // Marca a janela como a tocada por ultimo (topo do seu grupo de z-order).
+  void raise(SU::UIHandle id) {
+    raised_.erase(std::remove(raised_.begin(), raised_.end(), id), raised_.end());
+    raised_.push_back(id);
+  }
+
   // Janela desenhada neste quadro (esta no dock como aba ativa, ou flutua). Grip de aba inativa nao e clicavel.
   [[nodiscard]] bool visibleNow(const Window& w) const { return !model_.contains(w.id) || model_.active(w.id); }
 
@@ -300,6 +324,7 @@ class Host {
         drag_.BeginPress(tabs[i], p, true);
         activeWin_ = tabs[i];
         lastActive_ = tabs[i];
+        raise(tabs[i]);
         grabOffset_ = {p.x - leaf.bounds.position.x, p.y - leaf.bounds.position.y};
         grabSize_ = leaf.bounds.size;
         return true;
@@ -321,10 +346,12 @@ class Host {
       }
       model_.select(tabs[index]);
       lastActive_ = tabs[index];
+      raise(tabs[index]);
       return true;
     }
-    // Bordas de janela flutuante (vem antes de tudo que esta embaixo dela).
-    for (Window& w : windows_) {
+    // Bordas de janela flutuante (vem antes de tudo que esta embaixo dela), de cima para baixo.
+    for (Window* wp : hitOrder()) {
+      Window& w = *wp;
       if (!w.open() || !visibleNow(w) || model_.contains(w.id)) continue;
       window_frame::Frame* state = w.frameState ? w.frameState() : nullptr;
       if (state && state->beginResize(p)) {
@@ -333,6 +360,7 @@ class Host {
         resizeWin_ = w.id;
         activeWin_ = w.id;
         lastActive_ = w.id;
+        raise(w.id);
         return true;
       }
     }
@@ -341,13 +369,15 @@ class Host {
       divider_ = d;
       return true;
     }
-    for (Window& w : windows_) {
+    for (Window* wp : hitOrder()) {
+      Window& w = *wp;
       if (!w.open() || !visibleNow(w)) continue;
       const std::optional<SU::Rect> f = w.frame();
       if (!f || inGroup(w.id) || !inside(w.grip(), p)) continue;   // grip de aba agrupada fica oculto
       drag_.BeginPress(w.id, p, model_.contains(w.id));
       activeWin_ = w.id;
       lastActive_ = w.id;
+      raise(w.id);
       grabOffset_ = {p.x - f->position.x, p.y - f->position.y};
       grabSize_ = f->size;
       return true;
@@ -558,6 +588,7 @@ class Host {
   SW::DockDragController drag_{};
   SU::UIHandle activeWin_{};
   SU::UIHandle lastActive_{};   // ultimo grupo tocado: janela nova entra nele
+  std::vector<SU::UIHandle> raised_;   // ordem de ativacao (o fim e a janela tocada por ultimo)
   SU::UIHandle resizeWin_{};    // janela flutuante sendo redimensionada pela borda
   int resizeMask_ = 0;          // bordas que o redimensionamento em curso move (mascara de Frame::edgeAt)
   bool resizing_ = false;

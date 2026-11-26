@@ -90,6 +90,12 @@ if(TOOL_WITH_SPRITEUI)
   target_link_libraries(editor_resize_hover_tests PRIVATE SpriteUi::SpriteUI)
   add_test(NAME Editor.ResizeHover COMMAND editor_resize_hover_tests)
 
+  # Gestos do host do dock (grip, borda, repeticao): sem janela, so SDL_Event e geometria.
+  add_executable(editor_dock_host_tests tests/test_dock_host.cpp)
+  target_include_directories(editor_dock_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_dock_host_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  add_test(NAME Editor.DockHost COMMAND editor_dock_host_tests)
+
   # Captura headless da janela Editor info (SpriteUI). Nao e um teste do ctest: gera PPM para conferir visualmente.
   add_executable(editor_info_capture tools/editor_info_capture.cpp)
   target_include_directories(editor_info_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
