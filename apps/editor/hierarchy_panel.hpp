@@ -81,8 +81,8 @@ struct Source {
 
 // Itens do menu "+ Create", na ordem exibida. O main.cpp cria o objeto pelo indice.
 inline constexpr const char* kCreateLabels[] = {"Empty object", "Cube", "Sphere", "Plane", "Camera",
-                                                "Main Camera (Principal)", "Global Light", "Point Light", "Audio Source"};
-inline constexpr int kCreateCount = 9;
+                                                "Main Camera (Principal)", "Global Light", "Point Light", "Audio Source", "Canvas"};
+inline constexpr int kCreateCount = static_cast<int>(sizeof(kCreateLabels) / sizeof(kCreateLabels[0]));   // a lista e a unica fonte
 
 struct Metrics {
     static constexpr float kToolbarH = 30.f;
@@ -122,17 +122,18 @@ struct Colors {
     SU::Vec4 field = sui::Srgb(0.08f, 0.10f, 0.14f);
     SU::Vec4 caret = sui::Srgb(0.91f, 0.918f, 0.933f);
     // Cor do icone por tipo, na ordem de hm::Kind.
-    SU::Vec4 kinds[6] = {sui::Srgb(0.62f, 0.68f, 0.78f), sui::Srgb(0.42f, 0.85f, 0.52f), sui::Srgb(1.f, 0.85f, 0.35f),
-                         sui::Srgb(0.85f, 0.55f, 0.95f), sui::Srgb(1.f, 0.6f, 0.3f), sui::Srgb(0.4f, 0.85f, 0.95f)};
+    SU::Vec4 kinds[7] = {sui::Srgb(0.62f, 0.68f, 0.78f), sui::Srgb(0.42f, 0.85f, 0.52f), sui::Srgb(1.f, 0.85f, 0.35f),
+                         sui::Srgb(0.85f, 0.55f, 0.95f), sui::Srgb(1.f, 0.6f, 0.3f), sui::Srgb(0.4f, 0.85f, 0.95f),
+                         sui::Srgb(0.35f, 0.95f, 0.7f)};
 };
 
 enum class Button : std::uint8_t { None, Create, Duplicate, Delete };
 
 // Atlas de icones: celulas de kIconCell px, lado a lado. A ordem e a do IconCell.
 inline constexpr int kIconCell = 32;
-inline constexpr int kIconCellCount = 3;
+inline constexpr int kIconCellCount = 6;
 inline constexpr int kAtlasW = kIconCell * kIconCellCount;
-enum IconCell : int { kDotCell, kEyeCell, kLockCell };
+enum IconCell : int { kDotCell, kEyeCell, kLockCell, kSquareCell, kTriangleCell, kRingCell };
 inline constexpr const char* kEyePath = "assets/icons/eye.png";
 inline constexpr const char* kLockPath = "assets/icons/lock.png";
 
@@ -642,6 +643,9 @@ class HierarchyPanel {
         if (!squareMultiple(eye) || !squareMultiple(lock)) return;
         std::vector<std::uint8_t> atlas(static_cast<std::size_t>(kAtlasW) * kIconCell * 4, 0);
         packDot(atlas);
+        packSquare(atlas);
+        packTriangle(atlas);
+        packRing(atlas);
         packCell(eye, kEyeCell, atlas);
         packCell(lock, kLockCell, atlas);
         iconsReady_ = sdl_.uploadIcons(renderer, kAtlasW, kIconCell, atlas.data());
@@ -649,6 +653,54 @@ class HierarchyPanel {
 
     static bool squareMultiple(const tool::Texture& t) {
         return t.w == t.h && t.w % static_cast<std::uint32_t>(kIconCell) == 0;
+    }
+
+    // Quadrado com cantos suaves (Canvas). Como a bolinha, branco: a cor vem do tipo na hora de desenhar.
+    static void packSquare(std::vector<std::uint8_t>& atlas) {
+        const float half = kIconCell * 0.5f, side = half - 2.f, radius = 4.f;
+        for (int y = 0; y < kIconCell; ++y) {
+            for (int x = 0; x < kIconCell; ++x) {
+                const float dx = std::fabs(x + 0.5f - half) - side + radius, dy = std::fabs(y + 0.5f - half) - side + radius;
+                const float outside = std::hypot(std::max(dx, 0.f), std::max(dy, 0.f)) + std::min(std::max(dx, dy), 0.f) - radius;
+                const float cover = std::clamp(0.5f - outside, 0.f, 1.f);
+                std::uint8_t* px = &atlas[(static_cast<std::size_t>(y) * kAtlasW + (kSquareCell * kIconCell) + x) * 4];
+                px[0] = px[1] = px[2] = 255;
+                px[3] = static_cast<std::uint8_t>(cover * 255.f + 0.5f);
+            }
+        }
+    }
+
+    // Triangulo apontando para cima (Luz). Mesma regra de cor da bolinha.
+    static void packTriangle(std::vector<std::uint8_t>& atlas) {
+        const float apexX = kIconCell * 0.5f, apexY = 3.f, baseY = kIconCell - 4.f, halfBase = kIconCell * 0.4f;
+        for (int y = 0; y < kIconCell; ++y) {
+            for (int x = 0; x < kIconCell; ++x) {
+                const float py = y + 0.5f, px0 = x + 0.5f;
+                float cover = 0.f;
+                if (py >= apexY && py <= baseY) {
+                    const float t = (py - apexY) / (baseY - apexY);       // 0 na ponta, 1 na base
+                    const float half = halfBase * t;
+                    cover = std::clamp(std::min(px0 - (apexX - half), (apexX + half) - px0) + 0.5f, 0.f, 1.f);
+                }
+                std::uint8_t* p = &atlas[(static_cast<std::size_t>(y) * kAtlasW + (kTriangleCell * kIconCell) + x) * 4];
+                p[0] = p[1] = p[2] = 255;
+                p[3] = static_cast<std::uint8_t>(cover * 255.f + 0.5f);
+            }
+        }
+    }
+
+    // Anel branco (so a borda de um circulo): sobre a bolinha tingida, faz a camera ter borda branca.
+    static void packRing(std::vector<std::uint8_t>& atlas) {
+        const float half = kIconCell * 0.5f, radius = half - 2.f, width = 2.2f;
+        for (int y = 0; y < kIconCell; ++y) {
+            for (int x = 0; x < kIconCell; ++x) {
+                const float d = std::hypot(x + 0.5f - half, y + 0.5f - half);
+                const float cover = std::clamp(width * 0.5f - std::fabs(d - radius) + 0.5f, 0.f, 1.f);
+                std::uint8_t* p = &atlas[(static_cast<std::size_t>(y) * kAtlasW + (kRingCell * kIconCell) + x) * 4];
+                p[0] = p[1] = p[2] = 255;
+                p[3] = static_cast<std::uint8_t>(cover * 255.f + 0.5f);
+            }
+        }
     }
 
     // Bolinha: disco branco com borda suave. A cor vem do tipo, na hora de desenhar.
@@ -688,6 +740,19 @@ class HierarchyPanel {
 
     // Icone deste quadro, em coordenadas locais do canvas da lista (ver appendIcons).
     void addIcon(float x, float y, float size, IconCell cell, SU::Vec4 tint) { icons_.push_back({x, y, size, cell, tint}); }
+    // Icone do tipo: quadrado (Canvas), triangulo (Luz), bolinha com borda branca (Camera), bolinha (demais).
+    void addKindIcon(float x, float y, hm::Kind kind) {
+        const SU::Vec4 tint = colors_.kinds[static_cast<std::size_t>(kind)];
+        switch (kind) {
+            case hm::Kind::Canvas: addIcon(x, y, Metrics::kIcon, kSquareCell, tint); break;
+            case hm::Kind::Light: addIcon(x, y, Metrics::kIcon, kTriangleCell, tint); break;
+            case hm::Kind::Camera:
+                addIcon(x, y, Metrics::kIcon, kDotCell, tint);
+                addIcon(x, y, Metrics::kIcon, kRingCell, sui::Srgb(1.f, 1.f, 1.f));
+                break;
+            default: addIcon(x, y, Metrics::kIcon, kDotCell, tint); break;
+        }
+    }
 
     // Todos os icones do quadro viram sprites do atlas: um lote so. Cada sprite fica no seu lugar na janela.
     void appendIcons(std::vector<SR::UIRenderItem>& out, std::uint64_t& paint) const {
@@ -795,7 +860,7 @@ class HierarchyPanel {
         }
         const float iconX = expanderX + Metrics::kExpander + 4.f;
         const float iconY = y + (Metrics::kRowH - Metrics::kIcon) * 0.5f;
-        addIcon(iconX, iconY, Metrics::kIcon, kDotCell, colors_.kinds[static_cast<std::size_t>(item->kind)]);
+        addKindIcon(iconX, iconY, item->kind);
         const float labelX = iconX + Metrics::kIcon + 6.f;
         const float lockX = list.w - Metrics::kToggle - Metrics::kPad;
         const float labelW = lockX - Metrics::kToggleGap - Metrics::kToggle - Metrics::kPad - labelX;

@@ -129,6 +129,7 @@ editor::hierarchy_model::Kind hierarchyKindOf(tool::World& w, tool::Entity e) {
   if (w.has<ed_::AudioSource>(e)) return K::Audio;
   if (w.has<ed_::ParticleComp>(e)) return K::Particles;
   if (w.has<ed_::UiCanvas>(e)) return K::Ui;
+  if (w.has<ed_::CanvasComp>(e)) return K::Canvas;
   return K::Object;
 }
 
@@ -164,6 +165,7 @@ void createFromHierarchyMenu(Editor& ed, int kind) {
     case 6: ed.selected = ed.makeGlobalLight(); break;
     case 7: ed.selected = ed.makePointLight(); break;
     case 8: ed.selected = ed.makeAudio(""); break;
+    case 9: ed.selected = ed.makeCanvas(); break;
     default: break;
   }
 }

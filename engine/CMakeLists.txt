@@ -16,6 +16,7 @@ target_link_libraries(tool_debug INTERFACE Threads::Threads)
 tool_module(events DEPS tool_debug)
 tool_module(ecs    DEPS tool_debug)
 tool_module(scene  DEPS tool_ecs tool_events)
+tool_module(canvas DEPS tool_core) # Canvas: layout por ancora e cache por dirty flag; so funcoes e dados
 
 tool_module(input DEPS tool_core)
 tool_module(platform DEPS tool_input tool_debug)
