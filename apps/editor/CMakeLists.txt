@@ -304,6 +304,12 @@ target_include_directories(editor_scene_transform_menu_tests PRIVATE ${CMAKE_CUR
 target_link_libraries(editor_scene_transform_menu_tests PRIVATE tool::math tool::render)
 add_test(NAME Editor.SceneTransformMenu COMMAND editor_scene_transform_menu_tests)
 
+# Edicao do Canvas na Scene (canvas_edit.hpp): caixa na area, alca sob o mouse e arrasto em pixels de tela.
+add_executable(editor_canvas_edit_tests tests/test_canvas_edit.cpp)
+target_include_directories(editor_canvas_edit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_canvas_edit_tests PRIVATE tool::canvas)
+add_test(NAME Editor.CanvasEdit COMMAND editor_canvas_edit_tests)
+
 # Modelo da janela Jogo (game_view_model.hpp): letterbox, divisao entre duas cameras e recorte do preencher.
 add_executable(editor_game_view_model_tests tests/test_game_view_model.cpp)
 target_include_directories(editor_game_view_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
