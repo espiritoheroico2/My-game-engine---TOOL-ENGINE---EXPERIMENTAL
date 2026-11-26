@@ -449,13 +449,16 @@ private:
       const canvas_edit::Box b = canvas_edit::boxFor(c.layout, img.w, img.h, c.ref);
       const vm::Pixel a{img.x + b.x, img.y + b.y}, z{a.x + b.w, a.y + b.h};
       const view::Color edge = c.selected ? kHighlight : kTextDim;
-      out.rectFilled(a, z, view::Rgba(255, 255, 255, 14), 0.f);
       out.line(a, {z.x, a.y}, 1.f, edge);
       out.line({z.x, a.y}, z, 1.f, edge);
       out.line(z, {a.x, z.y}, 1.f, edge);
       out.line({a.x, z.y}, a, 1.f, edge);
       out.text({a.x + 4.f, a.y + 4.f}, T("Canvas"), kFont, edge);
-      if (c.selected && v.canvasEdit) out.rectFilled({z.x - 4.f, z.y - 4.f}, {z.x + 4.f, z.y + 4.f}, kHighlight, 1.f);
+      if (c.selected && v.canvasEdit) {
+        // Alcas do modo Edit canvas: a ancora (canto superior esquerdo, move) e o canto inferior direito (redimensiona).
+        out.rectFilled({a.x - 4.f, a.y - 4.f}, {a.x + 4.f, a.y + 4.f}, kHighlight, 1.f);
+        out.rectFilled({z.x - 4.f, z.y - 4.f}, {z.x + 4.f, z.y + 4.f}, kHighlight, 1.f);
+      }
     }
   }
 

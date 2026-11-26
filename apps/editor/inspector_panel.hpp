@@ -1063,7 +1063,8 @@ class InspectorPanel {
     void canvasSection() {
         CanvasComp& ui = *ctx_.cv;
         if (!beginSection(im::Section::Canvas, T("Canvas (game UI)"))) return;
-        checkField(T("Visible"), &ui.visible);
+        checkField(T("Visible in game"), &ui.visible);
+        checkField(T("Show in Scene"), &ui.showInScene);
         std::vector<std::string> options{T("(all Principal cameras)")};
         std::size_t selected = 0;
         for (const std::string& name : ctx_.cameraNames) {
@@ -1090,6 +1091,13 @@ class InspectorPanel {
              ui.layout.resize == tool::canvas::Resize::Scale ? 1u : 0u, [&ui](std::size_t i) {
                  ui.layout.resize = i == 1 ? tool::canvas::Resize::Scale : tool::canvas::Resize::Follow;
              });
+        // Aparencia do canvas: fundo e borda (cor e opacidade), canto redondo e espessura da borda.
+        swatch(T("Background"), ui.bg);
+        slider(T("Background opacity"), &ui.bg[3], {0.f, 1.f});
+        swatch(T("Border"), ui.edge);
+        slider(T("Border opacity"), &ui.edge[3], {0.f, 1.f});
+        slider(T("Corner radius"), &ui.style.radius, {0.f, 200.f});
+        slider(T("Border width"), &ui.style.borderWidth, {0.f, 40.f});
         static const char* kinds[] = {"Text", "Panel", "Button", "Bar"};
         for (int i = 0; i < ui.count && i < kMaxUi; ++i) {
             UiElem& it = ui.items[i];

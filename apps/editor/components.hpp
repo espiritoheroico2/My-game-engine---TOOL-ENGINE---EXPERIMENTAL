@@ -143,7 +143,10 @@ struct CanvasComp {
   tool::canvas::Style style;
   tool::canvas::Cache cache;
   char camera[40] = "";
-  bool visible = true;
+  bool visible = true;        // "Visível no jogo": desenha na Game, para a camera escolhida
+  bool showInScene = true;    // "Mostrar na Scene": previa (caixa e elementos) sobre a cena do editor
+  float bg[4] = {0.f, 0.f, 0.f, 0.f};       // fundo RGBA 0..1 (alfa 0 = transparente)
+  float edge[4] = {1.f, 1.f, 1.f, 1.f};    // cor da borda RGBA 0..1
   int count = 0;
   UiElem items[kMaxUi];
 };
@@ -365,8 +368,9 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     o.set("w", static_cast<double>(L.width)); o.set("h", static_cast<double>(L.height));
     o.set("resize", std::string(L.resize == tool::canvas::Resize::Scale ? "scale" : "follow"));
     o.set("radius", static_cast<double>(S.radius)); o.set("border_width", static_cast<double>(S.borderWidth));
-    o.set("bg", static_cast<double>(S.background)); o.set("bc", static_cast<double>(S.border));
-    o.set("camera", std::string(c->camera)); o.set("visible", c->visible); o.set("items", itemsJson(*c));
+    o.set("bg", ser::vec(c->bg, 4)); o.set("bc", ser::vec(c->edge, 4));
+    o.set("camera", std::string(c->camera)); o.set("visible", c->visible); o.set("scene", c->showInScene);
+    o.set("items", itemsJson(*c));
     j.set("canvas", o);
   }
   if (auto* p = w.get<ParticleComp>(e)) {
@@ -486,9 +490,9 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     c.layout.width = ser::clampNum(o, "w", 320.f, 1.f, 1e5f); c.layout.height = ser::clampNum(o, "h", 240.f, 1.f, 1e5f);
     c.layout.resize = o["resize"].asString() == "scale" ? tool::canvas::Resize::Scale : tool::canvas::Resize::Follow;
     c.style.radius = ser::clampNum(o, "radius", 0.f, 0.f, 1e4f); c.style.borderWidth = ser::clampNum(o, "border_width", 0.f, 0.f, 1000.f);
-    c.style.background = static_cast<tool::canvas::Color>(o["bg"].asNumber(0.0));
-    c.style.border = static_cast<tool::canvas::Color>(o["bc"].asNumber(4294967295.0));
+    ser::readVec(o["bg"], c.bg, 4); ser::readVec(o["bc"], c.edge, 4);
     ser::copyStr(c.camera, sizeof c.camera, o["camera"].asString()); c.visible = ser::flag(o, "visible", true);
+    c.showInScene = ser::flag(o, "scene", true);
     readItems(o["items"], c);
     w.add<CanvasComp>(e, c);
   }

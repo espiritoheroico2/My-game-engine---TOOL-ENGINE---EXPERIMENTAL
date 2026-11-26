@@ -1069,10 +1069,11 @@ void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img,
     cb.layout = c.layout;
     cb.ref = ed_::kDesignRef;
     cb.selected = ed.selected.index == e.index && ed.selected.generation == e.generation;
-    cb.visible = c.visible;
+    cb.visible = c.showInScene;   // a caixa da Scene so aparece se "Mostrar na Scene" estiver ligado
     v.canvases.push_back(cb);
     if (cb.selected) v.selCanvas = true;
   });
+  vo::buildCanvasPreview(ed, img, v.above);   // previa dos elementos e do fundo do canvas, sobre a cena
   v.probe = [&ed, cam, img](vm::Pixel p) { return sceneProbe(ed, cam, img, p); };
   const vm::Projection proj = vm::Projection::make(cam, {img.x, img.y, img.w, img.h});
   vo::buildParticles(ed, cam, img, ed.selected, v.below);

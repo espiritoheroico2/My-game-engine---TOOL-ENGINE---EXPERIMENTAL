@@ -136,6 +136,7 @@ private:
     box.border = {{std::min(s.a.x, s.b.x), std::min(s.a.y, s.b.y)}, {std::fabs(s.a.x - s.b.x), std::fabs(s.a.y - s.b.y)}};
     Elm::PanelStyle style;
     style.cornerRadius = s.radius;
+    style.borderWidth = s.thickness;
     style.background = premultiplied(s.color);
     style.border = premultiplied(s.edge);
     std::vector<SR::UIRenderItem> built = Elm::BuildPanelItems(box, style, 0.f, out.paint);

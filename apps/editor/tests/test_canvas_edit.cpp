@@ -59,6 +59,15 @@ int main() {
     CHECK(gripAt(b, 106.f, 50.f) == Grip::Corner);
     CHECK(gripAt(b, 50.f, 25.f) == Grip::Body);
     CHECK(gripAt(b, 200.f, 200.f) == Grip::None);
+    CHECK(gripAt(b, 0.f, 0.f) == Grip::Anchor);
+    CHECK(gripAt(b, 4.f, 6.f) == Grip::Anchor);
+  }
+  // Ancora (canto superior esquerdo) move o canvas, como o corpo; nao redimensiona.
+  {
+    tc::Layout l = Follow(0.f, 0.f, 0.f, 0.f, 100.f, 50.f);
+    drag(l, Grip::Anchor, 12.f, 8.f, Ppu{1.f, 1.f});
+    CHECK(Near(l.offsetX, 12.f) && Near(l.offsetY, 8.f));
+    CHECK(Near(l.width, 100.f) && Near(l.height, 50.f));
   }
   // Arrasto do corpo no Follow: move o deslocamento, a ancora fica.
   {

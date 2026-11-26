@@ -64,8 +64,9 @@ public:
     add({ShapeKind::RoundRect, a, b, {}, 0.f, 0.f, radius, 0.f, false, col, {}});
   }
   // Fundo de painel com borda (Elements::Panel da SpriteUI). Os textos gravados antes dele ficam embaixo dele.
-  void panel(Pixel a, Pixel b, float radius, Color fill, Color edge) {
-    add({ShapeKind::Panel, a, b, {}, 0.f, 0.f, radius, 0.f, false, fill, {}, edge});
+  // thickness: espessura da borda em pixels (1 por padrao, como o painel da SpriteUi).
+  void panel(Pixel a, Pixel b, float radius, Color fill, Color edge, float thickness = 1.f) {
+    add({ShapeKind::Panel, a, b, {}, 0.f, thickness, radius, 0.f, false, fill, {}, edge});
   }
   void circleFilled(Pixel center, float r, Color col) { add({ShapeKind::CircleFilled, center, {}, {}, r, 0.f, 0.f, 0.f, false, col, {}}); }
   void circle(Pixel center, float r, Color col, float thickness) { add({ShapeKind::Ring, center, {}, {}, r, thickness, 0.f, 0.f, false, col, {}}); }
