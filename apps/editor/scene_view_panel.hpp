@@ -124,7 +124,8 @@ struct Values {
     tool::canvas::Layout layout;
     tool::canvas::Screen ref;
     bool selected = false;
-    bool visible = true;
+    bool visible = true;    // "Mostrar na Scene" ligado e objeto nao escondido pelo olho
+    bool locked = false;    // cadeado: o canvas nao se move, nao redimensiona e nao edita pontos nem linhas
     std::vector<canvas_division::Point> divisions;   // pontos de divisao (cruzes)
     std::vector<canvas_division::Line> divisionLines;   // linhas entre pontos
     canvas_regions::Regions regions;                    // numero de cada regiao do canvas
@@ -460,7 +461,7 @@ private:
   // o arrasto. True: o clique foi do canvas (nao vai para o objeto da cena).
   bool startCanvas(vm::Pixel p, const Values& v, const sui::Box& img, Requests& out) {
     for (const Values::CanvasBox& c : v.canvases) {
-      if (!c.visible || !c.selected) continue;
+      if (!c.visible || !c.selected || c.locked) continue;   // travado: sem pontos nem linhas
       const canvas_edit::Box b = canvas_edit::boxFor(c.layout, img.w, img.h, c.ref);
       const canvas_edit::Box win{img.x + b.x, img.y + b.y, b.w, b.h};
       // Pontos de divisao do canvas selecionado: pegar um arrasta; no modo Adicionar, clicar dentro coloca um.
@@ -505,6 +506,7 @@ private:
         out.select = c.id;
         return true;
       }
+      if (c.locked) return true;   // travado: seleciona, mas nao move nem redimensiona
       canvasDragging_ = true;
       canvasUp_ = false;
       canvasId_ = c.id;

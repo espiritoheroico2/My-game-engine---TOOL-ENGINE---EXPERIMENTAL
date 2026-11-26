@@ -187,8 +187,8 @@ inline void drawCanvas(Editor& ed, CanvasComp& cv, tool::canvas::Rect r, bool in
 inline void buildUi(Editor& ed, tool::Entity camEnt, sui::Box area, bool interactive, int hoverIdx, int pressedIdx, gp::Cell& cell) {
   tool::World& w = ed.scene.world();
   const auto* cn = w.get<Name>(camEnt);
-  w.each<CanvasComp>([&](tool::Entity, CanvasComp& cv) {
-    if (!cv.visible) return;
+  w.each<CanvasComp>([&](tool::Entity ce, CanvasComp& cv) {
+    if (!cv.visible || w.has<Inactive>(ce)) return;   // olho da hierarquia desligado: o canvas some do jogo
     if (cv.camera[0]) {
       if (!cn || std::string(cv.camera) != cn->text) return;
     } else if (!ed.isPrincipal(camEnt)) {
@@ -205,8 +205,9 @@ inline void buildUi(Editor& ed, tool::Entity camEnt, sui::Box area, bool interac
 // tem camera de jogo) e sem acertos de botao. Nao usa o cache do canvas: o tamanho da area da Scene e outro.
 inline void buildCanvasPreview(Editor& ed, sui::Box area, view::ShapeList& out) {
   gp::Cell scratch;
-  ed.scene.world().each<CanvasComp>([&](tool::Entity, CanvasComp& cv) {
-    if (!cv.showInScene) return;
+  tool::World& w = ed.scene.world();
+  w.each<CanvasComp>([&](tool::Entity ce, CanvasComp& cv) {
+    if (!cv.showInScene || w.has<Inactive>(ce)) return;   // olho desligado: some da previa da Scene tambem
     const canvas_edit::Box b = canvas_edit::boxFor(cv.layout, area.w, area.h, kDesignRef);
     drawCanvas(ed, cv, {area.x + b.x, area.y + b.y, b.w, b.h}, false, -1, -1, scratch);
   });

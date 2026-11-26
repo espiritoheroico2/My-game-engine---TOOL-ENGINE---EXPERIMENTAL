@@ -1093,7 +1093,8 @@ void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img,
     cb.layout = c.layout;
     cb.ref = ed_::kDesignRef;
     cb.selected = ed.selected.index == e.index && ed.selected.generation == e.generation;
-    cb.visible = c.showInScene;   // a caixa da Scene so aparece se "Mostrar na Scene" estiver ligado
+    cb.visible = c.showInScene && !ed.scene.world().has<ed_::Inactive>(e);   // "Mostrar na Scene" e o olho da hierarquia
+    cb.locked = ed.scene.world().has<ed_::Locked>(e);                        // cadeado: sem mover nem editar
     cb.divisions = c.divisions;
     cb.divisionLines = c.divisionLines;
     canvas_regions_refresh(c);
@@ -1164,7 +1165,7 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
   if (r.lineFrom) ed.lineFrom = *r.lineFrom;
   if (r.line) {
     const tool::Entity ce = unpackEntity(r.line->id);
-    if (w.alive(ce)) {
+    if (w.alive(ce) && !w.has<ed_::Locked>(ce)) {   // canvas travado nao muda
       if (auto* c = w.get<ed_::CanvasComp>(ce)) {
         using Op = scene_panel::Requests::LineOp;
         if (r.line->op == Op::Pick) {
@@ -1185,7 +1186,7 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
   }
   if (r.division) {
     const tool::Entity ce = unpackEntity(r.division->id);
-    if (w.alive(ce)) {
+    if (w.alive(ce) && !w.has<ed_::Locked>(ce)) {
       if (auto* c = w.get<ed_::CanvasComp>(ce)) {
         using Op = scene_panel::Requests::DivisionOp;
         if (r.division->op == Op::Add) {
@@ -1206,7 +1207,7 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
   }
   if (r.canvasDrag) {
     const tool::Entity ce = unpackEntity(r.canvasDrag->id);
-    if (w.alive(ce)) {
+    if (w.alive(ce) && !w.has<ed_::Locked>(ce)) {
       if (auto* c = w.get<ed_::CanvasComp>(ce)) {
         editor::canvas_edit::drag(c->layout, r.canvasDrag->grip, r.canvasDrag->dx, r.canvasDrag->dy, r.canvasDrag->ppu);
       }
