@@ -149,6 +149,7 @@ struct CanvasComp {
   float bg[4] = {0.f, 0.f, 0.f, 0.f};       // fundo RGBA 0..1 (alfa 0 = transparente)
   float edge[4] = {1.f, 1.f, 1.f, 1.f};    // cor da borda RGBA 0..1
   std::vector<canvas_division::Point> divisions;   // pontos de divisao (cruzes), em fracao do canvas
+  std::vector<canvas_division::Line> divisionLines;   // linhas entre pontos de divisao
   int count = 0;
   UiElem items[kMaxUi];
 };
@@ -291,6 +292,25 @@ inline tool::Json divisionsJson(const CanvasComp& c) {
   }
   return arr;
 }
+inline tool::Json divisionLinesJson(const CanvasComp& c) {
+  tool::Json arr = tool::Json::array();
+  for (const canvas_division::Line& l : c.divisionLines) {
+    tool::Json q = tool::Json::object();
+    q.set("a", static_cast<double>(l.a)); q.set("b", static_cast<double>(l.b)); q.set("dotted", l.dotted);
+    arr.push(q);
+  }
+  return arr;
+}
+inline void readDivisionLines(const tool::Json& arr, CanvasComp& c) {
+  const auto& it = arr.items();
+  for (size_t i = 0; i < it.size() && c.divisionLines.size() < 128; ++i) {
+    canvas_division::Line l;
+    l.a = static_cast<size_t>(std::max(0.0, it[i]["a"].asNumber(0.0)));
+    l.b = static_cast<size_t>(std::max(0.0, it[i]["b"].asNumber(0.0)));
+    l.dotted = it[i]["dotted"].asBool(false);
+    if (l.a < c.divisions.size() && l.b < c.divisions.size() && l.a != l.b) c.divisionLines.push_back(l);
+  }
+}
 inline void readDivisions(const tool::Json& arr, CanvasComp& c) {
   const auto& it = arr.items();
   for (size_t i = 0; i < it.size() && c.divisions.size() < 64; ++i) {
@@ -393,6 +413,7 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     o.set("camera", std::string(c->camera)); o.set("visible", c->visible); o.set("scene", c->showInScene);
     o.set("items", itemsJson(*c));
     o.set("divisions", divisionsJson(*c));
+    o.set("lines", divisionLinesJson(*c));
     j.set("canvas", o);
   }
   if (auto* p = w.get<ParticleComp>(e)) {
@@ -517,6 +538,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     c.showInScene = ser::flag(o, "scene", true);
     readItems(o["items"], c);
     readDivisions(o["divisions"], c);
+    readDivisionLines(o["lines"], c);
     w.add<CanvasComp>(e, c);
   }
   if (j.has("particles")) {

@@ -52,10 +52,40 @@ int main() {
     std::vector<cd::Point> pts;
     cd::add(pts, 0.1f, 0.1f);
     cd::add(pts, 0.9f, 0.9f);
-    cd::remove(pts, 0);
+    std::vector<cd::Line> none;
+    cd::remove(pts, none, 0);
     Check(pts.size() == 1 && Near(pts[0].x, 0.9f), "remove apaga o ponto certo");
-    cd::remove(pts, 7);
+    cd::remove(pts, none, 7);
     Check(pts.size() == 1, "remove com indice invalido nao muda nada");
+  }
+
+  {
+    std::vector<cd::Point> pts;
+    cd::add(pts, 0.0f, 0.5f);   // 0: (100,200)
+    cd::add(pts, 1.0f, 0.5f);   // 1: (500,200)
+    cd::add(pts, 0.5f, 1.0f);   // 2: (300,350)
+    std::vector<cd::Line> lines;
+    Check(cd::addLine(pts, lines, 0, 1, false), "addLine liga dois pontos");
+    Check(!cd::addLine(pts, lines, 1, 0, true), "addLine recusa a mesma linha no sentido contrario");
+    Check(!cd::addLine(pts, lines, 2, 2, false), "addLine recusa linha de um ponto para ele mesmo");
+    cd::addLine(pts, lines, 1, 2, true);
+    Check(cd::lineAt(pts, lines, canvas, 300.f, 202.f) == 0, "clique a 2 px do meio da linha 0 acerta a linha");
+    Check(cd::lineAt(pts, lines, canvas, 300.f, 230.f) == -1, "clique a 30 px da linha nao acerta");
+    Check(cd::lineAt(pts, lines, canvas, 500.f, 290.f) == 1, "linha pontilhada tambem acerta");
+    cd::remove(pts, lines, 1);
+    Check(pts.size() == 2 && lines.empty(), "remover o ponto apaga as linhas que o usavam");
+  }
+  {
+    std::vector<cd::Point> pts;
+    cd::add(pts, 0.1f, 0.1f);   // 0
+    cd::add(pts, 0.2f, 0.2f);   // 1
+    cd::add(pts, 0.3f, 0.3f);   // 2
+    std::vector<cd::Line> lines;
+    cd::addLine(pts, lines, 2, 0, false);
+    cd::remove(pts, lines, 1);
+    Check(lines.size() == 1 && lines[0].a == 1 && lines[0].b == 0, "remover um ponto desce os indices das linhas restantes");
+    cd::removeLine(lines, 0);
+    Check(lines.empty(), "removeLine apaga a linha");
   }
 
   std::printf("%s\n", gFailures == 0 ? "CanvasDivision OK" : "CanvasDivision FALHOU");
