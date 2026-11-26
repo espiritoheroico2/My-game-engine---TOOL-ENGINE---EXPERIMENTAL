@@ -186,6 +186,8 @@ struct Editor {
   int gizmoMode = 0;
   bool gizmoLocal = false;   // Q: gizmo na Scene pelos eixos do objeto (Local) ou do mundo
   bool canvasEdit = false;   // Edit canvas: na Scene, arrastar move e redimensiona o canvas selecionado
+  bool canvasDivisionAdd = false;   // modo Adicionar ponto de divisao (Edit canvas)
+  int selDivision = -1;             // ponto de divisao selecionado no canvas selecionado
   bool snapOn = false;       // ima da barra flutuante: o gizmo encaixa na grade de snapStep (igual a Ctrl ao arrastar)
   float snapStep = 0.25f;    // passo da grade do ima, em metros
   // Desfazer/Refazer (undo.hpp). `interactingPrev` detecta o fim de uma interacao do usuario.

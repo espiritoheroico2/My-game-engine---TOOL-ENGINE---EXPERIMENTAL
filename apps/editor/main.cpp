@@ -41,6 +41,7 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "sui_palette.hpp"
 #include "panel_router.hpp"
 #include "scene_view_panel.hpp"
+#include "canvas_division.hpp"
 #include "game_view_panel.hpp"
 #include "dock_host.hpp"
 #include "input_script.hpp"
@@ -1066,6 +1067,8 @@ void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img,
   v.snapStep = ed.snapStep;
   v.sel = sceneSelection(ed);
   v.canvasEdit = ed.canvasEdit;
+  v.divisionAdd = ed.canvasDivisionAdd;
+  v.selDivision = ed.selDivision;
   // Canvas da UI de jogo: todos seguem para a janela (ela desenha os visiveis); o selecionado ganha destaque.
   ed.scene.world().each<ed_::CanvasComp>([&](tool::Entity e, ed_::CanvasComp& c) {
     scene_panel::Values::CanvasBox cb;
@@ -1074,6 +1077,7 @@ void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img,
     cb.ref = ed_::kDesignRef;
     cb.selected = ed.selected.index == e.index && ed.selected.generation == e.generation;
     cb.visible = c.showInScene;   // a caixa da Scene so aparece se "Mostrar na Scene" estiver ligado
+    cb.divisions = c.divisions;
     v.canvases.push_back(cb);
     if (cb.selected) v.selCanvas = true;
   });
@@ -1132,6 +1136,24 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
   if (r.snapOn) ed.snapOn = *r.snapOn;
   if (r.snapStep) ed.snapStep = *r.snapStep;
   if (r.canvasEdit) ed.canvasEdit = *r.canvasEdit;
+  if (r.divisionAdd) ed.canvasDivisionAdd = *r.divisionAdd;
+  if (r.selDivision) ed.selDivision = *r.selDivision;
+  if (r.division) {
+    const tool::Entity ce = unpackEntity(r.division->id);
+    if (w.alive(ce)) {
+      if (auto* c = w.get<ed_::CanvasComp>(ce)) {
+        using Op = scene_panel::Requests::DivisionOp;
+        if (r.division->op == Op::Add) {
+          editor::canvas_division::add(c->divisions, r.division->x, r.division->y);
+        } else if (r.division->op == Op::Move) {
+          editor::canvas_division::move(c->divisions, r.division->index, r.division->x, r.division->y);
+        } else {
+          editor::canvas_division::remove(c->divisions, r.division->index);
+          ed.selDivision = -1;
+        }
+      }
+    }
+  }
   if (r.canvasDrag) {
     const tool::Entity ce = unpackEntity(r.canvasDrag->id);
     if (w.alive(ce)) {
