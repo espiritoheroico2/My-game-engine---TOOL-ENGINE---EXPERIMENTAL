@@ -22,6 +22,7 @@
 #include "scene_transform_menu.hpp"
 #include "canvas_edit.hpp"
 #include "canvas_division.hpp"
+#include "canvas_regions.hpp"
 #include "scene_view_model.hpp"
 #include "spriteui_host.hpp"
 #include "sui_panel.hpp"
@@ -126,6 +127,7 @@ struct Values {
     bool visible = true;
     std::vector<canvas_division::Point> divisions;   // pontos de divisao (cruzes)
     std::vector<canvas_division::Line> divisionLines;   // linhas entre pontos
+    canvas_regions::Regions regions;                    // numero de cada regiao do canvas
   };
   std::vector<CanvasBox> canvases;
   bool selCanvas = false;    // a selecao e um Canvas: mostra o botao Edit canvas
@@ -545,6 +547,12 @@ private:
             out.line({ax + dx * t0, ay + dy * t0}, {ax + dx * t1, ay + dy * t1}, 1.f, col);
           }
         }
+      }
+      // Numero de cada regiao, no centro dela.
+      for (int id = 1; id < c.regions.next; ++id) {
+        float rx = 0.f, ry = 0.f;
+        if (!canvas_regions::centerOf(c.regions, id, rx, ry)) continue;
+        out.text({a.x + rx * b.w - 4.f, a.y + ry * b.h - 6.f}, std::to_string(id), kFont, edge);
       }
       // Pontos de divisao: cruz e nome (viewpoint). O ponto selecionado fica em destaque.
       for (std::size_t i = 0; i < c.divisions.size(); ++i) {
