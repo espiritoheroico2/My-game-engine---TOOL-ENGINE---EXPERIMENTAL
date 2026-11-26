@@ -32,8 +32,10 @@
 #include "framed_window.hpp"
 #include "i18n.hpp"
 #include "inspector_bridge.hpp"
+#include "color_popup.hpp"
 #include "inspector_model.hpp"
 #include "project.hpp"
+#include "text_edit_keys.hpp"
 #include "slider_value_edit.hpp"
 #include "sui_panel.hpp"
 #include "ui_style.hpp"
@@ -292,7 +294,7 @@ class InspectorPanel {
                 dropdownRowTexts(drops_[c.key]);
             }
         }
-        if (popup_.open) appendPopup(items, paint);
+        if (popup_.isOpen()) appendPopup(items, paint);
         overlay_.appendItems(items, origin_.x, origin_.y, 0.f, visible_.y, visible_.y + visible_.h, owner, 0u, paint);
 
         packet_ = extractor_.Build(++frameId_, items, nullptr, clips);
@@ -304,7 +306,7 @@ class InspectorPanel {
     [[nodiscard]] bool wantsTextCursor(float x, float y) const {
         if (!shown_ || !sui::Box{visible_.x, visible_.y, visible_.w, visible_.h}.contains(x, y)) return false;
         const SU::Vec2 p{x - origin_.x, y - origin_.y};
-        if (field_kind_ == FieldKind::Hex && popup_.open && contains(pickerLayout().hexField, p)) return true;
+        if (popup_.overHex(p)) return true;
         for (const Control& c : controls_) {
             if (!c.disabled && (c.kind == Kind::Num || c.kind == Kind::Text) && contains(c.box, p)) return true;
         }
@@ -329,6 +331,7 @@ class InspectorPanel {
                 if (!captured_) return false;
                 return pointer(Elm::PointerPhase::Move, e.motion.x, e.motion.y, e.motion.windowID);
             case SDL_EVENT_TEXT_INPUT:
+                if (popup_.editingHex()) return popup_.text(e.text.text, SDL_GetWindowFromID(e.text.windowID));
                 if (field_kind_ == FieldKind::None) return false;
                 if (e.text.text) {
                     field_.Edit().InsertText(e.text.text);
@@ -336,6 +339,7 @@ class InspectorPanel {
                 }
                 return true;
             case SDL_EVENT_KEY_DOWN:
+                if (popup_.editingHex()) return popup_.keyDown(e.key.key, static_cast<SDL_Keymod>(e.key.mod), SDL_GetWindowFromID(e.key.windowID));
                 if (field_kind_ == FieldKind::None) return false;
                 keyInField(e.key.key, static_cast<SDL_Keymod>(e.key.mod), e.key.windowID);
                 return true;
@@ -347,7 +351,7 @@ class InspectorPanel {
   private:
     // ------------------------------------------------------------------ tipos
     enum class Kind : std::uint8_t { Header, Slider, Check, Drop, Swatch, Num, Text, Button, Cell };
-    enum class FieldKind : std::uint8_t { None, Number, Text, Hex };
+    enum class FieldKind : std::uint8_t { None, Number, Text };
 
     struct Control {
         Kind kind = Kind::Button;
@@ -1445,21 +1449,13 @@ class InspectorPanel {
     }
 
     // ------------------------------------------------------------------ seletor de cor
-    [[nodiscard]] Wd::ColorPickerLayout pickerLayout() const {
-        const SU::Rect inner{{popup_.box.position.x + 8.f, popup_.box.position.y + 8.f}, {popup_.box.size.x - 16.f, popup_.box.size.y - 16.f}};
-        return Wd::LayoutColorPicker(inner, pickerStyle_);
-    }
-
+    // O seletor e o popup compartilhado (color_popup.hpp): aqui so abre na amostra e entrega o desenho e o ponteiro.
     void openPicker(std::uint32_t key, float* rgb) {
         closePopups();
-        popup_.open = true;
-        popup_.key = key;
-        popup_.rgb = rgb;
         // Fica abaixo da amostra, sem sair da largura do bloco.
         const SU::Rect sw = swatchBox(key);
         const float x = std::min(sw.position.x, std::max(0.f, width_ - Metrics::kPopupW - 2.f));
-        popup_.box = rect(x, sw.position.y + sw.size.y + 4.f, Metrics::kPopupW, Metrics::kPopupH);
-        ib::SyncColorPicker(picker_, rgb);
+        popup_.open(key, rgb, rect(x, sw.position.y + sw.size.y + 4.f, Metrics::kPopupW, Metrics::kPopupH));
     }
 
     [[nodiscard]] SU::Rect swatchBox(std::uint32_t key) const {
@@ -1470,49 +1466,28 @@ class InspectorPanel {
     }
 
     void closePopups() {
-        popup_.open = false;
-        popup_.rgb = nullptr;
+        popup_.close();
         for (auto& [k, dd] : drops_) (void)dd.control.Close();
-        if (field_kind_ == FieldKind::Hex) endEdit();
     }
 
-    // Desenho da lista aberta do seletor: fundo, area de saturacao e matiz, amostra, HEX e os canais.
+    [[nodiscard]] color_popup::Look popupLook() const {
+        color_popup::Look look;
+        look.frame = frameStyle_;
+        look.field = fieldColor_;
+        look.fieldFocus = fieldFocusColor_;
+        look.text = theme_.text;
+        look.selection = selectionColor_;
+        look.font = Metrics::kFont;
+        look.fieldFont = editor::ui_style::uiFont(Metrics::kFont);
+        look.zPanel = Metrics::kZPopup;
+        return look;
+    }
+
+    // Lista aberta do seletor: fundo, area de cor, campo HEX e canais, no quadro do painel.
     void appendPopup(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint) {
-        Elm::Panel frame;
-        frame.border = popup_.box;
-        append(items, paint, Elm::BuildPanelItems(frame, frameStyle_, Metrics::kZPopup, paint));
-        const Wd::ColorPickerLayout layout = pickerLayout();
-        append(items, paint, Wd::BuildColorPickerItems(picker_, layout, sui::handleFor(0), pickerStyle_, Metrics::kZPopup, paint));
-        const std::string hex = im::HexText(popup_.rgb);
-        if (field_kind_ == FieldKind::Hex) {
-            std::vector<SR::ClipRectGPU> clips{{visible_.x, visible_.y, visible_.x + visible_.w, visible_.y + visible_.h}};
-            Edit::TextFieldRenderTarget target;
-            target.owner = sui::handleFor(0);
-            target.textureSlice = canvas_.sliceFor(Metrics::kFont);
-            target.zOrder = Metrics::kZPopup;
-            target.paintOrder = paint;
-            Edit::TextFieldStyle style;
-            style.background = fieldColor_;
-            style.focusBackground = fieldFocusColor_;
-            style.text = theme_.text;
-            style.selection = selectionColor_;
-            style.caret = theme_.text;
-            style.paddingX = 6.f;
-            style.height = layout.hexField.size.y;
-            style.fontSize = editor::ui_style::uiFont(Metrics::kFont);
-            const ST::TextLayoutResult lay = canvas_.layout(field_.Edit().Text(), Metrics::kFont);
-            std::vector<SR::UIRenderItem> built = field_.Build(toScreen(layout.hexField), lay, style, target, clips);
-            paint += built.size() + 1;
-            items.insert(items.end(), built.begin(), built.end());
-        } else {
-            overlay_.addText(layout.hexField.position.x + 6.f, layout.hexField.position.y + 5.f, hex, Metrics::kFont, theme_.text,
-                             layout.hexField.size.x - 10.f);
-        }
-        static const Wd::ColorChannel channels[4] = {Wd::ColorChannel::Red, Wd::ColorChannel::Green, Wd::ColorChannel::Blue, Wd::ColorChannel::Alpha};
-        for (int i = 0; i < 3; ++i) {   // R, G, B: so leitura (a digitacao e pelo HEX)
-            const SU::Rect r = layout.channelFields[static_cast<std::size_t>(i)];
-            overlay_.addText(r.position.x + 6.f, r.position.y + 5.f, picker_.ChannelText(channels[i]), Metrics::kSmallFont + 1.f, theme_.text, r.size.x - 8.f);
-        }
+        popup_.setLook(popupLook());
+        popup_.append(items, paint, sui::handleFor(0), SU::Vec2{origin_.x, origin_.y}, 0u,
+                      rect(visible_.x, visible_.y, visible_.w, visible_.h));
     }
 
     // ------------------------------------------------------------------ eventos
@@ -1538,7 +1513,7 @@ class InspectorPanel {
 
     bool routePointer(Elm::PointerPhase phase, SU::Vec2 p, SDL_Window* window) {
         // Clique fora do campo em edicao (que nao seja o HEX, tratado no seletor) encerra a edicao.
-        if (phase == Elm::PointerPhase::Down && field_kind_ != FieldKind::None && field_kind_ != FieldKind::Hex && !contains(field_box_, p)) {
+        if (phase == Elm::PointerPhase::Down && field_kind_ != FieldKind::None && !contains(field_box_, p)) {
             endEdit(window);
         }
         // Lista aberta de escolha: so ela recebe o ponteiro.
@@ -1547,7 +1522,7 @@ class InspectorPanel {
             applyDrop(c, phase, p);
             return true;
         }
-        if (field_kind_ != FieldKind::None && field_kind_ != FieldKind::Hex && field_.DraggingSelection()) {
+        if (field_kind_ != FieldKind::None && field_.DraggingSelection()) {
             if (phase == Elm::PointerPhase::Move) {
                 const ST::TextLayoutResult lay = canvas_.layout(field_.Edit().Text(), Metrics::kFont);
                 field_.PointerMove(SU::Vec2{p.x - field_box_.position.x, p.y - field_box_.position.y},
@@ -1560,9 +1535,9 @@ class InspectorPanel {
             }
         }
         // Seletor de cor aberto: arrastes na area e nos campos.
-        if (popup_.open) {
-            if (contains(popup_.box, p)) {
-                popupPointer(phase, p, window);
+        if (popup_.isOpen()) {
+            if (popup_.contains(p)) {
+                popup_.pointer(phase, p, window);
                 return true;
             }
             if (phase == Elm::PointerPhase::Down) closePopups();
@@ -1646,47 +1621,6 @@ class InspectorPanel {
         if (ev.valueChanged && c.setIndex) c.setIndex(dd.control.selectedIndex);
     }
 
-    void popupPointer(Elm::PointerPhase phase, SU::Vec2 p, SDL_Window* window) {
-        const Wd::ColorPickerLayout layout = pickerLayout();
-        if (phase == Elm::PointerPhase::Down && field_kind_ == FieldKind::Hex && !contains(layout.hexField, p)) endEdit(window);
-        if (phase == Elm::PointerPhase::Down && contains(layout.hexField, p)) {
-            if (field_kind_ != FieldKind::Hex) startHexEdit(window);
-            const ST::TextLayoutResult lay = canvas_.layout(field_.Edit().Text(), Metrics::kFont);
-            field_.PointerDown(SU::Vec2{p.x - layout.hexField.position.x, p.y - layout.hexField.position.y}, layout.hexField.size, lay,
-                               fieldStyle(layout.hexField));
-            return;
-        }
-        if (field_kind_ == FieldKind::Hex && field_.DraggingSelection()) {
-            if (phase == Elm::PointerPhase::Move) {
-                const ST::TextLayoutResult lay = canvas_.layout(field_.Edit().Text(), Metrics::kFont);
-                field_.PointerMove(SU::Vec2{p.x - layout.hexField.position.x, p.y - layout.hexField.position.y}, layout.hexField.size,
-                                  lay, fieldStyle(layout.hexField));
-                return;
-            }
-            if (phase == Elm::PointerPhase::Up) {
-                field_.PointerUp();
-                return;
-            }
-        }
-        if (phase == Elm::PointerPhase::Down || phase == Elm::PointerPhase::Move) {
-            bool changed = false;
-            if (contains(layout.saturationValue, p) || (phase == Elm::PointerPhase::Move && dragArea_ == 1)) {
-                if (phase == Elm::PointerPhase::Down) dragArea_ = 1;
-                const float s = clamp01((p.x - layout.saturationValue.position.x) / layout.saturationValue.size.x);
-                const float v = clamp01(1.f - (p.y - layout.saturationValue.position.y) / layout.saturationValue.size.y);
-                changed = picker_.DragSaturationValue(s, v);
-            } else if (contains(layout.hue, p) || (phase == Elm::PointerPhase::Move && dragArea_ == 2)) {
-                if (phase == Elm::PointerPhase::Down) dragArea_ = 2;
-                const float h = clamp01((p.x - layout.hue.position.x) / layout.hue.size.x);
-                changed = picker_.DragHue(h);
-            }
-            if (changed && popup_.rgb) ib::ReadColorPicker(picker_, popup_.rgb);
-        }
-        if (phase == Elm::PointerPhase::Up) dragArea_ = 0;
-    }
-
-    static float clamp01(float v) { return std::clamp(v, 0.f, 1.f); }
-
     [[nodiscard]] Elm::PointerEvent event(Elm::PointerPhase phase, SU::Vec2 p, const SU::Rect& box) const {
         return Elm::PointerEvent{phase, p, 0u, contains(box, p)};
     }
@@ -1722,14 +1656,6 @@ class InspectorPanel {
         if (window) SDL_StartTextInput(window);
     }
 
-    void startHexEdit(SDL_Window* window) {
-        field_key_ = 0xFFFFFFFFu;
-        field_ = Edit::TextField(im::HexText(popup_.rgb));
-        field_.SetFocus(true);
-        field_kind_ = FieldKind::Hex;
-        if (window) SDL_StartTextInput(window);
-    }
-
     void endEdit(SDL_Window* window = nullptr) {
         if (field_kind_ == FieldKind::None) return;
         field_.SetFocus(false);
@@ -1759,22 +1685,10 @@ class InspectorPanel {
             if (im::ParseNumberInRange(text, edit_range_, out) && edit_set_f_) edit_set_f_(out);
         } else if (field_kind_ == FieldKind::Text) {
             if (edit_set_text_) edit_set_text_(text);
-        } else if (field_kind_ == FieldKind::Hex) {
-            float rgb[3] = {0.f, 0.f, 0.f};
-            if (im::ApplyHexColor(text, rgb) && popup_.open) {
-                (void)picker_.SetColor(SU::Vec4{rgb[0], rgb[1], rgb[2], 1.0f});
-                if (popup_.rgb) {
-                    popup_.rgb[0] = rgb[0];
-                    popup_.rgb[1] = rgb[1];
-                    popup_.rgb[2] = rgb[2];
-                }
-            }
         }
     }
 
     void keyInField(SDL_Keycode key, SDL_Keymod mod, SDL_WindowID windowId) {
-        const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
-        const bool ctrl = (mod & SDL_KMOD_CTRL) != 0;
         SDL_Window* window = SDL_GetWindowFromID(windowId);
         if (key == SDLK_ESCAPE) {
             const std::function<void()> cancel = edit_on_cancel_;
@@ -1789,30 +1703,7 @@ class InspectorPanel {
             if (enter) enter();
             return;
         }
-        if (ctrl && key == SDLK_A) {
-            field_.Edit().SelectAll();
-        } else if (ctrl && key == SDLK_C) {
-            SDL_SetClipboardText(field_.Edit().Copy().c_str());
-        } else if (ctrl && key == SDLK_V) {
-            if (char* clip = SDL_GetClipboardText()) {
-                field_.Edit().Paste(clip);
-                SDL_free(clip);
-            }
-        } else if (key == SDLK_BACKSPACE) {
-            (void)field_.Edit().Backspace();
-        } else if (key == SDLK_DELETE) {
-            (void)field_.Edit().Delete();
-        } else if (key == SDLK_LEFT) {
-            field_.Edit().MoveLeft(shift);
-        } else if (key == SDLK_RIGHT) {
-            field_.Edit().MoveRight(shift);
-        } else if (key == SDLK_HOME) {
-            field_.Edit().MoveHome(shift);
-        } else if (key == SDLK_END) {
-            field_.Edit().MoveEnd(shift);
-        } else {
-            return;
-        }
+        if (!text_keys::ApplyEditKey(field_, key, mod)) return;
         commitField();
     }
 
@@ -1848,7 +1739,6 @@ class InspectorPanel {
     sui::Box visible_;
     bool shown_ = false;
     bool captured_ = false;
-    int dragArea_ = 0;
 
     im::Expanders expanders_;
     std::vector<Control> controls_;
@@ -1876,13 +1766,7 @@ class InspectorPanel {
     int lastTagClick_ = -1;
     std::uint32_t lastTagClickMs_ = 0;
 
-    struct Popup {
-        bool open = false;
-        std::uint32_t key = 0;
-        float* rgb = nullptr;
-        SU::Rect box{};
-    } popup_;
-    Wd::ColorPickerControl picker_;
+    color_popup::ColorPopup popup_{canvas_, overlay_};
 
     SU::Vec4 headerColor_ = sui::Srgb(0.10f, 0.13f, 0.18f, 1.f);
     SU::Vec4 headingColor_ = sui::Srgb(0.45f, 0.72f, 0.96f);
@@ -1899,7 +1783,6 @@ class InspectorPanel {
     Elm::CheckboxStyle checkStyle_{};
     Elm::DropdownStyle dropdownStyle_{};
     Elm::ButtonStyle buttonStyle_{};
-    Wd::ColorPickerStyle pickerStyle_{};
 };
 
 }  // namespace editor::inspector_panel
