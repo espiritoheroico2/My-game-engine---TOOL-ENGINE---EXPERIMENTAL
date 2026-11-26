@@ -543,6 +543,7 @@ struct Editor {
       UiElem& t = u.items[u.count++]; ser::copyStr(t.text, sizeof t.text, "Score: {score}"); t.x = 0.03f; t.y = 0.03f; t.fontScale = 1.4f;
       UiElem& b = u.items[u.count++]; b.kind = 3; b.x = 0.03f; b.y = 0.1f; b.w = 0.25f; b.h = 0.03f; ser::copyStr(b.action, sizeof b.action, "score"); b.maxValue = 10.f; b.color[0] = 0.9f; b.color[1] = 0.2f; b.color[2] = 0.2f;
       UiElem& k = u.items[u.count++]; k.kind = 2; k.x = 0.03f; k.y = 0.16f; k.w = 0.16f; k.h = 0.06f; ser::copyStr(k.text, sizeof k.text, "Add score"); ser::copyStr(k.action, sizeof k.action, "add_score"); k.color[0] = 0.9f; k.color[1] = 0.8f; k.color[2] = 0.3f;
+      stampNew(t, u); stampNew(b, u); stampNew(k, u);   // ids unicos e ordem Z (texto embaixo, botao em cima)
       scene.world().add<CanvasComp>(ui, u); }
     selected = {};
   }

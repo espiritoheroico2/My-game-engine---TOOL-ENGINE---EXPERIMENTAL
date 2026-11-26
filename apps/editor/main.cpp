@@ -726,6 +726,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     } else if (r == R::Canvas) {
       ed_::CanvasComp cv = ed_::FullCanvas(); ed_::UiElem& e = cv.items[cv.count++];
       std::snprintf(e.text, sizeof e.text, "%s", "Hello UI");
+      ed_::stampNew(e, cv);
       w.add<ed_::CanvasComp>(sel, cv);
     } else if (r == R::Voxel) {
       ed_::VoxelChunk vc; editor::fillTerrain(vc, 0, 0);
@@ -782,6 +783,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     if (!u || u->count >= ed_::kMaxUi) return;
     ed_::UiElem& e = u->items[u->count++];
     e = ed_::UiElem{};
+    ed_::stampNew(e, *u);   // id unico e ordem Z acima dos outros elementos
     if (kind == 0) {   // texto
       e.y = 0.05f + 0.07f * static_cast<float>(u->count);
       std::snprintf(e.text, sizeof e.text, "%s", "Score: {score}");

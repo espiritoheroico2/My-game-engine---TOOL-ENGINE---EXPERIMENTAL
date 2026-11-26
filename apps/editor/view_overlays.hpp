@@ -139,7 +139,11 @@ inline void drawCanvas(Editor& ed, CanvasComp& cv, tool::canvas::Rect r, bool in
   view::ShapeList& out = cell.overlay;
   const float k = cv.layout.width > 0.f ? r.w / cv.layout.width : 1.f;   // raio e borda acompanham a escala do canvas
   canvas_paint::drawBase(out, {r.x, r.y}, {r.x + r.w, r.y + r.h}, cv.bg, cv.edge, cv.style.radius * k, cv.style.borderWidth * k);
-  for (int i = 0; i < cv.count && i < kMaxUi; ++i) {
+  // Ordem Z: desenha do de z menor para o maior (o de z maior fica por cima). Empate: a ordem da lista.
+  std::vector<int> order;
+  for (int i = 0; i < cv.count && i < kMaxUi; ++i) order.push_back(i);
+  std::stable_sort(order.begin(), order.end(), [&cv](int p, int q) { return cv.items[p].z < cv.items[q].z; });
+  for (int i : order) {
     UiElem& it = cv.items[i];
     const vm::Pixel a{r.x + it.x * r.w, r.y + it.y * r.h};
     const vm::Pixel b{a.x + it.w * r.w, a.y + it.h * r.h};

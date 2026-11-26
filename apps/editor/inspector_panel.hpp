@@ -1108,7 +1108,9 @@ class InspectorPanel {
             nextRow();
             drop(T("Type"), tr({"Text", "Panel", "Button", "Bar"}), static_cast<std::size_t>(k), [&it](std::size_t t) { it.kind = static_cast<int>(t); });
             textRow(T("Text (use {variable})"), it.text, sizeof it.text);
-            textRow(T("Id"), it.id, sizeof it.id);
+            canvas_.addText(innerX_, y_ + 5.f, F("%s: %s", T("Id (unique, automatic)"), it.id), Metrics::kFont, headingColor_, ctrlX_ - innerX_ - 6.f);
+            nextRow();
+            intRow(T("Order Z (higher = in front)"), &it.z, -999, 999);
             if (it.kind == 2) textRow(T("Event name (on click)"), it.action, sizeof it.action);
             if (it.kind == 3) {
                 textRow(T("Variable"), it.action, sizeof it.action);

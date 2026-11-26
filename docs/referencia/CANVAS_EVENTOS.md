@@ -6,7 +6,8 @@ Status: **projeto aprovado, ainda não implementado**. Este documento descreve a
 
 - Um **canvas** é a tela de UI de uma entidade. Ele é dividido em **regiões** por pontos de divisão e linhas (feito no editor).
 - Cada região tem um número. A numeração segue a ordem de criação. Quando regiões se fundem, a fusão fica com o menor número (fusão da 4 com a 7 = 4).
-- Cada **elemento** (botão, texto, barra) tem um **id único** gerado automaticamente. O id nunca é reaproveitado no mesmo canvas.
+- Cada **elemento** (botão, texto, barra) recebe um **id único** no momento da criação. O id vale para o **jogo inteiro**, tem letras e números (formato `e` + base 36, ex.: `e1`, `ea`, `e10`) e nunca é reaproveitado durante a sessão.
+- Cada elemento tem uma **ordem Z**: o de valor maior fica por cima dos outros. Elementos novos entram por cima de todos.
 - Elementos e o jogo se comunicam por **eventos**, no estilo de eventos do C#: você se inscreve com uma função, e o evento chama todas as funções inscritas quando é disparado.
 
 ## Criar um elemento
@@ -22,14 +23,21 @@ Parâmetros de `CreateElement(tipo, texto, x, y, estiloBorda, regiao)`:
 |---|---|
 | `tipo` | Constante do tipo de elemento: `button`, `text`, `bar`. |
 | `texto` | Texto exibido no elemento. |
-| `x`, `y` | Posição. **Proposta:** fração do canvas (0 a 1). A confirmar. |
+| `x`, `y` | Posição do elemento dentro do canvas, em fração (0 = esquerda/topo, 1 = direita/base). |
 | `estiloBorda` | Constante de borda: `border.round`, e outras. |
 | `regiao` | Número da região onde o elemento fica. Usa a numeração salva no canvas. |
 
 O retorno é um objeto de elemento com:
 
-- `element.getID()` ou `element.id`: id único do elemento (número).
+- `element.getID()` ou `element.id`: id único do elemento, em texto (ex.: `"e1"`).
+- `element.z`: ordem Z do elemento. Maior fica por cima.
 - `element.Pressed`: evento disparado quando o elemento é clicado.
+
+## Ordem Z
+
+- O editor mostra o campo **Ordem Z** em cada elemento (valor maior fica por cima).
+- Elementos com a mesma ordem Z são desenhados na ordem da lista.
+- Um clique acerta o elemento de cima, então o que está visível recebe o clique.
 
 ## Eventos
 
@@ -77,10 +85,9 @@ As regiões vêm do editor e são salvas com o canvas. Os scripts conseguem usar
 
 ## Em aberto
 
-1. Unidades de `x` e `y`: fração do canvas (proposta), células da grade ou pixels.
-2. Tipo do argumento de `trigger`: texto livre (como `"cena game"`) ou objeto com campos (como `{ cena: "game" }`).
-3. Escopo do id: único por canvas (proposta) ou único no jogo inteiro.
-4. Operações por região: mostrar, esconder, adicionar e remover elementos pelo número da região.
+1. Tipo do argumento de `trigger`: texto livre (como `"cena game"`) ou objeto com campos (como `{ cena: "game" }`).
+2. Operações por região: mostrar, esconder, adicionar e remover elementos pelo número da região.
+3. Ids carregados de arquivo: hoje, ids repetidos num arquivo editado à mão não são corrigidos. Só ids vazios ou fora do formato são trocados.
 
 ## Relação com o sistema antigo
 
