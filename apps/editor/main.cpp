@@ -1048,7 +1048,14 @@ scene_panel::Probe sceneProbe(Editor& ed, const tool::Camera& cam, editor::sui::
 
 // Monta os dados da Scene do quadro: flags, selecao, particulas (abaixo), grade, cortados e icones (acima).
 // Regioes do canvas: recalcula a numeracao a partir de pontos e linhas (ver canvas_regions.hpp).
-void canvas_regions_refresh(ed_::CanvasComp& c) { editor::canvas_regions::refresh(c.regions, c.divisions, c.divisionLines); }
+void canvas_regions_refresh(ed_::CanvasComp& c) {
+  editor::canvas_regions::refresh(c.regions, c.divisions, c.divisionLines);
+  // Cada elemento sabe a regiao onde esta (pelo centro): acompanha quando e movido.
+  for (int i = 0; i < c.count && i < ed_::kMaxUi; ++i) {
+    ed_::UiElem& it = c.items[i];
+    it.region = editor::canvas_regions::regionOfBox(c.regions, it.x, it.y, it.w, it.h);
+  }
+}
 
 void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img, SDL_Texture* tex, int tw, int th) {
   scene_panel::Values v;
