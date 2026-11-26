@@ -110,6 +110,9 @@ class Host {
   }
 
   // A janela deve ser desenhada neste quadro: aberta e (flutuante ou a aba ativa da folha).
+  // Janela solta (fora do dock). A ordem de desenho usa isso: acopladas primeiro, soltas por ultimo.
+  [[nodiscard]] bool floating(SU::UIHandle id) const { return !model_.contains(id); }
+
   [[nodiscard]] bool visible(SU::UIHandle id, bool open) const {
     if (!open) return false;
     return !model_.contains(id) || model_.active(id);
