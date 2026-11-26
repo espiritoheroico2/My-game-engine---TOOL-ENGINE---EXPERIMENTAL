@@ -3,10 +3,11 @@
 // Pintura do fundo e da borda de um Canvas, igual na Game e na previa da Scene (sem janela).
 //
 // As cores ficam no componente como float[4] (RGBA, 0..1): o color picker escreve direto nelas, e o ponteiro continua
-// valido enquanto o picker esta aberto. O pintor espera cor pre-multiplicada (RGB ja vezes o alfa), entao
-// shapeColor faz essa conta. Sem isso, um fundo com alfa 14 sai branco solido.
+// valido enquanto o picker esta aberto. O pintor (view_painter.hpp) espera cor RETA (RGB sem multiplicar pelo alfa) e
+// quem faz a mistura e o SDL com BLEND reto. Por isso shapeColor so copia os canais.
 //
-// Exemplo: fundo azul (0, 0, 1) com opacidade 0,5 vai para o pintor como (0, 0, 0,5) com alfa 0,5.
+// Exemplo: fundo azul (0, 0, 1) com opacidade 0,5 vai para o pintor como (0, 0, 1) com alfa 0,5: metade azul, metade
+// do que estiver por baixo. Antes, o RGB era multiplicado pelo alfa duas vezes (aqui e no pintor), escurecendo as cores.
 
 #include "view_shapes.hpp"
 
@@ -14,10 +15,9 @@
 
 namespace editor::canvas_paint {
 
-// Cor RGBA 0..1 para a forma, pre-multiplicada.
+// Cor RGBA 0..1 para a forma, em cor reta (o alfa vale na mistura).
 inline view::Color shapeColor(const float c[4]) {
-  const float a = std::clamp(c[3], 0.f, 1.f);
-  return view::rgbaF(c[0] * a, c[1] * a, c[2] * a, a);
+  return view::rgbaF(c[0], c[1], c[2], std::clamp(c[3], 0.f, 1.f));
 }
 
 // Desenha o fundo e a borda do canvas no retangulo (a, b), em pixels de janela. radius e borderWidth ja estao na escala
