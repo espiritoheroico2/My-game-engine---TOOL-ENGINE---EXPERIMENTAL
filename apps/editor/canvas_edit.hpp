@@ -29,8 +29,9 @@ struct Box {
   [[nodiscard]] bool contains(float px, float py) const { return px >= x && px < x + w && py >= y && py < y + h; }
 };
 
-// Alca escolhida por um clique: nada, o corpo do canvas ou o canto inferior direito.
-enum class Grip : std::uint8_t { None, Body, Corner };
+// Alca escolhida por um clique: nada, o corpo do canvas, a ancora (canto superior esquerdo, para mover) ou o canto
+// inferior direito (para redimensionar).
+enum class Grip : std::uint8_t { None, Body, Anchor, Corner };
 
 // Retangulo do canvas dentro de uma area de (areaW, areaH) pixels de tela, em coordenadas locais da area.
 // ref e a referencia de projeto dos layouts (o modo Scale escala a partir dela).
@@ -39,9 +40,11 @@ inline Box boxFor(const tool::canvas::Layout& l, float areaW, float areaH, tool:
   return {r.x, r.y, r.w, r.h};
 }
 
-// Alca sob o ponto (px, py), em coordenadas da mesma origem da caixa. O canto tem prioridade sobre o corpo.
+// Alca sob o ponto (px, py), em coordenadas da mesma origem da caixa. Canto inferior direito e ancora (superior
+// esquerdo) tem prioridade sobre o corpo.
 inline Grip gripAt(const Box& b, float px, float py) {
   if (std::fabs(px - (b.x + b.w)) <= kCornerPx && std::fabs(py - (b.y + b.h)) <= kCornerPx) return Grip::Corner;
+  if (std::fabs(px - b.x) <= kCornerPx && std::fabs(py - b.y) <= kCornerPx) return Grip::Anchor;
   if (b.contains(px, py)) return Grip::Body;
   return Grip::None;
 }
@@ -61,7 +64,7 @@ inline Ppu pixelsPerUnit(const Box& b, const tool::canvas::Layout& l) {
 // Aplica um arrasto em pixels de tela. ppu vem de pixelsPerUnit no momento do clique (a escala nao muda durante o arrasto).
 inline void drag(tool::canvas::Layout& l, Grip g, float dx, float dy, Ppu ppu) {
   if (ppu.x <= 0.f || ppu.y <= 0.f) return;
-  if (g == Grip::Body) {
+  if (g == Grip::Body || g == Grip::Anchor) {   // a ancora so move; a ancora em si nao muda (anchorX/Y)
     l.offsetX += dx / ppu.x;
     l.offsetY += dy / ppu.y;
   } else if (g == Grip::Corner) {

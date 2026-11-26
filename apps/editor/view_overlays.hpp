@@ -15,6 +15,8 @@
 //   buildCulled:     contorno vermelho dos objetos que a camera de jogo principal nao desenha.
 //   buildPhysics:    contornos dos colisores (esferas e caixas) quando "Draw colliders" esta ligado.
 
+#include "canvas_edit.hpp"
+#include "canvas_paint.hpp"
 #include "editor_state.hpp"
 #include "fx.hpp"                 // fxdetail (trajetoria, alfa e cor) e uiFormat
 #include "game_view_panel.hpp"
@@ -130,10 +132,57 @@ inline void buildParticles(Editor& ed, const tool::Camera& cam, sui::Box area, t
 // UI do jogo de uma camera: desenha os Canvas que pertencem a camEnt dentro da celula. Cada canvas se posiciona na
 // area da camera (ancora e tamanho do layout); os elementos sao fracoes do canvas. Os botoes viram acertos na
 // celula (com a cor de hover/pressionado vinda de hoverIdx/pressedIdx, indices de botao da celula).
+// Um canvas no retangulo r (pixels de janela): fundo, borda e elementos (fracoes do canvas). Os botoes viram acertos
+// em cell.hits quando interactive; a previa da Scene desenha sem acertos.
+inline void drawCanvas(Editor& ed, CanvasComp& cv, tool::canvas::Rect r, bool interactive, int hoverIdx, int pressedIdx,
+                       gp::Cell& cell) {
+  view::ShapeList& out = cell.overlay;
+  const float k = cv.layout.width > 0.f ? r.w / cv.layout.width : 1.f;   // raio e borda acompanham a escala do canvas
+  canvas_paint::drawBase(out, {r.x, r.y}, {r.x + r.w, r.y + r.h}, cv.bg, cv.edge, cv.style.radius * k, cv.style.borderWidth * k);
+  for (int i = 0; i < cv.count && i < kMaxUi; ++i) {
+    UiElem& it = cv.items[i];
+    const vm::Pixel a{r.x + it.x * r.w, r.y + it.y * r.h};
+    const vm::Pixel b{a.x + it.w * r.w, a.y + it.h * r.h};
+    const std::string txt = uiFormat(ed, it.text);
+    const float fs = kUiFont * it.fontScale * std::max(0.5f, r.h / 600.f);
+    const view::Color col = canvas_paint::shapeColor(it.color);
+    auto label = [&](view::Color c) { out.text({(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f - fs * 0.5f}, txt, fs, c, true, b.x - a.x); };
+    switch (static_cast<UiKind>(it.kind)) {
+      case UiKind::Text: out.text(a, txt, fs, col); break;
+      case UiKind::Panel:
+        out.rectFilled(a, b, col, 4.f);
+        if (!txt.empty()) label(view::Rgba(255, 255, 255));
+        break;
+      case UiKind::Bar: {
+        const auto vit = ed.vars.find(it.action);
+        const float v = vit == ed.vars.end() ? 0.f : vit->second;
+        const float f = std::clamp(v / it.maxValue, 0.f, 1.f);
+        out.rectFilled(a, b, view::Rgba(20, 20, 20, 180), 3.f);
+        out.rectFilled(a, {a.x + (b.x - a.x) * f, b.y}, col, 3.f);
+        outlineRect(out, a, b, view::Rgba(255, 255, 255, 120));
+        break;
+      }
+      case UiKind::Button: {
+        const int k2 = static_cast<int>(cell.hits.size());
+        cell.hits.push_back({a, b, it.action});
+        const bool hov = interactive && hoverIdx == k2, down = interactive && pressedIdx == k2;
+        const float m = down ? 0.7f : hov ? 1.15f : 1.f;
+        const float tint[4] = {std::min(1.f, it.color[0] * m), std::min(1.f, it.color[1] * m), std::min(1.f, it.color[2] * m), it.color[3]};
+        out.rectFilled(a, b, canvas_paint::shapeColor(tint), 6.f);
+        outlineRect(out, a, b, view::Rgba(255, 255, 255, 160));
+        label(view::Rgba(0, 0, 0));
+        break;
+      }
+      default: break;
+    }
+  }
+}
+
+// UI do jogo de uma camera: os Canvas visiveis no jogo que pertencem a camEnt. Cada canvas se posiciona na area da
+// camera (ancora e tamanho do layout, com cache); os elementos sao fracoes do canvas.
 inline void buildUi(Editor& ed, tool::Entity camEnt, sui::Box area, bool interactive, int hoverIdx, int pressedIdx, gp::Cell& cell) {
   tool::World& w = ed.scene.world();
   const auto* cn = w.get<Name>(camEnt);
-  view::ShapeList& out = cell.overlay;
   w.each<CanvasComp>([&](tool::Entity, CanvasComp& cv) {
     if (!cv.visible) return;
     if (cv.camera[0]) {
@@ -143,45 +192,21 @@ inline void buildUi(Editor& ed, tool::Entity camEnt, sui::Box area, bool interac
     }
     // O canvas se calcula na area da camera; refaz so quando o layout ou a area mudam (cache).
     tool::canvas::Refresh(cv.cache, cv.layout, {area.w, area.h}, kDesignRef);
-    const tool::canvas::Rect r = cv.cache.rect;
-    const float ox = area.x + r.x, oy = area.y + r.y;
-    for (int i = 0; i < cv.count && i < kMaxUi; ++i) {
-      UiElem& it = cv.items[i];
-      const vm::Pixel a{ox + it.x * r.w, oy + it.y * r.h};
-      const vm::Pixel b{a.x + it.w * r.w, a.y + it.h * r.h};
-      const std::string txt = uiFormat(ed, it.text);
-      const float fs = kUiFont * it.fontScale * std::max(0.5f, area.h / 600.f);
-      const view::Color col = view::rgbaF(it.color[0], it.color[1], it.color[2], it.color[3]);
-      auto label = [&](view::Color c) { out.text({(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f - fs * 0.5f}, txt, fs, c, true, b.x - a.x); };
-      switch (static_cast<UiKind>(it.kind)) {
-        case UiKind::Text: out.text(a, txt, fs, col); break;
-        case UiKind::Panel:
-          out.rectFilled(a, b, col, 4.f);
-          if (!txt.empty()) label(view::Rgba(255, 255, 255));
-          break;
-        case UiKind::Bar: {
-          const auto vit = ed.vars.find(it.action);
-          const float v = vit == ed.vars.end() ? 0.f : vit->second;
-          const float f = std::clamp(v / it.maxValue, 0.f, 1.f);
-          out.rectFilled(a, b, view::Rgba(20, 20, 20, 180), 3.f);
-          out.rectFilled(a, {a.x + (b.x - a.x) * f, b.y}, col, 3.f);
-          outlineRect(out, a, b, view::Rgba(255, 255, 255, 120));
-          break;
-        }
-        case UiKind::Button: {
-          const int k = static_cast<int>(cell.hits.size());
-          cell.hits.push_back({a, b, it.action});
-          const bool hov = interactive && hoverIdx == k, down = interactive && pressedIdx == k;
-          const float m = down ? 0.7f : hov ? 1.15f : 1.f;
-          out.rectFilled(a, b, view::rgbaF(std::min(1.f, it.color[0] * m), std::min(1.f, it.color[1] * m), std::min(1.f, it.color[2] * m), it.color[3]), 6.f);
-          outlineRect(out, a, b, view::Rgba(255, 255, 255, 160));
-          label(view::Rgba(0, 0, 0));
-          break;
-        }
-        default: break;
-      }
-    }
+    const tool::canvas::Rect& r = cv.cache.rect;
+    drawCanvas(ed, cv, {area.x + r.x, area.y + r.y, r.w, r.h}, interactive, hoverIdx, pressedIdx, cell);
   });
+}
+
+// Previa da Scene: os canvas com "Mostrar na Scene" ligado, sobre a area da cena. Sem filtro de camera (a Scene nao
+// tem camera de jogo) e sem acertos de botao. Nao usa o cache do canvas: o tamanho da area da Scene e outro.
+inline void buildCanvasPreview(Editor& ed, sui::Box area, view::ShapeList& out) {
+  gp::Cell scratch;
+  ed.scene.world().each<CanvasComp>([&](tool::Entity, CanvasComp& cv) {
+    if (!cv.showInScene) return;
+    const canvas_edit::Box b = canvas_edit::boxFor(cv.layout, area.w, area.h, kDesignRef);
+    drawCanvas(ed, cv, {area.x + b.x, area.y + b.y, b.w, b.h}, false, -1, -1, scratch);
+  });
+  out.append(scratch.overlay);
 }
 
 // Segmento 3D recortado no plano da camera, como linha da vista.
