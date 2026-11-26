@@ -122,6 +122,8 @@ class SpriteUiSdlRenderer {
       }
       if (vertices_.empty()) continue;
       SDL_Texture* texture = textureFor(renderer, batch.textureSlice);
+      // Sem isso o SDL usa BLENDMODE_NONE para geometria sem textura e ignora o alfa (tudo sai opaco).
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
       if (!SDL_RenderGeometry(renderer, texture, vertices_.data(), static_cast<int>(vertices_.size()),
                               indices_.data(), static_cast<int>(indices_.size()))) {
         SDL_SetRenderClipRect(renderer, nullptr);

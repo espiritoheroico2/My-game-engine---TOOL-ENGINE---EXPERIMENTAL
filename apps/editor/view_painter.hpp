@@ -183,6 +183,7 @@ inline bool drawTriRun(SDL_Renderer* renderer, const std::vector<SR::ClipRectGPU
     const SDL_Rect rect{static_cast<int>(c.minX), static_cast<int>(c.minY), static_cast<int>(c.maxX - c.minX), static_cast<int>(c.maxY - c.minY)};
     SDL_SetRenderClipRect(renderer, &rect);
   }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);   // cor reta: o alfa vale na mistura (ver canvas_paint.hpp)
   const bool ok = SDL_RenderGeometry(renderer, nullptr, run.verts.data(), static_cast<int>(run.verts.size()), nullptr, 0);
   SDL_SetRenderClipRect(renderer, nullptr);
   return ok;
