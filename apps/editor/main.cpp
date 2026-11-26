@@ -2890,7 +2890,12 @@ static int runEditorMain(int argc, char** argv) {
     SDL_RenderClear(renderer);
     drawViewPanels(ed, renderer);   // Scene e Jogo em SpriteUI
     const double nowSec = static_cast<double>(SDL_GetTicksNS()) * 1e-9;
-    if (profPanel) {   // Profiler: moldura SpriteUI com o botao Exportar
+    // Duas passadas: janelas acopladas primeiro, soltas por ultimo (uma soltra fica por cima do dock).
+    // Cada janela cai em uma so passada, entao roda uma vez. Overlays sem dock rodam na passada final.
+    for (int pass = 0; pass < 2; ++pass) {
+    const bool floatPass = pass == 1;
+    auto onPass = [&](editor::dock_host::Kind k) { return (gDock && gDock->floating(editor::dock_host::idOf(k))) == floatPass; };
+    if (profPanel && onPass(editor::dock_host::Kind::Profiler)) {   // Profiler: moldura SpriteUI com o botao Exportar
       if (profPanel->consumeExportRequest()) profPanel->beginExport(nowSec);
       const bool profilerVisible = dockShown(editor::dock_host::Kind::Profiler, ed.showProfiler);
       if (profilerVisible || profPanel->exporting()) {
@@ -2904,7 +2909,7 @@ static int runEditorMain(int argc, char** argv) {
       if (profPanel->consumeClose()) ed.showProfiler = false;   // X da moldura
       if (profPanel->consumeHelp()) editor::openHelp("profiler");   // ? da moldura
     }
-    if (hierPanel) {   // Hierarchy: janela SpriteUI com moldura propria
+    if (hierPanel && onPass(editor::dock_host::Kind::Hierarchy)) {   // Hierarchy: janela SpriteUI com moldura propria
       const bool shown = dockShown(editor::dock_host::Kind::Hierarchy, ed.showHierarchy);
       editor::hierarchy_panel::Requests requests;
       const editor::hierarchy_panel::Source source = shown ? hierarchySource(ed) : editor::hierarchy_panel::Source{};
@@ -2916,7 +2921,7 @@ static int runEditorMain(int argc, char** argv) {
       if (hierPanel && hierPanel->consumeHelp()) editor::openHelp("hierarchy");   // ? da moldura
       applyHierarchyRequests(ed, requests);
     }
-    if (codingPanel) {   // moldura da janela Coding (SpriteUI): titulo, X, "?" e grip
+    if (codingPanel && onPass(editor::dock_host::Kind::Coding)) {   // moldura da janela Coding (SpriteUI): titulo, X, "?" e grip
       if (!codingPanel->chrome().draw(renderer, T("Coding"))) tool::logError(std::string("Coding frame render failed: ") + SDL_GetError());
       if (codingPanel->chrome().consumeClose()) ed.showCoding = false;
       codingPanel->chrome().consumeHelp();
@@ -2925,7 +2930,7 @@ static int runEditorMain(int argc, char** argv) {
         tool::logError(std::string("Coding render failed: ") + SDL_GetError());
       }
     }
-    if (assetsPanel && dockShown(editor::dock_host::Kind::Assets, ed.showAssets)) {   // Assets: janela SpriteUI flutuante (lista, grade, acoes e texto)
+    if (assetsPanel && onPass(editor::dock_host::Kind::Assets) && dockShown(editor::dock_host::Kind::Assets, ed.showAssets)) {   // Assets: janela SpriteUI flutuante (lista, grade, acoes e texto)
       syncAssetsPanel(ed, *assetsPanel);
       std::vector<editor::assetsui::View::Action> assetsActs;
       int winW = 0, winH = 0;
@@ -2938,7 +2943,7 @@ static int runEditorMain(int argc, char** argv) {
         applyAssetsActions(ed, *assetsPanel, assetsActs);
       }
     }
-    if (scenesPanel && dockShown(editor::dock_host::Kind::Scenes, ed.showScenes)) {   // Scenes: janela SpriteUI flutuante
+    if (scenesPanel && onPass(editor::dock_host::Kind::Scenes) && dockShown(editor::dock_host::Kind::Scenes, ed.showScenes)) {   // Scenes: janela SpriteUI flutuante
       syncScenesPanel(ed, *scenesPanel);
       std::vector<editor::scenesui::View::Action> scenesActs;
       int winW = 0, winH = 0;
@@ -2952,14 +2957,14 @@ static int runEditorMain(int argc, char** argv) {
         applyScenesActions(ed, *scenesPanel, scenesActs);
       }
     }
-    if (narrativePanel) {   // Narrative Controller (SpriteUI): moldura, grafo, variaveis e propriedades
+    if (narrativePanel && onPass(editor::dock_host::Kind::Narrative)) {   // Narrative Controller (SpriteUI): moldura, grafo, variaveis e propriedades
       int nw = 0, nh = 0;
       SDL_GetWindowSize(window, &nw, &nh);
       if (!narrativePanel->draw(renderer, static_cast<float>(nw), static_cast<float>(nh), dockShown(editor::dock_host::Kind::Narrative, ed.showNarrative))) tool::logError(std::string("Narrative render failed: ") + SDL_GetError());
       if (narrativePanel->chrome().consumeClose()) ed.showNarrative = false;
       if (narrativePanel->chrome().consumeHelp()) editor::openHelp("narrative");
     }
-    if (helpPanel) {   // por cima das outras janelas; o "?" e F1 abrem o topico em helpState().pending
+    if (helpPanel && floatPass) {   // por cima das outras janelas; o "?" e F1 abrem o topico em helpState().pending
       editor::HelpState& help = editor::helpState();
       if (!help.pending.empty()) {
         helpPanel->openTopic(help.pending);
@@ -2970,7 +2975,7 @@ static int runEditorMain(int argc, char** argv) {
         helpPanel.reset();
       }
     }
-    if (testMapPanel) {
+    if (testMapPanel && floatPass) {
       editor::TestMapState& testMap = editor::testMapState();
       if (!testMapPanel->draw(renderer, window, testMap.open, testMap.side, editor::I18n::get().code())) {
         tool::logError(std::string("Test map SpriteUI render failed: ") + SDL_GetError());
@@ -2982,7 +2987,7 @@ static int runEditorMain(int argc, char** argv) {
         tool::logInfo("Test map: " + std::to_string(made) + " chunks");
       }
     }
-    if (editorInfoPanel) {   // Editor info (SpriteUI): abre com o que esta salvo; Save e Close viram acoes do host
+    if (editorInfoPanel && floatPass) {   // Editor info (SpriteUI): abre com o que esta salvo; Save e Close viram acoes do host
       if (ed.showEditorInfo && !editorInfoWasOpen) editorInfoPanel->open(ed.projSettings);
       editorInfoWasOpen = ed.showEditorInfo;
       if (ed.showEditorInfo) {
@@ -2993,12 +2998,12 @@ static int runEditorMain(int argc, char** argv) {
         else applyEditorInfoActions(ed, *editorInfoPanel, eiActs);
       }
     }
-    if (settingsPanel) {   // moldura do Settings (SpriteUI)
+    if (settingsPanel && onPass(editor::dock_host::Kind::Settings)) {   // moldura do Settings (SpriteUI)
       if (!settingsPanel->chrome().draw(renderer, T("Settings"))) tool::logError(std::string("Settings frame render failed: ") + SDL_GetError());
       if (settingsPanel->chrome().consumeClose()) ed.showSettings = false;
       if (settingsPanel->chrome().consumeHelp()) editor::openHelp("profiler");
     }
-    if (settingsPanel) {   // Configuracoes: faixa de abas e conteudo da janela
+    if (settingsPanel && onPass(editor::dock_host::Kind::Settings)) {   // Configuracoes: faixa de abas e conteudo da janela
       const bool shown = ed.showSettings && gSettingsFrame;
       editor::settings_changes::Requests requests;
       const editor::settings_panel::Values values = shown ? settingsValues(ed) : editor::settings_panel::Values{};
@@ -3010,12 +3015,12 @@ static int runEditorMain(int argc, char** argv) {
       editor::settings_changes::ApplyChanges(target, requests);
     }
     // Inspector por cima das Configuracoes (ordem de desenho: quem desenha por ultimo fica na frente).
-    if (inspPanel) {   // moldura do Inspector (SpriteUI): titulo, X, "?" e grip
+    if (inspPanel && onPass(editor::dock_host::Kind::Inspector)) {   // moldura do Inspector (SpriteUI): titulo, X, "?" e grip
       if (!inspPanel->chrome().draw(renderer, T("Inspector"))) tool::logError(std::string("Inspector frame render failed: ") + SDL_GetError());
       if (inspPanel->chrome().consumeClose()) ed.showInspector = false;
       if (inspPanel->chrome().consumeHelp()) editor::openHelp("objects");
     }
-    if (inspPanel) {   // Inspector: componentes do objeto, no bloco SpriteUI deste quadro
+    if (inspPanel && onPass(editor::dock_host::Kind::Inspector)) {   // Inspector: componentes do objeto, no bloco SpriteUI deste quadro
       const bool shown = ed.showInspector && gInspectorFrame;
       if (!inspPanel->draw(renderer, gInspectorOrigin, gInspectorVisible, shown)) {
         tool::logError(std::string("Inspector SpriteUI render failed: ") + SDL_GetError());
@@ -3023,7 +3028,7 @@ static int runEditorMain(int argc, char** argv) {
         gInspectorPanel = nullptr;
       }
     }
-    if (menuPanel) {
+    if (menuPanel && floatPass) {
       std::vector<editor::mainmenu::Request> menuRequests;
       menuPanel->setState(menuStateOf(ed), [](const char* text) { return T(text); });
       if (!menuPanel->draw(renderer, window, editor::ui_style::barHeight(), menuRequests)) {
@@ -3032,7 +3037,7 @@ static int runEditorMain(int argc, char** argv) {
       }
       for (const editor::mainmenu::Request& request : menuRequests) applyMenuRequest(ed, quit, request);
     }
-    if (consolePanel) {
+    if (consolePanel && onPass(editor::dock_host::Kind::Console)) {
       const editor::console_panel::Source source{ed.console, ed.consoleSerial, tool::debug().count(tool::Severity::Error),
                                                  tool::debug().count(tool::Severity::Warning)};
       editor::console_panel::Requests requests;
@@ -3043,6 +3048,7 @@ static int runEditorMain(int argc, char** argv) {
       if (requests.close) ed.showConsole = false;   // X da moldura SpriteUI
       if (!requests.help.empty()) editor::openHelp(requests.help);   // ? da moldura SpriteUI
       applyConsoleRequests(ed, requests);
+    }
     }
     if (inputPanel && !inputPanel->draw(renderer, window, ed)) {   // Input Map (SpriteUI)
       tool::logError(std::string("Input map SpriteUI render failed: ") + SDL_GetError());
