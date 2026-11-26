@@ -17,7 +17,9 @@
 //                campo de texto com foco. Pedidos vao para pending_.
 
 #include "i18n.hpp"
+#include "color_popup.hpp"
 #include "framed_window.hpp"
+#include "inspector_model.hpp"
 #include "settings_bridge.hpp"
 #include "settings_changes.hpp"
 #include "settings_form.hpp"
@@ -53,6 +55,7 @@ namespace editor::settings_panel {
 namespace sb = editor::settings_bridge;
 namespace sc = editor::settings_changes;
 namespace sm = editor::settings_model;
+namespace im = editor::inspector_model;
 namespace SU = ToolEngine::SpriteUi;
 namespace Elm = SU::Elements;
 namespace W = SU::Widgets;
@@ -120,6 +123,7 @@ struct Metrics {
     static constexpr int kCustomStep = 16;    // passo para largura e altura
     static constexpr float kPopupTextZ = 0.97f;
     static constexpr float kPopupZ = 0.95f;
+    static constexpr float kColorPopupW = 232.f, kColorPopupH = 210.f;   // seletor de cor (mesmo tamanho do Inspector)
     static constexpr float kControlZ = 0.3f;
 };
 
@@ -137,10 +141,7 @@ class SettingsPanel {
         fixed_[kFixedButtonRadius].field = sc::Field::ButtonRadius;
         fixed_[kFixedWindowRadius].field = sc::Field::WindowRadius;
         fixed_[kFixedTextScale].field = sc::Field::TextScale;
-        for (int ch = 0; ch < 3; ++ch) {   // cor personalizada: index = canal; o slot da cor sai na hora do pedido
-            fixed_[kFixedCustomR + static_cast<std::size_t>(ch)].field = sc::Field::CustomColor;
-            fixed_[kFixedCustomR + static_cast<std::size_t>(ch)].index = ch;
-        }
+        colorPopup_.onChange([this](const float rgb[3]) { customPicked(rgb); });
     }
     SettingsPanel(const SettingsPanel&) = delete;
     // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e desenhado pelo painel, abaixo do cabecalho.
@@ -160,12 +161,14 @@ class SettingsPanel {
                 capture_.down();   // so um clique dentro do painel abre a captura
                 return true;
             case SDL_EVENT_TEXT_INPUT:
+                if (colorPopup_.editingHex()) return colorPopup_.text(e.text.text, window_);
                 if (FormSlot* s = focusedSlot()) {
                     if (e.text.text) s->edit.InsertText(e.text.text);
                     return true;
                 }
                 return false;
             case SDL_EVENT_KEY_DOWN:
+                if (colorPopup_.editingHex()) return colorPopup_.keyDown(e.key.key, static_cast<SDL_Keymod>(e.key.mod), window_);
                 return textKey(e.key.key);
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 if (bar_.Dragging()) {
@@ -242,6 +245,8 @@ class SettingsPanel {
         if (open_[kGraphicsTab]) appendControls(items, paint);
         if (open_[kAppearanceTab]) appendAppearance(items, paint);
         appendForm(items, paint);
+        colorPopup_.setLook(colorLook());
+        colorPopup_.append(items, paint, owner, SU::Vec2{rect_.x, rect_.y}, kWindowClip, SU::Rect{{rect_.x, rect_.y}, {rect_.w, rect_.h}});
         overlay_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, bottom, owner, kWindowClip, paint);
         appendPopups(items, paint);
 
@@ -465,15 +470,19 @@ class SettingsPanel {
                         std::string(T(editor::palette::kTokenNames[colorSlot_ >= 5 ? colorSlot_ - 5 : 0])), Metrics::kFont,
                         theme_.text, textWidth() - 2.f * Metrics::kRowH - 12.f);
         y += Metrics::kRowH + Metrics::kGap;
-        // Sliders R, G, B da cor escolhida (valor de 0 a 1 com duas casas).
+        // Cor da paleta escolhida: a amostra abre o seletor (o mesmo popup do Inspector). Sem o seletor aberto, a linha
+        // mostra o valor do modelo; com ele aberto, mostra a cor que esta sendo editada.
         const int slot = std::clamp(colorSlot_, 0, 12);
-        const char* names[3] = {"Red", "Green", "Blue"};
-        for (int ch = 0; ch < 3; ++ch) {
-            const float value = v.customColor[static_cast<std::size_t>(slot * 3 + ch)];
-            char shown[16];
-            std::snprintf(shown, sizeof shown, "%.2f", static_cast<double>(value));
-            y = styleRow(kFixedCustomR + static_cast<std::size_t>(ch), value, names[ch], y, 0.f, 1.f, 0.01f, false, shown);
-        }
+        for (std::size_t ch = 0; ch < 3; ++ch) customModel_[ch] = v.customColor[static_cast<std::size_t>(slot) * 3 + ch];
+        const float* shown = colorPopup_.isOpen() ? customRgb_ : customModel_;
+        customSwatch_ = SU::Rect{{Metrics::kPad, y}, {textWidth(), Metrics::kRowH}};
+        canvas_.addSolid(customSwatch_.position.x, y, customSwatch_.size.x, customSwatch_.size.y, btnColor_, 0.2f,
+                         editor::ui_style::buttonRadius());
+        canvas_.addSolid(customSwatch_.position.x + 6.f, y + 6.f, 26.f, customSwatch_.size.y - 12.f,
+                         SU::Vec4{shown[0], shown[1], shown[2], 1.f}, 0.24f);
+        canvas_.addText(customSwatch_.position.x + 40.f, y + 5.f, std::string(T("Color")) + "   " + im::HexText(shown), Metrics::kFont,
+                        theme_.text, customSwatch_.size.x - 46.f);
+        y += Metrics::kRowH + Metrics::kGap;
         return y + Metrics::kGap;
     }
 
@@ -532,11 +541,6 @@ class SettingsPanel {
         append(items, paint, Elm::BuildSliderItems(fixed_[kFixedButtonRadius].slider, sliderStyle_, z, paint), kContentClip);
         append(items, paint, Elm::BuildSliderItems(fixed_[kFixedWindowRadius].slider, sliderStyle_, z, paint), kContentClip);
         append(items, paint, Elm::BuildSliderItems(fixed_[kFixedTextScale].slider, sliderStyle_, z, paint), kContentClip);
-        if (static_cast<int>(editor::palette::kCustomIndex) == palette_) {
-            for (std::size_t k = kFixedCustomR; k <= kFixedCustomB; ++k) {
-                append(items, paint, Elm::BuildSliderItems(fixed_[k].slider, sliderStyle_, z, paint), kContentClip);
-            }
-        }
     }
 
     // Arrasto dos sliders de Appearance: cada valor vai pelo mesmo caminho dos outros campos (pedido -> main.cpp).
@@ -935,6 +939,36 @@ class SettingsPanel {
         if (s.slider.SetValue(typed)) sliderChanged(s);
     }
 
+    // Cor do seletor mudou: um pedido por canal (index = slot * 3 + canal), o mesmo caminho dos outros campos.
+    void customPicked(const float rgb[3]) {
+        const int slot = std::clamp(colorSlot_, 0, 12);
+        for (int ch = 0; ch < 3; ++ch) pending_.push_back(sc::Change{sc::Field::CustomColor, slot * 3 + ch, rgb[ch], false});
+    }
+
+    // Clique na amostra: o seletor abre abaixo dela (ou acima, se nao couber), com a cor atual do modelo.
+    void openCustomPicker() {
+        for (std::size_t ch = 0; ch < 3; ++ch) customRgb_[ch] = customModel_[ch];
+        float y = customSwatch_.position.y + customSwatch_.size.y + 4.f;
+        if (y + Metrics::kColorPopupH > rect_.h) y = std::max(0.f, customSwatch_.position.y - Metrics::kColorPopupH - 4.f);
+        const float x = std::min(customSwatch_.position.x, std::max(0.f, rect_.w - Metrics::kColorPopupW - 2.f));
+        colorPopup_.open(0u, customRgb_, SU::Rect{{x, y}, {Metrics::kColorPopupW, Metrics::kColorPopupH}});
+    }
+
+    [[nodiscard]] color_popup::Look colorLook() const {
+        color_popup::Look look;
+        look.frame.cornerRadius = editor::ui_style::windowRadius();
+        look.frame.background = panelColor_;
+        look.frame.border = sui::Srgb(0.32f, 0.36f, 0.42f, 1.f);
+        look.field = btnColor_;
+        look.fieldFocus = theme_.surface;
+        look.text = theme_.text;
+        look.selection = theme_.accent;
+        look.font = Metrics::kFont;
+        look.fieldFont = editor::ui_style::uiFont(Metrics::kFont);
+        look.zPanel = Metrics::kPopupZ;
+        return look;
+    }
+
     // Um slider mudou (arraste ou digitado): o pedido segue o mesmo caminho para os dois casos.
     void sliderChanged(FormSlot& s) {
         const float value = s.slider.Value();
@@ -942,8 +976,7 @@ class SettingsPanel {
             pending_.push_back(formChange(s.id, value, false, 0, ""));
             return;
         }
-        const int index = s.field == sc::Field::CustomColor ? std::clamp(colorSlot_, 0, 12) * 3 + s.index : s.index;
-        pending_.push_back(sc::Change{s.field, index, value, false});
+        pending_.push_back(sc::Change{s.field, s.index, value, false});
     }
 
     // Clique no campo do valor abre a digitacao; o texto de partida e o valor atual (Esc volta a ele).
@@ -1218,10 +1251,20 @@ class SettingsPanel {
         }
         const SU::Vec2 p{x - rect_.x, y - rect_.y};
         if (phase == Elm::PointerPhase::Down) blurOutside(p);   // clique fora do campo de texto confirma o texto
+        if (colorPopup_.isOpen()) {   // seletor de cor aberto: a caixa dele recebe o ponteiro primeiro
+            if (colorPopup_.contains(p)) {
+                colorPopup_.pointer(phase, p, window_);
+                return true;
+            }
+            if (phase == Elm::PointerPhase::Down) colorPopup_.close(window_);
+        }
+        if (phase == Elm::PointerPhase::Down && palette_ == static_cast<int>(editor::palette::kCustomIndex) && contains(customSwatch_, p)) {
+            openCustomPicker();
+            return true;
+        }
         if (phase == Elm::PointerPhase::Up && sectionPointer(p)) return true;
         if (phase == Elm::PointerPhase::Up && paletteRowPointer(p)) return true;
         if (appearanceSliderPointer(phase, p)) return true;
-        if (customSliderPointer(phase, p)) return true;
         if (phase == Elm::PointerPhase::Down && scrollbarPointer(p)) return true;
         if (formPointer(phase, p)) return true;
         if (!open_[kGraphicsTab]) return true;
@@ -1234,6 +1277,7 @@ class SettingsPanel {
     // So entrega o Up aos controles: nao abre secoes, paletas nem passos, porque o clique nao foi nelas.
     void releasePointer(float x, float y) {
         const SU::Vec2 p{x - rect_.x, y - rect_.y};
+        if (colorPopup_.isOpen()) colorPopup_.pointer(Elm::PointerPhase::Up, p, window_);
         if (appearanceSliderPointer(Elm::PointerPhase::Up, p)) return;
         if (formPointer(Elm::PointerPhase::Up, p)) return;
         if (open_[kGraphicsTab]) contentPointer(Elm::PointerPhase::Up, p);
@@ -1273,15 +1317,6 @@ class SettingsPanel {
                 pending_.push_back({sc::Field::ThemeFile, static_cast<int>(k), 0.f, false});
                 return true;
             }
-        }
-        return false;
-    }
-
-    // Sliders R, G, B da cor escolhida: cada movimento vai como Field::CustomColor (index = slot * 3 + canal).
-    bool customSliderPointer(Elm::PointerPhase phase, const SU::Vec2& p) {
-        if (palette_ != static_cast<int>(editor::palette::kCustomIndex)) return false;
-        for (std::size_t k = kFixedCustomR; k <= kFixedCustomB; ++k) {
-            if (sliderPointer(kFixedSection, k, fixed_[k], phase, p)) return true;
         }
         return false;
     }
@@ -1451,6 +1486,11 @@ class SettingsPanel {
     float contentH_ = 0.f;                // altura do conteudo da aba Graficos (do ultimo layout)
     std::vector<Stepper> steps_;
     sc::Requests pending_;
+    // Cor personalizada: a linha mostra o modelo (customModel_); o seletor edita a copia customRgb_ e avisa cada mudanca.
+    SU::Rect customSwatch_{};
+    float customModel_[3] = {0.f, 0.f, 0.f};
+    float customRgb_[3] = {0.f, 0.f, 0.f};
+    color_popup::ColorPopup colorPopup_{canvas_, overlay_};
     std::array<std::vector<std::unique_ptr<FormSlot>>, sm::kTabCount> formPool_{};   // controles das linhas, por secao
     std::size_t focusSection_ = npos;   // campo de texto com foco (secao e linha); npos = nenhum
     std::size_t focusIndex_ = npos;
@@ -1463,12 +1503,11 @@ class SettingsPanel {
     Elm::RadioGroup apis_;
     Elm::Dropdown resolution_;
     Elm::Slider scale_;
-    // Sliders fixos (Appearance): raios, escala do texto e a cor personalizada (R, G, B). Cada um tem a caixa do valor
-    // digitavel. Ficam fora das secoes de linhas; o foco deles usa a secao kFixedSection.
+    // Sliders fixos (Appearance): raios e escala do texto. Cada um tem a caixa do valor digitavel. Ficam fora das
+    // secoes de linhas; o foco deles usa a secao kFixedSection.
     static constexpr std::size_t kFixedSection = npos - 1;
     static constexpr std::size_t kFixedButtonRadius = 0, kFixedWindowRadius = 1, kFixedTextScale = 2;
-    static constexpr std::size_t kFixedCustomR = 3, kFixedCustomG = 4, kFixedCustomB = 5;
-    static constexpr std::size_t kFixedCount = 6;
+    static constexpr std::size_t kFixedCount = 3;
     std::array<FormSlot, kFixedCount> fixed_;
     std::array<sui::Box, editor::palette::kBaseCount> baseBtns_{};   // cores-base (botoes)
     sui::Box tokenPrev_{}, tokenNext_{};                             // lista avancada (< e >)
