@@ -71,7 +71,7 @@ int main() {
     cd::addLine(pts, lines, 1, 2, true);
     Check(cd::lineAt(pts, lines, canvas, 300.f, 202.f) == 0, "clique a 2 px do meio da linha 0 acerta a linha");
     Check(cd::lineAt(pts, lines, canvas, 300.f, 230.f) == -1, "clique a 30 px da linha nao acerta");
-    Check(cd::lineAt(pts, lines, canvas, 500.f, 290.f) == 1, "linha pontilhada tambem acerta");
+    Check(cd::lineAt(pts, lines, canvas, 400.f, 275.f) == 1, "linha pontilhada tambem acerta (no meio do segmento)");
     cd::remove(pts, lines, 1);
     Check(pts.size() == 2 && lines.empty(), "remover o ponto apaga as linhas que o usavam");
   }
