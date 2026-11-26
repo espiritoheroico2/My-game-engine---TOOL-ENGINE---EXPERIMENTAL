@@ -171,9 +171,15 @@ class Frame {
   bool beginResize(SU::Vec2 p) {
     if (!placed_) return false;
     const SW::WindowFramePart part = SW::WindowFramePartAt(frame_, metrics_, false, p);
-    if (part == SW::WindowFramePart::Close || part == SW::WindowFramePart::Minimize) return false;
     const int edge = edgeAt(p);
     if (edge == 0) return false;
+    // Botoes do cabecalho ganham da borda, exceto os 4 px mais externos das laterais (o X encosta na borda direita).
+    if (part == SW::WindowFramePart::Close || part == SW::WindowFramePart::Minimize) {
+      constexpr float kOuterSide = 4.f;
+      const bool outerSide = (edge & 3) != 0 &&
+                             (p.x < frame_.position.x + kOuterSide || p.x >= frame_.position.x + frame_.size.x - kOuterSide);
+      if (!outerSide) return false;
+    }
     resizing_ = true;
     resizeMask_ = edge;
     startRect_ = frame_;
