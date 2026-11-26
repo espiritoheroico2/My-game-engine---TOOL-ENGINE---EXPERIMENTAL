@@ -96,6 +96,11 @@ if(TOOL_WITH_SPRITEUI)
   target_link_libraries(editor_dock_host_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
   add_test(NAME Editor.DockHost COMMAND editor_dock_host_tests)
 
+  # Limites de janela solta e guarda do botao do mouse: funcoes puras, sem janela.
+  add_executable(editor_pointer_guard_tests tests/test_pointer_guard.cpp)
+  target_include_directories(editor_pointer_guard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME Editor.PointerGuard COMMAND editor_pointer_guard_tests)
+
   # Captura headless da janela Editor info (SpriteUI). Nao e um teste do ctest: gera PPM para conferir visualmente.
   add_executable(editor_info_capture tools/editor_info_capture.cpp)
   target_include_directories(editor_info_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

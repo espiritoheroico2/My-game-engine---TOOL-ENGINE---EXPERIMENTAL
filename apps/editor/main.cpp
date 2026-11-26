@@ -47,6 +47,10 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "view_overlays.hpp"
 #include "settings_model.hpp"
 #include "ui_style.hpp"
+#include "pointer_guard.hpp"
+
+// Estado do botao esquerdo visto pelo editor (pointer_guard.hpp): detecta soltura perdida.
+static editor::pointer_guard::State gPointerGuard;
 
 
 #include <SDL3/SDL.h>
@@ -2733,8 +2737,29 @@ static int runEditorMain(int argc, char** argv) {
     editor::ZoneTimer zone(ed.prof, editor::Zone::Events);
     int nEvents = 0;
     spriteUiDiagnostics.beginFrame();
+    // Guarda do botao: se o editor ainda ve o botao esquerdo preso mas o SDL diz que ele foi solto (o BUTTON_UP se
+    // perdeu), empurra a soltura sintetica para a fila. Assim nenhum arraste continua depois de soltar o mouse.
+    SDL_PumpEvents();
+    {
+      float mx = 0.f, my = 0.f;
+      const bool sdlLeft = (SDL_GetMouseState(&mx, &my) & SDL_BUTTON_LMASK) != 0;
+      if (editor::pointer_guard::releaseMissed(gPointerGuard, sdlLeft, scriptPlayer != nullptr)) {
+        SDL_Event up{};
+        up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        up.button.windowID = SDL_GetWindowID(window);
+        up.button.button = SDL_BUTTON_LEFT;
+        up.button.down = false;
+        up.button.clicks = 1;
+        up.button.x = mx;
+        up.button.y = my;
+        SDL_PushEvent(&up);
+        editor::pointer_guard::observeLeft(gPointerGuard, false);
+      }
+    }
     while (SDL_PollEvent(&e)) {
       editor::frameInput().onEvent(e);   // entrada do quadro (SDL), para a Scene e o Game
+      if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) editor::pointer_guard::observeLeft(gPointerGuard, true);
+      if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == SDL_BUTTON_LEFT) editor::pointer_guard::observeLeft(gPointerGuard, false);
       // Movimento do mouse sem botao (so passar por cima) nao conta como atividade: senao a cena nunca fica ociosa
       // e cada pixel de mouse refaz as duas vistas por 3 quadros. A interface continua redesenhando a cada quadro.
       if (!(e.type == SDL_EVENT_MOUSE_MOTION && e.motion.state == 0 && !ed.freeFly)) ++nEvents;

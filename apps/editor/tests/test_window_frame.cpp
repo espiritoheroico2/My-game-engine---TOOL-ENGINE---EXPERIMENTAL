@@ -96,12 +96,13 @@ int main() {
     f.pointerMove({-5000.f, -5000.f});
     f.place(1280.f, 800.f);   // o host chama place() a cada quadro e prende a posicao
     const auto r = f.rect();
-    Check(r.position.x >= 0.f && r.position.y >= 0.f, "arraste para fora: volta para dentro da borda superior/esquerda");
+    // Regra: o cabecalho fica visivel e pelo menos 80 px da janela ficam visiveis na horizontal (window_bounds.hpp).
+    Check(r.position.y >= 0.f && r.position.x + r.size.x >= 80.f, "arraste para fora: cabecalho e faixa visivel pela esquerda/topo");
     f.pointerMove({9000.f, 9000.f});
     f.place(1280.f, 800.f);
     const auto r2 = f.rect();
-    Check(r2.position.x + r2.size.x <= 1280.f && r2.position.y + r2.size.y <= 800.f,
-          "arraste para fora: volta para dentro da borda inferior/direita");
+    Check(r2.position.x <= 1280.f - 80.f && r2.position.y <= 800.f - f.metrics().headerHeight,
+          "arraste para fora: cabecalho e faixa visivel pela direita/base");
   }
 
   // 7. Antes do primeiro quadro, nenhum clique conta.
