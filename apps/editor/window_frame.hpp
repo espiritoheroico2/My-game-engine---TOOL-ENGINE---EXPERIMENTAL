@@ -20,6 +20,14 @@
 
 namespace editor::window_frame {
 
+// Area onde uma janela solta pode ficar, em coordenadas da janela do editor: a area do dock (sem menu e sem barra
+// de status). O host a manda a cada quadro. Sem area (zero), vale a janela inteira.
+inline window_bounds::Box& floatAreaSlot() {
+  static window_bounds::Box box{};
+  return box;
+}
+inline void setFloatArea(window_bounds::Box box) { floatAreaSlot() = box; }
+
 namespace SU = ToolEngine::SpriteUi;
 namespace SW = ToolEngine::SpriteUi::Widgets;
 
@@ -58,7 +66,7 @@ class Frame {
       placed_ = true;
     }
     // Janela solta: o cabecalho fica na area e uma faixa visivel fica pegavel (window_bounds.hpp).
-    const auto kept = editor::window_bounds::keepInside({pos_.x, pos_.y}, w, {0.f, 0.f, windowW, windowH},
+    const auto kept = editor::window_bounds::keepInside({pos_.x, pos_.y}, w, floatArea(windowW, windowH),
                                                         metrics_.headerHeight, Metrics::kKeepGrab);
     pos_ = {kept.x, kept.y};
     frame_ = SU::Rect{pos_, {w, shown}};
@@ -66,6 +74,11 @@ class Frame {
 
   // Janela no dock: `dock` e o retangulo do conteudo que o dock manda neste quadro (o arraste nao move a janela
   // acoplada). Sem `dock`: volta a flutuar na posicao em que estava (undock). Minimizada, so o cabecalho.
+  static window_bounds::Box floatArea(float windowW, float windowH) {
+    const window_bounds::Box a = floatAreaSlot();
+    return a.w > 0.f && a.h > 0.f ? a : window_bounds::Box{0.f, 0.f, windowW, windowH};
+  }
+
   void placeIn(float windowW, float windowH, std::optional<SU::Rect> dock, float width = Metrics::kWidth,
                float height = Metrics::kHeight, float firstX = -1.f) {
     if (dock) {

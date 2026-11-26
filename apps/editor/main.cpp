@@ -2861,6 +2861,7 @@ static int runEditorMain(int argc, char** argv) {
           gDockSaveRequested = false;
           tool::logInfo(gDock->save(kDockLayoutFile) ? std::string("Layout das janelas salvo") : std::string("Nao foi possivel salvar o layout"));
         }
+        editor::window_frame::setFloatArea({0.f, menuH, static_cast<float>(dockW), static_cast<float>(dockH) - menuH - statusH});   // janela solta: dentro do dock
         gDock->beginFrame({{0.f, menuH}, {static_cast<float>(dockW), static_cast<float>(dockH) - menuH - statusH}}, dockW, dockH);
         gInspectorBody = framedBody(inspPanel ? &inspPanel->chrome() : nullptr, dockShown(editor::dock_host::Kind::Inspector, ed.showInspector), dockW, dockH, 340.f, 520.f);
         gSettingsBody = framedBody(settingsPanel ? &settingsPanel->chrome() : nullptr, dockShown(editor::dock_host::Kind::Settings, ed.showSettings), dockW, dockH, 460.f, 480.f);
