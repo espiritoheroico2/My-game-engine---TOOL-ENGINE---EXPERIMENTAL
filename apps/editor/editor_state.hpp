@@ -469,6 +469,7 @@ struct Editor {
     if (principal) { scene.world().addTag(e, scene.tag("Principal")); scene.world().get<CameraComp>(e)->soundEar = true; }
     return e;
   }
+  tool::Entity makeCanvas() { tool::Entity e = make("Canvas"); scene.world().add<CanvasComp>(e, CanvasComp{}); return e; }
   tool::Entity makeGlobalLight() { tool::Entity e = make("Global Light"); scene.world().get<Transform>(e)->pos[1] = 6.f; scene.world().add<GlobalLight>(e); return e; }
   tool::Entity makePointLight() {
     tool::Entity e = make("Point Light"); scene.world().get<Transform>(e)->pos[1] = 2.5f;

@@ -15,6 +15,7 @@
 // ToolEngine Editor - componentes dos objetos da cena e sua (de)serializacao em JSON.
 #pragma once
 #include "tool/audio/audio.hpp"
+#include "tool/canvas/canvas_layout.hpp"
 #include "tool/core/json.hpp"
 #include "tool/core/parallel.hpp"
 #include "tool/math/math.hpp"
@@ -134,6 +135,14 @@ struct VoxelChunk {
   unsigned char at(int x, int y, int z) const { return (x < 0 || y < 0 || z < 0 || x >= kChunkSize || y >= kChunkSize || z >= kChunkSize) ? 0 : blocks[index(x, y, z)]; }
 };
 struct UiCanvas { char camera[40] = ""; bool visible = true; int count = 0; UiElem items[kMaxUi]; };
+
+// Canvas (engine/canvas): contêiner de UI com ancora. O cache guarda o retangulo do quadro atual e so e refeito quando
+// o layout ou a tela mudam; um canvas parado custa uma comparacao por quadro.
+struct CanvasComp {
+  tool::canvas::Layout layout;
+  tool::canvas::Style style;
+  tool::canvas::Cache cache;
+};
 
 struct SpawnerComp {
   long long total = 0, spawned = 0; int perFrame = 1;
@@ -309,6 +318,16 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     for (int i = 0; i < kChunkBlocks;) { const unsigned char v = vc->blocks[i]; int n = 1; while (i + n < kChunkBlocks && vc->blocks[i + n] == v) ++n; rle.push(static_cast<int>(v)); rle.push(n); i += n; }
     o.set("rle", rle); j.set("voxels", o);
   }
+  if (auto* c = w.get<CanvasComp>(e)) {
+    Json o = Json::object(); const auto& L = c->layout; const auto& S = c->style;
+    o.set("ax", static_cast<double>(L.anchorX)); o.set("ay", static_cast<double>(L.anchorY));
+    o.set("ox", static_cast<double>(L.offsetX)); o.set("oy", static_cast<double>(L.offsetY));
+    o.set("w", static_cast<double>(L.width)); o.set("h", static_cast<double>(L.height));
+    o.set("resize", std::string(L.resize == tool::canvas::Resize::Scale ? "scale" : "follow"));
+    o.set("radius", static_cast<double>(S.radius)); o.set("border_width", static_cast<double>(S.borderWidth));
+    o.set("bg", static_cast<double>(S.background)); o.set("bc", static_cast<double>(S.border));
+    j.set("canvas", o);
+  }
   if (auto* u = w.get<UiCanvas>(e)) {
     Json o = Json::object(); o.set("camera", std::string(u->camera)); o.set("visible", u->visible); Json arr = Json::array();
     for (int i = 0; i < u->count && i < kMaxUi; ++i) { const UiElem& it = u->items[i]; Json q = Json::object();
@@ -430,6 +449,17 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
       ser::readVec(q["color"], it.color, 4); it.maxValue = ser::clampNum(q, "max", 100.f, 0.0001f, 1e9f); it.fontScale = ser::clampNum(q, "font", 1.f, 0.3f, 8.f);
     }
     w.add<UiCanvas>(e, u);
+  }
+  if (j.has("canvas")) {
+    CanvasComp c; const auto& o = j["canvas"];
+    c.layout.anchorX = ser::clampNum(o, "ax", 0.5f, -2.f, 3.f); c.layout.anchorY = ser::clampNum(o, "ay", 0.5f, -2.f, 3.f);
+    c.layout.offsetX = ser::clampNum(o, "ox", 0.f, -1e5f, 1e5f); c.layout.offsetY = ser::clampNum(o, "oy", 0.f, -1e5f, 1e5f);
+    c.layout.width = ser::clampNum(o, "w", 320.f, 1.f, 1e5f); c.layout.height = ser::clampNum(o, "h", 240.f, 1.f, 1e5f);
+    c.layout.resize = o["resize"].asString() == "scale" ? tool::canvas::Resize::Scale : tool::canvas::Resize::Follow;
+    c.style.radius = ser::clampNum(o, "radius", 0.f, 0.f, 1e4f); c.style.borderWidth = ser::clampNum(o, "border_width", 0.f, 0.f, 1000.f);
+    c.style.background = static_cast<tool::canvas::Color>(o["bg"].asNumber(0.0));
+    c.style.border = static_cast<tool::canvas::Color>(o["bc"].asNumber(4294967295.0));
+    w.add<CanvasComp>(e, c);
   }
   if (j.has("particles")) {
     ParticleComp p; const auto& o = j["particles"]; p.emitting = ser::flag(o, "emitting", true); p.loop = ser::flag(o, "loop", true); p.maxParticles = std::clamp(static_cast<int>(o["max"].asNumber(200)), 1, 5000);

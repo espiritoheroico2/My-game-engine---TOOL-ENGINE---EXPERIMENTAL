@@ -16,3 +16,8 @@ if(TOOL_WITH_SPRITEUI)
   target_compile_definitions(tool_tests PRIVATE TOOL_WITH_SPRITEUI=1 TOOL_SHADERS_DIR="${CMAKE_SOURCE_DIR}/assets/shaders")
 endif()
 add_test(NAME tool_tests COMMAND tool_tests)
+
+# Canvas (engine/canvas): executavel proprio, para compilar sem depender do resto dos testes do engine.
+add_executable(tool_canvas_tests main.cpp test_canvas.cpp)
+target_link_libraries(tool_canvas_tests PRIVATE tool::canvas)
+add_test(NAME tool_canvas_tests COMMAND tool_canvas_tests)
