@@ -10,7 +10,7 @@
 //
 // Como funciona:
 //   buildParticles:  particulas da vista; a trajetoria do objeto selecionado (Scene) sai antes.
-//   buildUi:         elementos de UI de cada UiCanvas da camera (texto, painel, barra e botao). Botao vira um
+//   buildUi:         elementos de UI de cada Canvas da camera (texto, painel, barra e botao). Botao vira um
 //                    acerto (UiHit) na celula: o clique no Play devolve a acao dele.
 //   buildCulled:     contorno vermelho dos objetos que a camera de jogo principal nao desenha.
 //   buildPhysics:    contornos dos colisores (esferas e caixas) quando "Draw colliders" esta ligado.
@@ -127,23 +127,28 @@ inline void buildParticles(Editor& ed, const tool::Camera& cam, sui::Box area, t
   });
 }
 
-// UI do jogo de uma camera: desenha os UiCanvas que pertencem a camEnt dentro da celula. Os botoes viram acertos na
+// UI do jogo de uma camera: desenha os Canvas que pertencem a camEnt dentro da celula. Cada canvas se posiciona na
+// area da camera (ancora e tamanho do layout); os elementos sao fracoes do canvas. Os botoes viram acertos na
 // celula (com a cor de hover/pressionado vinda de hoverIdx/pressedIdx, indices de botao da celula).
 inline void buildUi(Editor& ed, tool::Entity camEnt, sui::Box area, bool interactive, int hoverIdx, int pressedIdx, gp::Cell& cell) {
   tool::World& w = ed.scene.world();
   const auto* cn = w.get<Name>(camEnt);
   view::ShapeList& out = cell.overlay;
-  w.each<UiCanvas>([&](tool::Entity, UiCanvas& cv) {
+  w.each<CanvasComp>([&](tool::Entity, CanvasComp& cv) {
     if (!cv.visible) return;
     if (cv.camera[0]) {
       if (!cn || std::string(cv.camera) != cn->text) return;
     } else if (!ed.isPrincipal(camEnt)) {
       return;
     }
+    // O canvas se calcula na area da camera; refaz so quando o layout ou a area mudam (cache).
+    tool::canvas::Refresh(cv.cache, cv.layout, {area.w, area.h}, kDesignRef);
+    const tool::canvas::Rect r = cv.cache.rect;
+    const float ox = area.x + r.x, oy = area.y + r.y;
     for (int i = 0; i < cv.count && i < kMaxUi; ++i) {
       UiElem& it = cv.items[i];
-      const vm::Pixel a{area.x + it.x * area.w, area.y + it.y * area.h};
-      const vm::Pixel b{a.x + it.w * area.w, a.y + it.h * area.h};
+      const vm::Pixel a{ox + it.x * r.w, oy + it.y * r.h};
+      const vm::Pixel b{a.x + it.w * r.w, a.y + it.h * r.h};
       const std::string txt = uiFormat(ed, it.text);
       const float fs = kUiFont * it.fontScale * std::max(0.5f, area.h / 600.f);
       const view::Color col = view::rgbaF(it.color[0], it.color[1], it.color[2], it.color[3]);

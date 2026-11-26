@@ -24,7 +24,7 @@ namespace editor::inspector_model {
 // Secoes de componente com expansor (cabecalho clicavel). O cabecalho do objeto (nome, ativo, travado) nao tem.
 // PostFx e o subgrupo "Post-processing (this camera)" dentro da Camera.
 enum class Section : std::uint8_t {
-    Transform, MeshRenderer, Light, GlobalLight, Camera, Audio, PostFx, Tags, Script, Physics, Tools, Voxel, UiCanvas,
+    Transform, MeshRenderer, Light, GlobalLight, Camera, Audio, PostFx, Tags, Script, Physics, Tools, Voxel, Canvas,
     Particles, ParticleShape, ParticleColors, ParticleRoute, ParticleTornado, Resources
 };
 inline constexpr std::size_t kSectionCount = 19;
@@ -33,7 +33,7 @@ inline constexpr std::size_t kSectionCount = 19;
 // mesma ordem de ToolKind (Jump, Move, Follow Target, Spin, On Collision, Script library).
 enum class Resource : std::uint8_t {
     Physics, ToolJump, ToolMove, ToolFollow, ToolSpin, ToolOnCollision, ToolScriptLib,
-    Mesh, PointLight, Camera, Audio, Particles, Script, GameUi, Voxel, ToolsAll, GlobalLight
+    Mesh, PointLight, Camera, Audio, Particles, Script, Canvas, Voxel, ToolsAll, GlobalLight
 };
 
 // Estado de aberto e fechado de cada secao.

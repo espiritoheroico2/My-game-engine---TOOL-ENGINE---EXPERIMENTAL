@@ -122,9 +122,8 @@ struct Colors {
     SU::Vec4 field = sui::Srgb(0.08f, 0.10f, 0.14f);
     SU::Vec4 caret = sui::Srgb(0.91f, 0.918f, 0.933f);
     // Cor do icone por tipo, na ordem de hm::Kind.
-    SU::Vec4 kinds[7] = {sui::Srgb(0.62f, 0.68f, 0.78f), sui::Srgb(0.42f, 0.85f, 0.52f), sui::Srgb(1.f, 0.85f, 0.35f),
-                         sui::Srgb(0.85f, 0.55f, 0.95f), sui::Srgb(1.f, 0.6f, 0.3f), sui::Srgb(0.4f, 0.85f, 0.95f),
-                         sui::Srgb(0.35f, 0.95f, 0.7f)};
+    SU::Vec4 kinds[6] = {sui::Srgb(0.62f, 0.68f, 0.78f), sui::Srgb(0.42f, 0.85f, 0.52f), sui::Srgb(1.f, 0.85f, 0.35f),
+                         sui::Srgb(0.85f, 0.55f, 0.95f), sui::Srgb(1.f, 0.6f, 0.3f), sui::Srgb(0.35f, 0.95f, 0.7f)};
 };
 
 enum class Button : std::uint8_t { None, Create, Duplicate, Delete };

@@ -6,7 +6,7 @@
 // e so mudam em acao do usuario (clique, arrasto ou digitacao). Desenhar e ler nao escrevem nada.
 //
 // Secoes em SpriteUI: nome, ativo e travado; Transform; Mesh Renderer (com as partes de modelo importado); Light
-// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; Voxel; Game UI; Particles; ToolObject Script
+// source; Global Light (sun); Camera (com o pos-processamento); Audio Source; Physics; Tools; Voxel; Canvas (game UI); Particles; ToolObject Script
 // e Tags. Recursos (Add / Remove) entram neste painel.
 //
 // Exemplo: a Luz do sol tem cor, intensidade e sombra. Clicar na amostra da cor abre o seletor; arrastar a area
@@ -100,7 +100,7 @@ struct Context {
     bool hasPhysics = false;             // o objeto tem Physics (algumas ferramentas precisam)
     VoxelChunk* voxel = nullptr;         // blocos do objeto (nullptr: nao tem)
     unsigned voxelSolid = 0;             // blocos preenchidos no chunk
-    UiCanvas* ui = nullptr;              // UI de jogo do objeto (nullptr: nao tem)
+    CanvasComp* cv = nullptr;            // Canvas (UI de jogo) do objeto (nullptr: nao tem)
     std::vector<std::string> cameraNames;   // cameras da cena (para escolher onde a UI aparece)
     ParticleComp* particles = nullptr;   // particulas do objeto (nullptr: nao tem)
     std::vector<int> addable;            // recursos (im::Resource) que o objeto ainda pode receber
@@ -232,7 +232,7 @@ class InspectorPanel {
         if (ctx.physics) physics();
         if (ctx.tools) tools();
         if (ctx.voxel) voxel();
-        if (ctx.ui) uiCanvas();
+        if (ctx.cv) canvasSection();
         if (ctx.particles) particles();
         resources();
         script();
@@ -1022,7 +1022,7 @@ class InspectorPanel {
         static const char* names[] = {
             "Physics body (Newtoon)", "Tool: Jump", "Tool: Move", "Tool: Follow Target", "Tool: Spin", "Tool: On Collision",
             "Tool: Script library", "Mesh (cube)", "Point Light", "Camera", "Audio Source", "Particle System", "ToolObject Script",
-            "Game UI (canvas)", "Voxel chunk (blocks)", "Tools (all)", "Global Light"};
+            "Canvas (game UI)", "Voxel chunk (blocks)", "Tools (all)", "Global Light"};
         const std::size_t i = static_cast<std::size_t>(id);
         return i < std::size(names) ? names[i] : "";
     }
@@ -1057,12 +1057,12 @@ class InspectorPanel {
         endSection();
     }
 
-    // UI de jogo (camada sobre a camera): visivel, camera onde aparece (vazio = todas as Principais), elementos
-    // (texto, painel, botao, barra) com posicao, tamanho, cor e escala, e os botoes para adicionar. A lista e fixa
+    // Canvas (UI de jogo): visivel, camera onde aparece (vazio = todas as Principais), ancora e tamanho do canvas,
+    // elementos (texto, painel, botao, barra) em fracoes do canvas, e os botoes para adicionar. A lista e fixa
     // (sem recolher por elemento), como as ferramentas.
-    void uiCanvas() {
-        UiCanvas& ui = *ctx_.ui;
-        if (!beginSection(im::Section::UiCanvas, T("Game UI (camera layer)"))) return;
+    void canvasSection() {
+        CanvasComp& ui = *ctx_.cv;
+        if (!beginSection(im::Section::Canvas, T("Canvas (game UI)"))) return;
         checkField(T("Visible"), &ui.visible);
         std::vector<std::string> options{T("(all Principal cameras)")};
         std::size_t selected = 0;
@@ -1079,6 +1079,17 @@ class InspectorPanel {
             if (i == 0 || i >= list.size()) ui.camera[0] = 0;
             else std::snprintf(ui.camera, sizeof ui.camera, "%s", list[i].c_str());
         });
+        // Posicao e tamanho do canvas: em pixels de projeto (referencia 1920x1080), e no modo Scale acompanham a camera.
+        slider(T("Anchor X"), &ui.layout.anchorX, {-2.f, 3.f});
+        slider(T("Anchor Y"), &ui.layout.anchorY, {-2.f, 3.f});
+        numberRow(T("Offset X"), &ui.layout.offsetX, 0, {-1e5f, 1e5f});
+        numberRow(T("Offset Y"), &ui.layout.offsetY, 0, {-1e5f, 1e5f});
+        numberRow(T("Canvas width"), &ui.layout.width, 0, {1.f, 1e5f});
+        numberRow(T("Canvas height"), &ui.layout.height, 0, {1.f, 1e5f});
+        drop(T("Resize"), tr({"Follow anchor (fixed size)", "Scale with camera"}),
+             ui.layout.resize == tool::canvas::Resize::Scale ? 1u : 0u, [&ui](std::size_t i) {
+                 ui.layout.resize = i == 1 ? tool::canvas::Resize::Scale : tool::canvas::Resize::Follow;
+             });
         static const char* kinds[] = {"Text", "Panel", "Button", "Bar"};
         for (int i = 0; i < ui.count && i < kMaxUi; ++i) {
             UiElem& it = ui.items[i];
@@ -1114,7 +1125,7 @@ class InspectorPanel {
         canvas_.addText(innerX_, y_, T("Appears over the Game view of the chosen camera. Button clicks (while playing) send their event name."),
                         Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
         nextRow();
-        button(ctrlX_, T("Remove UI"), [this] { hooks_.removeUi(); }, Metrics::kButtonW);
+        button(ctrlX_, T("Remove Canvas"), [this] { hooks_.removeUi(); }, Metrics::kButtonW);
         nextRow();
         endSection();
     }

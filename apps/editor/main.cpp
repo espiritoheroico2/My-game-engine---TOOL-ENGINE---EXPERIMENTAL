@@ -128,7 +128,6 @@ editor::hierarchy_model::Kind hierarchyKindOf(tool::World& w, tool::Entity e) {
   if (w.has<ed_::GlobalLight>(e) || w.has<ed_::LightComp>(e)) return K::Light;
   if (w.has<ed_::AudioSource>(e)) return K::Audio;
   if (w.has<ed_::ParticleComp>(e)) return K::Particles;
-  if (w.has<ed_::UiCanvas>(e)) return K::Ui;
   if (w.has<ed_::CanvasComp>(e)) return K::Canvas;
   return K::Object;
 }
@@ -597,10 +596,10 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   if (!w.has<ed_::AudioSource>(e)) addR(R::Audio); else remR(R::Audio);
   if (!w.has<ed_::ParticleComp>(e)) addR(R::Particles); else remR(R::Particles);
   if (!w.has<ed_::ScriptComp>(e)) addR(R::Script); else remR(R::Script);
-  if (!w.has<ed_::UiCanvas>(e)) addR(R::GameUi); else remR(R::GameUi);
+  if (!w.has<ed_::CanvasComp>(e)) addR(R::Canvas); else remR(R::Canvas);
   if (!w.has<ed_::VoxelChunk>(e)) addR(R::Voxel); else remR(R::Voxel);
-  // UI de jogo do objeto e os nomes das cameras da cena (a escolha de onde a UI aparece).
-  c.ui = w.get<ed_::UiCanvas>(e);
+  // Canvas (UI de jogo) do objeto e os nomes das cameras da cena (a escolha de onde o canvas aparece).
+  c.cv = w.get<ed_::CanvasComp>(e);
   w.each<ed_::CameraComp>([&](tool::Entity ce, ed_::CameraComp&) {
     if (auto* n = w.get<ed_::Name>(ce)) c.cameraNames.emplace_back(n->text);
   });
@@ -695,7 +694,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     if (auto* vc = ed.scene.world().get<ed_::VoxelChunk>(ed.selected)) editor::clearChunk(*vc);
     ed.undoTick(false);
   };
-  h.removeUi = [&ed] { ed.scene.world().remove<ed_::UiCanvas>(ed.selected); };
+  h.removeUi = [&ed] { ed.scene.world().remove<ed_::CanvasComp>(ed.selected); };
   h.addResource = [&ed](int id) {   // regras do menu "+ Add Resource"
     using R = editor::inspector_model::Resource;
     tool::World& w = ed.scene.world();
@@ -718,10 +717,10 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
       w.add<ed_::ParticleComp>(sel);
     } else if (r == R::Script) {
       ed.attachScript(sel);
-    } else if (r == R::GameUi) {
-      ed_::UiCanvas u; ed_::UiElem& e = u.items[u.count++];
+    } else if (r == R::Canvas) {
+      ed_::CanvasComp cv = ed_::FullCanvas(); ed_::UiElem& e = cv.items[cv.count++];
       std::snprintf(e.text, sizeof e.text, "%s", "Hello UI");
-      w.add<ed_::UiCanvas>(sel, u);
+      w.add<ed_::CanvasComp>(sel, cv);
     } else if (r == R::Voxel) {
       ed_::VoxelChunk vc; editor::fillTerrain(vc, 0, 0);
       w.add<ed_::VoxelChunk>(sel, vc);
@@ -762,7 +761,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
         w.remove<ed_::AudioSource>(sel);
         break;
       case R::Particles: w.remove<ed_::ParticleComp>(sel); break;
-      case R::GameUi: w.remove<ed_::UiCanvas>(sel); break;
+      case R::Canvas: w.remove<ed_::CanvasComp>(sel); break;
       case R::Voxel: w.remove<ed_::VoxelChunk>(sel); break;
       case R::Script: w.remove<ed_::ScriptComp>(sel); break;
       default: break;
@@ -773,7 +772,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   };
   h.removeParticles = [&ed] { ed.scene.world().remove<ed_::ParticleComp>(ed.selected); };
   h.addUiElem = [&ed](int kind) {   // valores iniciais de cada tipo: do botao "+"
-    auto* u = ed.scene.world().get<ed_::UiCanvas>(ed.selected);
+    auto* u = ed.scene.world().get<ed_::CanvasComp>(ed.selected);
     if (!u || u->count >= ed_::kMaxUi) return;
     ed_::UiElem& e = u->items[u->count++];
     e = ed_::UiElem{};
@@ -796,7 +795,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     }
   };
   h.removeUiElem = [&ed](std::size_t i) {   // desloca os elementos seguintes
-    auto* u = ed.scene.world().get<ed_::UiCanvas>(ed.selected);
+    auto* u = ed.scene.world().get<ed_::CanvasComp>(ed.selected);
     if (!u || static_cast<int>(i) >= u->count) return;
     for (int k = static_cast<int>(i); k + 1 < u->count; ++k) u->items[k] = u->items[k + 1];
     --u->count;

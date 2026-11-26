@@ -32,7 +32,7 @@ using Id = std::uint64_t;
 inline constexpr Id NoId = 0;
 
 // Tipo do objeto: so muda o icone e a cor. Object e o objeto vazio.
-enum class Kind : std::uint8_t { Object, Camera, Light, Audio, Particles, Ui, Canvas };
+enum class Kind : std::uint8_t { Object, Camera, Light, Audio, Particles, Canvas };
 
 struct Item {
     Id id = NoId;

@@ -18,7 +18,7 @@
 //                editor_state.hpp) e mostrada pela janela Scene. Grade, gizmos e particulas sao gravados em
 //                view::ShapeList e desenhados por view_painter.hpp.
 //   Jogo         O mesmo executavel no modo --player: uma janela sem decoracao, mostrando a imagem da camera de
-//                jogo. A UI do jogo (UiCanvas) e desenhada por cima dela.
+//                jogo. A UI do jogo (Canvas) e desenhada por cima dela.
 //
 // ============================================================================================================
 // 2. ENTRADA E FOCO
@@ -47,7 +47,7 @@
 //   - editor_theme.json      tema escolhido/personalizado.
 //   - Project/project.json   configuracoes do projeto (inclui editorInfo para exportacao).
 // 3.4 Jogo (runtime)
-//   - UiCanvas (components.hpp): lista de elementos UiElem (texto, barra, botao) ligada a uma camera.
+//   - CanvasComp (components.hpp): canvas com ancora e tamanho, lista de elementos UiElem (texto, barra, botao) ligada a uma camera.
 //   - fx.hpp formata o texto de UI do jogo ("{variavel}"); view_overlays.hpp desenha os elementos.
 //   - Botoes do jogo: reagem so durante o Play (eventos "ui_show", "ui_hide", acoes).
 //
