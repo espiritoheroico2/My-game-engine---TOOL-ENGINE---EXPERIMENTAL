@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui_style.hpp"
+#include "window_bounds.hpp"
 
 // Moldura flutuante do Console (SpriteUI): posicao da janela, arraste pelo grip, X para fechar.
 // So regras e geometria, sem SDL nem desenho. O painel (console_panel.hpp) desenha a moldura e repassa os
@@ -31,6 +32,7 @@ struct Metrics {
   static constexpr float kHelpSize = 18.f;   // diametro do circulo do "?"
   static constexpr float kHelpGap = 4.f;     // espaco entre o grip e o circulo, e entre o circulo e o titulo
   static constexpr float kResizeBand = 6.f;  // faixa (px) em volta da moldura que redimensiona
+  static constexpr float kKeepGrab = 80.f;   // px visiveis de uma janela solta quase toda fora da area
   static constexpr float kMinWidth = 220.f;  // menor largura ao redimensionar
 };
 
@@ -55,8 +57,10 @@ class Frame {
       pos_ = {std::floor(x), std::max(0.f, std::floor(windowH - h - Metrics::kBottomGap))};
       placed_ = true;
     }
-    pos_.x = std::clamp(pos_.x, 0.f, std::max(0.f, windowW - w));
-    pos_.y = std::clamp(pos_.y, 0.f, std::max(0.f, windowH - shown));
+    // Janela solta: o cabecalho fica na area e uma faixa visivel fica pegavel (window_bounds.hpp).
+    const auto kept = editor::window_bounds::keepInside({pos_.x, pos_.y}, w, {0.f, 0.f, windowW, windowH},
+                                                        metrics_.headerHeight, Metrics::kKeepGrab);
+    pos_ = {kept.x, kept.y};
     frame_ = SU::Rect{pos_, {w, shown}};
   }
 
