@@ -63,7 +63,7 @@ struct Theme {
   static constexpr float kAssetNameWidth = 596.f;
   static constexpr float kFontSize = 12.f;
   static constexpr float kLabelSize = 12.f;
-  static constexpr float kTitleSize = 20.f;
+  static constexpr float kTitleSize = 12.f;   // titulo da moldura: mesmo tamanho das outras janelas
   static constexpr float kFieldInset = 8.f;
   static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth
   static constexpr float kHelpSize = 18.f;    // diametro do "?"
