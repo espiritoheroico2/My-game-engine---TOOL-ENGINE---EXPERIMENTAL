@@ -1061,6 +1061,18 @@ void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img,
   v.snapOn = ed.snapOn;
   v.snapStep = ed.snapStep;
   v.sel = sceneSelection(ed);
+  v.canvasEdit = ed.canvasEdit;
+  // Canvas da UI de jogo: todos seguem para a janela (ela desenha os visiveis); o selecionado ganha destaque.
+  ed.scene.world().each<ed_::CanvasComp>([&](tool::Entity e, ed_::CanvasComp& c) {
+    scene_panel::Values::CanvasBox cb;
+    cb.id = packEntity(e);
+    cb.layout = c.layout;
+    cb.ref = ed_::kDesignRef;
+    cb.selected = ed.selected.index == e.index && ed.selected.generation == e.generation;
+    cb.visible = c.visible;
+    v.canvases.push_back(cb);
+    if (cb.selected) v.selCanvas = true;
+  });
   v.probe = [&ed, cam, img](vm::Pixel p) { return sceneProbe(ed, cam, img, p); };
   const vm::Projection proj = vm::Projection::make(cam, {img.x, img.y, img.w, img.h});
   vo::buildParticles(ed, cam, img, ed.selected, v.below);
@@ -1114,6 +1126,15 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
   if (r.localSpace) ed.gizmoLocal = *r.localSpace;
   if (r.snapOn) ed.snapOn = *r.snapOn;
   if (r.snapStep) ed.snapStep = *r.snapStep;
+  if (r.canvasEdit) ed.canvasEdit = *r.canvasEdit;
+  if (r.canvasDrag) {
+    const tool::Entity ce = unpackEntity(r.canvasDrag->id);
+    if (w.alive(ce)) {
+      if (auto* c = w.get<ed_::CanvasComp>(ce)) {
+        editor::canvas_edit::drag(c->layout, r.canvasDrag->grip, r.canvasDrag->dx, r.canvasDrag->dy, r.canvasDrag->ppu);
+      }
+    }
+  }
   if (r.select && w.alive(unpackEntity(*r.select))) ed.selected = unpackEntity(*r.select);
   if (w.alive(ed.selected)) {
     if (auto* t = w.get<ed_::Transform>(ed.selected)) {

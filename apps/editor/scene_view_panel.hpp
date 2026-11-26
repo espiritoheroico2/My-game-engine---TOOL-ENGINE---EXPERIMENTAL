@@ -20,6 +20,7 @@
 #include "window_palette.hpp"
 #include "i18n.hpp"
 #include "scene_transform_menu.hpp"
+#include "canvas_edit.hpp"
 #include "scene_view_model.hpp"
 #include "spriteui_host.hpp"
 #include "sui_panel.hpp"
@@ -115,6 +116,17 @@ struct Values {
   bool snapOn = false;
   float snapStep = 0.25f;
   Selection sel;
+  // Canvas da UI de jogo, desenhados sobre a cena (o Editor passa todos; a janela desenha os visiveis).
+  struct CanvasBox {
+    std::uint64_t id = 0;
+    tool::canvas::Layout layout;
+    tool::canvas::Screen ref;
+    bool selected = false;
+    bool visible = true;
+  };
+  std::vector<CanvasBox> canvases;
+  bool selCanvas = false;    // a selecao e um Canvas: mostra o botao Edit canvas
+  bool canvasEdit = false;   // modo Edit canvas: clicar e arrastar move ou redimensiona o canvas
   view::ShapeList below;
   view::ShapeList grid;   // vazio quando a grade esta desligada
   view::ShapeList above;
@@ -130,6 +142,15 @@ struct Requests {
   std::optional<std::uint64_t> select;
   std::optional<std::array<float, 3>> pos, rot, scale;   // arrasto do gizmo: Transform novo do quadro
   std::optional<std::pair<CtxAct, std::uint64_t>> ctx;   // item escolhido no menu de contexto
+  // Modo Edit canvas: liga/desliga, e o arrasto do canvas neste quadro (delta em pixels desde o quadro anterior).
+  struct CanvasDrag {
+    std::uint64_t id = 0;
+    float dx = 0.f, dy = 0.f;
+    canvas_edit::Grip grip = canvas_edit::Grip::None;
+    canvas_edit::Ppu ppu{};
+  };
+  std::optional<bool> canvasEdit;
+  std::optional<CanvasDrag> canvasDrag;
   bool close = false, help = false;                       // X e "?" da moldura (o host fecha ou abre a Help)
 };
 
@@ -196,6 +217,8 @@ public:
       queue_.clear();
       ctx_.Close();
       dragging_ = false;
+      canvasDragging_ = false;
+      canvasUp_ = false;
       frame_.reset();
       return true;
     }
@@ -207,6 +230,16 @@ public:
     }
     queue_.clear();
     if (dragging_) updateDrag(v, out);
+    if (canvasDragging_ && !minimized) {
+      // Delta desde o quadro anterior; o soltar fecha o arrasto depois de mandar o ultimo pedaco.
+      const float dx = mouse_.x - canvasLast_.x, dy = mouse_.y - canvasLast_.y;
+      if (dx != 0.f || dy != 0.f) out.canvasDrag = Requests::CanvasDrag{canvasId_, dx, dy, canvasGrip_, canvasPpu_};
+      canvasLast_ = mouse_;
+      if (canvasUp_) {
+        canvasDragging_ = false;
+        canvasUp_ = false;
+      }
+    }
 
     view::ShapeList overlay;
     if (!minimized && img.w >= 1.f && img.h >= 1.f) {
@@ -214,6 +247,7 @@ public:
       overlay.append(v.below);
       overlay.append(v.grid);
       overlay.append(v.above);
+      buildCanvases(v, img, overlay);
       if (v.showGizmos && !v.playing && v.sel.present) addGizmo(v, proj, overlay);
     }
     view::ShapeList chrome;
@@ -263,7 +297,7 @@ private:
   };
 
   // Botoes da barra e da barra flutuante. O id diz o que o clique faz.
-  enum class Btn : std::uint8_t { PlayStop, Pause, Step, Grid, Gizmos, Culled, PostFx, Mode0, Mode1, Mode2, Magnet, Space, SnapContact };
+  enum class Btn : std::uint8_t { PlayStop, Pause, Step, Grid, Gizmos, Culled, PostFx, Mode0, Mode1, Mode2, Magnet, Space, SnapContact, EditCanvas };
   struct Button {
     sui::Box box;
     Btn id;
@@ -301,6 +335,7 @@ private:
           dragging_ = false;
           sliderDrag_ = false;
           floatDragging_ = false;
+          if (canvasDragging_) canvasUp_ = true;
         }
         if (ev.button == SDL_BUTTON_RIGHT && rightDown_) {
           rightDown_ = false;
@@ -372,6 +407,7 @@ private:
     }
     if (floatRect_.contains(p.x, p.y)) return;
     if (img.contains(p.x, p.y)) {
+      if (v.canvasEdit && startCanvas(p, v, img, out)) return;
       if (v.freeFly) return;
       if (startGizmo(p, v)) return;
       const Probe hit = v.probe ? v.probe(p) : Probe{};
@@ -381,6 +417,48 @@ private:
   }
 
   // Clique num botao da barra ou da barra flutuante.
+  // Modo Edit canvas: clique sobre um canvas seleciona-o; sobre o canvas ja selecionado, o corpo ou o canto comeca
+  // o arrasto. True: o clique foi do canvas (nao vai para o objeto da cena).
+  bool startCanvas(vm::Pixel p, const Values& v, const sui::Box& img, Requests& out) {
+    for (const Values::CanvasBox& c : v.canvases) {
+      if (!c.visible) continue;
+      const canvas_edit::Box b = canvas_edit::boxFor(c.layout, img.w, img.h, c.ref);
+      const canvas_edit::Box win{img.x + b.x, img.y + b.y, b.w, b.h};
+      const canvas_edit::Grip g = canvas_edit::gripAt(win, p.x, p.y);
+      if (g == canvas_edit::Grip::None) continue;
+      if (!c.selected) {
+        out.select = c.id;
+        return true;
+      }
+      canvasDragging_ = true;
+      canvasUp_ = false;
+      canvasId_ = c.id;
+      canvasGrip_ = g;
+      canvasPpu_ = canvas_edit::pixelsPerUnit(win, c.layout);
+      canvasLast_ = p;
+      return true;
+    }
+    return false;
+  }
+
+  // Caixa de cada canvas visivel sobre a cena: contorno (o selecionado em destaque) e, no modo Edit canvas, a alca
+  // do canto. Fica por cima da cena e abaixo do gizmo.
+  void buildCanvases(const Values& v, const sui::Box& img, view::ShapeList& out) const {
+    for (const Values::CanvasBox& c : v.canvases) {
+      if (!c.visible) continue;
+      const canvas_edit::Box b = canvas_edit::boxFor(c.layout, img.w, img.h, c.ref);
+      const vm::Pixel a{img.x + b.x, img.y + b.y}, z{a.x + b.w, a.y + b.h};
+      const view::Color edge = c.selected ? kHighlight : kTextDim;
+      out.rectFilled(a, z, view::Rgba(255, 255, 255, 14), 0.f);
+      out.line(a, {z.x, a.y}, 1.f, edge);
+      out.line({z.x, a.y}, z, 1.f, edge);
+      out.line(z, {a.x, z.y}, 1.f, edge);
+      out.line({a.x, z.y}, a, 1.f, edge);
+      out.text({a.x + 4.f, a.y + 4.f}, T("Canvas"), kFont, edge);
+      if (c.selected && v.canvasEdit) out.rectFilled({z.x - 4.f, z.y - 4.f}, {z.x + 4.f, z.y + 4.f}, kHighlight, 1.f);
+    }
+  }
+
   void press(Btn b, const Values& v, Requests& out) {
     switch (b) {
       case Btn::PlayStop: out.playToggle = true; break;
@@ -396,6 +474,7 @@ private:
       case Btn::Magnet: out.snapOn = !v.snapOn; break;
       case Btn::Space: out.localSpace = !v.localSpace; break;
       case Btn::SnapContact: out.snapToContact = true; break;
+      case Btn::EditCanvas: out.canvasEdit = !v.canvasEdit; break;
     }
   }
 
@@ -622,6 +701,7 @@ private:
     addButton(bar, x, by, kBtnH, T("Magnet"), Btn::Magnet, v.snapOn, true, 8.f);
     x += 4.f;
     addButton(bar, x, by, kBtnH, v.localSpace ? T("Local (Q)") : T("World (Q)"), Btn::Space, v.localSpace, true, 8.f);
+    if (v.selCanvas) addButton(bar, x, by, kBtnH, T("Edit canvas"), Btn::EditCanvas, v.canvasEdit, true, 8.f);
     x += 4.f;
     sliderBox_ = {x, y + (kFloatH - 8.f) * 0.5f, kSliderW, 8.f};
     const float t = stm::sliderFromSnapStep(v.snapStep);
@@ -656,6 +736,7 @@ private:
     addWidth(T("Magnet"), 8.f);
     cursor += 4.f;
     addWidth(v.localSpace ? T("Local (Q)") : T("World (Q)"), 8.f);
+    if (v.selCanvas) addWidth(T("Edit canvas"), 8.f);
     cursor += 4.f + kSliderW + 6.f;
     char val[32];
     std::snprintf(val, sizeof val, "%.2f m", static_cast<double>(v.snapStep));
@@ -702,6 +783,12 @@ private:
   std::vector<In> queue_;
 
   bool dragging_ = false;
+  bool canvasDragging_ = false;   // arrasto de canvas em curso (Edit canvas)
+  bool canvasUp_ = false;         // soltou no meio do quadro: o arrasto acaba depois de mandar o ultimo delta
+  std::uint64_t canvasId_ = 0;
+  canvas_edit::Grip canvasGrip_ = canvas_edit::Grip::None;
+  canvas_edit::Ppu canvasPpu_{};
+  vm::Pixel canvasLast_{};
   vm::DragStart start_{};
   std::string readout_;
   bool sliderDrag_ = false;
