@@ -479,6 +479,17 @@ class SettingsPanel {
 
     struct FormSlot;   // definido com as linhas genericas, abaixo
 
+    // Caixa do valor de um deslizante, a direita da faixa: a mesma geometria em toda linha de slider. Mostra o texto
+    // dado (unidade ou numero); sem foco de digitacao (quem digita usa layoutValueBox).
+    void drawValueBox(const std::string& shown, float y) {
+        const float vx = Metrics::kPad + labelW_ + controlW_ - Metrics::kValueW + 4.f;
+        const float vw = Metrics::kValueW - 4.f;
+        const SU::Rect box = rectOf(vx, y, vw, Metrics::kRowH);
+        canvas_.addSolid(box.position.x, box.position.y, box.size.x, box.size.y, btnColor_, 0.2f,
+                         editor::ui_style::buttonRadius());
+        canvas_.addText(box.position.x + 6.f, y + 5.f, shown, Metrics::kFont, theme_.textDim, vw - 8.f);
+    }
+
     // Um slider com rotulo e valor na linha de Appearance (slot fixo k). A faixa fica em `s.slider.border`.
     float styleRow(std::size_t k, float value, const char* label, float y, float lo, float hi, float step, bool integer,
                    const std::string& shown) {
@@ -566,6 +577,7 @@ class SettingsPanel {
         }
         scale_.border = rectOf(Metrics::kPad + labelW_, y, controlW_ - Metrics::kValueW, Metrics::kRowH);
         text(Metrics::kPad, y + 6.f, T("Render scale"), Metrics::kFont, labelW_ - 6.f);
+        drawValueBox(Elm::SliderValueText(scale_), y);
         y += Metrics::kRowH + Metrics::kGap;
         text(Metrics::kPad, y, T("Below 1.0 renders fewer pixels (faster); above 1.0 renders more pixels (sharper, slower)."),
              Metrics::kSmallFont, textWidth());
