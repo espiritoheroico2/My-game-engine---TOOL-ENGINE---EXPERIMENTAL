@@ -42,6 +42,7 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "panel_router.hpp"
 #include "scene_view_panel.hpp"
 #include "canvas_division.hpp"
+#include "canvas_regions.hpp"
 #include "game_view_panel.hpp"
 #include "dock_host.hpp"
 #include "input_script.hpp"
@@ -1046,6 +1047,9 @@ scene_panel::Probe sceneProbe(Editor& ed, const tool::Camera& cam, editor::sui::
 }
 
 // Monta os dados da Scene do quadro: flags, selecao, particulas (abaixo), grade, cortados e icones (acima).
+// Regioes do canvas: recalcula a numeracao a partir de pontos e linhas (ver canvas_regions.hpp).
+void canvas_regions_refresh(ed_::CanvasComp& c) { editor::canvas_regions::refresh(c.regions, c.divisions, c.divisionLines); }
+
 void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img, SDL_Texture* tex, int tw, int th) {
   scene_panel::Values v;
   v.shown = true;
@@ -1083,6 +1087,8 @@ void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img,
     cb.visible = c.showInScene;   // a caixa da Scene so aparece se "Mostrar na Scene" estiver ligado
     cb.divisions = c.divisions;
     cb.divisionLines = c.divisionLines;
+    canvas_regions_refresh(c);
+    cb.regions = c.regions;
     v.canvases.push_back(cb);
     if (cb.selected) v.selCanvas = true;
   });
@@ -1157,10 +1163,12 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
             ed.lineFrom = static_cast<int>(r.line->index);
           } else {
             editor::canvas_division::addLine(c->divisions, c->divisionLines, static_cast<std::size_t>(ed.lineFrom), r.line->index, ed.dottedLine);
+            canvas_regions_refresh(*c);
             ed.lineFrom = -1;
           }
         } else {
           editor::canvas_division::removeLine(c->divisionLines, r.line->index);
+          canvas_regions_refresh(*c);
           ed.selLine = -1;
         }
       }
@@ -1173,10 +1181,13 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
         using Op = scene_panel::Requests::DivisionOp;
         if (r.division->op == Op::Add) {
           editor::canvas_division::add(c->divisions, r.division->x, r.division->y);
+          canvas_regions_refresh(*c);
         } else if (r.division->op == Op::Move) {
           editor::canvas_division::move(c->divisions, r.division->index, r.division->x, r.division->y);
+          canvas_regions_refresh(*c);
         } else {
           editor::canvas_division::remove(c->divisions, c->divisionLines, r.division->index);
+          canvas_regions_refresh(*c);
           ed.selDivision = -1;
           ed.selLine = -1;
           ed.lineFrom = -1;

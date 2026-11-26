@@ -15,6 +15,7 @@
 // ToolEngine Editor - componentes dos objetos da cena e sua (de)serializacao em JSON.
 #pragma once
 #include "canvas_division.hpp"
+#include "canvas_regions.hpp"
 #include "tool/audio/audio.hpp"
 #include "tool/canvas/canvas_layout.hpp"
 #include "tool/core/json.hpp"
@@ -150,6 +151,7 @@ struct CanvasComp {
   float edge[4] = {1.f, 1.f, 1.f, 1.f};    // cor da borda RGBA 0..1
   std::vector<canvas_division::Point> divisions;   // pontos de divisao (cruzes), em fracao do canvas
   std::vector<canvas_division::Line> divisionLines;   // linhas entre pontos de divisao
+  canvas_regions::Regions regions;   // regioes cortadas pelas linhas, com numero (ver canvas_regions.hpp)
   int count = 0;
   UiElem items[kMaxUi];
 };
@@ -414,6 +416,14 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     o.set("items", itemsJson(*c));
     o.set("divisions", divisionsJson(*c));
     o.set("lines", divisionLinesJson(*c));
+    {
+      tool::Json rg = tool::Json::object();
+      rg.set("next", static_cast<double>(c->regions.next));
+      tool::Json cells = tool::Json::array();
+      for (std::uint16_t v : c->regions.cell) cells.push(static_cast<double>(v));
+      rg.set("cells", cells);
+      o.set("regions", rg);
+    }
     j.set("canvas", o);
   }
   if (auto* p = w.get<ParticleComp>(e)) {
@@ -539,6 +549,13 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     readItems(o["items"], c);
     readDivisions(o["divisions"], c);
     readDivisionLines(o["lines"], c);
+    {
+      const auto& cells = o["regions"]["cells"].items();
+      if (cells.size() == c.regions.cell.size()) {
+        for (std::size_t i = 0; i < cells.size(); ++i) c.regions.cell[i] = static_cast<std::uint16_t>(std::max(0.0, cells[i].asNumber(0.0)));
+        c.regions.next = std::max(1, static_cast<int>(o["regions"]["next"].asNumber(1.0)));
+      }
+    }
     w.add<CanvasComp>(e, c);
   }
   if (j.has("particles")) {
