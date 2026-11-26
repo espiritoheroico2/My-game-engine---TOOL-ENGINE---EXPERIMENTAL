@@ -208,10 +208,10 @@ class Frame {
     if (resizeMask_ & 2) w = std::max(minW, w + dx);
     if (resizeMask_ & 4) { const float ny = std::min(y + dy, y + h - minH); h = y + h - ny; y = ny; }
     if (resizeMask_ & 8) h = std::max(minH, h + dy);
-    x = std::max(x, 0.f);
-    y = std::max(y, 0.f);
-    w = std::min(w, lastWinW_ - x);   // nao sai da janela do editor
-    h = std::min(h, lastWinH_ - y);
+    // Posicao fica por conta de place() (keepInside): o cabecalho segue visivel. Aqui so o tamanho e limitado a area.
+    const window_bounds::Box area = floatArea(lastWinW_, lastWinH_);
+    w = std::min(w, area.x + area.w - x);   // a largura nao passa da borda direita da area
+    h = std::min(h, area.h);
     pos_ = {x, y};
     userSize_ = {w, h};
     userSized_ = true;
