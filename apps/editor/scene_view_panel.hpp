@@ -125,12 +125,17 @@ struct Values {
     bool selected = false;
     bool visible = true;
     std::vector<canvas_division::Point> divisions;   // pontos de divisao (cruzes)
+    std::vector<canvas_division::Line> divisionLines;   // linhas entre pontos
   };
   std::vector<CanvasBox> canvases;
   bool selCanvas = false;    // a selecao e um Canvas: mostra o botao Edit canvas
   bool canvasEdit = false;   // modo Edit canvas: clicar e arrastar move ou redimensiona o canvas
   bool divisionAdd = false;  // modo Adicionar ponto: o clique dentro do canvas selecionado coloca uma cruz
   int selDivision = -1;      // ponto de divisao selecionado no canvas selecionado (-1: nenhum)
+  bool divisionLine = false; // modo Linha: dois cliques em pontos ligam uma linha
+  bool dottedLine = false;   // estilo das linhas novas: pontilhada
+  int selLine = -1;          // linha selecionada (-1: nenhuma)
+  int lineFrom = -1;         // primeiro ponto escolhido no modo Linha (-1: nenhum)
   view::ShapeList below;
   view::ShapeList grid;   // vazio quando a grade esta desligada
   view::ShapeList above;
@@ -164,6 +169,16 @@ struct Requests {
     float x = 0.f, y = 0.f;
   };
   std::optional<DivisionEdit> division;
+  // Linhas entre pontos: escolher um ponto no modo Linha (Pick), apagar a linha selecionada (Remove).
+  enum class LineOp : std::uint8_t { Pick, Remove };
+  struct LineEdit {
+    std::uint64_t id = 0;
+    LineOp op = LineOp::Pick;
+    std::size_t index = 0;   // Pick: indice do ponto; Remove: indice da linha
+  };
+  std::optional<LineEdit> line;
+  std::optional<bool> divisionLine, dottedLine;
+  std::optional<int> selLine, lineFrom;
   std::optional<bool> divisionAdd;
   std::optional<int> selDivision;
   bool close = false, help = false;                       // X e "?" da moldura (o host fecha ou abre a Help)
@@ -318,7 +333,7 @@ private:
   };
 
   // Botoes da barra e da barra flutuante. O id diz o que o clique faz.
-  enum class Btn : std::uint8_t { PlayStop, Pause, Step, Grid, Gizmos, Culled, PostFx, Mode0, Mode1, Mode2, Magnet, Space, SnapContact, EditCanvas, AddPoint, RemovePoint };
+  enum class Btn : std::uint8_t { PlayStop, Pause, Step, Grid, Gizmos, Culled, PostFx, Mode0, Mode1, Mode2, Magnet, Space, SnapContact, EditCanvas, AddPoint, RemovePoint, AddLine, DottedLine, RemoveLine };
   struct Button {
     sui::Box box;
     Btn id;
@@ -449,13 +464,26 @@ private:
       // Pontos de divisao do canvas selecionado: pegar um arrasta; no modo Adicionar, clicar dentro coloca um.
       const canvas_division::Rect rect{win.x, win.y, win.w, win.h};
       const int hit = canvas_division::hitAt(c.divisions, rect, p.x, p.y);
+      if (hit >= 0 && v.divisionLine) {
+        out.line = Requests::LineEdit{c.id, Requests::LineOp::Pick, static_cast<std::size_t>(hit)};
+        return true;
+      }
       if (hit >= 0) {
         out.selDivision = hit;
+        out.selLine = -1;
         divisionDragging_ = true;
         divisionId_ = c.id;
         divisionIndex_ = static_cast<std::size_t>(hit);
         divisionBox_ = win;
         return true;
+      }
+      if (!v.divisionLine) {
+        const int li = canvas_division::lineAt(c.divisions, c.divisionLines, rect, p.x, p.y);
+        if (li >= 0) {
+          out.selLine = li;
+          out.selDivision = -1;
+          return true;
+        }
       }
       if (v.divisionAdd && win.contains(p.x, p.y) && win.w > 0.f && win.h > 0.f) {
         const float fx = canvas_division::clamp01((p.x - win.x) / win.w);
@@ -499,6 +527,25 @@ private:
       out.line(z, {a.x, z.y}, 1.f, edge);
       out.line({a.x, z.y}, a, 1.f, edge);
       out.text({a.x + 4.f, a.y + 4.f}, T("Canvas"), kFont, edge);
+      // Linhas entre pontos (pontilhadas ou solidas); a selecionada fica em destaque.
+      for (std::size_t i = 0; i < c.divisionLines.size(); ++i) {
+        const canvas_division::Line& l = c.divisionLines[i];
+        if (l.a >= c.divisions.size() || l.b >= c.divisions.size()) continue;
+        float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+        canvas_division::toPixels(c.divisions[l.a], {a.x, a.y, b.w, b.h}, ax, ay);
+        canvas_division::toPixels(c.divisions[l.b], {a.x, a.y, b.w, b.h}, bx, by);
+        const view::Color col = c.selected && static_cast<int>(i) == v.selLine ? kHighlight : kTextDim;
+        if (!l.dotted) {
+          out.line({ax, ay}, {bx, by}, 1.f, col);
+        } else {
+          const float dx = bx - ax, dy = by - ay, len = std::sqrt(dx * dx + dy * dy);
+          const int steps = static_cast<int>(len / 8.f);
+          for (int k = 0; k < steps; ++k) {
+            const float t0 = static_cast<float>(k) / static_cast<float>(steps), t1 = (static_cast<float>(k) + 0.5f) / static_cast<float>(steps);
+            out.line({ax + dx * t0, ay + dy * t0}, {ax + dx * t1, ay + dy * t1}, 1.f, col);
+          }
+        }
+      }
       // Pontos de divisao: cruz e nome (viewpoint). O ponto selecionado fica em destaque.
       for (std::size_t i = 0; i < c.divisions.size(); ++i) {
         float px = 0.f, py = 0.f;
@@ -534,6 +581,15 @@ private:
       case Btn::SnapContact: out.snapToContact = true; break;
       case Btn::EditCanvas: out.canvasEdit = !v.canvasEdit; break;
       case Btn::AddPoint: out.divisionAdd = !v.divisionAdd; break;
+      case Btn::AddLine: out.divisionLine = !v.divisionLine; out.lineFrom = -1; break;
+      case Btn::DottedLine: out.dottedLine = !v.dottedLine; break;
+      case Btn::RemoveLine:
+        for (const Values::CanvasBox& c : v.canvases) {
+          if (!c.selected || v.selLine < 0) continue;
+          out.line = Requests::LineEdit{c.id, Requests::LineOp::Remove, static_cast<std::size_t>(v.selLine)};
+          out.selLine = -1;
+        }
+        break;
       case Btn::RemovePoint:
         for (const Values::CanvasBox& c : v.canvases) {
           if (!c.selected || v.selDivision < 0) continue;
@@ -770,6 +826,9 @@ private:
     if (v.selCanvas) addButton(bar, x, by, kBtnH, T("Edit canvas"), Btn::EditCanvas, v.canvasEdit, true, 8.f);
     if (v.selCanvas && v.canvasEdit) addButton(bar, x, by, kBtnH, T("Add point"), Btn::AddPoint, v.divisionAdd, true, 8.f);
     if (v.selCanvas && v.canvasEdit && v.selDivision >= 0) addButton(bar, x, by, kBtnH, T("Remove point"), Btn::RemovePoint, false, true, 8.f);
+    if (v.selCanvas && v.canvasEdit) addButton(bar, x, by, kBtnH, T("Line"), Btn::AddLine, v.divisionLine, true, 8.f);
+    if (v.selCanvas && v.canvasEdit && v.divisionLine) addButton(bar, x, by, kBtnH, T("Dotted"), Btn::DottedLine, v.dottedLine, true, 8.f);
+    if (v.selCanvas && v.canvasEdit && v.selLine >= 0) addButton(bar, x, by, kBtnH, T("Remove line"), Btn::RemoveLine, false, true, 8.f);
     x += 4.f;
     sliderBox_ = {x, y + (kFloatH - 8.f) * 0.5f, kSliderW, 8.f};
     const float t = stm::sliderFromSnapStep(v.snapStep);
@@ -807,6 +866,9 @@ private:
     if (v.selCanvas) addWidth(T("Edit canvas"), 8.f);
     if (v.selCanvas && v.canvasEdit) addWidth(T("Add point"), 8.f);
     if (v.selCanvas && v.canvasEdit && v.selDivision >= 0) addWidth(T("Remove point"), 8.f);
+    if (v.selCanvas && v.canvasEdit) addWidth(T("Line"), 8.f);
+    if (v.selCanvas && v.canvasEdit && v.divisionLine) addWidth(T("Dotted"), 8.f);
+    if (v.selCanvas && v.canvasEdit && v.selLine >= 0) addWidth(T("Remove line"), 8.f);
     cursor += 4.f + kSliderW + 6.f;
     char val[32];
     std::snprintf(val, sizeof val, "%.2f m", static_cast<double>(v.snapStep));

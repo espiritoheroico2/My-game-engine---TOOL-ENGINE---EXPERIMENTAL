@@ -34,6 +34,12 @@ struct Rect {
   float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
 };
 
+// Linha entre dois pontos de divisao (indices em points). Pontilhada ou solida. Ao mover um ponto, a linha segue.
+struct Line {
+  std::size_t a = 0, b = 0;
+  bool dotted = false;
+};
+
 [[nodiscard]] inline float clamp01(float v) { return std::clamp(v, 0.f, 1.f); }
 
 // Nome exibido: o nome dado pelo usuario, ou "P<posicao+1>" quando vazio.
@@ -50,9 +56,35 @@ inline std::size_t add(std::vector<Point>& points, float x, float y) {
   return points.size() - 1;
 }
 
-// Apaga o ponto de indice i. Indice invalido: nada muda.
-inline void remove(std::vector<Point>& points, std::size_t i) {
-  if (i < points.size()) points.erase(points.begin() + static_cast<std::ptrdiff_t>(i));
+// Apaga o ponto de indice i. Indice invalido: nada muda. As linhas que usavam o ponto somem, e os indices acima
+// dele descem uma posicao.
+inline void remove(std::vector<Point>& points, std::vector<Line>& lines, std::size_t i) {
+  if (i >= points.size()) return;
+  points.erase(points.begin() + static_cast<std::ptrdiff_t>(i));
+  std::vector<Line> kept;
+  for (Line l : lines) {
+    if (l.a == i || l.b == i) continue;
+    if (l.a > i) --l.a;
+    if (l.b > i) --l.b;
+    kept.push_back(l);
+  }
+  lines = kept;
+}
+
+// Liga os pontos a e b com uma linha. Recusa ponto igual, indice invalido e linha ja existente (nos dois sentidos).
+// Devolve true quando criou a linha.
+inline bool addLine(const std::vector<Point>& points, std::vector<Line>& lines, std::size_t a, std::size_t b, bool dotted) {
+  if (a == b || a >= points.size() || b >= points.size()) return false;
+  for (const Line& l : lines) {
+    if ((l.a == a && l.b == b) || (l.a == b && l.b == a)) return false;
+  }
+  lines.push_back(Line{a, b, dotted});
+  return true;
+}
+
+// Apaga a linha de indice i. Indice invalido: nada muda.
+inline void removeLine(std::vector<Line>& lines, std::size_t i) {
+  if (i < lines.size()) lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(i));
 }
 
 // Move o ponto i para a fracao (x, y), limitada ao canvas.
@@ -74,6 +106,24 @@ inline void move(std::vector<Point>& points, std::size_t i, float x, float y) {
     float sx = 0.f, sy = 0.f;
     toPixels(points[i], canvas, sx, sy);
     if (std::fabs(px - sx) <= kHitRadiusPx && std::fabs(py - sy) <= kHitRadiusPx) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+// Indice da linha sob o clique (distancia ate o segmento <= kHitRadiusPx), ou -1.
+[[nodiscard]] inline int lineAt(const std::vector<Point>& points, const std::vector<Line>& lines, Rect canvas, float px, float py) {
+  for (std::size_t i = 0; i < lines.size(); ++i) {
+    const Line& l = lines[i];
+    if (l.a >= points.size() || l.b >= points.size()) continue;
+    float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+    toPixels(points[l.a], canvas, ax, ay);
+    toPixels(points[l.b], canvas, bx, by);
+    const float dx = bx - ax, dy = by - ay;
+    const float len2 = dx * dx + dy * dy;
+    float t = len2 > 0.f ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0.f;
+    t = std::clamp(t, 0.f, 1.f);
+    const float qx = ax + t * dx - px, qy = ay + t * dy - py;
+    if (std::sqrt(qx * qx + qy * qy) <= kHitRadiusPx) return static_cast<int>(i);
   }
   return -1;
 }

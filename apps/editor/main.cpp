@@ -1069,6 +1069,10 @@ void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img,
   v.canvasEdit = ed.canvasEdit;
   v.divisionAdd = ed.canvasDivisionAdd;
   v.selDivision = ed.selDivision;
+  v.divisionLine = ed.divisionLineMode;
+  v.dottedLine = ed.dottedLine;
+  v.selLine = ed.selLine;
+  v.lineFrom = ed.lineFrom;
   // Canvas da UI de jogo: todos seguem para a janela (ela desenha os visiveis); o selecionado ganha destaque.
   ed.scene.world().each<ed_::CanvasComp>([&](tool::Entity e, ed_::CanvasComp& c) {
     scene_panel::Values::CanvasBox cb;
@@ -1078,6 +1082,7 @@ void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img,
     cb.selected = ed.selected.index == e.index && ed.selected.generation == e.generation;
     cb.visible = c.showInScene;   // a caixa da Scene so aparece se "Mostrar na Scene" estiver ligado
     cb.divisions = c.divisions;
+    cb.divisionLines = c.divisionLines;
     v.canvases.push_back(cb);
     if (cb.selected) v.selCanvas = true;
   });
@@ -1138,6 +1143,29 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
   if (r.canvasEdit) ed.canvasEdit = *r.canvasEdit;
   if (r.divisionAdd) ed.canvasDivisionAdd = *r.divisionAdd;
   if (r.selDivision) ed.selDivision = *r.selDivision;
+  if (r.divisionLine) ed.divisionLineMode = *r.divisionLine;
+  if (r.dottedLine) ed.dottedLine = *r.dottedLine;
+  if (r.selLine) ed.selLine = *r.selLine;
+  if (r.lineFrom) ed.lineFrom = *r.lineFrom;
+  if (r.line) {
+    const tool::Entity ce = unpackEntity(r.line->id);
+    if (w.alive(ce)) {
+      if (auto* c = w.get<ed_::CanvasComp>(ce)) {
+        using Op = scene_panel::Requests::LineOp;
+        if (r.line->op == Op::Pick) {
+          if (ed.lineFrom < 0) {
+            ed.lineFrom = static_cast<int>(r.line->index);
+          } else {
+            editor::canvas_division::addLine(c->divisions, c->divisionLines, static_cast<std::size_t>(ed.lineFrom), r.line->index, ed.dottedLine);
+            ed.lineFrom = -1;
+          }
+        } else {
+          editor::canvas_division::removeLine(c->divisionLines, r.line->index);
+          ed.selLine = -1;
+        }
+      }
+    }
+  }
   if (r.division) {
     const tool::Entity ce = unpackEntity(r.division->id);
     if (w.alive(ce)) {
@@ -1148,8 +1176,10 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
         } else if (r.division->op == Op::Move) {
           editor::canvas_division::move(c->divisions, r.division->index, r.division->x, r.division->y);
         } else {
-          editor::canvas_division::remove(c->divisions, r.division->index);
+          editor::canvas_division::remove(c->divisions, c->divisionLines, r.division->index);
           ed.selDivision = -1;
+          ed.selLine = -1;
+          ed.lineFrom = -1;
         }
       }
     }
