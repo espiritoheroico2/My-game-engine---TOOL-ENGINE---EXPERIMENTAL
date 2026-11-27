@@ -159,6 +159,23 @@ TEST(newtoon_500_sleeping_bodies_skip_broadphase_rebuilds) {
   CHECK(s.w.stats.awake == 0);
 }
 
+TEST(newtoon_stats_report_step_limit_colors_and_phase_times) {
+  Sim s; s.add({0, -0.5f, 0}, ShapeType::Box, {20, 0.5f, 20}, 0.f);
+  s.add({0, 0.45f, 0}, ShapeType::Box, {0.5f, 0.5f, 0.5f}, 1.f);   // ja encostado no chao: contato no primeiro passo
+  s.w.Simulate(s.t, s.r, s.c, s.w.fixedDt);
+  CHECK(s.w.stats.steps == 1 && !s.w.stats.hitStepLimit);
+  CHECK(s.w.stats.contacts > 0 && s.w.stats.colorsUsed >= 1 && s.w.stats.largestColorBucket >= 1);
+  const auto& st = s.w.stats;
+  CHECK(st.integrateMs >= 0.f && st.prepareMs >= 0.f && st.broadphaseMs >= 0.f && st.narrowphaseMs >= 0.f &&
+        st.solverMs >= 0.f && st.ccdMs >= 0.f && st.finishMs >= 0.f);
+  // Quadro de 0,2 s: pede 12 passos, o limite e 5 -> o resto do acumulador e descartado e o quadro fica marcado.
+  s.w.Simulate(s.t, s.r, s.c, 0.2f);
+  CHECK(s.w.stats.steps == s.w.maxStepsPerFrame && s.w.stats.hitStepLimit);
+  // Exatamente 5 passos (sem sobra) nao conta como estouro do limite.
+  s.w.Simulate(s.t, s.r, s.c, s.w.fixedDt * 5.f + 1e-5f);
+  CHECK(s.w.stats.steps == s.w.maxStepsPerFrame && !s.w.stats.hitStepLimit);
+}
+
 TEST(newtoon_verlet_chain_hangs_from_fixed_bone) {
   std::vector<DynamicBone> bones(4); std::vector<BoneConstraint> cs;
   for (int i = 0; i < 4; ++i) { bones[static_cast<size_t>(i)].position = bones[static_cast<size_t>(i)].previousPosition = {static_cast<float>(i), 0, 0}; bones[static_cast<size_t>(i)].mass = i == 0 ? 0.f : 1.f; if (i) cs.push_back({static_cast<Entity>(i - 1), static_cast<Entity>(i), 1.f, 1.f}); }

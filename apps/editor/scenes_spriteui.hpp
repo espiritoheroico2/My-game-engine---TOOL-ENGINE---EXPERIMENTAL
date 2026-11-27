@@ -91,6 +91,7 @@ struct FrameInput {
   bool pointerDown = false;
   bool pointerPressed = false;
   bool pointerReleased = false;
+  bool doubleClick = false;   // o Down deste quadro foi o segundo clique rapido (duplo clique)
   bool windowFocused = true;
   std::uint64_t frameId = 0;
 };
@@ -120,6 +121,7 @@ class View {
     const float frameHeight = Theme::kPanelHeight + frame_.metrics().headerHeight + 2.f * frame_.metrics().borderWidth;
     frame_.placeIn(windowWidth, windowHeight, dock_, panelWidth, frameHeight);   // posicao, dock e minimizar: moldura padrao
     handleFrameInput(in, actions);
+    if (in.pointerPressed) doubleClick_ = in.doubleClick;   // vale ate a soltura (o clique sai no quadro da soltura)
 
     // Minimizada: so a moldura (cabecalho). O conteudo nao aparece nem recebe cliques.
     if (frame_.minimized()) {
@@ -459,6 +461,10 @@ class View {
     for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
       if (event.target != rows_h_[i]) continue;
       if (i < rows_.size()) model_.selected = rows_[i].name;
+      // Duplo clique abre a cena (mesmas regras do botao Open: nunca a atual, nunca com confirmacao em curso).
+      if (i < rows_.size() && doubleClick_ && model_.mode == NameMode::None && SM::ActionsFor(model_.selected, model_.current).open) {
+        actions.push_back(Action::Open);
+      }
       return;
     }
     if (event.target == save_) {
@@ -720,6 +726,7 @@ class View {
   std::vector<std::pair<SU::UIHandle, bool>> enabled_;
   std::size_t removed_ = kNone;
   float lastX_ = 0.f, lastY_ = 0.f;
+  bool doubleClick_ = false;
 
   // Moldura: cores (SpriteUI, definidas em buildTree) e geometria padrao (window_frame::Frame).
   SW::WindowFrameColors frameColors_{};

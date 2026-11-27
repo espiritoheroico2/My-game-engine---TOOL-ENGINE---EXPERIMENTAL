@@ -42,6 +42,7 @@ class Panel {
         pressed_ = true;
         down_ = true;
         owned_ = true;
+        doubleClick_ = e.button.clicks >= 2;
         return true;
       case SDL_EVENT_MOUSE_BUTTON_UP:
         if (e.button.button != SDL_BUTTON_LEFT) return false;
@@ -88,20 +89,30 @@ class Panel {
     texts_.clear();
     backspaces_ = 0;
 
+    // Pressionar e soltar no mesmo quadro (clique rapido): o Down vale neste quadro e a soltura no seguinte, senao o
+    // clique do SpriteUI se perde. O quadro extra e pedido ao host (needsFrame).
+    const bool deferRelease = pressed_ && released_;
     FrameInput in;
     in.pointerX = x_;
     in.pointerY = y_;
-    in.pointerDown = down_;
+    in.pointerDown = deferRelease ? true : down_;
     in.pointerPressed = pressed_;
-    in.pointerReleased = released_;
+    in.pointerReleased = released_ && !deferRelease;
+    in.doubleClick = pressed_ && doubleClick_;
     in.frameId = ++frame_;
+    // O clique muda o modelo depois do desenho: um quadro a mais mostra o resultado sem esperar outro evento.
+    needsFrame_ = pressed_ || released_;
     pressed_ = false;
-    released_ = false;
+    if (!deferRelease) released_ = false;
 
     const auto packet = view_.Frame(windowW, windowH, in, actions);
     if (!ToolEngine::SpriteUi::Rendering::IsFramePacketValid(packet)) return true;
     return sdl_.draw(renderer, packet);
   }
+
+ public:
+  // true quando o quadro tratou um clique: o host pede mais um quadro (o ritmo por eventos nao redesenha sozinho).
+  [[nodiscard]] bool needsFrame() const { return needsFrame_ || released_; }
 
  private:
   bool inside(float x, float y) const {
@@ -114,6 +125,7 @@ class Panel {
   sui::SpriteUiSdlRenderer& sdl_;
   float x_ = 0.f, y_ = 0.f;
   bool pressed_ = false, released_ = false, down_ = false, owned_ = false;
+  bool doubleClick_ = false, needsFrame_ = false;
   int backspaces_ = 0;
   bool textInputOn_ = false;   // estado atual de SDL_StartTextInput/SDL_StopTextInput da janela
   std::vector<std::string> texts_;

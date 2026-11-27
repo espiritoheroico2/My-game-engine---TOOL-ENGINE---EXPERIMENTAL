@@ -99,6 +99,19 @@ int main() {
   ClickOn(view, view.rowHandle(0), id);
   Check(m.selected == "Alpha", "clicar na lista seleciona a cena (ordem de nome)");
   Check(Contains(ClickOn(view, view.openHandle(), id), Action::Open), "Open em outra cena dispara Open");
+  {   // Duplo clique numa cena que nao e a atual abre (Open); numa cena so selecionada com clique simples, nao.
+    const SU::Rect r0 = view.rectOf(view.rowHandle(0));
+    const float cx = r0.position.x + 0.5f * r0.size.x, cy = r0.position.y + 0.5f * r0.size.y;
+    FrameInput dn;
+    dn.pointerX = cx; dn.pointerY = cy; dn.pointerDown = true; dn.pointerPressed = true; dn.doubleClick = true; dn.frameId = ++id;
+    std::vector<Action> acts;
+    (void)view.Frame(kW, kH, dn, acts);
+    FrameInput up;
+    up.pointerX = cx; up.pointerY = cy; up.pointerReleased = true; up.frameId = ++id;
+    (void)view.Frame(kW, kH, up, acts);
+    Check(Contains(acts, Action::Open), "duplo clique numa cena abre (Open)");
+    Check(!Contains(Click(view, cx, cy, id), Action::Open), "clique simples so seleciona");
+  }
   // Apagar pede confirmacao: o primeiro clique so abre a pergunta; Cancelar desfaz; Apagar confirma.
   Check(!Contains(ClickOn(view, view.deleteHandle(), id), Action::Delete) && m.mode == SM::NameMode::Delete,
         "Delete pede confirmacao antes de apagar");
@@ -155,19 +168,13 @@ int main() {
   Click(view, minBtn.position.x + 0.5f * minBtn.size.x, minBtn.position.y + 0.5f * minBtn.size.y, id);
   Check(!view.minimized() && view.frameRect().size.y > 400.f, "minimizar de novo restaura a janela");
 
-  // 8. X fecha (Close) e o grip arrasta a janela; o mesmo arraste no conteudo nao arrasta.
+  // 8. X fecha (Close).
   const SU::Rect frame = view.frameRect();
   const SU::Rect bar = SW::WindowFrameHeader(frame, view.frameMetrics(), false);
   const SU::Vec2 closePoint{frame.position.x + frame.size.x - 12.f, bar.position.y + bar.size.y * 0.5f};
   Check(Contains(Click(view, closePoint.x, closePoint.y, id), Action::Close), "X dispara Close");
 
-  const SU::Rect grip = SW::WindowGripRect(bar, 14.f);
-  const SU::Vec2 start{grip.position.x + grip.size.x * 0.5f, grip.position.y + grip.size.y * 0.5f};
-  const SU::Vec2 before = view.windowPos();
-  Run(view, start.x, start.y, true, true, false, ++id);
-  Run(view, start.x + 40.f, start.y + 20.f, true, false, false, ++id);
-  Run(view, start.x + 40.f, start.y + 20.f, false, false, true, ++id);
-  Check(view.windowPos().x != before.x || view.windowPos().y != before.y, "o grip arrasta a janela");
+  // O arraste pelo grip e o redimensionamento sao do host do dock (dock_host.hpp): a view so desenha o grip.
 
   // 9. Clique fora de qualquer elemento (canto da janela, sem botao) nao gera acao.
   const auto outside = Click(view, 2.f, 2.f, id);

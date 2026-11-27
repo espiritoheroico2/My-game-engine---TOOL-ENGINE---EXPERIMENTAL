@@ -37,13 +37,21 @@ enum class Zone : int {
   Ui,
   Present,
   Physics,
+  // Subzonas (ficam no fim para nao mudar os numeros z0..z13 do CSV do bench). Cada uma esta DENTRO de outra zona:
+  // nao some com a zona mae.
+  ScenePrepLights,     // dentro de ScenePrepare: luzes, Light Prism e assinaturas das sombras
+  ScenePrepOcclusion,  // dentro de ScenePrepare: rasterizacao do buffer de oclusao (CPU)
+  DrawList,            // dentro de GpuRender ou CpuRender: material, LOD, culling por objeto e lista de desenho
   Count
 };
 inline const char* zoneName(Zone z) {
   static const char* n[] = {"Events + input", "Update (audio, pool)", "Panels (hierarchy, inspector...)", "Scene view render",
                             "Scene preparation (culling, shadows)", "CPU rasterization", "GPU render/submit", "GPU readback",
                             "Game view render", "Post-processing (FXAA, sharpen)", "Skybox (images)", "UI draw",
-                            "Present (VSync)", "Physics simulation"};
+                            "Present (VSync)", "Physics simulation",
+                            "  Scene prep > lights, shadow signature", "  Scene prep > occlusion buffer",
+                            "  Render > culling + draw list"};
+  static_assert(sizeof(n) / sizeof(n[0]) == static_cast<size_t>(Zone::Count), "um nome por zona");
   return n[static_cast<int>(z)];
 }
 

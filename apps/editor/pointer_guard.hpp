@@ -17,8 +17,10 @@ inline void observeLeft(State& s, bool down) { s.leftHeld = down; }
 
 // True quando o editor acredita que o botao esta preso, o SDL diz que ele esta solto, e nenhum roteiro de teste esta
 // tocando (o roteiro emite seus proprios eventos e nao reflete o botao real).
-[[nodiscard]] inline bool releaseMissed(const State& s, bool sdlLeftHeld, bool scriptActive) {
-  return s.leftHeld && !sdlLeftHeld && !scriptActive;
+// `upQueued`: o BUTTON_UP real ja esta na fila do SDL (so ainda nao foi lido). Nesse caso nada se perdeu e a soltura
+// sintetica duplicaria o clique (um cabecalho de secao abriria e fechava na mesma soltura).
+[[nodiscard]] inline bool releaseMissed(const State& s, bool sdlLeftHeld, bool scriptActive, bool upQueued = false) {
+  return s.leftHeld && !sdlLeftHeld && !scriptActive && !upQueued;
 }
 
 }  // namespace editor::pointer_guard

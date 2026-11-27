@@ -52,6 +52,16 @@ if(TOOL_WITH_SPRITEUI)
   endif()
   add_test(NAME Editor.EditorInfoView COMMAND editor_info_view_tests)
 
+  # Cache de layout de texto do Canvas (sui_panel.hpp): igual ao calculo direto, invalidacao e limite. Sem janela.
+  add_executable(editor_sui_text_cache_tests tests/test_sui_text_cache.cpp)
+  target_include_directories(editor_sui_text_cache_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(editor_sui_text_cache_tests PRIVATE EDITOR_FONT_PATH="${CMAKE_SOURCE_DIR}/assets/fonts/Xmind-Regular.ttf")
+  target_link_libraries(editor_sui_text_cache_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_sui_text_cache_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.SuiTextCache COMMAND editor_sui_text_cache_tests)
+
   # Secao Tags do Inspector (inspector_panel.hpp): entra no bloco e ocupa altura. Sem janela.
   add_executable(editor_inspector_tags_tests tests/test_inspector_tags.cpp)
   target_include_directories(editor_inspector_tags_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -93,7 +103,7 @@ if(TOOL_WITH_SPRITEUI)
   # Gestos do host do dock (grip, borda, repeticao): sem janela, so SDL_Event e geometria.
   add_executable(editor_dock_host_tests tests/test_dock_host.cpp)
   target_include_directories(editor_dock_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(editor_dock_host_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  target_link_libraries(editor_dock_host_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
   add_test(NAME Editor.DockHost COMMAND editor_dock_host_tests)
 
   # Limites de janela solta e guarda do botao do mouse: funcoes puras, sem janela.
@@ -147,7 +157,7 @@ if(TOOL_WITH_SPRITEUI)
   # Modelo da janela Scenes (scenes_model.hpp): ordem das cenas, acoes por selecao, nome e assets da cena.
   add_executable(editor_scenes_model_tests tests/test_scenes_model.cpp)
   target_include_directories(editor_scenes_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(editor_scenes_model_tests PRIVATE SpriteUi::SpriteUI tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  target_link_libraries(editor_scenes_model_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
   if(TARGET tool::audio_miniaudio)
     target_link_libraries(editor_scenes_model_tests PRIVATE tool::audio_miniaudio)
   endif()
@@ -166,7 +176,7 @@ if(TOOL_WITH_SPRITEUI)
   add_executable(editor_scenes_view_tests tests/test_scenes_view.cpp)
   target_include_directories(editor_scenes_view_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_definitions(editor_scenes_view_tests PRIVATE EDITOR_FONT_PATH="${CMAKE_SOURCE_DIR}/assets/fonts/Xmind-Regular.ttf")
-  target_link_libraries(editor_scenes_view_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  target_link_libraries(editor_scenes_view_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
   if(TOOL_WITH_MINIAUDIO)
     target_link_libraries(editor_scenes_view_tests PRIVATE tool::audio_miniaudio)
   endif()
@@ -199,6 +209,16 @@ add_test(NAME ui_editor COMMAND tool_ui_test)
 add_executable(editor_window_manager_tests tests/test_window_manager.cpp window_manager.cpp)
 target_include_directories(editor_window_manager_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME Editor.WindowManager COMMAND editor_window_manager_tests)
+
+# Ritmo dos quadros (frame_pacing.hpp): funcao pura, sem janela.
+add_executable(editor_frame_pacing_tests tests/test_frame_pacing.cpp)
+target_include_directories(editor_frame_pacing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.FramePacing COMMAND editor_frame_pacing_tests)
+
+# Barra de rolagem unica (ui_scrollbar.hpp): geometria e arraste puros, sem janela.
+add_executable(editor_ui_scrollbar_tests tests/test_ui_scrollbar.cpp)
+target_include_directories(editor_ui_scrollbar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.UiScrollbar COMMAND editor_ui_scrollbar_tests)
 
 if(TOOL_WITH_SPRITEUI)
   add_executable(editor_panel_router_tests tests/test_panel_router.cpp)

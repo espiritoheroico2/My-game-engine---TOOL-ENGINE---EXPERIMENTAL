@@ -43,6 +43,7 @@ int main() {
 
   constexpr int kWinW = 1600, kWinH = 900;
   editor::sui::TextAtlasSet text;
+  text.load("", 1.f);   // fonte embutida: as abas medem os titulos
   editor::sui::SpriteUiSdlRenderer sdl;
   dh::Host host(text, sdl);
 
@@ -95,6 +96,122 @@ int main() {
     (void)host.onEvent(Motion(edgeX + 200.f, midY, false));
     host.beginFrame(area, kWinW, kWinH);
     Check(frame.rect().size.x == after, "depois de soltar a janela nao segue mais o mouse");
+  }
+
+  // 3. Geometria pura das abas: largura pelo titulo, X sempre com espaco proprio, "..." no lugar de sobrepor.
+  {
+    const std::vector<float> fit = dh::tabWidths({40.f, 60.f}, 1000.f);
+    Check(fit.size() == 2 && fit[0] == dh::kTabOverhead + 40.f && fit[1] == dh::kTabOverhead + 60.f, "aba tem a largura do titulo mais grip e X");
+    const std::vector<float> longTitle = dh::tabWidths({900.f}, 1000.f);
+    Check(longTitle[0] == dh::kTabMaxWidth, "titulo enorme e limitado a largura maxima da aba");
+    const std::vector<float> tight = dh::tabWidths({80.f, 80.f, 80.f}, 300.f);
+    float tightSum = 0.f;
+    for (float v : tight) tightSum += v;
+    Check(tightSum <= 300.f + 0.01f, "abas encolhem juntas para caber na barra");
+    bool allMin = true;
+    for (float v : tight) allMin = allMin && v >= dh::kTabMinWidth - 0.01f;
+    Check(allMin, "aba encolhida mantem espaco para grip, X e um pedaco do nome");
+    const std::vector<float> tiny = dh::tabWidths({80.f, 80.f, 80.f, 80.f}, 100.f);
+    float tinySum = 0.f;
+    for (float v : tiny) tinySum += v;
+    Check(tinySum <= 100.01f, "barra minuscula: abas dividem a largura sem passar dela");
+    auto measure = [](const std::string& t) { return static_cast<float>(t.size()) * 7.f; };
+    Check(dh::fitText("Hierarchy", 200.f, measure) == "Hierarchy", "titulo que cabe fica inteiro");
+    const std::string cut = dh::fitText("Hierarchy", 50.f, measure);
+    Check(cut.size() >= 3 && cut.substr(cut.size() - 3) == "..." && measure(cut) <= 50.f, "titulo longo vira texto com ... que cabe na faixa");
+    Check(dh::fitText("Hierarchy", 0.f, measure).empty(), "faixa de largura 0 nao desenha o nome (nunca sem limite)");
+    Check(dh::fitText("Hierarchy", 10.f, measure).empty(), "nem o ... cabe: nada e desenhado");
+    const SU::Rect leaf{{100.f, 50.f}, {600.f, 400.f}};
+    const SU::Rect help = dh::helpRectOf(leaf);
+    Check(dh::tabsStartX(leaf) > help.position.x + help.size.x, "abas comecam depois do ? (sem sobrepor)");
+  }
+
+  // 4. Janela solta volta ao dock, mesmo quando esta por cima da faixa de abas de um grupo.
+  {
+    struct W {
+      wf::Frame frame;
+      bool open = true;
+    };
+    W wa, wb, wc;
+    dh::Host h2(text, sdl);
+    auto reg = [&](W& win, dh::Kind k, const char* title) {
+      dh::Window d;
+      d.id = dh::idOf(k);
+      d.title = [title] { return std::string(title); };
+      d.open = [&win] { return win.open; };
+      d.close = [&win] { win.open = false; };
+      d.frame = [&win] { return std::optional<SU::Rect>(win.frame.rect()); };
+      d.grip = [&win] { return win.frame.gripRect(); };
+      d.setDock = [&win](std::optional<SU::Rect> r) { win.frame.placeIn(kWinW, kWinH, r, 400.f, 300.f, 100.f); };
+      d.floatAt = [&win](SU::Vec2 at) { win.frame.undock(at); };
+      d.frameState = [&win] { return &win.frame; };
+      h2.add(d);
+    };
+    reg(wa, dh::Kind::Hierarchy, "Hierarchy");
+    reg(wb, dh::Kind::Console, "Console");
+    reg(wc, dh::Kind::Assets, "Assets");
+    h2.beginFrame(area, kWinW, kWinH);
+    h2.beginFrame(area, kWinW, kWinH);
+    const SU::UIHandle idA = dh::idOf(dh::Kind::Hierarchy), idB = dh::idOf(dh::Kind::Console), idC = dh::idOf(dh::Kind::Assets);
+    Check(h2.model().tabsOf(idA).size() == 3, "tres janelas abertas viram abas de uma folha");
+    const auto leaves0 = h2.model().leaves();
+    const SU::Rect leaf0 = leaves0.front().bounds;
+    {
+      const auto cells = h2.tabCells(leaves0.front());
+      Check(cells.has_value() && cells->w.size() == 3, "barra de abas com tres abas");
+      Check(cells.has_value() && cells->x1 <= leaf0.position.x + leaf0.size.x - dh::kCloseReserve + 0.01f, "abas terminam antes da borda direita da folha");
+    }
+    {
+      const auto cells = h2.tabCells(leaves0.front());
+      const float tx = cells->x(1) + dh::kTabGripW * 0.5f, ty = leaf0.position.y + dh::kHeaderH * 0.5f;
+      Check(h2.onEvent(Button(true, tx, ty)), "grip da aba consome o clique");
+      (void)h2.onEvent(Motion(tx + 40.f, 850.f, true));
+      (void)h2.onEvent(Button(false, tx + 40.f, 850.f));
+      h2.beginFrame(area, kWinW, kWinH);
+      Check(h2.floating(idB) && !h2.model().contains(idB), "aba arrastada para fora do dock vira janela solta");
+      Check(h2.model().tabsOf(idA).size() == 2, "as outras duas continuam em abas");
+    }
+    {
+      // Janela solta com o grip exatamente sobre o grip da primeira aba (caso que antes pegava a aba de baixo).
+      const auto cells = h2.tabCells(h2.model().leaves().front());
+      const SU::Rect leaf = h2.model().leaves().front().bounds;
+      const float tx = cells->x(0) + dh::kTabGripW * 0.5f, ty = leaf.position.y + dh::kHeaderH * 0.5f;
+      const SU::Rect g = wb.frame.gripRect();
+      wb.frame.undock({wb.frame.rect().position.x + (tx - (g.position.x + g.size.x * 0.5f)),
+                       wb.frame.rect().position.y + (ty - (g.position.y + g.size.y * 0.5f))});
+      h2.beginFrame(area, kWinW, kWinH);
+      const SU::Rect g2 = wb.frame.gripRect();
+      const float px = g2.position.x + g2.size.x * 0.5f, py = g2.position.y + g2.size.y * 0.5f;
+      Check(h2.onEvent(Button(true, px, py)), "grip da janela solta consome o clique");
+      const float cx = leaf.position.x + leaf.size.x * 0.5f, cy = leaf.position.y + leaf.size.y * 0.5f;
+      (void)h2.onEvent(Motion(cx, cy, true));
+      (void)h2.onEvent(Button(false, cx, cy));
+      h2.beginFrame(area, kWinW, kWinH);
+      Check(h2.model().contains(idB), "janela solta, solta no centro do dock, volta como aba");
+      Check(h2.model().tabsOf(idA).size() == 3, "a folha volta a ter tres abas");
+      Check(h2.model().contains(idA) && h2.model().contains(idC), "as outras abas continuam no dock");
+    }
+    {
+      // Solta numa borda da folha: divide o dock.
+      const auto cells = h2.tabCells(h2.model().leaves().front());
+      const SU::Rect leaf = h2.model().leaves().front().bounds;
+      const SU::UIHandle lastTabId = h2.model().tabsOf(idA).back();
+      const float tx = cells->x(2) + dh::kTabGripW * 0.5f, ty = leaf.position.y + dh::kHeaderH * 0.5f;
+      Check(h2.onEvent(Button(true, tx, ty)), "grip da terceira aba consome o clique");
+      (void)h2.onEvent(Motion(tx + 40.f, 850.f, true));
+      (void)h2.onEvent(Button(false, tx + 40.f, 850.f));
+      h2.beginFrame(area, kWinW, kWinH);
+            Check(h2.floating(lastTabId), "outra aba solta tambem flutua");
+      const SU::Rect g = (lastTabId == idC ? wc : wb).frame.gripRect();
+      const float px = g.position.x + g.size.x * 0.5f, py = g.position.y + g.size.y * 0.5f;
+      const SU::Rect lf = h2.model().leaves().front().bounds;
+      const float ex = lf.position.x + 6.f, ey = lf.position.y + lf.size.y * 0.5f;
+      (void)h2.onEvent(Button(true, px, py));
+      (void)h2.onEvent(Motion(ex, ey, true));
+      (void)h2.onEvent(Button(false, ex, ey));
+      h2.beginFrame(area, kWinW, kWinH);
+      Check(h2.model().contains(lastTabId) && h2.model().leaves().size() == 2, "janela solta, solta na borda, divide o dock");
+    }
   }
 
   std::printf("\n%d de %d verificacoes passaram\n", gChecks - gFailures, gChecks);

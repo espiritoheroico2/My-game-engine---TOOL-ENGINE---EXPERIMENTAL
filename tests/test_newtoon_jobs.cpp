@@ -92,6 +92,38 @@ TEST(jobs_pool_still_works_after_exceptions) {
   CHECK(ok);
 }
 
+TEST(jobs_many_back_to_back_calls_cover_every_index) {
+  // O solver da fisica faz centenas de chamadas seguidas: cada uma reusa o slot do job do pool.
+  // Nenhuma chamada pode perder, repetir ou vazar blocos para a seguinte (tamanhos variados, com e sem excecao).
+  std::vector<int> hits(5000, 0);
+  bool ok = true;
+  for (int call = 0; call < 3000; ++call) {
+    const size_t n = 1 + static_cast<size_t>((call * 7919) % 5000);
+    const size_t grain = call % 3 == 0 ? 1 : (call % 3 == 1 ? 64 : 257);
+    std::fill(hits.begin(), hits.begin() + static_cast<std::ptrdiff_t>(n), 0);
+    const bool throwHere = call % 97 == 0;
+    bool threw = false;
+    try {
+      tool::parallelFor(n, grain, [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i) hits[i]++;
+        if (throwHere && b == 0) throw std::runtime_error("x");
+      });
+    } catch (const std::runtime_error&) { threw = true; }
+    ok = ok && threw == throwHere;
+    for (size_t i = 0; i < n; ++i) ok = ok && hits[i] == 1;
+  }
+  CHECK(ok);
+}
+
+TEST(jobs_ceil_division_keeps_the_last_partial_chunk) {
+  // n = 3 * grain + 1: antes (n / grain arredondado para baixo) viravam 3 blocos; agora 4, como pede a divisao para cima.
+  if (JobSystem::Get().WorkerCount() + 1 >= 4) {
+    std::atomic<size_t> blocks{0};
+    tool::parallelFor(3 * 64 + 1, 64, [&](size_t, size_t) { ++blocks; });
+    CHECK(blocks.load() == 4);
+  }
+}
+
 TEST(jobs_splits_into_oversubscribed_blocks) {
   // A carga vira threads * kOversub blocos (balanceamento dinamico); com um thread so, um bloco.
   std::atomic<size_t> blocks{0};

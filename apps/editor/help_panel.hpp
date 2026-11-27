@@ -10,6 +10,7 @@
 #include "help_model.hpp"
 #include "i18n.hpp"
 #include "sui_panel.hpp"
+#include "ui_scrollbar.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -108,14 +109,22 @@ class HelpPanel {
         return true;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (e.button.button != SDL_BUTTON_LEFT || !panel_.contains(e.button.x, e.button.y)) return false;
+        if (listBar_.pointerDown(e.button.x, e.button.y, listScroll_) || bodyBar_.pointerDown(e.button.x, e.button.y, bodyScroll_)) return true;
         click(e.button.x, e.button.y, open, window);
         return true;
       case SDL_EVENT_MOUSE_MOTION:
+        listBar_.pointerMove(e.motion.x, e.motion.y, listScroll_);
+        bodyBar_.pointerMove(e.motion.x, e.motion.y, bodyScroll_);
+        if (listBar_.dragging() || bodyBar_.dragging()) return true;   // o arraste segue com o mouse fora da barra
         if (!model_.Search().DraggingSelection()) return false;
         moveSearchCaret(e.motion.x, e.motion.y);
         dirty_ = true;
         return true;
       case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (e.button.button == SDL_BUTTON_LEFT) {
+          const bool wasBar = listBar_.pointerUp() | bodyBar_.pointerUp();
+          if (wasBar) return true;
+        }
         if (e.button.button != SDL_BUTTON_LEFT || !model_.Search().DraggingSelection()) return false;
         model_.Search().PointerUp();
         return true;
@@ -316,9 +325,9 @@ class HelpPanel {
     items.push_back(sui::Canvas::solidItem(panel_.x, panel_.y, panel_.w, panel_.h, theme_.panel, 0.f, owner, 0u, paint++));
     chrome_.appendItems(items, panel_.x, panel_.y, 0.f, panel_.y, panel_.y + panel_.h, owner, 0u, paint);
     list_.appendItems(items, listBox_.x, listBox_.y, listScroll_, listBox_.y, listBox_.y + listBox_.h, owner, 1u, paint);
-    appendThumb(items, listBox_, listContentH_, listScroll_, listMax_, 1u, owner, paint);
+    appendBar(items, listBar_, listBox_, listContentH_, listScroll_, 1u, owner, paint);
     body_.appendItems(items, bodyBox_.x, bodyBox_.y, bodyScroll_, bodyBox_.y, bodyBox_.y + bodyBox_.h, owner, 2u, paint);
-    appendThumb(items, bodyBox_, bodyContentH_, bodyScroll_, bodyMax_, 2u, owner, paint);
+    appendBar(items, bodyBar_, bodyBox_, bodyContentH_, bodyScroll_, 2u, owner, paint);
     appendSearch(items, clips, owner, paint);
     packet_ = extractor_.Build(++frameId_, items, nullptr, clips);
     if (!SR::IsFramePacketValid(packet_)) return true;
@@ -340,14 +349,14 @@ class HelpPanel {
                       static_cast<std::uint32_t>(clips.size() - 1), paint);
   }
 
-  // Barra de rolagem: so aparece quando o conteudo passa da caixa.
-  void appendThumb(std::vector<SR::UIRenderItem>& out, const Box& box, float contentH, float scroll, float maxScroll, std::uint32_t clip,
-                   SU::UIHandle owner, std::uint64_t& paint) const {
-    if (box.h <= 0.f || contentH <= box.h + 0.5f) return;
-    const float track = std::max(1.f, box.h - 8.f);
-    const float thumb = std::min(track, std::max(24.f, track * box.h / contentH));
-    const float y = box.y + 4.f + (maxScroll > 0.f ? scroll / maxScroll * (track - thumb) : 0.f);
-    out.push_back(sui::Canvas::solidItem(box.x + box.w - kScrollW - 2.f, y, kScrollW, thumb, colors_.scroll, 0.8f, owner, clip, paint++));
+  // Barra de rolagem unica do editor (ui_scrollbar.hpp): so aparece quando o conteudo passa da caixa.
+  void appendBar(std::vector<SR::UIRenderItem>& out, ui_scrollbar::Scrollbar& bar, const Box& box, float contentH, float scroll,
+                 std::uint32_t clip, SU::UIHandle owner, std::uint64_t& paint) const {
+    bar.layout({box.x + box.w - ui_scrollbar::kWidth, box.y, ui_scrollbar::kWidth, box.h}, contentH, box.h);
+    for (const ui_scrollbar::Quad& q : bar.quads(palette::active(), scroll)) {
+      if (q.rect.w <= 0.f || q.rect.h <= 0.f) continue;
+      out.push_back(sui::Canvas::solidItem(q.rect.x, q.rect.y, q.rect.w, q.rect.h, sui::PaletteColor(q.color), 0.8f, owner, clip, paint++));
+    }
   }
 
   static SR::ClipRectGPU clipOf(const Box& b) { return {b.x, b.y, b.x + b.w, b.y + b.h}; }
@@ -448,6 +457,7 @@ class HelpPanel {
   sui::Canvas hint_;
   sui::Theme theme_;
   Colors colors_;
+  mutable ui_scrollbar::Scrollbar listBar_, bodyBar_;
   HelpModel model_;
   SR::RenderExtractor extractor_;
   SR::FramePacket packet_;

@@ -45,6 +45,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <atomic>
 #include <cstring>
 #include <array>
 
@@ -301,6 +302,10 @@ struct Editor {
   // Ocioso = nada muda na tela: sem Play, sem emissor de particulas animando (ou pausado) e sem interacao ha 3 quadros.
   bool fxAnimating = false;   // definido por updateParticles: ha ParticleComp na cena
   bool viewsIdle() const { return !playing && !(fxAnimating && !paused) && idleFrames > 3; }
+  // Ritmo dos quadros (frame_pacing.hpp): ocioso, o laco dorme e so monta a interface quando algo pede. Qualquer codigo
+  // (inclusive outra thread) chama requestFrame() para forcar o proximo quadro.
+  std::atomic<bool> frameRequested{false};
+  void requestFrame() { frameRequested.store(true, std::memory_order_relaxed); }
   bool fpsDirty = true;
   int gpuBadFrames = 0;
   // Tamanho fixo escolhido (retorna false se o modo e "acompanha a janela").
@@ -313,6 +318,7 @@ struct Editor {
   SDL_GLContext glCtx = nullptr; // so Linux/OpenGL: contexto criado pelo SDL, ativado apenas durante o desenho da GPU
   std::vector<tool::u8> gpuPixels[2];          // ultimo quadro lido da GPU, por vista (0 = Scene, 1 = Game)
   int gpuPixW[2] = {0, 0}, gpuPixH[2] = {0, 0};
+  std::vector<tool::u8> gpuScaled;             // auxiliar da reamostragem do ultimo quadro da GPU durante um resize
 
   // aparencia/idioma
   ::editor::Theme theme;
@@ -887,6 +893,7 @@ private:
       ~RenderWorldMatCacheGuard() { editor.renderWorldMatCacheActive_ = false; }
     } renderWorldMatCacheGuard{*this};
     ZoneTimer prepareTimer(prof, Zone::ScenePrepare);
+    ZoneTimer lightsTimer(prof, Zone::ScenePrepLights);   // subzona: ate as assinaturas das sombras
     tool::SoftRenderer& renderer = vi ? rendererGame : rendererScene;   // renderizador e assinatura da vista (0 = Scene, 1 = Game)
     std::vector<tool::Light> lights; tool::Vec3 ambient; int sunIdx = -1;
     // Com skybox ligado, o fundo sai com alfa 0 (o skybox e pintado depois, em renderView). 2D nao usa skybox.
@@ -911,6 +918,7 @@ private:
     const bool pointShadows = !lf.shadowLights.empty();
     const std::uint64_t psigNow = pointShadows ? pointShadowSignature(cam, lf) : 0;
     if (!pointShadows) psigCpuValid[vi] = false;
+    lightsTimer.stop();
     tool::u64 tris = 0; unsigned draws = 0, casters = 0;
     // Emissao do objeto: cor x intensidade (linear). Vale para todas as partes de um modelo.
     // Sem "Enable emission" o objeto nao emite: nem cor extra nem brilho (bloom).
@@ -960,6 +968,7 @@ private:
     const std::array<tool::Vec4, 6> planes = doCull ? framePlanes(cam, w, h) : std::array<tool::Vec4, 6>{};
     tool::render::OcclusionBuffer occ;
     if (sceneInfo.render.occlusionCull && !cam.ortho) {
+      ZoneTimer occlusionTimer(prof, Zone::ScenePrepOcclusion);
       // Oclusores: triangulos de todos os objetos visiveis. Malhas muito densas ficam de fora (custo por quadro).
       constexpr size_t kOccluderMaxTris = 2048;
       occ.begin(static_cast<tool::u32>(w), static_cast<tool::u32>(h), proj * view);
@@ -1088,11 +1097,14 @@ private:
             if (!mesh.idx.empty()) gpu.draw(mesh, {}, editor::game_grid::GameGrid::MaterialAt(i));
           }
         }
-        scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-          if (scene.world().has<Inactive>(e)) return;
-          pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); gpu.draw(m, worldMat(e), mat); });
-        });
-        drawChunks(gpu);
+        {
+          ZoneTimer drawListTimer(prof, Zone::DrawList);
+          scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+            if (scene.world().has<Inactive>(e)) return;
+            pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); gpu.draw(m, worldMat(e), mat); });
+          });
+          drawChunks(gpu);
+        }
         gpu.setBloom(sceneInfo.render.lighting.bloom, sceneInfo.render.lighting.bloomThreshold, sceneInfo.render.lighting.bloomStrength);
         gpu.end();
         auto viewStats = gpu.renderStats();
@@ -1115,6 +1127,22 @@ private:
         if (tool::debug().count(tool::Severity::Error) > errBefore) {
           if (++gpuBadFrames >= 5) { applyApi(0); apiStatus = "Software (CPU) - the GPU reported errors in several frames in a row (see Console)"; gpuBadFrames = 0; }
         } else gpuBadFrames = 0;
+        // Resize: a leitura assincrona ainda traz o quadro do tamanho antigo. Antes isso caia na rasterizacao da CPU a cada passo
+        // do arrasto (163 ms/quadro medido em --bench-resize = o "congelamento"). Agora reamostra o ultimo quadro da GPU (vizinho
+        // mais proximo, ~1 ms) ate chegar o quadro do tamanho novo, 1 ou 2 quadros depois.
+        if (rd >= 0 && !gpuPixels[vi].empty() && gpuPixW[vi] > 0 && gpuPixH[vi] > 0 && (gpuPixW[vi] != w || gpuPixH[vi] != h)
+            && gpuPixels[vi].size() == static_cast<size_t>(gpuPixW[vi]) * static_cast<size_t>(gpuPixH[vi]) * 4) {
+          const int sw = gpuPixW[vi], sh = gpuPixH[vi];
+          gpuScaled.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+          const tool::u32* src = reinterpret_cast<const tool::u32*>(gpuPixels[vi].data());
+          tool::u32* dst = reinterpret_cast<tool::u32*>(gpuScaled.data());
+          for (int y = 0; y < h; ++y) {
+            const tool::u32* srow = src + static_cast<size_t>(y * sh / h) * static_cast<size_t>(sw);
+            for (int x = 0; x < w; ++x) *dst++ = srow[x * sw / w];
+          }
+          gpuPixels[vi].swap(gpuScaled);
+          gpuPixW[vi] = w; gpuPixH[vi] = h;
+        }
         const bool haveFrame = rd >= 0 && gpuPixW[vi] == w && gpuPixH[vi] == h && !gpuPixels[vi].empty();
         if (apiActive != 0 && haveFrame) {
           if (std::getenv("TOOL_DUMP")) { // depuracao: media de brilho do quadro (para comparar APIs sem olhar a tela)
@@ -1145,11 +1173,14 @@ private:
         if (!mesh.idx.empty()) renderer.draw(mesh, {}, editor::game_grid::GameGrid::MaterialAt(i));
       }
     }
-    scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-      if (scene.world().has<Inactive>(e)) return;
-      pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); renderer.draw(m, worldMat(e), mat); });
-    });
-    drawChunks(renderer);
+    {
+      ZoneTimer drawListTimer(prof, Zone::DrawList);
+      scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+        if (scene.world().has<Inactive>(e)) return;
+        pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); renderer.draw(m, worldMat(e), mat); });
+      });
+      drawChunks(renderer);
+    }
     // Ray tracing (CPU): BVH da LightPrism com os triangulos dos objetos visiveis (voxels de fora, por enquanto).
     // Vive ate o pixels() abaixo, que conclui o desenho e aplica a oclusao.
     const tool::LightingSettings& lset = sceneInfo.render.lighting;

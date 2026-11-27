@@ -55,6 +55,7 @@ int main() {
     Check(pg::releaseMissed(s, false, false), "preso no editor e solto no SDL: sintetizar soltura");
     Check(!pg::releaseMissed(s, true, false), "botao de fato preso: a guarda nao age");
     Check(!pg::releaseMissed(s, false, true), "roteiro de teste ativo: a guarda nao age");
+    Check(!pg::releaseMissed(s, false, false, true), "soltura real ainda na fila: nao sintetiza (evita soltura dupla)");
     pg::observeLeft(s, false);
     Check(!pg::releaseMissed(s, false, false), "soltura ja vista pelo editor: nada a fazer");
   }

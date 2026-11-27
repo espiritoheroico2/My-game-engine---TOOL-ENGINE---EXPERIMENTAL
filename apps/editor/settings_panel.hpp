@@ -178,9 +178,15 @@ class SettingsPanel {
                 if (e.button.button != SDL_BUTTON_LEFT) return inside(e.button.x, e.button.y);
                 // Up dentro do painel segue o caminho normal (cabecalhos, paletas, controles) mesmo com a captura aberta:
                 // a captura so muda o caso de soltar fora. Soltar fora solta os controles sem disparar cliques.
-                if (capture_.up() && !inside(e.button.x, e.button.y)) {
-                    releasePointer(e.button.x, e.button.y);
-                    return true;
+                {
+                    const bool hadCapture = capture_.up();
+                    if (hadCapture && !inside(e.button.x, e.button.y)) {
+                        releasePointer(e.button.x, e.button.y);
+                        return true;
+                    }
+                    // Up sem Down anterior dentro do painel (soltura duplicada ou sintetica da guarda do botao) nao e
+                    // clique: sem isto o cabecalho de secao abria e fechava na mesma soltura ("o + nao expande").
+                    if (!hadCapture) return inside(e.button.x, e.button.y);
                 }
                 return pointer(Elm::PointerPhase::Up, e.button.x, e.button.y);
             case SDL_EVENT_MOUSE_MOTION:

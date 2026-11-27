@@ -8,6 +8,7 @@
 #include "newtoon_jobs.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <unordered_map>
 #include <vector>
 
@@ -24,6 +25,11 @@ class PhysicsWorld {
 
   struct Stats {
     int bodies = 0, awake = 0, pairs = 0, contacts = 0, steps = 0, idleSteps = 0, broadphaseBuilds = 0, broadphaseRefits = 0;
+    bool hitStepLimit = false;   // o quadro pediu mais passos que maxStepsPerFrame (o acumulador foi descartado)
+    // Cores do solver no ultimo passo com contatos: quantas cores tem contatos e o tamanho do maior bucket.
+    int colorsUsed = 0, largestColorBucket = 0;
+    // Tempo de parede por fase, somado em todos os passos do quadro (ms). Nao inclui os passos ociosos.
+    float integrateMs = 0, prepareMs = 0, broadphaseMs = 0, narrowphaseMs = 0, solverMs = 0, ccdMs = 0, finishMs = 0;
   } stats;
 
   const std::vector<CollisionEvent>& GetCollisionEvents() const { return events_; }
@@ -35,7 +41,7 @@ class PhysicsWorld {
     acc_ += std::clamp(dt, 0.f, 0.25f);
     int steps = 0;
     while (acc_ >= fixedDt && steps < maxStepsPerFrame) { Step(tf, rb, col, n, fixedDt); acc_ -= fixedDt; ++steps; }
-    if (steps == maxStepsPerFrame) acc_ = 0.f;
+    if (steps == maxStepsPerFrame) { stats.hitStepLimit = acc_ >= fixedDt; acc_ = 0.f; }
     stats.steps = steps;
     if (steps == 0 && cache_.size() != n) {
       if (Prepare(tf, rb, col, n)) ++stats.broadphaseBuilds; else ++stats.broadphaseRefits;
@@ -157,6 +163,14 @@ class PhysicsWorld {
       return;
     }
 
+    // Cronometro das fases: lap(campo) soma o tempo desde a marca anterior e reinicia a marca.
+    auto mark = std::chrono::steady_clock::now();
+    auto lap = [&mark](float& acc) {
+      const auto now = std::chrono::steady_clock::now();
+      acc += std::chrono::duration<float, std::milli>(now - mark).count();
+      mark = now;
+    };
+
     // 1) Velocidades (paralelo): gravidade, forcas, arrasto
     JobSystem::Get().ParallelFor(n, 1024, [&](size_t b, size_t e) {
       for (size_t i = b; i < e; ++i) {
@@ -175,8 +189,11 @@ class PhysicsWorld {
       }
     });
 
+    lap(stats.integrateMs);
+
     // 2) Formas + BVH
     if (Prepare(tf, rb, col, n)) ++stats.broadphaseBuilds; else ++stats.broadphaseRefits;
+    lap(stats.prepareMs);
 
     // 3) Broad-phase PARALELA (cada bloco grava em seu proprio buffer local, sem mutex)
     constexpr size_t kBroadGrain = 256;
@@ -209,6 +226,7 @@ class PhysicsWorld {
       pairs_.insert(pairs_.end(), chunkPairs_[c].begin(), chunkPairs_[c].end());
     }
     stats.pairs += static_cast<int>(pairs_.size());
+    lap(stats.broadphaseMs);
 
     // 4) Narrow-phase PARALELA (SAT Box-Box / Sphere-Box em todos os cores)
     const size_t pairCount = pairs_.size();
@@ -261,6 +279,7 @@ class PhysicsWorld {
       curPairs_[Key(a, b)] = info;
     }
     stats.contacts += static_cast<int>(contacts_.size());
+    lap(stats.narrowphaseMs);
 
     // 5) Solver PARALELO via Graph Coloring (sem mutexes nem condicoes de corrida)
     if (!contacts_.empty()) {
@@ -276,6 +295,12 @@ class PhysicsWorld {
 
       // Particiona os contatos em cores independentes
       colorGraph_.Build(contacts_, rb, n);
+      stats.colorsUsed = 0; stats.largestColorBucket = 0;
+      for (const auto& bucket : colorGraph_.buckets) {
+        if (bucket.empty()) continue;
+        ++stats.colorsUsed;
+        stats.largestColorBucket = std::max(stats.largestColorBucket, static_cast<int>(bucket.size()));
+      }
 
       for (int it = 0; it < solverIterations; ++it) {
         SolveContactsColored(rb);
@@ -286,6 +311,8 @@ class PhysicsWorld {
         if (f != curPairs_.end()) f->second.impulse += c.jn;
       }
     }
+
+    lap(stats.solverMs);
 
     // 6) CCD (so quem pediu e anda rapido)
     for (size_t i = 0; i < n; ++i) {
@@ -301,6 +328,8 @@ class PhysicsWorld {
         tf[i].position += Normalized(r.velocity) * std::min(allow, reach) - r.velocity * dt;
       }
     }
+
+    lap(stats.ccdMs);
 
     // 7) Posicoes e rotacoes (paralelo)
     JobSystem::Get().ParallelFor(n, 1024, [&](size_t b, size_t e) {
@@ -341,6 +370,7 @@ class PhysicsWorld {
     }
     prevPairs_ = std::move(curPairs_);
     TrimEvents();
+    lap(stats.finishMs);
   }
 
   static float c0Up(const Vec3& n) { return n.y; }

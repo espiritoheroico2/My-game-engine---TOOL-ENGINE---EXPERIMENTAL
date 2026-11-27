@@ -19,6 +19,7 @@
 #include "window_help_icon.hpp"
 #include "text_atlas_set.hpp"
 #include "console_model.hpp"
+#include "ui_scrollbar.hpp"
 #include "i18n.hpp"
 #include "spriteui_host.hpp"
 
@@ -164,12 +165,20 @@ class ConsolePanel {
         return false;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (e.button.button == SDL_BUTTON_LEFT && frameDown(e.button.x, e.button.y)) return true;
+        if (e.button.button == SDL_BUTTON_LEFT && bar_.pointerDown(e.button.x, e.button.y, scroll_)) {
+          scroll_ = ui_scrollbar::clampScroll(scroll_, contentH_, viewportH_);
+          model_.onScrolled(scroll_, maxScroll_);
+          return true;
+        }
         onMouseDown(e);
         return false;
       case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (e.button.button == SDL_BUTTON_LEFT && bar_.pointerUp()) return true;
         onMouseUp(e);
         return false;
       case SDL_EVENT_MOUSE_MOTION:
+        if (bar_.pointerMove(e.motion.x, e.motion.y, scroll_)) model_.onScrolled(scroll_, maxScroll_);
+        if (bar_.dragging()) return true;   // o arraste do polegar segue mesmo com o mouse fora da lista
         if (draggingSelection_) moveCaretFromPointer(e.motion.x, e.motion.y, true);
         return false;
       case SDL_EVENT_TEXT_INPUT:
@@ -438,6 +447,7 @@ class ConsolePanel {
   }
 
   void resetInteraction() {
+    bar_.pointerUp();
     pressed_ = Hit{};
     pending_ = Hit{};
     draggingSelection_ = false;
@@ -807,7 +817,7 @@ class ConsolePanel {
       if (!rowVisible(e)) continue;
       appendLayout(e.text, {lx + Theme::kListInset, ly + e.y - scroll_}, e.color, 0.3f, clip, text_.sliceFor(Theme::kFont));
     }
-    addScrollThumb(lx, ly, lw, clip);
+    addScrollThumb(lx, ly, lw);
   }
 
   bool rowVisible(const Entry& e) const {
@@ -815,12 +825,13 @@ class ConsolePanel {
     return top + e.h >= 0.f && top <= viewportH_;
   }
 
-  void addScrollThumb(float lx, float ly, float lw, std::uint32_t clip) {
-    if (contentH_ <= viewportH_ + 0.5f || viewportH_ <= 0.f) return;
-    const float trackH = std::max(1.f, viewportH_ - 8.f);
-    const float thumbH = std::min(trackH, std::max(24.f, trackH * viewportH_ / contentH_));
-    const float thumbY = ly + 4.f + (maxScroll_ > 0.f ? scroll_ / maxScroll_ * (trackH - thumbH) : 0.f);
-    addSolid(lx + lw - Theme::kScrollW - 2.f, thumbY, Theme::kScrollW, thumbH, colors_.scroll, 0.4f, clip);
+  // Barra de rolagem unica do editor (ui_scrollbar.hpp): trilho na faixa reservada a direita da lista.
+  void addScrollThumb(float lx, float ly, float lw) {
+    bar_.layout({lx + lw + 2.f, ly, ui_scrollbar::kWidth, viewportH_}, contentH_, viewportH_);
+    if (!bar_.visible()) return;
+    const std::uint32_t barClip = addClip(lx + lw, ly, Theme::kScrollLane, viewportH_);   // a barra fica fora do corte da lista
+    for (const ui_scrollbar::Quad& q : bar_.quads(palette::active(), scroll_))
+      addSolid(q.rect.x, q.rect.y, q.rect.w, q.rect.h, Srgb(q.color.r, q.color.g, q.color.b, q.color.a), 0.4f, barClip);
   }
 
   const sui::TextAtlasSet& text_;
@@ -847,6 +858,7 @@ class ConsolePanel {
 
   // Lista (reconstruida so quando muda)
   std::vector<Entry> entries_;
+  ui_scrollbar::Scrollbar bar_;
   float contentH_ = 0.f, viewportH_ = 0.f, listTop_ = 0.f, maxScroll_ = 0.f, scroll_ = 0.f;
   std::uint64_t builtSerial_ = ~0ull;
   float builtWidth_ = -1.f;

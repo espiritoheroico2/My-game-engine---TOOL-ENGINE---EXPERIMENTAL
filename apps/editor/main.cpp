@@ -2,12 +2,13 @@
 // Janelas: Hierarchy, Inspector, Scene, Game, Assets, Scenes, Console, Profiler, Narrative Controller, Settings,
 // Coding, Input Map, Export game e Help. Quem faz o quadro: o laco SDL deste arquivo (eventos, dock_host, paineis).
 // O estado esta em editor_state.hpp; Assets/Scenes em assets_panel.hpp; componentes em components.hpp.
-// Uso: tool_editor [--frames N] [--api vulkan|opengl|d3d12|d3d11] [--bench-frames N] [--lang pt-BR] [--tab N] [--play] [--screenshot-tab ...]
+// Uso: tool_editor [--frames N] [--api vulkan|opengl|d3d12|d3d11] [--bench-frames N] [--bench-warmup N] [--bench-dt S] [--no-occlusion] [--lang pt-BR] [--tab N] [--play] [--screenshot-tab ...]
 //   (N > 0 roda sem interacao e sai; usado nos testes automaticos)
 #include "assets_panel.hpp"
 #include <cctype>
 #include "editor_state.hpp"
 #include "export_panel.hpp"
+#include "frame_pacing.hpp"
 #include "input_map_panel.hpp"
 #include "frame_input.hpp"
 #include "extra_ui.hpp"
@@ -225,7 +226,15 @@ void applyHierarchyRequests(Editor& ed, const editor::hierarchy_panel::Requests&
 void syncScenesPanel(Editor& ed, editor::scenesui::Panel& panel) {
   namespace SM = editor::scenes_model;
   SM::Model& m = panel.model();
-  if (ed.sceneList.empty()) ed.refreshScenes();
+  // A lista acompanha a pasta de cenas: reconfere a cada 2 s e quando os assets mudam (cena criada ou apagada fora do editor).
+  static unsigned scenesRev = ~0u;
+  static double scenesAt = -1e9;
+  const double scenesNow = static_cast<double>(SDL_GetTicks()) / 1000.0;
+  if (ed.sceneList.empty() || scenesRev != ed_::assetsRevision() || scenesNow - scenesAt >= 2.0) {
+    scenesRev = ed_::assetsRevision();
+    scenesAt = scenesNow;
+    ed.refreshScenes();
+  }
   m.scenes = ed.sceneList;
   m.current = ed.sceneInfo.name;
   m.assets = ed.sceneInfo.assets;
@@ -1229,7 +1238,7 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
 
 void applyGameRequests(Editor& ed, const game_panel::Requests& r) {
   if (r.close) ed.showGame = false;
-  if (r.help) editor::openHelp("start");
+  if (r.help) editor::openHelp("game");
   if (r.playToggle) { if (ed.playing) ed.stopPlay(); else ed.startPlay(); }
   if (r.pauseToggle) ed.paused = !ed.paused;
   if (r.stepOnce) ed.stepOnce = true;
@@ -2503,6 +2512,11 @@ static int runEditorMain(int argc, char** argv) {
   long long ecsCount = 0;   // --ecs N: benchmark de N esferas (ver abaixo)
   long long voxelCount = 0; // --voxel N: benchmark de N chunks de terreno (16x16x16 blocos cada)
   int benchFrames = 300;    // --bench-frames N: quadros medidos apos aquecimento
+  int benchWarmup = 60;     // --bench-warmup N: quadros descartados entre o fim do nascimento e o inicio da medicao
+  bool benchNoOcclusion = false;   // --no-occlusion: desliga o occlusion culling da cena (comparacao A/B)
+  // --bench-dt S: cada quadro avanca S segundos de jogo, qualquer que seja o tempo real (reproduzivel; 1/60 = 0.016667).
+  // Sem ele o jogo usa o tempo real do quadro: num quadro headless de 1 ms a fisica so da um passo a cada ~16 quadros.
+  double benchDt = 0.0;
   int mapSide = 0;          // --map N: mapa de N x N chunks de terreno, centrado na origem (ver Criar > Test map of chunks)
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--map") == 0) mapSide = std::atoi(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--frames") == 0) maxFrames = std::atoi(argv[i + 1]);
@@ -2518,10 +2532,31 @@ static int runEditorMain(int argc, char** argv) {
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--ecs") == 0) ecsCount = std::atoll(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--voxel") == 0) voxelCount = std::atoll(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-frames") == 0) benchFrames = std::clamp(std::atoi(argv[i + 1]), 1, 10000);
-  const bool headless = maxFrames > 0 || ecsCount > 0 || voxelCount > 0;   // sem dialogo de projeto, sem gravar cena/configuracoes
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-warmup") == 0) benchWarmup = std::clamp(std::atoi(argv[i + 1]), 0, 10000);
+  for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--no-occlusion") == 0) benchNoOcclusion = true;
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-dt") == 0) benchDt = std::clamp(std::atof(argv[i + 1]), 0.0, 0.25);
+  // --instances N: cena de escala so para o RENDER (N entidades planas, sem fisica); --instance-mesh cube|sphere.
+  long long instanceCount = 0; int instanceShape = 0;
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--instances") == 0) instanceCount = std::clamp<long long>(std::atoll(argv[i + 1]), 0, 1000000);
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--instance-mesh") == 0) instanceShape = std::strcmp(argv[i + 1], "sphere") == 0 ? 1 : 0;
+  // --bench-render WxH: o benchmark headless chama renderView (Game) a cada quadro; sem isso nada e desenhado (sem paineis).
+  // Padrao 1280x720 com --instances; opt-in com --ecs. --bench-camera orbit: o olho gira 0,5 grau por quadro.
+  int benchRenderW = 0, benchRenderH = 0; bool benchOrbit = false;
+  if (instanceCount > 0) { benchRenderW = 1280; benchRenderH = 720; }
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-render") == 0) {
+    int rw = 0, rh = 0;
+    if (std::sscanf(argv[i + 1], "%dx%d", &rw, &rh) == 2 && rw >= 32 && rh >= 18) { benchRenderW = std::min(rw, 7680); benchRenderH = std::min(rh, 4320); }
+    else std::fprintf(stderr, "--bench-render: use WxH (ex.: 1280x720)\n");
+  }
+  // --bench-resize N: so de teste. Varia o tamanho renderizado a cada quadro (N tamanhos distintos, como arrastar a borda de um painel)
+  // para medir o custo de recriar os alvos da GPU a cada resize.
+  int benchResizeN = 0;
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-resize") == 0) benchResizeN = std::clamp(std::atoi(argv[i + 1]), 0, 100000);
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-camera") == 0) benchOrbit = std::strcmp(argv[i + 1], "orbit") == 0;
+  const bool headless = maxFrames > 0 || ecsCount > 0 || voxelCount > 0 || instanceCount > 0;   // sem dialogo de projeto, sem gravar cena/configuracoes
   std::string projectArg;   // --project <pasta>: abre esse projeto direto, sem a janela de inicio
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--project") == 0) projectArg = argv[i + 1];
-  if ((ecsCount > 0 || voxelCount > 0 || mapSide > 0) && projectArg.empty()) { std::fprintf(stderr, "--ecs/--voxel precisam de --project <pasta de teste> (nao grava o projeto)\n"); return 1; }
+  if ((ecsCount > 0 || voxelCount > 0 || mapSide > 0 || instanceCount > 0) && projectArg.empty()) { std::fprintf(stderr, "--ecs/--voxel/--instances precisam de --project <pasta de teste> (nao grava o projeto)\n"); return 1; }
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--api") == 0) startApi = std::strcmp(argv[i + 1], "vulkan") == 0 ? 1 : std::strcmp(argv[i + 1], "opengl") == 0 ? 2 : std::strcmp(argv[i + 1], "d3d12") == 0 ? 3 : std::strcmp(argv[i + 1], "d3d11") == 0 ? 4 : 0;
   for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--test-map") == 0) ed_::openTestMap(); }   // --test-map: captura de tela
   for (int i = 1; i < argc; ++i) { if (std::strcmp(argv[i], "--play") == 0) startPlaying = true; if (std::strcmp(argv[i], "--selftest") == 0) selfTest = true; if (std::strcmp(argv[i], "--player") == 0) playerMode = true; }
@@ -2570,6 +2605,7 @@ static int runEditorMain(int argc, char** argv) {
     ed.console.emplace_back(l, std::string(m));
     if (ed.console.size() > editor::console_model::kMaxEntries) ed.console.pop_front();
     ++ed.consoleSerial;
+    ed.requestFrame();   // linha nova no Console: o proximo quadro a mostra (log pode vir de outra thread)
     std::fprintf(l >= tool::LogLevel::Warn ? stderr : stdout, "[%s] %.*s\n", tool::toString(l), static_cast<int>(m.size()), m.data());
   });
   tool::logInfo("Editor started.");
@@ -2627,8 +2663,11 @@ static int runEditorMain(int argc, char** argv) {
   if (startPlaying) ed.startPlay();
   // --ecs N: benchmark sem vsync. Cria N esferas (como "test ECS: N"), mede o tempo de cada quadro depois do nascimento
   // e imprime media, p50, p95 e maximo. Sai sozinho ao fim de benchFrames quadros medidos.
+  if (benchNoOcclusion) ed.sceneInfo.render.occlusionCull = false;   // so nesta execucao (headless nao grava a cena)
   if (ecsCount > 0) ed.startEcsTest(ecsCount);
   if (mapSide > 0) ed.generateChunkMap(mapSide);
+  long long instancesMade = 0;
+  if (instanceCount > 0) instancesMade = editor::createInstanceScene(ed, instanceCount, instanceShape);   // tudo antes do laco
   if (voxelCount > 0) {   // chunks em grade quadrada, todos com terreno
     const long long side = static_cast<long long>(std::ceil(std::sqrt(static_cast<double>(voxelCount))));
     for (long long i = 0; i < voxelCount; ++i) ed.makeVoxel("Chunk", static_cast<int>(i % side), static_cast<int>(i / side), true);
@@ -2638,15 +2677,29 @@ static int runEditorMain(int argc, char** argv) {
   bool quit = false;
   int frame = 0, layoutFocus = 0;
   const Uint64 t0 = SDL_GetTicks();
-  const bool bench = ecsCount > 0 || voxelCount > 0;
+  const bool bench = ecsCount > 0 || voxelCount > 0 || instanceCount > 0;
+  int benchRenderFrame = 0;   // indice do quadro renderizado (da a posicao da camera em --bench-camera orbit)
+  // Escala da distancia da camera: acompanha o lado da grade (1 = ~100 mil instancias); --ecs usa a area das esferas.
+  const float benchCamK = instanceCount > 0 ? std::max(0.1f, std::ceil(std::sqrt(static_cast<float>(instanceCount))) / 316.f) : 0.3f;
   std::vector<double> benchMs;
   uint64_t benchUpload0 = 0;   // uploads do BatchCB no primeiro quadro medido
   std::array<double, static_cast<size_t>(editor::Zone::Count)> benchZoneMs{};
+  // Fases do benchmark: nascimento (spawn) -> aquecimento (descartado) -> janela medida (steady state).
+  int benchSpawnFrames = 0, benchWarmupLeft = benchWarmup;
+  Uint64 benchSpawnStartNs = 0, benchSpawnEndNs = 0;
+  // Estado fisico no primeiro e no ultimo quadro medido QUE DEU PASSO (quadro sem passo zera os contadores).
+  Newtoon::PhysicsWorld::Stats benchPhysStart{}, benchPhysEnd{};
+  bool benchPhysHaveStart = false;
+  struct BenchPhysSum {
+    double integrate = 0, prepare = 0, broad = 0, narrow = 0, solver = 0, ccd = 0, finish = 0;
+    double steps = 0, awake = 0, pairs = 0, contacts = 0;
+    int stepLimitFrames = 0;
+  } benchPhys;
   // TOOL_BENCH_CSV=<arquivo>: grava cada quadro medido (ms total e de cada zona) para achar a origem dos picos.
   std::FILE* benchCsv = nullptr;
   if (const char* csvPath = std::getenv("TOOL_BENCH_CSV")) {
     benchCsv = std::fopen(csvPath, "w");
-    if (benchCsv) { std::fprintf(benchCsv, "frame,total_ms"); for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::fprintf(benchCsv, ",z%d", z); std::fprintf(benchCsv, "\n"); }
+    if (benchCsv) { std::fprintf(benchCsv, "frame,total_ms"); for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::fprintf(benchCsv, ",z%d", z); std::fprintf(benchCsv, ",phys_steps,phys_awake,phys_pairs,phys_contacts,phys_colors\n"); }
   }
   bool benchArmed = false;
   editor::SpriteUiDiagnostics spriteUiDiagnostics;
@@ -2749,7 +2802,56 @@ static int runEditorMain(int argc, char** argv) {
     addDockWindow(*dockOwner, Kind::Narrative, [] { return std::string(T("Narrative Controller")); }, [&ed]() -> bool& { return ed.showNarrative; }, [&] { return narrativePanel ? &narrativePanel->chrome() : nullptr; });
     dockOwner->load(kDockLayoutFile);   // organizacao salva na sessao anterior (se houver e for valida)
   }
+  // Ritmo dos quadros (frame_pacing.hpp): ocioso e sem nada pedindo, o laco dorme em vez de refazer a interface a cada ~16 ms.
+  editor::frame_pacing::Pacer pacer(2, 100.0);   // acorda a cada 100 ms para reconferir as fontes que nao geram evento
+  double lastDrawSec = 0.0;      // inicio do ultimo quadro desenhado
+  double trailingAt = -1.0;      // quadro extra ~450 ms depois da ultima atividade (prazos de 0,4 s: checagem de scripts)
+  struct PollSig {               // fontes de mudanca sem evento SDL: qualquer diferenca pede um quadro
+    std::uint64_t console = 0, assetsRev = 0; unsigned loads = 0; std::size_t entities = 0; int errors = 0, warnings = 0; bool imports = false; std::string status;
+    bool operator==(const PollSig&) const = default;
+  } lastPollSig;
   while (!quit) {
+    if (!headless) {   // espera ANTES de iniciar o quadro: iteracao pulada nao entra no historico do Profiler (so soma a espera)
+      const auto secNow = [] { return static_cast<double>(SDL_GetTicksNS()) * 1e-9; };
+      for (;;) {
+        SDL_PumpEvents();
+        const double nowS = secNow();
+        PollSig sig;
+        sig.console = ed.consoleSerial; sig.assetsRev = editor::assetsRevision(); sig.loads = ed.sceneLoads;
+        sig.entities = ed.scene.world().liveCount();
+        sig.errors = tool::debug().count(tool::Severity::Error); sig.warnings = tool::debug().count(tool::Severity::Warning);
+        { std::lock_guard lk(editor::importMutex()); sig.imports = !editor::importQueue().empty(); }   // dialogo de arquivos responde em outra thread
+        sig.status = ed.statusLine;
+        if (!(sig == lastPollSig)) { lastPollSig = sig; ed.requestFrame(); }
+        editor::frame_pacing::Inputs in;
+        in.eventArrived = SDL_HasEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+        in.playing = ed.playing;
+        in.anyViewBusy = !ed.viewsIdle();
+        in.frameRequested = ed.frameRequested.load(std::memory_order_relaxed);
+        // Sempre desenha: jogo exportado, roteiro de teste, primeiros quadros, navegacao livre e troca de API em andamento.
+        in.alwaysRender = playerMode || scriptPlayer != nullptr || frame < 30 || ed.freeFly || ed.apiPending >= 0;
+        in.nowSec = nowS;
+        double deadline = editor::frame_pacing::kNoDeadline;
+        if (trailingAt > 0.0) deadline = std::min(deadline, trailingAt);
+        // Profiler visivel e rodando (ou exportando): graficos ao vivo, ~10 Hz (o painel limita o refresh a 4 Hz).
+        if (profPanel && ((dockShown(editor::dock_host::Kind::Profiler, ed.showProfiler) && !ed.prof.paused) || profPanel->exporting()))
+          deadline = std::min(deadline, lastDrawSec + 0.1);
+        // Botao esquerdo preso: a guarda do botao precisa conferir o SDL (soltura perdida) sem esperar um evento.
+        if (gPointerGuard.leftHeld) deadline = std::min(deadline, lastDrawSec + 0.05);
+        in.deadlineSec = deadline;
+        const editor::frame_pacing::Decision d = pacer.decide(in);
+        if (d.render) {
+          ed.frameRequested.store(false, std::memory_order_relaxed);
+          lastDrawSec = nowS;
+          if (trailingAt > 0.0 && nowS >= trailingAt) trailingAt = -1.0;
+          break;
+        }
+        const auto waitStart = editor::FrameProfiler::Clock::now();
+        SDL_Event waited;
+        if (SDL_WaitEventTimeout(&waited, std::max(1, static_cast<int>(std::ceil(d.waitMs))))) SDL_PushEvent(&waited);   // o evento volta para a fila
+        ed.prof.addWait(std::chrono::duration<float, std::milli>(editor::FrameProfiler::Clock::now() - waitStart).count());
+      }
+    }
     const Uint64 frameStart = SDL_GetTicksNS();
     ed.applyPendingApi();   // troca de API pedida no quadro anterior (com o aviso ja desenhado)
     if (ed.fpsDirty && renderer) { SDL_SetRenderVSync(renderer, ed.fpsMode == 0 && !headless ? 1 : 0); ed.fpsDirty = false; }
@@ -2799,14 +2901,6 @@ static int runEditorMain(int argc, char** argv) {
       scriptPlayer->pump(frame, SDL_GetWindowID(window));
     }
     SDL_Event e;
-    // Ocioso: espera ate 16 ms pelo proximo evento (em vez de girar o quadro sem parar). O evento volta para a fila.
-    // A espera vem ANTES da zona de medicao: nao e trabalho e nao deve aparecer como "Events + input".
-    if (ed.viewsIdle() && !headless) {
-      const auto waitStart = editor::FrameProfiler::Clock::now();
-      SDL_Event waited;
-      if (SDL_WaitEventTimeout(&waited, 16)) SDL_PushEvent(&waited);
-      ed.prof.addWait(std::chrono::duration<float, std::milli>(editor::FrameProfiler::Clock::now() - waitStart).count());
-    }
     editor::ZoneTimer zone(ed.prof, editor::Zone::Events);
     int nEvents = 0;
     spriteUiDiagnostics.beginFrame();
@@ -2816,7 +2910,9 @@ static int runEditorMain(int argc, char** argv) {
     {
       float mx = 0.f, my = 0.f;
       const bool sdlLeft = (SDL_GetMouseState(&mx, &my) & SDL_BUTTON_LMASK) != 0;
-      if (editor::pointer_guard::releaseMissed(gPointerGuard, sdlLeft, scriptPlayer != nullptr)) {
+      // Soltura real ainda na fila (SDL_PumpEvents ja atualizou o estado, o laco abaixo ainda nao leu o evento): nao sintetiza.
+      const bool upQueued = SDL_HasEvent(SDL_EVENT_MOUSE_BUTTON_UP);
+      if (editor::pointer_guard::releaseMissed(gPointerGuard, sdlLeft, scriptPlayer != nullptr, upQueued)) {
         SDL_Event up{};
         up.type = SDL_EVENT_MOUSE_BUTTON_UP;
         up.button.windowID = SDL_GetWindowID(window);
@@ -2830,6 +2926,7 @@ static int runEditorMain(int argc, char** argv) {
       }
     }
     while (SDL_PollEvent(&e)) {
+      trailingAt = static_cast<double>(SDL_GetTicksNS()) * 1e-9 + 0.45;   // quadro extra depois da ultima atividade (prazos de 0,4 s)
       editor::frameInput().onEvent(e);   // entrada do quadro (SDL), para a Scene e o Game
       if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) editor::pointer_guard::observeLeft(gPointerGuard, true);
       if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == SDL_BUTTON_LEFT) editor::pointer_guard::observeLeft(gPointerGuard, false);
@@ -2899,7 +2996,7 @@ static int runEditorMain(int argc, char** argv) {
     ed.scene.setClock(ed.time);
     ed.scene.collectPool(ed.time);
     ed.uiTyping = SDL_TextInputActive(window);
-    ed.tick(static_cast<double>(tool::debug().lastFrameMs()) / 1000.0);
+    ed.tick(benchDt > 0.0 ? benchDt : static_cast<double>(tool::debug().lastFrameMs()) / 1000.0);
     ed.beginRenderStatsFrame();
     if (!ed.paused) ed.updateParticles(static_cast<float>(tool::debug().lastFrameMs()) / 1000.f);
     editor::processImports(ed);
@@ -2951,6 +3048,12 @@ static int runEditorMain(int argc, char** argv) {
       if (dockShown(editor::dock_host::Kind::Scene, ed.showScene)) drawSceneWindow(ed, renderer);
       if (dockShown(editor::dock_host::Kind::Game, ed.showGame)) drawGameWindow(ed, renderer, false);
     }
+    if (bench && benchRenderW > 0) {   // sem paineis ninguem pede a imagem: o benchmark renderiza uma vista Game por quadro
+      const tool::Camera bc = editor::benchCamera(benchCamK, benchRenderFrame++, benchOrbit);
+      int bw = benchRenderW, bh = benchRenderH;
+      if (benchResizeN > 0) { const int k = (benchRenderFrame - 1) % benchResizeN; bw = std::max(32, benchRenderW - k * 3); bh = std::max(18, benchRenderH - k * 2); }
+      ed.renderView(bc, bw, bh, false, editor::Zone::GameRender, &ed.sceneInfo.render.post);
+    }
     { // "Panels" = tempo dos paineis SEM as renderizacoes 3D (essas ja foram contadas nas suas proprias zonas)
       const float total = std::chrono::duration<float, std::milli>(editor::FrameProfiler::Clock::now() - panelsStart).count();
       const float inner = ed.prof.cur[static_cast<int>(editor::Zone::SceneRender)] + ed.prof.cur[static_cast<int>(editor::Zone::GameRender)] + ed.prof.cur[static_cast<int>(editor::Zone::PostFx)] + ed.prof.cur[static_cast<int>(editor::Zone::Sky)];
@@ -2997,7 +3100,7 @@ static int runEditorMain(int argc, char** argv) {
     if (codingPanel && onPass(editor::dock_host::Kind::Coding)) {   // moldura da janela Coding (SpriteUI): titulo, X, "?" e grip
       if (!codingPanel->chrome().draw(renderer, T("Coding"))) tool::logError(std::string("Coding frame render failed: ") + SDL_GetError());
       if (codingPanel->chrome().consumeClose()) ed.showCoding = false;
-      codingPanel->chrome().consumeHelp();
+      if (codingPanel->chrome().consumeHelp()) editor::openHelp("script");
       if (dockShown(editor::dock_host::Kind::Coding, ed.showCoding) &&
           !codingPanel->drawBody(renderer, gCodingBody, ed.project.root)) {
         tool::logError(std::string("Coding render failed: ") + SDL_GetError());
@@ -3028,6 +3131,7 @@ static int runEditorMain(int argc, char** argv) {
         ed.showScenes = false;
       } else {
         applyScenesActions(ed, *scenesPanel, scenesActs);
+        if (scenesPanel->needsFrame() || !scenesActs.empty()) ed.requestFrame();   // clique muda o modelo apos o desenho: mostra o resultado
       }
     }
     if (narrativePanel && onPass(editor::dock_host::Kind::Narrative)) {   // Narrative Controller (SpriteUI): moldura, grafo, variaveis e propriedades
@@ -3074,7 +3178,7 @@ static int runEditorMain(int argc, char** argv) {
     if (settingsPanel && onPass(editor::dock_host::Kind::Settings)) {   // moldura do Settings (SpriteUI)
       if (!settingsPanel->chrome().draw(renderer, T("Settings"))) tool::logError(std::string("Settings frame render failed: ") + SDL_GetError());
       if (settingsPanel->chrome().consumeClose()) ed.showSettings = false;
-      if (settingsPanel->chrome().consumeHelp()) editor::openHelp("profiler");
+      if (settingsPanel->chrome().consumeHelp()) editor::openHelp("settings");
     }
     if (settingsPanel && onPass(editor::dock_host::Kind::Settings)) {   // Configuracoes: faixa de abas e conteudo da janela
       const bool shown = ed.showSettings && gSettingsFrame;
@@ -3220,20 +3324,61 @@ static int runEditorMain(int argc, char** argv) {
       ed.scene.world().each<editor::SpawnerComp>([&](tool::Entity, editor::SpawnerComp& s) { if (s.armed) armed = true; });
       if (armed) benchArmed = true;
       if (voxelCount > 0 && frame == 10) benchArmed = true;   // chunks nao tem nascimento: mede a partir do 10o quadro
-      if (benchArmed && !armed) {   // nascimento terminou: mede os proximos quadros
+      if (instanceCount > 0) benchArmed = true;               // instancias sao criadas antes do laco: o aquecimento comeca ja
+      if (armed) {   // nascimento em andamento: conta quadros e tempo (fora da janela medida)
+        if (benchSpawnFrames == 0) benchSpawnStartNs = frameStart;
+        ++benchSpawnFrames; benchSpawnEndNs = SDL_GetTicksNS();
+      }
+      if (benchArmed && !armed && benchWarmupLeft > 0) --benchWarmupLeft;   // aquecimento: descartado
+      else if (benchArmed && !armed) {   // nascimento e aquecimento terminaram: mede os proximos quadros (steady state)
+        const auto& ps = ed.play.world.stats;
         if (benchMs.empty()) benchUpload0 = ed.gpu.batchCbUploads();
+        if (ps.steps > 0) { if (!benchPhysHaveStart) { benchPhysStart = ps; benchPhysHaveStart = true; } benchPhysEnd = ps; }
         benchMs.push_back(static_cast<double>(SDL_GetTicksNS() - frameStart) / 1e6);
         for (size_t z = 0; z < benchZoneMs.size(); ++z) benchZoneMs[z] += ed.prof.cur[z];
-        if (benchCsv) { std::fprintf(benchCsv, "%zu,%.3f", benchMs.size(), benchMs.back()); for (size_t z = 0; z < benchZoneMs.size(); ++z) std::fprintf(benchCsv, ",%.3f", ed.prof.cur[z]); std::fprintf(benchCsv, "\n"); }
+        benchPhys.integrate += ps.integrateMs; benchPhys.prepare += ps.prepareMs; benchPhys.broad += ps.broadphaseMs;
+        benchPhys.narrow += ps.narrowphaseMs; benchPhys.solver += ps.solverMs; benchPhys.ccd += ps.ccdMs; benchPhys.finish += ps.finishMs;
+        benchPhys.steps += ps.steps; benchPhys.awake += ps.awake; benchPhys.pairs += ps.pairs; benchPhys.contacts += ps.contacts;
+        if (ps.hitStepLimit) ++benchPhys.stepLimitFrames;
+        if (benchCsv) {
+          std::fprintf(benchCsv, "%zu,%.3f", benchMs.size(), benchMs.back());
+          for (size_t z = 0; z < benchZoneMs.size(); ++z) std::fprintf(benchCsv, ",%.3f", ed.prof.cur[z]);
+          std::fprintf(benchCsv, ",%d,%d,%d,%d,%d\n", ps.steps, ps.awake, ps.pairs, ps.contacts, ps.colorsUsed);
+        }
         if (benchMs.size() >= static_cast<size_t>(benchFrames)) {
           std::vector<double> s = benchMs; std::sort(s.begin(), s.end());
           if (benchCsv) { std::fclose(benchCsv); benchCsv = nullptr; }
           double sum = 0; for (double v : s) sum += v;
-          std::printf("ECS bench: %s, %zu bodies, %zu frames\n", ecsCount > 0 ? (std::to_string(ecsCount) + " spheres").c_str() : (std::to_string(voxelCount) + " voxel chunks").c_str(), ed.play.ents.size(), s.size());
-          std::printf("ECS bench: avg %.2f ms (%.1f fps), p50 %.2f ms, p95 %.2f ms, max %.2f ms\n", sum / s.size(), 1000.0 * s.size() / sum,
-                      s[s.size() / 2], s[s.size() * 95 / 100], s.back());
-          for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::printf("ECS bench:   %-34s %7.2f ms\n", editor::zoneName(static_cast<editor::Zone>(z)), benchZoneMs[static_cast<size_t>(z)] / s.size());
+          const double nf = static_cast<double>(s.size());
+          const double p99 = s[std::min(s.size() - 1, s.size() * 99 / 100)];
+          const std::string benchWhat = ecsCount > 0 ? std::to_string(ecsCount) + " spheres" : instanceCount > 0 ? std::to_string(instancesMade) + " instances" : std::to_string(voxelCount) + " voxel chunks";
+          std::printf("ECS bench: %s, %zu bodies, %zu frames\n", benchWhat.c_str(), ed.play.ents.size(), s.size());
+          if (benchRenderW > 0) std::printf("ECS bench: render %dx%d (Game view each frame), camera %s, api %s\n", benchRenderW, benchRenderH, benchOrbit ? "orbit" : "fixed", ed.apiStatus.c_str());
+          else std::printf("ECS bench: render off (headless without panels draws nothing; use --bench-render WxH)\n");
+          std::printf("ECS bench: spawn %d frames, %.0f ms; warm-up %d frames; occlusion %s; game dt %s\n", benchSpawnFrames,
+                      static_cast<double>(benchSpawnEndNs - benchSpawnStartNs) / 1e6, benchWarmup, ed.sceneInfo.render.occlusionCull ? "on" : "off",
+                      benchDt > 0.0 ? (std::to_string(benchDt) + " s fixed").c_str() : "real time");
+          std::printf("ECS bench: avg %.2f ms (%.1f fps), p50 %.2f ms, p95 %.2f ms, p99 %.2f ms (1%% low %.1f fps), max %.2f ms\n", sum / nf, 1000.0 * nf / sum,
+                      s[s.size() / 2], s[s.size() * 95 / 100], p99, p99 > 0 ? 1000.0 / p99 : 0.0, s.back());
+          std::printf("ECS bench: zones, avg ms (indented zones are inside the zone above them; do not add them up)\n");
+          for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::printf("ECS bench:   %-40s %7.2f ms\n", editor::zoneName(static_cast<editor::Zone>(z)), benchZoneMs[static_cast<size_t>(z)] / nf);
+          // Fisica: fases (ms por quadro, somando os passos) e estado no inicio/fim da janela. Contadores somam os passos do quadro.
+          std::printf("ECS bench: physics phases, avg ms/frame: integrate %.2f, prepare %.2f, broadphase %.2f, narrowphase %.2f, solver %.2f, ccd %.2f, finish %.2f\n",
+                      benchPhys.integrate / nf, benchPhys.prepare / nf, benchPhys.broad / nf, benchPhys.narrow / nf, benchPhys.solver / nf, benchPhys.ccd / nf, benchPhys.finish / nf);
+          const double ns = benchPhys.steps > 0 ? benchPhys.steps : 1.0;
+          const double physMs = benchPhys.integrate + benchPhys.prepare + benchPhys.broad + benchPhys.narrow + benchPhys.solver + benchPhys.ccd + benchPhys.finish;
+          std::printf("ECS bench: physics steps: %.0f in %zu frames (%.2f per frame), %.2f ms per step; frames over the step limit %d\n",
+                      benchPhys.steps, s.size(), benchPhys.steps / nf, physMs / ns, benchPhys.stepLimitFrames);
+          std::printf("ECS bench: physics per step, avg: awake %.0f, pairs %.0f, contacts %.0f\n",
+                      benchPhys.awake / ns, benchPhys.pairs / ns, benchPhys.contacts / ns);
+          const auto& pe = benchPhysEnd;
+          std::printf("ECS bench: physics start -> end: steps %d -> %d, awake %d -> %d, pairs %d -> %d, contacts %d -> %d, colors %d -> %d, largest bucket %d -> %d\n",
+                      benchPhysStart.steps, pe.steps, benchPhysStart.awake, pe.awake, benchPhysStart.pairs, pe.pairs, benchPhysStart.contacts, pe.contacts,
+                      benchPhysStart.colorsUsed, pe.colorsUsed, benchPhysStart.largestColorBucket, pe.largestColorBucket);
           std::printf("ECS bench:   last frame: %llu draws, %llu triangles, %llu culled\n", static_cast<unsigned long long>(ed.prof.last.draws), static_cast<unsigned long long>(ed.prof.last.tris), static_cast<unsigned long long>(ed.prof.last.culled));
+          { size_t renderables = 0;
+            ed.scene.world().each<editor::MeshRenderer, editor::Transform>([&](tool::Entity e, editor::MeshRenderer&, editor::Transform&) { if (!ed.scene.world().has<editor::Inactive>(e)) ++renderables; });
+            std::printf("ECS bench:   renderable entities: %zu\n", renderables); }
           // Log para verificacao automatica: uploads do BatchCB por quadro e estado do culling de clusters.
           const double uploadsPerFrame = s.size() > 1 ? static_cast<double>(ed.gpu.batchCbUploads() - benchUpload0) / static_cast<double>(s.size() - 1) : 0.0;
           std::printf("ECS bench:   BatchCB uploads/frame %.1f (total %llu)\n", uploadsPerFrame, static_cast<unsigned long long>(ed.gpu.batchCbUploads()));

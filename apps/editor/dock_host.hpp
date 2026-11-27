@@ -53,11 +53,70 @@ inline constexpr float kHeaderH = 30.f;
 inline constexpr float kHelpReserve = 30.f;   // grip + "?" (quando nao ha grip medido)
 inline constexpr float kCloseReserve = 8.f;   // margem a direita da barra agrupada
 inline constexpr float kTabX = 18.f;          // botao X de cada aba (fecha a janela da aba)
-inline constexpr float kTabMaxWidth = 120.f;
+inline constexpr float kTabMaxWidth = 200.f;
 inline constexpr float kTabPadX = 6.f;       // folga horizontal interna de cada aba (grip e X ficam afastados da borda)
 inline constexpr float kTabGripW = 14.f;     // grip de cada aba (seis pontos), antes do nome
 inline constexpr float kTabEdge = 4.f;       // folga da barra de abas a esquerda (ela ocupa o cabecalho inteiro)
+inline constexpr float kTabNameGap = 4.f;    // folga entre o nome e o X da aba
+inline constexpr float kTabMinName = 20.f;   // espaco minimo do nome numa aba (com "..." quando o titulo nao cabe)
+// Tudo da aba que nao e o nome: folga, grip, folga, X, folga. O nome ocupa a largura da aba menos isto.
+inline constexpr float kTabOverhead = kTabPadX + kTabGripW + kTabNameGap + kTabX + kTabPadX;
+inline constexpr float kTabMinWidth = kTabOverhead + kTabMinName;
 inline constexpr float kEdgeHighlightW = 4.f;   // espessura do destaque da borda sob o mouse (ou redimensionada)
+
+// Area do "?" da janela ativa na barra de abas: mesma posicao do "?" da moldura (depois do grip), para o clique chegar a ela.
+inline SU::Rect helpRectOf(SU::Rect leaf) {
+  using M = window_frame::Metrics;
+  return {{leaf.position.x + M::kGripWidth + M::kHelpGap, leaf.position.y + (kHeaderH - M::kHelpSize) * 0.5f},
+          {M::kHelpSize, M::kHelpSize}};
+}
+// Onde comecam as abas: logo depois do "?".
+inline float tabsStartX(SU::Rect leaf) {
+  const SU::Rect h = helpRectOf(leaf);
+  return h.position.x + h.size.x + window_frame::Metrics::kHelpGap;
+}
+
+// Largura de cada aba pelo tamanho do titulo (textW = largura do titulo medida). Cada aba cabe o titulo inteiro, o grip e o X;
+// se a soma passa de `avail`, todas encolhem juntas (o nome vira "..."), sem nunca ficar menor que grip + X + um pedaco do nome.
+// Se nem o minimo cabe, divide igual: o nome some e sobram o grip e o X, sem sobreposicao.
+inline std::vector<float> tabWidths(const std::vector<float>& textW, float avail) {
+  std::vector<float> w;
+  w.reserve(textW.size());
+  float sum = 0.f;
+  for (float t : textW) {
+    const float v = std::clamp(kTabOverhead + std::max(0.f, t), kTabMinWidth, kTabMaxWidth);
+    w.push_back(v);
+    sum += v;
+  }
+  if (w.empty() || sum <= avail) return w;
+  const float k = std::max(0.f, avail) / sum;
+  float total = 0.f;
+  for (float& v : w) {
+    v = std::max(kTabMinWidth, v * k);
+    total += v;
+  }
+  if (total > avail) {
+    const float eq = std::max(0.f, avail) / static_cast<float>(w.size());
+    for (float& v : w) v = eq;
+  }
+  return w;
+}
+
+// Texto que cabe em maxW: o proprio titulo, ou o inicio dele com "..." no fim; vazio se nem o "..." cabe. `measure` mede em pixels.
+template <class Measure>
+inline std::string fitText(const std::string& s, float maxW, Measure measure) {
+  if (maxW <= 0.f || s.empty()) return {};
+  if (measure(s) <= maxW) return s;
+  const std::string dots = "...";
+  std::size_t n = s.size();
+  while (n > 0) {
+    --n;
+    while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0u) == 0x80u) --n;   // nao corta no meio de um caractere UTF-8
+    const std::string t = s.substr(0, n) + dots;
+    if (measure(t) <= maxW) return t;
+  }
+  return measure(dots) <= maxW ? dots : std::string{};
+}
 
 // O que o host precisa de cada janela. As funcoes sao preenchidas pelo main.cpp com os paineis ja criados.
 struct Window {
@@ -151,18 +210,39 @@ class Host {
     }
   }
 
-  // Abas da folha dentro da barra da moldura da janela ativa: faixa entre o "?" e os botoes da direita.
-  // Nao cria barra nova. Nullopt se a folha tem uma so janela.
+  // Abas da folha dentro da barra da moldura da janela ativa: faixa entre o "?" e a borda direita.
+  // Cada aba tem a largura do proprio titulo (tabWidths). Nao cria barra nova. Nullopt se a folha tem uma so janela.
   struct TabCells {
-    float x0, x1, tabW;
+    float x0 = 0.f, x1 = 0.f;
+    std::vector<float> w;   // largura de cada aba
+    [[nodiscard]] float x(std::size_t i) const {
+      float v = x0;
+      for (std::size_t k = 0; k < i && k < w.size(); ++k) v += w[k];
+      return v;
+    }
+    // Indice da aba sob a coordenada x (presa as pontas).
+    [[nodiscard]] std::size_t indexAt(float px) const {
+      float v = x0;
+      for (std::size_t k = 0; k < w.size(); ++k) {
+        v += w[k];
+        if (px < v) return k;
+      }
+      return w.empty() ? 0 : w.size() - 1;
+    }
   };
   [[nodiscard]] std::optional<TabCells> tabCells(const SW::DockLeafRect& leaf) const {
-    const std::size_t n = model_.tabsOf(leaf.leaf).size();
-    if (n < 2) return std::nullopt;
+    const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
+    if (tabs.size() < 2) return std::nullopt;
     const float right = leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve;
-    const float left = leaf.bounds.position.x + kTabEdge;
-    const float tabW = std::min(kTabMaxWidth, std::max(0.f, right - left) / static_cast<float>(n));
-    return TabCells{left, left + tabW * static_cast<float>(n), tabW};
+    const float left = tabsStartX(leaf.bounds);
+    std::vector<float> textW;
+    textW.reserve(tabs.size());
+    for (SU::UIHandle t : tabs) textW.push_back(painter_.measure(titleOf(t), kStripFont));
+    TabCells c;
+    c.x0 = left;
+    c.w = tabWidths(textW, std::max(0.f, right - left));
+    c.x1 = c.x(c.w.size());
+    return c;
   }
 
   // Overlay do dock: abas na barra da moldura, guia de encaixe durante o arraste e contorno da janela arrastada.
@@ -183,12 +263,18 @@ class Host {
         const SU::Rect g = w.grip();
         if (g.size.x > 0.f) shapes.rectFilled(px(g.position), px({g.position.x + g.size.x, g.position.y + g.size.y}), view::Rgba(31, 41, 59));
       }
+      // "?" da janela ativa: a barra cobre o do cabecalho, entao ele e redesenhado no mesmo lugar (o clique chega a moldura).
+      const SU::Rect hr = helpRectOf(leaf.bounds);
+      const view::Pixel hc{hr.position.x + hr.size.x * 0.5f, hr.position.y + hr.size.y * 0.5f};
+      shapes.circleFilled(hc, hr.size.x * 0.5f, view::Rgba(64, 102, 178));
+      shapes.textMiddle(hc, "?", kStripFont, view::Rgba(233, 234, 238), true);
       for (std::size_t i = 0; i < tabs.size(); ++i) {
-        const float x = c->x0 + c->tabW * static_cast<float>(i);
+        const float x = c->x(i);
+        const float tw = c->w[i];
         const bool on = tabs[i] == leaf.leaf;
-        shapes.rectFilled({x, y}, {x + c->tabW - 1.f, y + kHeaderH},
+        shapes.rectFilled({x, y}, {x + tw - 1.f, y + kHeaderH},
                           on ? view::Rgba(52, 68, 96) : view::Rgba(24, 31, 46));
-        if (on) shapes.rectFilled({x, y + kHeaderH - 2.f}, {x + c->tabW - 1.f, y + kHeaderH}, view::Rgba(74, 130, 200));
+        if (on) shapes.rectFilled({x, y + kHeaderH - 2.f}, {x + tw - 1.f, y + kHeaderH}, view::Rgba(74, 130, 200));
         // Grip da aba: seis pontos (duas colunas, tres linhas), com folga de kTabPadX da borda da aba.
         const float gx = x + kTabPadX, gy = y + (kHeaderH - 12.f) * 0.5f;
         for (int col = 0; col < 2; ++col) {
@@ -197,12 +283,14 @@ class Host {
             shapes.rectFilled({dx, dy}, {dx + 2.f, dy + 2.f}, view::Rgba(120, 132, 150));
           }
         }
-        // Nome alinhado a esquerda, depois do grip, e X centrado na sua faixa a direita; os dois no centro vertical da aba.
+        // Nome alinhado a esquerda, depois do grip, e X na faixa da direita; os dois no centro vertical da aba.
+        // O nome e cortado aqui (com "...") para nunca passar da sua faixa: largura 0 no desenho significa sem limite.
         const float midY = y + kHeaderH * 0.5f;
         const float nameX = x + kTabPadX + kTabGripW;
-        const float nameW = std::max(0.f, c->tabW - (nameX - x) - kTabX - kTabPadX);
-        shapes.textMiddle({nameX, midY}, titleOf(tabs[i]), kStripFont, view::Rgba(233, 234, 238), false, nameW);
-        shapes.textMiddle({x + c->tabW - kTabPadX - kTabX * 0.5f, midY}, "X", kStripFont, view::Rgba(170, 178, 194), true, kTabX);
+        const float nameW = std::max(0.f, tw - kTabOverhead);
+        const std::string name = fitText(titleOf(tabs[i]), nameW, [this](const std::string& t) { return painter_.measure(t, kStripFont); });
+        if (!name.empty()) shapes.textMiddle({nameX, midY}, name, kStripFont, view::Rgba(233, 234, 238), false, nameW);
+        shapes.textMiddle({x + tw - kTabPadX - kTabX * 0.5f, midY}, "X", kStripFont, view::Rgba(170, 178, 194), true, kTabX);
       }
     }
     if (drag_.IsDragging()) {
@@ -313,16 +401,31 @@ class Host {
     }
   }
 
+  // Ha uma janela solta (flutuante, desenhada) sob o ponto? Ela fica por cima do dock: a faixa de abas e as divisorias
+  // que estao por baixo dela nao recebem o clique. Sem isto, uma janela solta sobre a faixa de abas nao podia ser
+  // arrastada de volta (o clique pegava a aba de baixo) e, sem arraste, nao havia como acopla-la de novo.
+  [[nodiscard]] bool floatingAt(SU::Vec2 p) {
+    for (Window* wp : hitOrder()) {
+      const Window& w = *wp;
+      if (!w.open() || !visibleNow(w) || model_.contains(w.id)) continue;
+      const std::optional<SU::Rect> f = w.frame();
+      if (f && inside(*f, p)) return true;
+    }
+    return false;
+  }
+
   // Clique: faixa de abas troca a aba ativa; grip inicia o gesto de arraste. Devolve true se consumiu o clique.
   bool pressed(SU::Vec2 p) {
     pointer_ = p;
+    const bool overFloat = floatingAt(p);
     // Cada aba tem o seu grip: arrastar por ele tira so aquela aba do grupo.
     for (const SW::DockLeafRect& leaf : model_.leaves()) {
+      if (overFloat) break;
       const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
       const std::optional<TabCells> c = tabCells(leaf);
       if (!c) continue;
       for (std::size_t i = 0; i < tabs.size(); ++i) {
-        const float x = c->x0 + c->tabW * static_cast<float>(i);
+        const float x = c->x(i);
         if (!inside(tabGripRect(leaf, x), p)) continue;
         drag_.BeginPress(tabs[i], p, true);
         activeWin_ = tabs[i];
@@ -334,15 +437,15 @@ class Host {
       }
     }
     for (const SW::DockLeafRect& leaf : model_.leaves()) {
+      if (overFloat) break;
       const std::optional<TabCells> c = tabCells(leaf);
       if (!c) continue;
       const SU::Rect strip{{c->x0, leaf.bounds.position.y}, {c->x1 - c->x0, kHeaderH}};
       if (!inside(strip, p)) continue;
       const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
-      const auto index = static_cast<std::size_t>(
-          std::clamp((p.x - c->x0) / c->tabW, 0.f, static_cast<float>(tabs.size() - 1)));
-      const float localX = p.x - (c->x0 + c->tabW * static_cast<float>(index));
-      if (localX >= c->tabW - kTabX) {   // X da aba: fecha a janela dela
+      const std::size_t index = c->indexAt(p.x);
+      const float localX = p.x - c->x(index);
+      if (localX >= c->w[index] - kTabPadX - kTabX) {   // X da aba: fecha a janela dela
         for (Window& w : windows_) {
           if (w.id == tabs[index] && w.close) { w.close(); return true; }
         }
@@ -367,8 +470,8 @@ class Host {
         return true;
       }
     }
-    // Divisoria entre folhas do dock.
-    if (SW::UIDockNode* d = model_.dividerAt(p)) {
+    // Divisoria entre folhas do dock (nao vale sob uma janela solta).
+    if (SW::UIDockNode* d = overFloat ? nullptr : model_.dividerAt(p)) {
       divider_ = d;
       return true;
     }

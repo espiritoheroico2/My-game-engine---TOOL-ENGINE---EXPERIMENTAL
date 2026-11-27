@@ -121,6 +121,61 @@ inline void Editor::startEcsTest(long long n) {
   play.indexOf.reserve(play.indexOf.size() + static_cast<size_t>(n));
 }
 
+// --instances N (benchmark de render, sem fisica): N entidades planas (sem Parent) com Name, Transform e MeshRenderer,
+// numa grade com jitter (~4 m), centrada na origem, com semente fixa. `shape`: 0 = cubo, 1 = esfera. Cria tudo de uma vez
+// e devolve quantas foram criadas (menos que N se faltar memoria).
+inline long long createInstanceScene(Editor& ed, long long n, int shape) {
+  // ~0,7 KB por entidade (o MeshRenderer carrega dois caminhos de 160 bytes). Avisa antes de comecar.
+  const double estimateMB = static_cast<double>(n) * 0.7 / 1024.0;
+  if (estimateMB > 1024.0) tool::logWarn("--instances: " + std::to_string(n) + " entities need about " + std::to_string(static_cast<int>(estimateMB)) + " MB of RAM. If the editor closes, use a smaller N.");
+  auto& w = ed.scene.world();
+  const long long side = static_cast<long long>(std::ceil(std::sqrt(static_cast<double>(n))));
+  const float spacing = 4.f, half = static_cast<float>(side - 1) * 0.5f;
+  uint32_t seed = 2463534242u ^ static_cast<uint32_t>(n);
+  long long made = 0;
+  const double t0 = ecs_detail::nowSec();
+  try {
+    for (long long i = 0; i < n; ++i) {
+      const tool::Entity e = w.create();
+      Name nm; std::snprintf(nm.text, sizeof nm.text, "inst"); w.add<Name>(e, nm);
+      Transform tr;
+      const float sc = 0.5f + ecs_detail::frand(seed);   // 0,5 a 1,5
+      const float jx = (ecs_detail::frand(seed) - 0.5f) * 2.f, jz = (ecs_detail::frand(seed) - 0.5f) * 2.f;
+      tr.pos[0] = (static_cast<float>(i % side) - half) * spacing + jx;
+      tr.pos[1] = 0.5f * sc;   // apoiado no chao (malha de 1 m centrada)
+      tr.pos[2] = (static_cast<float>(i / side) - half) * spacing + jz;
+      tr.rot[1] = ecs_detail::frand(seed) * 360.f;   // yaw em graus
+      tr.scale[0] = tr.scale[1] = tr.scale[2] = sc;
+      w.add<Transform>(e, tr);
+      MeshRenderer mr; mr.shape = shape; mr.castShadow = false;
+      mr.color[0] = 0.3f + ecs_detail::frand(seed) * 0.7f; mr.color[1] = 0.3f + ecs_detail::frand(seed) * 0.7f; mr.color[2] = 0.3f + ecs_detail::frand(seed) * 0.7f;
+      mr.roughness = 0.5f;
+      w.add<MeshRenderer>(e, mr);
+      ++made;
+    }
+  } catch (const std::bad_alloc&) {
+    tool::logWarn("--instances: out of memory after " + std::to_string(made) + " of " + std::to_string(n) + " entities.");
+  }
+  const double ms = (ecs_detail::nowSec() - t0) * 1000.0;
+  tool::logInfo("--instances: " + std::to_string(made) + " entities (" + (shape == 1 ? "spheres" : "cubes") + ", grid " + std::to_string(side) + "x" + std::to_string(side) + ") created in " + std::to_string(static_cast<int>(ms)) + " ms.");
+  std::printf("ECS bench: created %lld instances in %.0f ms\n", made, ms);
+  return made;
+}
+
+// Camera fixa do benchmark de render. `k` escala a distancia com o lado da grade (1 = grade de ~100 mil, lado ~316).
+// Com `orbit`, o olho gira em torno do centro 0,5 grau por QUADRO (reproduzivel, nao depende do relogio).
+inline tool::Camera benchCamera(float k, int frameIndex, bool orbit) {
+  tool::Camera c;
+  const float ang = orbit ? static_cast<float>(frameIndex) * 0.5f * 3.14159265f / 180.f : 0.f;
+  const float r = 120.f * k, h = 60.f * k;
+  c.eye = {std::sin(ang) * r, h, -std::cos(ang) * r};
+  c.target = {0.f, 0.f, 0.f};
+  c.up = {0.f, 1.f, 0.f};
+  c.nearZ = std::max(0.1f, 0.1f * k);
+  c.farZ = std::max(100.f, 6.f * r);
+  return c;
+}
+
 // Comandos digitados no Console. Mantenha simples: cada comando e uma linha.
 inline void runConsoleCommand(Editor& ed, const std::string& raw) {
   std::string c;

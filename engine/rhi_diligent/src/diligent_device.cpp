@@ -212,9 +212,15 @@ public:
   // Destruir o handle do backbuffer zera backbufferHandle_.
   void destroy(Handle h) override {
     if (!ids_.alive(h)) { debug().report(diag::kStaleHandle, Severity::Warning, "RHI destroy() com handle obsoleto"); return; }
-    ctx->WaitForIdle(); // simples e seguro: o objeto pode estar em uso por comandos em voo
+    // Antes: WaitForIdle por objeto. Um resize destroi ~9 alvos por tamanho e cada espera parava o editor inteiro (centenas de ms).
+    // Agora o objeto vai para um cemiterio e so e liberado kGraveFrames quadros depois (os comandos em voo ja terminaram;
+    // o Diligent ainda adia a liberacao real da GPU por conta propria). O handle e liberado ja.
     if (h == backbufferHandle_) backbufferHandle_ = kNullHandle;
-    objs_.erase(h.index); pipelines_.erase(h.index); sizes_.erase(h.index); kinds_.erase(h.index);
+    Grave g; g.frame = frameNo_;
+    if (auto it = objs_.find(h.index); it != objs_.end()) { g.obj = std::move(it->second); objs_.erase(it); }
+    if (auto it = pipelines_.find(h.index); it != pipelines_.end()) { g.pipe = std::move(it->second.srb); pipelines_.erase(it); }
+    sizes_.erase(h.index); kinds_.erase(h.index);
+    graveyard_.push_back(std::move(g));
     ids_.destroy(h);
   }
 
@@ -236,6 +242,26 @@ public:
     ++stats_.bufferUploads;
   }
 
+  // Escrita parcial: UpdateBuffer com offset (so USAGE_DEFAULT). Dinamico nao preserva o resto (Map/DISCARD): rejeita com aviso.
+  void updateBufferRange(BufferId b, size_t offset, const void* data, size_t size) override {
+    auto* buf = obj<dl::IBuffer>(b, Kind::Buffer);
+    if (!buf) { debug().report(diag::kStaleHandle, Severity::Warning, "updateBufferRange em handle invalido"); return; }
+    if (size == 0) return;
+    const size_t total = sizes_[b.index];
+    if (offset > total || size > total - offset) { // cobre estouro de offset+size sem somar
+      debug().report("TOOL-E134", Severity::Warning, "updateBufferRange fora dos limites do buffer; nada foi escrito");
+      return;
+    }
+    const auto usage = buf->GetDesc().Usage;
+    if (usage == dl::USAGE_DYNAMIC) {
+      debug().report("TOOL-E134", Severity::Warning, "updateBufferRange em buffer dinamico: escrita parcial impossivel (Map/DISCARD apagaria o resto); use updateBuffer ou um buffer nao dinamico");
+      return;
+    }
+    if (usage != dl::USAGE_DEFAULT) { debug().report("TOOL-E134", Severity::Warning, "updateBufferRange em buffer imutavel"); return; }
+    ctx->UpdateBuffer(buf, static_cast<dl::Uint64>(offset), static_cast<dl::Uint64>(size), data, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    ++stats_.bufferUploads;
+  }
+
   // Cria uma DiligentCommands para gravar comandos neste dispositivo.
   std::unique_ptr<ICommandList> beginCommands() override;
   // Envia os comandos gravados: Flush do contexto imediato.
@@ -245,7 +271,13 @@ public:
     ctx->Flush();
   }
   // Zera as estatisticas e marca o quadro como ativo.
-  void beginFrame() override { stats_ = {}; frameActive_ = true; }
+  void beginFrame() override {
+    stats_ = {}; frameActive_ = true; ++frameNo_;
+    // Libera o cemiterio (ver destroy): objetos destruidos ha mais de kGraveFrames quadros.
+    size_t keep = 0;
+    for (auto& g : graveyard_) if (frameNo_ - g.frame <= kGraveFrames) graveyard_[keep++] = std::move(g);
+    graveyard_.resize(keep);
+  }
   // Finaliza o quadro: chama present() e desativa a acumulacao.
   void endFrame() override { present(); frameActive_ = false; }
 
@@ -399,6 +431,10 @@ private:
   // Registra o objeto, seu tipo e seu tamanho no indice de handle index.
   void put(u32 index, Kind k, dl::IDeviceObject* o, size_t size) { kinds_[index] = k; objs_[index] = o; sizes_[index] = size; }
 
+  struct Grave { dl::RefCntAutoPtr<dl::IDeviceObject> obj; dl::RefCntAutoPtr<dl::IShaderResourceBinding> pipe; u64 frame = 0; };
+  static constexpr u64 kGraveFrames = 4;
+  std::vector<Grave> graveyard_;
+  u64 frameNo_ = 0;
   HandleAllocator ids_;
   std::unordered_map<u32, Kind> kinds_;
   std::unordered_map<u32, dl::RefCntAutoPtr<dl::IDeviceObject>> objs_;

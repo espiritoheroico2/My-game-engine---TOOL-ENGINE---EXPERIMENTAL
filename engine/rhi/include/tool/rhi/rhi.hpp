@@ -165,6 +165,13 @@ public:
   virtual void destroy(Handle h) = 0;
   // Escreve `size` bytes de data no inicio do buffer. size nao pode passar do tamanho do buffer.
   virtual void updateBuffer(BufferId b, const void* data, size_t size) = 0;
+  // Escreve `size` bytes de data a partir do byte `offset` do buffer e preserva o resto do conteudo.
+  // offset+size alem do tamanho do buffer (ou estouro da soma) e rejeitado com aviso e nada e escrito.
+  // size 0 nao faz nada. Buffers dinamicos (BufferDesc::dynamic / uniform) nao aceitam escrita parcial: sao rejeitados com aviso.
+  // Como o updateBuffer de buffers nao dinamicos, grava um comando de copia: chame fora de um render pass
+  // (antes de begin() ou depois de end() da lista que usa o buffer), pois Vulkan/D3D12 nao aceitam copias dentro de um passe.
+  // Conta um bufferUploads por escrita aceita.
+  virtual void updateBufferRange(BufferId b, size_t offset, const void* data, size_t size) = 0;
   // Cria uma lista de comandos nova para gravar um lote de draws.
   virtual std::unique_ptr<ICommandList> beginCommands() = 0;
   // Envia para a GPU uma lista ja fechada com end().

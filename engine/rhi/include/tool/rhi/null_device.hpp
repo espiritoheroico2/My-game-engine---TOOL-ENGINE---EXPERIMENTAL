@@ -4,7 +4,9 @@
 #pragma once
 #include "tool/rhi/rhi.hpp"
 
+#include <cstring>
 #include <unordered_map>
+#include <vector>
 
 namespace tool::rhi {
 
@@ -15,9 +17,14 @@ public:
   Backend backend() const override { return Backend::Null; }
 
   // Registra um buffer (sem GPU). Tamanho 0 gera erro TOOL-E130 e handle nulo.
-  BufferId createBuffer(const BufferDesc& d, const void*) override {
+  BufferId createBuffer(const BufferDesc& d, const void* data) override {
     if (d.size == 0) { debug().report("TOOL-E130", Severity::Error, "buffer de tamanho 0"); return kNullHandle; }
-    Handle h = ids_.create(); kind_[h.index] = Kind::Buffer; bufSize_[h.index] = d.size; return h;
+    Handle h = ids_.create(); kind_[h.index] = Kind::Buffer; bufSize_[h.index] = d.size;
+    auto& store = bufData_[h.index]; store.assign(d.size, 0); // copia local do conteudo, para testes
+    if (data) std::memcpy(store.data(), data, d.size);
+    if (d.dynamic || d.usage == BufferUsage::Uniform) bufDynamic_[h.index] = true; // espelha o Diligent: sem escrita parcial
+    else bufDynamic_.erase(h.index);
+    return h;
   }
   // Registra uma textura. Dimensao 0 gera erro TOOL-E131. Os dados iniciais sao ignorados.
   TextureId createTexture(const TextureDesc& d, const void*) override {
@@ -38,13 +45,36 @@ public:
   }
   // Libera o handle. Handle obsoleto gera aviso, nao erro.
   void destroy(Handle h) override {
-    if (!ids_.destroy(h)) debug().report(diag::kStaleHandle, Severity::Warning, "RHI destroy() com handle obsoleto");
+    if (!ids_.destroy(h)) { debug().report(diag::kStaleHandle, Severity::Warning, "RHI destroy() com handle obsoleto"); return; }
+    // libera a copia local do buffer (a memoria nao fica presa ate o indice ser reaproveitado)
+    bufData_.erase(h.index); bufDynamic_.erase(h.index); bufSize_.erase(h.index);
   }
-  // Valida o upload (handle e tamanho) e conta bufferUploads, sem copiar nada.
-  void updateBuffer(BufferId b, const void*, size_t size) override {
+  // Valida o upload (handle e tamanho), copia para o armazenamento local e conta bufferUploads.
+  void updateBuffer(BufferId b, const void* data, size_t size) override {
     if (!valid(b, Kind::Buffer)) { debug().report(diag::kStaleHandle, Severity::Error, "updateBuffer em handle invalido"); return; }
     if (size > bufSize_[b.index]) { debug().report("TOOL-E134", Severity::Error, "updateBuffer maior que o buffer"); return; }
+    if (data && size) std::memcpy(bufData_[b.index].data(), data, size);
     ++stats_.bufferUploads;
+  }
+  // Escrita parcial: valida handle e limites (sem estouro de offset+size), copia no offset e conta bufferUploads.
+  void updateBufferRange(BufferId b, size_t offset, const void* data, size_t size) override {
+    if (!valid(b, Kind::Buffer)) { debug().report(diag::kStaleHandle, Severity::Warning, "updateBufferRange em handle invalido"); return; }
+    if (size == 0) return;
+    const size_t total = bufSize_[b.index];
+    if (offset > total || size > total - offset) {
+      debug().report("TOOL-E134", Severity::Warning, "updateBufferRange fora dos limites do buffer; nada foi escrito"); return;
+    }
+    if (bufDynamic_.count(b.index)) {
+      debug().report("TOOL-E134", Severity::Warning, "updateBufferRange em buffer dinamico: escrita parcial impossivel"); return;
+    }
+    if (data) std::memcpy(bufData_[b.index].data() + offset, data, size);
+    ++stats_.bufferUploads;
+  }
+  // So para testes: conteudo atual do buffer (vazio se o handle for invalido).
+  const std::vector<u8>& bufferContents(BufferId b) const {
+    static const std::vector<u8> empty;
+    if (!valid(b, Kind::Buffer)) return empty;
+    return bufData_.at(b.index);
   }
 
   // Cria uma lista de comandos que valida o uso (begin/end, handles, pipeline).
@@ -141,6 +171,8 @@ private:
   HandleAllocator ids_;
   std::unordered_map<u32, Kind> kind_;
   std::unordered_map<u32, size_t> bufSize_;
+  std::unordered_map<u32, std::vector<u8>> bufData_;
+  std::unordered_map<u32, bool> bufDynamic_;
   DrawStats stats_, last_;
 };
 
