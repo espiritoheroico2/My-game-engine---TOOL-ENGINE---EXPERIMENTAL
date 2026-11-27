@@ -169,6 +169,11 @@ if(TOOL_WITH_SPRITEUI)
   endif()
   add_test(NAME Editor.ScenesModel COMMAND editor_scenes_model_tests)
 
+  # Regras puras de usabilidade (usability_hints.hpp): estados vazios, motivo de botao bloqueado e confirmacao em dois cliques.
+  add_executable(editor_usability_hints_tests tests/test_usability_hints.cpp)
+  target_include_directories(editor_usability_hints_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME Editor.UsabilityHints COMMAND editor_usability_hints_tests)
+
   # Modelo da janela Assets (assets_model.hpp): migalhas, ordem, filtro, acoes por tipo, nomes e selecao. Sem janela.
   add_executable(editor_assets_model_tests tests/test_assets_model.cpp)
   target_include_directories(editor_assets_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -177,6 +182,33 @@ if(TOOL_WITH_SPRITEUI)
     target_link_libraries(editor_assets_model_tests PRIVATE tool::audio_miniaudio)
   endif()
   add_test(NAME Editor.AssetsModel COMMAND editor_assets_model_tests)
+
+  # Fisica da cena (project.hpp: PhysicsSettings, clamp, ida-e-volta JSON) e tabela de zonas do Profiler. Sem janela.
+  add_executable(editor_physics_settings_tests tests/test_physics_settings.cpp)
+  target_include_directories(editor_physics_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_physics_settings_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_physics_settings_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.PhysicsSettings COMMAND editor_physics_settings_tests)
+
+  # Presets de configuracao (config_preset.hpp): salvar/listar/carregar/apagar JSON de render + fisica. Sem janela.
+  add_executable(editor_config_preset_tests tests/test_config_preset.cpp)
+  target_include_directories(editor_config_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_config_preset_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_config_preset_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.ConfigPreset COMMAND editor_config_preset_tests)
+
+  # Tooltip (tooltip.hpp): espera de 0,5 s, reinicio e posicao do balao. Sem janela.
+  add_executable(editor_tooltip_tests tests/test_tooltip.cpp)
+  target_include_directories(editor_tooltip_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_tooltip_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_tooltip_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.Tooltip COMMAND editor_tooltip_tests)
 
   # Janela Scenes em SpriteUI (scenes_spriteui.hpp): lista, botoes, campo de nome, assets, X e grip. Sem janela.
   add_executable(editor_scenes_view_tests tests/test_scenes_view.cpp)
@@ -466,3 +498,10 @@ add_executable(editor_canvas_elems_tests tests/test_canvas_elems.cpp)
 target_include_directories(editor_canvas_elems_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(editor_canvas_elems_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
 add_test(NAME Editor.CanvasElems COMMAND editor_canvas_elems_tests)
+
+# components.hpp inclui canvas_layout.hpp; estes alvos nao ligavam tool::canvas e falhavam na compilacao.
+foreach(t editor_start_screen_model_tests editor_info_model_tests editor_info_view_tests editor_inspector_tags_tests editor_info_capture editor_assets_capture editor_assets_model_tests editor_assets_view_tests)
+  if(TARGET ${t})
+    target_link_libraries(${t} PRIVATE tool::canvas)
+  endif()
+endforeach()

@@ -57,6 +57,7 @@ struct PlayRuntime {
   Newtoon::PhysicsWorld world;
   std::vector<Newtoon::Transform> prevTf;          // pose no inicio do tick fixo anterior (para interpolacao visual)
   std::vector<Newtoon::Transform> tf;
+  std::vector<Newtoon::Transform> renderTf;        // poses interpoladas de render (GetInterpolatedTransforms); reutilizado a cada quadro
   std::vector<Newtoon::Rigidbody> rb;
   std::vector<Newtoon::Collider> col;
   std::vector<tool::Entity> ents;                  // indice do corpo -> entidade
@@ -137,13 +138,16 @@ struct PlayRuntime {
 
   // Sincroniza e interpola poses fisicas -> Transform ECS em paralelo (alpha em [0, 1]).
   // Ignora estaticos, culled e corpos que ja estavam adormecidos no quadro anterior.
-  void syncPhysicsToEcsParallel(tool::World& ecsWorld, float alpha = 1.f) {
+  // `render` (opcional): poses ja interpoladas pelo mundo Newtoon; usadas no lugar do slerp manual para corpos acordados.
+  // Corpos dormindo recebem sempre a pose final (tf), senao o ultimo valor gravado ficaria parado numa pose intermediaria.
+  void syncPhysicsToEcsParallel(tool::World& ecsWorld, float alpha = 1.f, const std::vector<Newtoon::Transform>* render = nullptr) {
     const size_t count = tf.size();
     if (count == 0) return;
     if (wasSleeping.size() != count) wasSleeping.assign(count, 0);
 
     const bool hasPrev = prevTf.size() == count && alpha < 0.9999f;
     const float t = std::clamp(alpha, 0.f, 1.f);
+    const bool useRender = render && render->size() == count;
 
     tool::parallelFor(count, 256, [&](size_t b, size_t e) {
       for (size_t i = b; i < e; ++i) {
@@ -160,7 +164,11 @@ struct PlayRuntime {
         if (!tr) continue;
 
         const Newtoon::Transform& cur = tf[i];
-        if (hasPrev && !sleepingNow) {
+        if (useRender && !sleepingNow) {
+          const Newtoon::Transform& rt = (*render)[i];
+          tr->pos[0] = rt.position.x; tr->pos[1] = rt.position.y; tr->pos[2] = rt.position.z;
+          quatToEuler(rt.rotation, tr->rot);
+        } else if (hasPrev && !sleepingNow) {
           const Newtoon::Transform& prv = prevTf[i];
           tr->pos[0] = prv.position.x + (cur.position.x - prv.position.x) * t;
           tr->pos[1] = prv.position.y + (cur.position.y - prv.position.y) * t;

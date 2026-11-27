@@ -72,10 +72,21 @@ inline void Editor::tickSpawners(float) {
       mr.color[0] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f; mr.color[1] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f; mr.color[2] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f;
       mr.roughness = 0.4f;
       w.add<MeshRenderer>(s, mr);
-      PhysicsComp ph; ph.collider = 2; ph.mass = 1.f;
-      w.add<PhysicsComp>(s, ph);
       w.add<Parent>(s, Parent{e});
-      any = pushRuntimeBody(s) || any;
+      if (sp->physics) {
+        // "test ecsf": corpo Newtoon (esfera) que cai e colide.
+        PhysicsComp ph; ph.collider = 2; ph.mass = 1.f;
+        w.add<PhysicsComp>(s, ph);
+        any = pushRuntimeBody(s) || any;
+      } else {
+        // "test ecs": sem fisica. A instancia oscila em torno do ponto de nascimento (MoverComp, tickMovers).
+        MoverComp mv;
+        mv.base[0] = tr.pos[0]; mv.base[1] = tr.pos[1]; mv.base[2] = tr.pos[2];
+        mv.amp = 2.f + ecs_detail::frand(sp->seed) * 6.f;
+        mv.freq = 0.2f + ecs_detail::frand(sp->seed) * 0.6f;
+        mv.phase = ecs_detail::frand(sp->seed) * 6.2831853f;
+        w.add<MoverComp>(s, mv);
+      }
     }
     } catch (const std::bad_alloc&) {
       // Memoria acabou: para o teste aqui, mantendo o editor aberto (o Stop desfaz as esferas).
@@ -94,7 +105,20 @@ inline void Editor::tickSpawners(float) {
   }
 }
 
-inline void Editor::startEcsTest(long long n) {
+// Movimento do "test ecs" (sem fisica): avanca o tempo de cada MoverComp e recoloca o Transform sobre o caminho.
+// Roda so no Play (o Stop restaura a cena e os componentes somem junto com as instancias).
+inline void Editor::tickMovers(float dt) {
+  if (!playing) return;
+  scene.world().each<MoverComp, Transform>([&](tool::Entity, MoverComp& m, Transform& tr) {
+    m.t += dt;
+    const float a = m.t * m.freq + m.phase;   // fase do caminho
+    tr.pos[0] = m.base[0] + m.amp * std::sin(a);
+    tr.pos[1] = m.base[1] + 0.5f * m.amp * std::sin(2.f * a);
+    tr.pos[2] = m.base[2] + m.amp * std::cos(a);
+  });
+}
+
+inline void Editor::startEcsTest(long long n, bool physics) {
   // Medido em 2026-11-18: ~7 KB de memoria por esfera (50 mil esferas = ~370 MB). Avisa antes de comecar.
   const double estimateMB = static_cast<double>(n) * 7.0 / 1024.0;
   if (estimateMB > 1024.0) tool::logWarn("test ECS: " + std::to_string(n) + " spheres need about " + std::to_string(static_cast<int>(estimateMB)) + " MB of RAM. If the editor closes, use a smaller N.");
@@ -104,6 +128,7 @@ inline void Editor::startEcsTest(long long n) {
   if (w.has<SpawnerComp>(call)) w.remove<SpawnerComp>(call);
   SpawnerComp sp;
   sp.total = n;
+  sp.physics = physics;
   sp.perFrame = static_cast<int>(std::max<long long>(1, (n + 239) / 240));   // ~4 s no total, a 60 fps
   sp.armed = true;
   sp.seed = 2463534242u ^ static_cast<uint32_t>(n);
@@ -187,24 +212,28 @@ inline void runConsoleCommand(Editor& ed, const std::string& raw) {
   if (c.empty()) return;
   tool::logInfo("> " + raw);
   if (c == "help") {
-    tool::logInfo("test ECS: N   -> N esferas caem do ceu como filhas do objeto ECScall (padrao 10000, maximo 1000000)");
+    tool::logInfo("test ecs: N   -> N instancias SEM fisica, oscilando pelo espaco (filhas de ECScall; padrao 10000, maximo 1000000)");
+    tool::logInfo("test ecsf: N  -> N esferas COM fisica, caindo e colidindo (filhas de ECScall; padrao 10000, maximo 1000000)");
     tool::logInfo("clear         -> limpa o Console");
     tool::logInfo("scripts       -> verifica os scripts de todos os objetos da cena (erros e avisos com linha)");
     return;
   }
   if (c == "clear") { ed.console.clear(); ++ed.consoleSerial; return; }
   if (c == "scripts") { ed.checkAllScripts(); return; }
-  if (c.rfind("test ecs", 0) == 0) {
-    size_t i = 8;
+  // "test ecsf: N" = com fisica (esferas caindo); "test ecs: N" = sem fisica (instancias movendo no espaco).
+  const bool withPhysics = c.rfind("test ecsf", 0) == 0;
+  if (withPhysics || c.rfind("test ecs", 0) == 0) {
+    size_t i = withPhysics ? 9 : 8;
+    const std::string label = withPhysics ? "test ecsf" : "test ecs";
     while (i < c.size() && (std::isspace(static_cast<unsigned char>(c[i])) || c[i] == ':')) ++i;
     long long n = 10000;
     if (i < c.size()) {
-      if (!std::isdigit(static_cast<unsigned char>(c[i]))) { tool::logWarn("test ECS: use a number, e.g. 'test ECS: 10000'"); return; }
+      if (!std::isdigit(static_cast<unsigned char>(c[i]))) { tool::logWarn(label + ": use a number, e.g. '" + label + ": 10000'"); return; }
       n = 0; for (; i < c.size() && std::isdigit(static_cast<unsigned char>(c[i])); ++i) n = std::min<long long>(n * 10 + (c[i] - '0'), 2000000);
     }
     if (n < 1) n = 1;
-    if (n > 1000000) { tool::logWarn("test ECS: maximum is 1000000; using 1000000."); n = 1000000; }
-    ed.startEcsTest(n);
+    if (n > 1000000) { tool::logWarn(label + ": maximum is 1000000; using 1000000."); n = 1000000; }
+    ed.startEcsTest(n, withPhysics);
     return;
   }
   tool::logWarn("Unknown command: '" + raw + "'. Type 'help'.");

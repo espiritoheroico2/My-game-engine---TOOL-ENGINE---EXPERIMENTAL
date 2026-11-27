@@ -758,7 +758,7 @@ inline int runSelfTest(const std::string& samplesDir) {
     size_t physBefore = 0; w.each<PhysicsComp>([&](tool::Entity e, PhysicsComp&) { if (!w.has<Inactive>(e)) ++physBefore; });
     const float previousSimRadius = ed.sceneInfo.physics.simRadius;
     ed.sceneInfo.physics.simRadius = 100.f;
-    runConsoleCommand(ed, "test ECS: 100");   // perFrame = 1 -> 100 quadros
+    runConsoleCommand(ed, "test ecsf: 100");   // com fisica; perFrame = 1 -> 100 quadros
     check(ed.playing, "ECS test starts Play by itself");
     for (int i = 0; i < 120; ++i) ed.tick(1.0 / 60.0);
     tool::Entity call = ed.findByName("ECScall");
@@ -771,6 +771,29 @@ inline int runSelfTest(const std::string& samplesDir) {
     ed.sceneInfo.physics.simRadius = previousSimRadius;
     int leftover = 0; w.each<Name>([&](tool::Entity, Name& nm) { if (std::string(nm.text) == "sphere") ++leftover; });
     check(leftover == 0, "ECS test: Stop removes every sphere");
+    ed.scene.world().destroy(ed.findByName("ECScall"));
+  }
+  { // "test ecs: N" (sem fisica): N instancias com MoverComp, nenhum corpo Newtoon, e a posicao muda no tempo
+    tool::World& w = ed.scene.world();
+    runConsoleCommand(ed, "test ecs: 50");
+    check(ed.playing, "test ecs starts Play by itself");
+    const size_t bodiesAtStart = ed.play.ents.size();   // corpos da propria cena, criados ao entrar no Play
+    for (int i = 0; i < 120; ++i) ed.tick(1.0 / 60.0);
+    int movers = 0, withPhysics = 0;
+    tool::Entity first{};
+    w.each<MoverComp>([&](tool::Entity e, MoverComp&) { if (movers == 0) first = e; ++movers; if (w.has<PhysicsComp>(e)) ++withPhysics; });
+    check(movers == 50, "test ecs: 50 instances carry MoverComp");
+    check(withPhysics == 0, "test ecs: instances have no PhysicsComp (no physics)");
+    check(ed.play.ents.size() == bodiesAtStart, "test ecs: no Newtoon body is created");
+    const Transform* t0 = w.get<Transform>(first);
+    const float x0 = t0 ? t0->pos[0] : 0.f, y0 = t0 ? t0->pos[1] : 0.f, z0 = t0 ? t0->pos[2] : 0.f;
+    for (int i = 0; i < 60; ++i) ed.tick(1.0 / 60.0);
+    const Transform* t1 = w.get<Transform>(first);
+    const float moved = t1 ? std::fabs(t1->pos[0] - x0) + std::fabs(t1->pos[1] - y0) + std::fabs(t1->pos[2] - z0) : 0.f;
+    check(moved > 0.01f, "test ecs: an instance moves over time");
+    ed.stopPlay();
+    int leftover = 0; w.each<MoverComp>([&](tool::Entity, MoverComp&) { ++leftover; });
+    check(leftover == 0, "test ecs: Stop removes every mover");
     ed.scene.world().destroy(ed.findByName("ECScall"));
   }
   { // comandos do Console

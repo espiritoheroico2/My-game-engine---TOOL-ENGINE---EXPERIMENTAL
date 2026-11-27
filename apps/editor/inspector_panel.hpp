@@ -42,6 +42,7 @@
 #include "sui_panel.hpp"
 #include "ui_scrollbar.hpp"
 #include "ui_style.hpp"
+#include "usability_hints.hpp"   // texto do estado "nenhum objeto selecionado"
 
 #include <SDL3/SDL.h>
 
@@ -215,8 +216,9 @@ class InspectorPanel {
         y_ = Metrics::kPad - scrollY_;   // a rolagem sobe o conteudo; o recorte do corpo esconde o que sai
         if (!ctx.hasObject) {
             closePopups();
-            canvas_.addText(Metrics::kPad, y_, T("no object selected"), Metrics::kFont, theme_.textDim, width_ - 2.f * Metrics::kPad);
-            y_ += Metrics::kRowH;
+            // Estado vazio com orientacao (antes: "no object selected", sem dizer como selecionar).
+            y_ += canvas_.addParagraph(Metrics::kPad, y_, T(editor::usability::InspectorEmptyText()), Metrics::kFont, theme_.textDim,
+                                       width_ - 2.f * Metrics::kPad) + Metrics::kPad;
             contentH_ = y_ + scrollY_;
             addScrollbar();
             return y_ + Metrics::kPad;

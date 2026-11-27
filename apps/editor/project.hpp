@@ -18,6 +18,7 @@
 #include "tool/render/lighting.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -253,7 +254,22 @@ struct PhysicsSettings {
   int stepHz = 60;             // passo fixo da simulacao
   bool drawColliders = true;   // desenha as caixas/esferas de colisao na janela Scene
   float simRadius = 0.f;       // raio em volta da camera: corpos dinamicos fora dele nao sao simulados (0 = todos)
+  // Recursos do Newtoon Physics (chave ausente na cena = este padrao, entao cenas antigas abrem iguais).
+  bool softStep = true;        // contatos "soft" (Soft Step): estavel com razoes de massa altas
+  bool warmStarting = true;    // reaproveita os impulsos do passo anterior (pilhas mais estaveis)
+  bool islands = true;         // ilhas de simulacao: grupos de corpos dormem juntos
+  bool interpolation = true;   // interpola a pose entre passos fixos ao desenhar (movimento suave com 144 Hz+)
+  float contactHertz = 30.f;   // rigidez do contato soft (5..120)
+  float contactDampingRatio = 1.f; // amortecimento do contato soft (0..5)
 };
+
+// Prende os campos da fisica em faixas seguras (arquivo editado a mao ou slider fora do limite nao quebra a simulacao).
+// NaN/infinito caem no padrao. Funcao pura: testavel sem janela.
+inline void clampPhysicsSettings(PhysicsSettings& p) {
+  auto fin = [](float v, float d) { return std::isfinite(v) ? v : d; };
+  p.contactHertz = std::clamp(fin(p.contactHertz, 30.f), 5.f, 120.f);
+  p.contactDampingRatio = std::clamp(fin(p.contactDampingRatio, 1.f), 0.f, 5.f);
+}
 
 // Dados da cena fora das entidades: nome, divisao de tela, skybox, assets, render, fisica, narrativa e script.
 struct SceneFile {
@@ -266,12 +282,15 @@ struct SceneFile {
   PhysicsSettings physics;
   std::string narrative; // grafo do Narrative Controller desta cena (relativo ao projeto), ex.: Assets/Narrative/Main.narr.json
   std::string script;    // codigo da cena (.js) que chama o Narrative Controller
+  std::string presetPath; // arquivo de configuracao (JSON, render + fisica) desta cena; vazio = padrao do jogo
 };
 
 // Fisica da cena -> JSON (par de loadPhysicsSettings).
 inline tool::Json savePhysicsSettings(const PhysicsSettings& p) {
   tool::Json o = tool::Json::object();
   o.set("enabled", p.enabled); o.set("gravity", ser::vec(p.gravity, 3)); o.set("solverIterations", p.solverIterations); o.set("stepHz", p.stepHz); o.set("drawColliders", p.drawColliders); o.set("simRadius", p.simRadius);
+  o.set("softStep", p.softStep); o.set("warmStarting", p.warmStarting); o.set("islands", p.islands); o.set("interpolation", p.interpolation);
+  o.set("contactHertz", p.contactHertz); o.set("contactDampingRatio", p.contactDampingRatio);
   return o;
 }
 // JSON -> fisica da cena; valores presos em faixas seguras (arquivo editado a mao nao quebra a simulacao).
@@ -281,6 +300,10 @@ inline PhysicsSettings loadPhysicsSettings(const tool::Json& o) {
   p.solverIterations = std::clamp(static_cast<int>(ser::num(o, "solverIterations", 10.f)), 1, 50); p.stepHz = std::clamp(static_cast<int>(ser::num(o, "stepHz", 60.f)), 15, 240);
   p.drawColliders = ser::flag(o, "drawColliders", true);
   p.simRadius = std::max(0.f, ser::num(o, "simRadius", 0.f));
+  p.softStep = ser::flag(o, "softStep", true); p.warmStarting = ser::flag(o, "warmStarting", true);
+  p.islands = ser::flag(o, "islands", true); p.interpolation = ser::flag(o, "interpolation", true);
+  p.contactHertz = ser::num(o, "contactHertz", 30.f); p.contactDampingRatio = ser::num(o, "contactDampingRatio", 1.f);
+  clampPhysicsSettings(p);
   return p;
 }
 
@@ -407,6 +430,7 @@ inline bool saveSceneFile(const Project& proj, tool::Scene& sc, const SceneFile&
   for (auto& a : info.assets) as.push(a);
   j.set("assets", as); j.set("render", saveRenderSettings(info.render)); j.set("physics", savePhysicsSettings(info.physics));
   j.set("narrative", info.narrative); j.set("script", info.script);
+  j.set("presetPath", info.presetPath);   // config personalizada da cena (vazio = padrao do jogo)
   j.set("entities", saveAllEntities(sc));
   return writeTextFile(proj.scenePath(info.name), j.dump());
 }
@@ -436,6 +460,7 @@ inline bool loadSceneFile(const Project& proj, tool::Scene& sc, const std::strin
   if (j->has("physics")) info.physics = loadPhysicsSettings((*j)["physics"]);
   info.narrative = (*j)["narrative"].asString(); info.script = (*j)["script"].asString();
   if (info.narrative.size() > 160 || info.script.size() > 160) { info.narrative.clear(); info.script.clear(); } // entrada nao confiavel
+  info.presetPath = (*j)["presetPath"].asString();   // chave ausente (cena antiga) = vazio = padrao do jogo
   loadAllEntities(sc, (*j)["entities"]);
   return true;
 }

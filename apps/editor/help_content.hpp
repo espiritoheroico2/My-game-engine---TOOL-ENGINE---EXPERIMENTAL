@@ -473,11 +473,11 @@ Settings > Graphics: API (CPU / Vulkan / OpenGL / D3D12), escala de render / res
 R"H(The Console lists the editor and game messages. Info, Warnings and Errors filter the levels. The filter box finds text in the messages and object names.
 Clear empties the list. Copy copies the visible lines. Auto-scroll keeps the last message in view.
 Check scripts verifies the scripts of the scene. Click a line with [object name] to select that object.
-The command line at the bottom runs editor commands (for example "test ECS: 10000" creates test objects).)H",
+The command line at the bottom runs editor commands (for example "test ecs: 10000" creates instances that move without physics, and "test ecsf: 10000" creates falling spheres with physics).)H",
 R"H(O Console lista as mensagens do editor e do jogo. Info, Warnings e Errors filtram os niveis. A caixa de filtro acha texto nas mensagens e nos nomes dos objetos.
 Clear esvazia a lista. Copy copia as linhas visiveis. Auto-scroll mantem a ultima mensagem a vista.
 Check scripts verifica os scripts da cena. Clique numa linha com [nome do objeto] para selecionar esse objeto.
-A linha de comando embaixo executa comandos do editor (por exemplo "test ECS: 10000" cria objetos de teste).)H"},
+A linha de comando embaixo executa comandos do editor (por exemplo "test ecs: 10000" cria instancias que se movem sem fisica, e "test ecsf: 10000" cria esferas com fisica caindo).)H"},
 
   {"hierarchy", "Windows", "Hierarchy: list of objects", "Hierarchy: lista de objetos",
 R"H(The Hierarchy lists every object of the scene. Click to select; the selection is shared with the Inspector and the Scene view.

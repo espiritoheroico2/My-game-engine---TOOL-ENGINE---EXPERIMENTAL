@@ -39,6 +39,11 @@ inline void Editor::startPhysics() {
   const PhysicsSettings& ps = sceneInfo.physics;
   play.world.gravity = {ps.gravity[0], ps.gravity[1], ps.gravity[2]};
   play.world.solverIterations = ps.solverIterations; play.world.fixedDt = 1.f / static_cast<float>(ps.stepHz);
+  // Recursos do Newtoon Physics (Settings > Physics); o clamp protege contra valores fora da faixa vindos de codigo.
+  PhysicsSettings safe = ps; clampPhysicsSettings(safe);
+  play.world.enableSoftConstraints = safe.softStep; play.world.enableWarmStarting = safe.warmStarting;
+  play.world.enableIslands = safe.islands; play.world.enableInterpolation = safe.interpolation;
+  play.world.contactHertz = safe.contactHertz; play.world.contactDampingRatio = safe.contactDampingRatio;
 
   const size_t estBodies = w.storageCount<PhysicsComp>();
   play.ents.reserve(estBodies);
@@ -176,8 +181,23 @@ inline void Editor::stepPlay(float dt) {
       ZoneTimer physicsTimer(prof, Zone::Physics);
       play.world.Simulate(play.tf, play.rb, play.col, dt);
     }
+    // Fases da fisica (ms do quadro, somadas nos passos): mesmo FrameProfiler::add das outras zonas, sem API nova.
+    {
+      const auto& st = play.world.stats;
+      prof.add(Zone::PhysicsIntegrate, st.integrateMs); prof.add(Zone::PhysicsPrepare, st.prepareMs);
+      prof.add(Zone::PhysicsBroadphase, st.broadphaseMs); prof.add(Zone::PhysicsNarrowphase, st.narrowphaseMs);
+      prof.add(Zone::PhysicsSolver, st.solverMs); prof.add(Zone::PhysicsCCD, st.ccdMs); prof.add(Zone::PhysicsFinish, st.finishMs);
+    }
     // 4) sincroniza em paralelo (somente corpos dinamicos acordados ou recem-adormecidos)
-    play.syncPhysicsToEcsParallel(w, 1.f);
+    // Interpolacao de render: com enableInterpolation o proprio mundo Newtoon entrega as poses entre o passo anterior e o
+    // atual (GetInterpolatedTransforms + Alpha). Os vetores sao membros do PlayRuntime (sem alocar por quadro).
+    // O ECS recebe a pose interpolada so para desenhar: a fisica continua a usar play.tf (pose real do passo).
+    if (play.world.enableInterpolation) {
+      play.world.GetInterpolatedTransforms(play.tf, play.renderTf);
+      play.syncPhysicsToEcsParallel(w, 1.f, &play.renderTf);
+    } else {
+      play.syncPhysicsToEcsParallel(w, 1.f);
+    }
 
     // 5) eventos de colisao -> Tool OnCollision
     for (const auto& ev : play.world.GetCollisionEvents()) {

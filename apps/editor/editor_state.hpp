@@ -16,6 +16,7 @@
 #include "profiler.hpp"
 #include "perf_warnings.hpp"
 #include "project.hpp"
+#include "config_preset.hpp"   // config (render + fisica) por cena: aplicada ao abrir a cena
 #include "project_settings.hpp"
 #include "script.hpp"
 #include "script_host.hpp"
@@ -249,7 +250,8 @@ struct Editor {
   // Teste de ECS (ecs_test.hpp): cria/atualiza o objeto ECScall com N esferas e da Play.
   bool pushRuntimeBody(tool::Entity e);   // corpo fisico para um objeto criado durante o Play (sem Rebuild)
   void tickSpawners(float dt);
-  void startEcsTest(long long n);
+  void tickMovers(float dt);   // "test ecs": move as instancias sem fisica (so Transform)
+  void startEcsTest(long long n, bool physics = true);
   void sendEvent(const std::string& target, const std::string& ev); void setActiveByName(const std::string& n, bool on);
   struct Bounds { tool::Vec3 center{}; float radius = 0.f; };
   struct BoundsEntry { size_t n = 0; const void* data = nullptr; tool::u32 revision = 0; Bounds b; };
@@ -600,6 +602,16 @@ struct Editor {
     if (saveCurrent && !sceneInfo.name.empty() && sceneInfo.name != name) saveScene();  // troca de cena = salva a atual (nao ha "sem salvar")
     SceneFile info; std::string err;
     if (!loadSceneFile(project, scene, name, info, &err)) { statusLine = err; tool::logError(err); return false; }
+    // Config da cena (render + fisica): o arquivo escolhido na janela Scenes, ou o padrao do jogo (Configs/default.json).
+    // Aplica antes de a cena ser montada. Arquivo inexistente = a cena segue com os proprios valores; erro = aviso e segue.
+    {
+      const std::string presetFile = config_preset::resolveForScene(project.root.string(), info.presetPath);
+      std::error_code pec;
+      if (fs::is_regular_file(presetFile, pec)) {
+        std::string perr;
+        if (!config_preset::load(presetFile, info, perr)) tool::logWarn("Scene config ignored: " + perr);
+      }
+    }
     sceneInfo = info; selected = {};
     preloadSceneAssets();
     ensureSceneCode(); openSceneNarrative();
@@ -607,6 +619,20 @@ struct Editor {
     statusLine = "Scene opened: " + name; tool::logInfo(statusLine);
     ++sceneLoads;
     return true;
+  }
+  // Define a config personalizada de uma cena (janela Scenes, engrenagem). `path` vazio = padrao do jogo.
+  // Cena aberta: grava em sceneInfo e salva a cena (nao ha flag de "modificada": o save e o jeito de persistir).
+  // Outra cena: altera so a chave "presetPath" no arquivo dela, sem abri-la. true se gravou.
+  bool setScenePreset(const std::string& name, const std::string& path) {
+    if (name == sceneInfo.name) { sceneInfo.presetPath = path; return saveScene(); }
+    std::string text;
+    if (!readTextFile(project.scenePath(name), text)) { statusLine = "cannot read scene '" + name + "'"; return false; }
+    auto j = tool::Json::parse(text);
+    if (!j || !j->isObject()) { statusLine = "scene file is not valid JSON"; return false; }
+    j->set("presetPath", path);
+    const bool ok = writeTextFile(project.scenePath(name), j->dump());
+    statusLine = ok ? "Scene config set: " + name : "Failed to save scene";
+    return ok;
   }
   bool newScene(const std::string& name) {
     if (!safeName(name)) { statusLine = "Invalid scene name"; return false; }
@@ -1001,19 +1027,27 @@ private:
       ZoneTimer occlusionTimer(prof, Zone::ScenePrepOcclusion);
       // Oclusores: triangulos de todos os objetos visiveis. Malhas muito densas ficam de fora (custo por quadro).
       constexpr size_t kOccluderMaxTris = 2048;
+      // Oclusor com raio projetado menor que isto (em pixels) nao esconde nada util: nao entra no buffer. Com
+      // milhares de objetos pequenos, rasterizar todos custava ~25 ms por quadro. Erra so para o lado seguro
+      // (menos oclusao, nunca esconder algo visivel): a distancia usada e a do centro menos o raio.
+      constexpr float kOccluderMinPx = 8.f;
+      const float tanHalfFov = std::tan(0.5f * cam.fovY);
       occ.begin(static_cast<tool::u32>(w), static_cast<tool::u32>(h), proj * view);
       scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
         if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
         const tool::Mesh* m = lodMeshOf(e, mr, cam);
         if (!m || m->idx.size() / 3 > kOccluderMaxTris) return;
         const tool::Mat4 wm = worldMat(e);
+        // Esfera envolvente no mundo: serve para o frustum e para o tamanho projetado.
+        const Bounds b = meshBounds(*m);
+        const float sc = std::max({std::hypot(wm.m[0][0], wm.m[0][1], wm.m[0][2]), std::hypot(wm.m[1][0], wm.m[1][1], wm.m[1][2]), std::hypot(wm.m[2][0], wm.m[2][1], wm.m[2][2])});
+        const tool::Vec3 c = wm.transformPoint(b.center); const float r = b.radius * sc;
         // Oclusor totalmente fora de um plano do frustum projeta fora da tela: nao esconde nada visivel. Pula.
-        if (doCull) {
-          const Bounds b = meshBounds(*m);
-          const float sc = std::max({std::hypot(wm.m[0][0], wm.m[0][1], wm.m[0][2]), std::hypot(wm.m[1][0], wm.m[1][1], wm.m[1][2]), std::hypot(wm.m[2][0], wm.m[2][1], wm.m[2][2])});
-          const tool::Vec3 c = wm.transformPoint(b.center); const float r = b.radius * sc;
-          for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) return;
-        }
+        if (doCull) for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) return;
+        // Tamanho projetado: raio * (metade da altura) / (tan(fov/2) * distancia). Pequeno demais: pula.
+        const float ex = c.x - cam.eye.x, ey = c.y - cam.eye.y, ez = c.z - cam.eye.z;
+        const float dist = std::sqrt(ex * ex + ey * ey + ez * ez) - r;
+        if (dist <= cam.nearZ || r * (0.5f * static_cast<float>(h)) / (tanHalfFov * dist) < kOccluderMinPx) return;
         for (size_t i = 0; i + 2 < m->idx.size(); i += 3) {
           // Dois triangulos de uma face (a,b,c)+(a,c,d), como em Mesh::cube e Mesh::plane, viram um quad.
           if (i + 5 < m->idx.size() && m->idx[i + 3] == m->idx[i] && m->idx[i + 4] == m->idx[i + 2]) {
@@ -1357,6 +1391,7 @@ public:
     try { tickScripts(static_cast<float>(dt)); }   // uma falha do sistema de scripts para os scripts, nao o editor
     catch (...) { tool::debug().report("TOOL-S009", tool::Severity::Error, "script system stopped after an internal error; the editor keeps running"); scriptHost.close(); }
     tickSpawners(static_cast<float>(dt));
+    tickMovers(static_cast<float>(dt));
     stepPlay(static_cast<float>(dt));
     updateListener();
   }

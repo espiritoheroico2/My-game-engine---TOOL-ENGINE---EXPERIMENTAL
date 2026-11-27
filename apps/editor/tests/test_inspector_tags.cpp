@@ -137,16 +137,17 @@ int main() {
   Check(hVoxelClosed < hVoxel, "secao Voxel fechada ocupa menos altura");
   voxelPanel.setAllSections(true);
 
-  // 9. Secao Game UI. Cada elemento acrescenta o seu bloco (titulo, Remove, tipo, textos, posicao, cor).
+  // 9. Elemento de Canvas selecionado. Os elementos sao linhas da Hierarchy; com um selecionado, o Inspector
+  // mostra so o bloco dele (nome, tipo, textos, posicao, cor). A altura desse bloco precisa ser positiva.
   editor::CanvasComp ui{};
   IP::Context withUi = base;
   withUi.cv = &ui;
-  IP::InspectorPanel uiEmpty(text, renderer);
-  const float hUiEmpty = uiEmpty.prepare(withUi, hooks, 300.f);
   ui.count = 1;
+  editor::UiElem selectedElem{};
+  withUi.uiElem = &selectedElem;
   IP::InspectorPanel uiOne(text, renderer);
   const float hUiOne = uiOne.prepare(withUi, hooks, 300.f);
-  Check(hUiOne > hUiEmpty, "cada elemento da Game UI acrescenta bloco na secao");
+  Check(hUiOne > 0.f, "elemento selecionado do Canvas mostra o bloco dele");
 
   // 10. Secao Particles. A secao inteira ocupa altura; a trajetoria (fechada no inicio) ocupa mais quando aberta.
   editor::ParticleComp particles{};

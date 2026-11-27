@@ -30,6 +30,7 @@
 #include "image_io.hpp"
 #include "sui_panel.hpp"
 #include "ui_style.hpp"
+#include "usability_hints.hpp"   // estado vazio da lista e botoes sem selecao
 #include "window_frame.hpp"
 #include "window_help_icon.hpp"
 
@@ -597,6 +598,7 @@ class HierarchyPanel {
         const bool dragging = drag_.Phase() != Dd::DragPhase::Idle;
         if (dragging) (void)drag_.PointerMove(SU::Vec2{x - rect_.x, y - rect_.y}, buildTargets());
         if (contains(x, y)) hoverRow_ = rowAt(x, y);
+        hoverButton_ = buttonAt(x, y);
         if (contextOpen_) {
             const int over = contextItemAt(x, y);
             if (over >= 0) subOpen_ = contextItems_[static_cast<std::size_t>(over)].cmd == kCtxAddElem ? 1 : (subOpen_ == 1 ? 0 : subOpen_);
@@ -953,19 +955,21 @@ class HierarchyPanel {
         toolbar_.clear();
         buttons_.clear();
         createX_ = Metrics::kPad;
-        float x = addButton(Button::Create, T("+ Create"), createX_);
-        x = addButton(Button::Duplicate, T("Duplicate"), x);
-        (void)addButton(Button::Delete, T("Delete"), x);
+        // Duplicate e Delete so agem com um objeto selecionado: sem ele ficam apagados (antes o clique nao fazia nada, sem aviso).
+        const editor::usability::HierarchyToolbar state = editor::usability::HierarchyToolbarState(model_.Selected() != hm::NoId);
+        float x = addButton(Button::Create, T("+ Create"), createX_, state.create);
+        x = addButton(Button::Duplicate, T("Duplicate"), x, state.duplicate);
+        (void)addButton(Button::Delete, T("Delete"), x, state.remove);
     }
 
-    // Desenha um botao da barra e devolve o X do proximo.
-    float addButton(Button which, const char* label, float x) {
+    // Desenha um botao da barra e devolve o X do proximo. Bloqueado = texto apagado; mouse em cima = fundo de hover.
+    float addButton(Button which, const char* label, float x, bool enabled = true) {
         const float w = toolbar_.layout(label, Metrics::kSmallFont).size.x + 2.f * Metrics::kBtnPad;
         const float h = Metrics::kToolbarBtnH;
         const float y = (Metrics::kToolbarH - h) * 0.5f;
-        toolbar_.addSolid(x, y, w, h, colors_.btn, 0.2f);
+        toolbar_.addSolid(x, y, w, h, enabled && hoverButton_ == which ? colors_.rowHover : colors_.btn, 0.2f);
         const float textY = y + (h - toolbar_.lineHeight(Metrics::kToolbarBtnFont)) * 0.5f;
-        toolbar_.addText(x + Metrics::kBtnPad, textY, label, Metrics::kToolbarBtnFont, theme_.text, w - 2.f * Metrics::kBtnPad);
+        toolbar_.addText(x + Metrics::kBtnPad, textY, label, Metrics::kToolbarBtnFont, enabled ? theme_.text : theme_.textDim, w - 2.f * Metrics::kBtnPad);
         buttons_.push_back({sui::Box{x, y, w, h}, which});
         return x + w + Metrics::kBtnGap;
     }
@@ -977,6 +981,10 @@ class HierarchyPanel {
         const sui::Box list = listBox();
         const auto range = visibleRange();
         for (std::size_t row = range.first; row < range.first + range.count; ++row) addRow(row, list);
+        // Cena sem objetos: diz o que fazer em vez de deixar a lista em branco.
+        if (const char* hint = editor::usability::HierarchyEmptyHint(model_.RowCount())) {
+            list_.addParagraph(Metrics::kPad, Metrics::kToolbarH + Metrics::kPad, T(hint), Metrics::kFont, theme_.textDim, list.w - 2.f * Metrics::kPad);
+        }
         addScrollThumb(list);
     }
 
@@ -1125,6 +1133,7 @@ class HierarchyPanel {
     float scrollY_ = 0.f;
     ui_scrollbar::Scrollbar bar_;
     std::size_t hoverRow_ = npos;
+    Button hoverButton_ = Button::None;   // botao da barra sob o mouse (fundo de hover)
     std::vector<std::pair<sui::Box, Button>> buttons_;
     float createX_ = 0.f;
     bool menuOpen_ = false;

@@ -832,7 +832,7 @@ class ConsolePanel {
     const float midY = y + b.h * 0.5f;
 
     if (line.empty() && !focused) {
-      const char* hint = isFilter ? T("filter (e.g. object name or TOOL-S007)") : "test ECS: 10000   (help)";
+      const char* hint = isFilter ? T("filter (e.g. object name or TOOL-S007)") : T("command (e.g. test ecs: 10000, test ecsf: 10000, or help)");
       addText(innerX, midY, hint, Theme::kFont, colors_.textDim, innerW, 0.35f, clip);
       return;
     }

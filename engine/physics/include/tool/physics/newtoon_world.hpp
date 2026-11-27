@@ -9,7 +9,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <unordered_map>
 #include <vector>
 
 namespace Newtoon {
@@ -21,10 +20,18 @@ class PhysicsWorld {
   int maxStepsPerFrame = 5;        // protecao contra a "espiral da morte" quando o quadro demora
   int solverIterations = 10;
   float baumgarte = 0.2f, slop = 0.005f, restitutionThreshold = 1.f;
+  bool enableWarmStarting = true;  // reaproveita impulsos do passo anterior (estabilidade em pilhas)
+  float warmStartFactor = 0.85f;
+  bool enableIslands = true;       // agrupa corpos em ilhas de simulacao para sono coletivo
+  bool enableInterpolation = true; // desative para economizar banda de memoria com 1M+ corpos
+  bool enableSoftConstraints = true; // Soft Step (Box2D v3 / TGS Soft): estavel com razoes de massa altas
+  float contactHertz = 30.f;
+  float contactDampingRatio = 1.f;
   std::vector<PhysicsMaterial> materials{PhysicsMaterial{}}; // materialId indexa aqui
 
   struct Stats {
     int bodies = 0, awake = 0, pairs = 0, contacts = 0, steps = 0, idleSteps = 0, broadphaseBuilds = 0, broadphaseRefits = 0;
+    int islands = 0, warmStartedContacts = 0;
     bool hitStepLimit = false;   // o quadro pediu mais passos que maxStepsPerFrame (o acumulador foi descartado)
     // Cores do solver no ultimo passo com contatos: quantas cores tem contatos e o tamanho do maior bucket.
     int colorsUsed = 0, largestColorBucket = 0;
@@ -32,15 +39,40 @@ class PhysicsWorld {
     float integrateMs = 0, prepareMs = 0, broadphaseMs = 0, narrowphaseMs = 0, solverMs = 0, ccdMs = 0, finishMs = 0;
   } stats;
 
+  // Fracao [0, 1] do acumulador entre o ultimo passo fisico e o proximo (para interpolacao de renderizacao).
+  float Alpha() const noexcept { return fixedDt > 0.f ? std::clamp(acc_ / fixedDt, 0.f, 1.f) : 0.f; }
+
+  // Gera poses interpoladas entre o estado anterior ao ultimo Step e o estado atual (para monitores 144Hz/240Hz+).
+  void GetInterpolatedTransforms(const std::vector<Transform>& current, std::vector<Transform>& out) const {
+    const size_t n = current.size();
+    out.resize(n);
+    const float a = Alpha();
+    if (prevTransforms_.size() != n || a >= 1.f - 1e-5f) {
+      out = current;
+      return;
+    }
+    for (size_t i = 0; i < n; ++i) {
+      out[i].position = Lerp(prevTransforms_[i].position, current[i].position, a);
+      out[i].rotation = Quat::Nlerp(prevTransforms_[i].rotation, current[i].rotation, a);
+      out[i].scale = current[i].scale;
+    }
+  }
+
   const std::vector<CollisionEvent>& GetCollisionEvents() const { return events_; }
   void ClearEvents() { events_.clear(); }
 
   void Simulate(std::vector<Transform>& tf, std::vector<Rigidbody>& rb, const std::vector<Collider>& col, float dt) {
     const size_t n = std::min({tf.size(), rb.size(), col.size()});
     stats = Stats{}; stats.bodies = static_cast<int>(n);
+    if (enableInterpolation && prevTransforms_.size() != tf.size()) prevTransforms_ = tf;
     acc_ += std::clamp(dt, 0.f, 0.25f);
     int steps = 0;
-    while (acc_ >= fixedDt && steps < maxStepsPerFrame) { Step(tf, rb, col, n, fixedDt); acc_ -= fixedDt; ++steps; }
+    while (acc_ >= fixedDt && steps < maxStepsPerFrame) {
+      if (enableInterpolation) prevTransforms_.assign(tf.begin(), tf.end());
+      Step(tf, rb, col, n, fixedDt);
+      acc_ -= fixedDt;
+      ++steps;
+    }
     if (steps == maxStepsPerFrame) { stats.hitStepLimit = acc_ >= fixedDt; acc_ = 0.f; }
     stats.steps = steps;
     if (steps == 0 && cache_.size() != n) {
@@ -74,7 +106,7 @@ class PhysicsWorld {
     float depth;
     float e, mu;
     Vec3 ra, rb;
-    float normalMass = 0, tangentMass = 0, tangentMass2 = 0, bias = 0, jn = 0, jt1 = 0, jt2 = 0;
+    float normalMass = 0, tangentMass = 0, tangentMass2 = 0, bias = 0, impulseSoftScale = 0, jn = 0, jt1 = 0, jt2 = 0;
     Vec3 t1, t2;
   };
   struct PairInfo { Entity a = kNoEntity, b = kNoEntity; Vec3 p, n; float depth = 0, impulse = 0; bool trigger = false; };
@@ -143,20 +175,18 @@ class PhysicsWorld {
       return (rb[i].IsDynamic() && !rb[i].isSleeping) || (rb[i].isKinematic && rb[i].velocity.SqrMagnitude() > 1e-8f);
     };
 
-    bool hasActiveBody = false;
-    for (size_t i = 0; i < n && !hasActiveBody; ++i) hasActiveBody = active(i);
+    activeIndices_.clear();
+    for (size_t i = 0; i < n; ++i) {
+      if (active(i)) activeIndices_.push_back(static_cast<Entity>(i));
+    }
+    const bool hasActiveBody = !activeIndices_.empty();
     if (!hasActiveBody && !ShapeInputsUnchanged(tf, rb, col, n)) {
       if (Prepare(tf, rb, col, n)) ++stats.broadphaseBuilds; else ++stats.broadphaseRefits;
     }
     if (!hasActiveBody) {
-      for (size_t i = 0; i < n; ++i) {
-        Rigidbody& r = rb[i];
-        if (!r.isSleeping) r.grounded = false;
-        r.forceAccumulator = r.torqueAccumulator = {};
-      }
       curPairs_.clear();
-      for (auto& kv : prevPairs_)
-        events_.push_back({kv.second.a, kv.second.b, {}, {}, 0.f, CollisionType::Exit, kv.second.trigger});
+      for (const auto& kv : prevPairs_)
+        events_.push_back({kv.info.a, kv.info.b, {}, {}, 0.f, CollisionType::Exit, kv.info.trigger});
       prevPairs_.clear();
       ++stats.idleSteps;
       TrimEvents();
@@ -171,12 +201,14 @@ class PhysicsWorld {
       mark = now;
     };
 
-    // 1) Velocidades (paralelo): gravidade, forcas, arrasto
-    JobSystem::Get().ParallelFor(n, 1024, [&](size_t b, size_t e) {
-      for (size_t i = b; i < e; ++i) {
+    // 1) Velocidades (paralelo, apenas corpos ativos): gravidade, forcas, arrasto
+    const size_t activeCount = activeIndices_.size();
+    JobSystem::Get().ParallelFor(activeCount, 512, [&](size_t b, size_t e) {
+      for (size_t idx = b; idx < e; ++idx) {
+        const Entity i = activeIndices_[idx];
         Rigidbody& r = rb[i];
-        if (!r.isSleeping) r.grounded = false;
-        if (!r.IsDynamic() || r.isSleeping) { r.forceAccumulator = r.torqueAccumulator = {}; continue; }
+        r.grounded = false;
+        if (!r.IsDynamic()) { r.forceAccumulator = r.torqueAccumulator = {}; continue; }
         const Vec3 g = r.overrideGravity ? r.gravity : gravity;
         if (r.useGravity) r.velocity += g * (r.gravityScale * dt);
         r.velocity += r.forceAccumulator * (r.inverseMass * dt);
@@ -195,9 +227,9 @@ class PhysicsWorld {
     if (Prepare(tf, rb, col, n)) ++stats.broadphaseBuilds; else ++stats.broadphaseRefits;
     lap(stats.prepareMs);
 
-    // 3) Broad-phase PARALELA (cada bloco grava em seu proprio buffer local, sem mutex)
-    constexpr size_t kBroadGrain = 256;
-    const size_t numBroadChunks = n > 0 ? (n + kBroadGrain - 1) / kBroadGrain : 0;
+    // 3) Broad-phase PARALELA (apenas corpos ativos consultam a BVH)
+    constexpr size_t kBroadGrain = 128;
+    const size_t numBroadChunks = activeCount > 0 ? (activeCount + kBroadGrain - 1) / kBroadGrain : 0;
     chunkPairs_.resize(numBroadChunks);
     for (size_t c = 0; c < numBroadChunks; ++c) chunkPairs_[c].clear();
 
@@ -205,14 +237,14 @@ class PhysicsWorld {
       for (size_t c = cb; c < ce; ++c) {
         auto& localPairs = chunkPairs_[c];
         const size_t b = c * kBroadGrain;
-        const size_t e = std::min(n, b + kBroadGrain);
-        for (size_t i = b; i < e; ++i) {
-          if (!active(i)) continue;
+        const size_t e = std::min(activeCount, b + kBroadGrain);
+        for (size_t idx = b; idx < e; ++idx) {
+          const Entity i = activeIndices_[idx];
           bvh_.Query(boxes_[i], [&](Entity j) {
             if (j == i) return;
             if (j < i && active(j)) return; // par ja visto do outro lado
             if (rb[i].IsStatic() && rb[j].IsStatic()) return;
-            localPairs.push_back({static_cast<Entity>(i), j});
+            localPairs.push_back({i, j});
           });
         }
       }
@@ -228,7 +260,7 @@ class PhysicsWorld {
     stats.pairs += static_cast<int>(pairs_.size());
     lap(stats.broadphaseMs);
 
-    // 4) Narrow-phase PARALELA (SAT Box-Box / Sphere-Box em todos os cores)
+    // 4) Narrow-phase PARALELA (zero alocacoes por par: buffer inline de 8 pontos)
     const size_t pairCount = pairs_.size();
     narrowResults_.resize(pairCount);
     JobSystem::Get().ParallelFor(pairCount, 128, [&](size_t b, size_t e) {
@@ -236,12 +268,12 @@ class PhysicsWorld {
       localPts.reserve(8);
       for (size_t idx = b; idx < e; ++idx) {
         auto& res = narrowResults_[idx];
-        res.pts.clear();
-        res.hit = false;
+        res.count = 0;
         const Entity a = pairs_[idx].first, bEnt = pairs_[idx].second;
         if (!Collide(cache_[a], cache_[bEnt], localPts)) continue;
-        res.hit = true;
-        res.pts.assign(localPts.begin(), localPts.end());
+        const uint8_t cnt = static_cast<uint8_t>(std::min<size_t>(localPts.size(), 8));
+        res.count = cnt;
+        for (uint8_t k = 0; k < cnt; ++k) res.pts[k] = localPts[k];
         localPts.clear();
       }
     });
@@ -253,7 +285,7 @@ class PhysicsWorld {
 
     for (size_t idx = 0; idx < pairCount; ++idx) {
       const auto& res = narrowResults_[idx];
-      if (!res.hit || res.pts.empty()) continue;
+      if (res.count == 0) continue;
 
       const Entity a = pairs_[idx].first, b = pairs_[idx].second;
       const bool trig = col[a].isTrigger || col[b].isTrigger;
@@ -266,7 +298,8 @@ class PhysicsWorld {
         const PhysicsMaterial& mb = Mat(col[b].materialId);
         const float mu = Combine(ma.frictionCombine, ma.friction, mb.friction);
         const float bounce = Combine(ma.bounceCombine, ma.bounciness, mb.bounciness);
-        for (const auto& c : res.pts) {
+        for (uint8_t kIdx = 0; kIdx < res.count; ++kIdx) {
+          const Pt& c = res.pts[kIdx];
           Contact k{};
           k.a = a; k.b = b; k.p = c.p; k.n = c.n; k.depth = c.depth; k.e = bounce; k.mu = mu;
           contacts_.push_back(k);
@@ -276,22 +309,30 @@ class PhysicsWorld {
         if (c0Up(res.pts[0].n) > 0.7f) { rb[b].grounded = true; rb[b].groundNormal = res.pts[0].n; }
         if (c0Up(res.pts[0].n) < -0.7f) { rb[a].grounded = true; rb[a].groundNormal = -res.pts[0].n; }
       }
-      curPairs_[Key(a, b)] = info;
+      curPairs_.push_back({Key(a, b), info});
     }
+    std::sort(curPairs_.begin(), curPairs_.end(), [](const PairEntry& x, const PairEntry& y) { return x.key < y.key; });
     stats.contacts += static_cast<int>(contacts_.size());
     lap(stats.narrowphaseMs);
 
     // 5) Solver PARALELO via Graph Coloring (sem mutexes nem condicoes de corrida)
+    ++frameStamp_;
+    if (frameStamp_ == 0) {
+      invIwStamp_.assign(n, 0);
+      islandStamp_.assign(n, 0);
+      frameStamp_ = 1;
+    }
     if (!contacts_.empty()) {
-      invIw_.resize(n); invIwReady_.assign(n, 0);
+      if (invIw_.size() < n) { invIw_.resize(n); invIwStamp_.resize(n, 0); }
       auto prepareInertia = [&](Entity e) {
-        if (invIwReady_[e]) return;
+        if (invIwStamp_[e] == frameStamp_) return;
         invIw_[e] = InvInertiaWorld(rb[e], cache_[e].R);
-        invIwReady_[e] = 1;
+        invIwStamp_[e] = frameStamp_;
       };
       for (const Contact& c : contacts_) { prepareInertia(c.a); prepareInertia(c.b); }
 
       PreSolve(tf, rb, dt);
+      if (enableWarmStarting) ApplyWarmStart(rb);
 
       // Particiona os contatos em cores independentes
       colorGraph_.Build(contacts_, rb, n);
@@ -306,23 +347,43 @@ class PhysicsWorld {
         SolveContactsColored(rb);
       }
 
+      nextWarmCache_.clear();
+      nextWarmCache_.reserve(curPairs_.size());
+      size_t pCursor = 0;
       for (const auto& c : contacts_) {
-        auto f = curPairs_.find(Key(c.a, c.b));
-        if (f != curPairs_.end()) f->second.impulse += c.jn;
+        const uint64_t k = Key(c.a, c.b);
+        while (pCursor < curPairs_.size() && curPairs_[pCursor].key < k) ++pCursor;
+        if (pCursor < curPairs_.size() && curPairs_[pCursor].key == k) curPairs_[pCursor].info.impulse += c.jn;
+        else {
+          auto it = std::lower_bound(curPairs_.begin(), curPairs_.end(), k, [](const PairEntry& e, uint64_t key) { return e.key < key; });
+          if (it != curPairs_.end() && it->key == k) it->info.impulse += c.jn;
+        }
+        if (enableWarmStarting && c.jn > 1e-6f) {
+          if (nextWarmCache_.empty() || nextWarmCache_.back().key != k) {
+            nextWarmCache_.push_back({k, {}});
+          }
+          auto& wm = nextWarmCache_.back().manifold;
+          if (wm.count < 8) wm.pts[wm.count++] = {c.p, c.n, c.jn, c.jt1, c.jt2};
+        }
       }
+      std::sort(nextWarmCache_.begin(), nextWarmCache_.end(), [](const WarmEntry& x, const WarmEntry& y) { return x.key < y.key; });
+      warmCache_.swap(nextWarmCache_);
+    } else {
+      warmCache_.clear();
     }
 
     lap(stats.solverMs);
 
-    // 6) CCD (so quem pediu e anda rapido)
-    for (size_t i = 0; i < n; ++i) {
+    // 6) CCD (apenas corpos ativos que pediram CCD)
+    for (size_t idx = 0; idx < activeCount; ++idx) {
+      const Entity i = activeIndices_[idx];
       Rigidbody& r = rb[i];
       if (!r.useCCD || !r.IsDynamic() || r.isSleeping) continue;
       const float speed = r.velocity.Magnitude();
       const float reach = speed * dt;
       const float size = cache_[i].sphere ? cache_[i].r : std::min({cache_[i].e.x, cache_[i].e.y, cache_[i].e.z});
       if (reach <= size) continue;
-      const RaycastHit h = Raycast(cache_[i].c, r.velocity, reach + size, static_cast<Entity>(i));
+      const RaycastHit h = Raycast(cache_[i].c, r.velocity, reach + size, i);
       if (h.hit && !col[h.entity].isTrigger) {
         const float allow = std::max(0.f, h.distance - size);
         tf[i].position += Normalized(r.velocity) * std::min(allow, reach) - r.velocity * dt;
@@ -331,9 +392,10 @@ class PhysicsWorld {
 
     lap(stats.ccdMs);
 
-    // 7) Posicoes e rotacoes (paralelo)
-    JobSystem::Get().ParallelFor(n, 1024, [&](size_t b, size_t e) {
-      for (size_t i = b; i < e; ++i) {
+    // 7) Posicoes e rotacoes (paralelo, apenas corpos ativos)
+    JobSystem::Get().ParallelFor(activeCount, 512, [&](size_t b, size_t e) {
+      for (size_t idx = b; idx < e; ++idx) {
+        const Entity i = activeIndices_[idx];
         Rigidbody& r = rb[i];
         if (r.IsStatic() || (r.isSleeping && !r.isKinematic)) continue;
         tf[i].position += r.velocity * dt;
@@ -346,29 +408,50 @@ class PhysicsWorld {
       }
     });
 
-    // 8) Sono
-    for (size_t i = 0; i < n; ++i) {
-      Rigidbody& r = rb[i];
-      if (!r.IsDynamic() || r.isSleeping) { if (!r.isSleeping) ++stats.awake; continue; }
-      if (r.velocity.Magnitude() < r.sleepThreshold && r.angularVelocity.Magnitude() < r.sleepThreshold) {
-        r.sleepTimer += dt;
-        if (r.sleepTimer > 0.5f) { r.isSleeping = true; r.velocity = r.angularVelocity = {}; }
-      } else {
-        r.sleepTimer = 0.f;
+    // 8) Sono + Ilhas de Simulacao (O(ativos + pares) via stamp)
+    if (!enableIslands || n == 0) {
+      for (size_t idx = 0; idx < activeCount; ++idx) {
+        const Entity i = activeIndices_[idx];
+        Rigidbody& r = rb[i];
+        if (!r.IsDynamic() || r.isSleeping) { if (!r.isSleeping) ++stats.awake; continue; }
+        if (r.velocity.Magnitude() < r.sleepThreshold && r.angularVelocity.Magnitude() < r.sleepThreshold) {
+          r.sleepTimer += dt;
+          if (r.sleepTimer > 0.5f) { r.isSleeping = true; r.velocity = r.angularVelocity = {}; }
+        } else {
+          r.sleepTimer = 0.f;
+        }
+        if (!r.isSleeping) ++stats.awake;
       }
-      if (!r.isSleeping) ++stats.awake;
+    } else {
+      UpdateIslandsAndSleep(rb, n, dt);
     }
 
-    // 9) Eventos Enter/Stay/Exit
-    for (auto& kv : curPairs_) {
-      const bool had = prevPairs_.count(kv.first) != 0;
-      events_.push_back({kv.second.a, kv.second.b, kv.second.p, kv.second.n, kv.second.impulse, had ? CollisionType::Stay : CollisionType::Enter, kv.second.trigger});
+    // 9) Eventos Enter/Stay/Exit por two-pointer merge O(P)
+    {
+      size_t i = 0, j = 0;
+      while (i < curPairs_.size() && j < prevPairs_.size()) {
+        if (curPairs_[i].key < prevPairs_[j].key) {
+          const auto& p = curPairs_[i++].info;
+          events_.push_back({p.a, p.b, p.p, p.n, p.impulse, CollisionType::Enter, p.trigger});
+        } else if (prevPairs_[j].key < curPairs_[i].key) {
+          const auto& p = prevPairs_[j++].info;
+          events_.push_back({p.a, p.b, {}, {}, 0.f, CollisionType::Exit, p.trigger});
+        } else {
+          const auto& p = curPairs_[i++].info;
+          ++j;
+          events_.push_back({p.a, p.b, p.p, p.n, p.impulse, CollisionType::Stay, p.trigger});
+        }
+      }
+      while (i < curPairs_.size()) {
+        const auto& p = curPairs_[i++].info;
+        events_.push_back({p.a, p.b, p.p, p.n, p.impulse, CollisionType::Enter, p.trigger});
+      }
+      while (j < prevPairs_.size()) {
+        const auto& p = prevPairs_[j++].info;
+        events_.push_back({p.a, p.b, {}, {}, 0.f, CollisionType::Exit, p.trigger});
+      }
     }
-    for (auto& kv : prevPairs_) {
-      if (!curPairs_.count(kv.first))
-        events_.push_back({kv.second.a, kv.second.b, {}, {}, 0.f, CollisionType::Exit, kv.second.trigger});
-    }
-    prevPairs_ = std::move(curPairs_);
+    prevPairs_.swap(curPairs_);
     TrimEvents();
     lap(stats.finishMs);
   }
@@ -513,7 +596,18 @@ class PhysicsWorld {
         c.normalMass = k > 1e-9f ? 1.f / k : 0.f;
         const Vec3 vrel = (B.velocity + Cross(B.angularVelocity, c.rb)) - (A.velocity + Cross(A.angularVelocity, c.ra));
         const float vn = Dot(vrel, c.n);
-        c.bias = std::min(4.f, baumgarte / dt * std::max(c.depth - slop, 0.f));
+        const float pen = std::max(c.depth - slop, 0.f);
+        if (enableSoftConstraints) {
+          const float omega = 2.f * 3.14159265f * contactHertz;
+          const float a1 = 2.f * contactDampingRatio + omega * dt;
+          const float a2 = dt * omega * a1;
+          c.normalMass *= a2 / (1.f + a2);
+          c.impulseSoftScale = 1.f / (1.f + a2);
+          c.bias = std::min(4.f, (omega / a1) * pen);
+        } else {
+          c.impulseSoftScale = 0.f;
+          c.bias = std::min(4.f, baumgarte / dt * pen);
+        }
         if (vn < -restitutionThreshold) c.bias += -c.e * vn;
         Vec3 t = vrel - c.n * vn;
         t = t.SqrMagnitude() > 1e-8f ? Normalized(t) : (std::fabs(c.n.x) > 0.9f ? Normalized(Cross(c.n, Vec3{0, 1, 0})) : Normalized(Cross(c.n, Vec3{1, 0, 0})));
@@ -523,8 +617,108 @@ class PhysicsWorld {
         c.tangentMass = k1 > 1e-9f ? 1.f / k1 : 0.f;
         c.tangentMass2 = k2 > 1e-9f ? 1.f / k2 : 0.f;
         c.jn = c.jt1 = c.jt2 = 0.f;
+        if (enableWarmStarting && !warmCache_.empty()) {
+          const uint64_t pairKey = Key(c.a, c.b);
+          const auto it = std::lower_bound(warmCache_.begin(), warmCache_.end(), pairKey, [](const WarmEntry& e, uint64_t key) { return e.key < key; });
+          if (it != warmCache_.end() && it->key == pairKey) {
+            const WarmManifold& wm = it->manifold;
+            for (uint8_t m = 0; m < wm.count; ++m) {
+              if ((c.p - wm.pts[m].p).SqrMagnitude() < 0.04f && Dot(c.n, wm.pts[m].n) > 0.9f) {
+                c.jn = wm.pts[m].jn * warmStartFactor;
+                c.jt1 = wm.pts[m].jt1 * warmStartFactor;
+                c.jt2 = wm.pts[m].jt2 * warmStartFactor;
+                break;
+              }
+            }
+          }
+        }
       }
     });
+  }
+
+  void ApplyWarmStart(std::vector<Rigidbody>& rb) {
+    int warmCount = 0;
+    for (const auto& c : contacts_) {
+      if (c.jn <= 0.f && std::fabs(c.jt1) <= 0.f && std::fabs(c.jt2) <= 0.f) continue;
+      ++warmCount;
+      const Vec3 P = c.n * c.jn + c.t1 * c.jt1 + c.t2 * c.jt2;
+      Rigidbody& A = rb[c.a];
+      Rigidbody& B = rb[c.b];
+      if (A.IsDynamic()) { A.velocity -= P * A.inverseMass; A.angularVelocity -= invIw_[c.a] * Cross(c.ra, P); }
+      if (B.IsDynamic()) { B.velocity += P * B.inverseMass; B.angularVelocity += invIw_[c.b] * Cross(c.rb, P); }
+    }
+    stats.warmStartedContacts += warmCount;
+  }
+
+  void UpdateIslandsAndSleep(std::vector<Rigidbody>& rb, size_t n, float dt) {
+    if (islandParent_.size() < n) {
+      islandParent_.resize(n);
+      islandRank_.resize(n, 0);
+      islandAwake_.resize(n, 0);
+      islandSeen_.resize(n, 0);
+      islandStamp_.resize(n, 0);
+    }
+    auto ensureNode = [&](Entity x) {
+      if (islandStamp_[x] != frameStamp_) {
+        islandStamp_[x] = frameStamp_;
+        islandParent_[x] = x;
+        islandRank_[x] = 0;
+        islandAwake_[x] = 0;
+        islandSeen_[x] = 0;
+      }
+    };
+    auto findRoot = [&](Entity x) {
+      ensureNode(x);
+      while (islandParent_[x] != x) {
+        islandParent_[x] = islandParent_[islandParent_[x]];
+        x = islandParent_[x];
+      }
+      return x;
+    };
+    auto unite = [&](Entity a, Entity b) {
+      Entity ra = findRoot(a), rbRoot = findRoot(b);
+      if (ra == rbRoot) return;
+      if (islandRank_[ra] < islandRank_[rbRoot]) std::swap(ra, rbRoot);
+      islandParent_[rbRoot] = ra;
+      if (islandRank_[ra] == islandRank_[rbRoot]) ++islandRank_[ra];
+    };
+
+    for (const auto& kv : curPairs_) {
+      if (kv.info.trigger) continue;
+      const Entity a = kv.info.a, b = kv.info.b;
+      if (rb[a].IsDynamic() && rb[b].IsDynamic()) unite(a, b);
+    }
+
+    for (Entity i : activeIndices_) {
+      Rigidbody& r = rb[i];
+      if (!r.IsDynamic()) continue;
+      const Entity root = findRoot(i);
+      if (!r.isSleeping) {
+        if (r.velocity.Magnitude() < r.sleepThreshold && r.angularVelocity.Magnitude() < r.sleepThreshold) {
+          r.sleepTimer += dt;
+          if (r.sleepTimer <= 0.5f) islandAwake_[root] = 1;
+        } else {
+          r.sleepTimer = 0.f;
+          islandAwake_[root] = 1;
+        }
+      }
+    }
+
+    int islandCount = 0;
+    for (Entity i : activeIndices_) {
+      Rigidbody& r = rb[i];
+      if (!r.IsDynamic()) continue;
+      const Entity root = findRoot(i);
+      if (!islandSeen_[root]) { islandSeen_[root] = 1; ++islandCount; }
+      if (islandAwake_[root]) {
+        r.isSleeping = false;
+        ++stats.awake;
+      } else {
+        r.isSleeping = true;
+        r.velocity = r.angularVelocity = {};
+      }
+    }
+    stats.islands = islandCount;
   }
 
   void SolveSingleContact(Contact& c, std::vector<Rigidbody>& rb) {
@@ -539,7 +733,7 @@ class PhysicsWorld {
     };
     {
       const float vn = Dot(vrel(), c.n);
-      float dj = c.normalMass * (-vn + c.bias);
+      float dj = c.normalMass * (-vn + c.bias) - c.impulseSoftScale * c.jn;
       const float old = c.jn;
       c.jn = std::max(0.f, old + dj);
       dj = c.jn - old;
@@ -564,13 +758,100 @@ class PhysicsWorld {
     }
   }
 
-  // Resolve todas as cores independentes em paralelo; apenas o ultimo balde (fallback) roda sequencialmente.
+#ifdef NEWTOON_SIMD_SSE2
+  // Wide-SIMD: resolve 4 contatos independentes da mesma cor simultaneamente nos registradores SSE2.
+  void Solve4ContactsWide(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t i3, std::vector<Rigidbody>& rb) {
+    Contact* cs[4] = {&contacts_[i0], &contacts_[i1], &contacts_[i2], &contacts_[i3]};
+    auto computeVn = [&](const Vec3& dir0, const Vec3& dir1, const Vec3& dir2, const Vec3& dir3) {
+      const Vec3* dirs[4] = {&dir0, &dir1, &dir2, &dir3};
+      float v[4];
+      for (int lane = 0; lane < 4; ++lane) {
+        const Contact& c = *cs[lane];
+        const Rigidbody& A = rb[c.a];
+        const Rigidbody& B = rb[c.b];
+        const Vec3 vrel = (B.velocity + Cross(B.angularVelocity, c.rb)) - (A.velocity + Cross(A.angularVelocity, c.ra));
+        v[lane] = Dot(vrel, *dirs[lane]);
+      }
+      return _mm_loadu_ps(v);
+    };
+    auto apply4 = [&](const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3) {
+      const Vec3* ps[4] = {&p0, &p1, &p2, &p3};
+      for (int lane = 0; lane < 4; ++lane) {
+        const Contact& c = *cs[lane];
+        const Vec3& P = *ps[lane];
+        Rigidbody& A = rb[c.a];
+        Rigidbody& B = rb[c.b];
+        if (A.IsDynamic()) { A.velocity -= P * A.inverseMass; A.angularVelocity -= invIw_[c.a] * Cross(c.ra, P); }
+        if (B.IsDynamic()) { B.velocity += P * B.inverseMass; B.angularVelocity += invIw_[c.b] * Cross(c.rb, P); }
+      }
+    };
+
+    const __m128 zero = _mm_setzero_ps();
+    // 1) Normal impulse (4 contatos em paralelo em SSE2)
+    {
+      const __m128 vn = computeVn(cs[0]->n, cs[1]->n, cs[2]->n, cs[3]->n);
+      const __m128 nm = _mm_set_ps(cs[3]->normalMass, cs[2]->normalMass, cs[1]->normalMass, cs[0]->normalMass);
+      const __m128 bias = _mm_set_ps(cs[3]->bias, cs[2]->bias, cs[1]->bias, cs[0]->bias);
+      const __m128 soft = _mm_set_ps(cs[3]->impulseSoftScale, cs[2]->impulseSoftScale, cs[1]->impulseSoftScale, cs[0]->impulseSoftScale);
+      const __m128 oldJn = _mm_set_ps(cs[3]->jn, cs[2]->jn, cs[1]->jn, cs[0]->jn);
+      const __m128 dj = _mm_sub_ps(_mm_mul_ps(nm, _mm_sub_ps(bias, vn)), _mm_mul_ps(soft, oldJn));
+      const __m128 newJn = _mm_max_ps(zero, _mm_add_ps(oldJn, dj));
+      const __m128 delta = _mm_sub_ps(newJn, oldJn);
+      alignas(16) float jnArr[4], dArr[4];
+      _mm_store_ps(jnArr, newJn);
+      _mm_store_ps(dArr, delta);
+      for (int lane = 0; lane < 4; ++lane) cs[lane]->jn = jnArr[lane];
+      apply4(cs[0]->n * dArr[0], cs[1]->n * dArr[1], cs[2]->n * dArr[2], cs[3]->n * dArr[3]);
+    }
+
+    const __m128 maxF = _mm_set_ps(cs[3]->mu * cs[3]->jn, cs[2]->mu * cs[2]->jn, cs[1]->mu * cs[1]->jn, cs[0]->mu * cs[0]->jn);
+    const __m128 minF = _mm_sub_ps(zero, maxF);
+
+    // 2) Tangente 1 (4 contatos em paralelo)
+    {
+      const __m128 vt = computeVn(cs[0]->t1, cs[1]->t1, cs[2]->t1, cs[3]->t1);
+      const __m128 tm = _mm_set_ps(cs[3]->tangentMass, cs[2]->tangentMass, cs[1]->tangentMass, cs[0]->tangentMass);
+      const __m128 oldJt = _mm_set_ps(cs[3]->jt1, cs[2]->jt1, cs[1]->jt1, cs[0]->jt1);
+      const __m128 dj = _mm_sub_ps(zero, _mm_mul_ps(tm, vt));
+      const __m128 newJt = _mm_min_ps(maxF, _mm_max_ps(minF, _mm_add_ps(oldJt, dj)));
+      const __m128 delta = _mm_sub_ps(newJt, oldJt);
+      alignas(16) float jtArr[4], dArr[4];
+      _mm_store_ps(jtArr, newJt);
+      _mm_store_ps(dArr, delta);
+      for (int lane = 0; lane < 4; ++lane) cs[lane]->jt1 = jtArr[lane];
+      apply4(cs[0]->t1 * dArr[0], cs[1]->t1 * dArr[1], cs[2]->t1 * dArr[2], cs[3]->t1 * dArr[3]);
+    }
+
+    // 3) Tangente 2 (4 contatos em paralelo)
+    {
+      const __m128 vt = computeVn(cs[0]->t2, cs[1]->t2, cs[2]->t2, cs[3]->t2);
+      const __m128 tm = _mm_set_ps(cs[3]->tangentMass2, cs[2]->tangentMass2, cs[1]->tangentMass2, cs[0]->tangentMass2);
+      const __m128 oldJt = _mm_set_ps(cs[3]->jt2, cs[2]->jt2, cs[1]->jt2, cs[0]->jt2);
+      const __m128 dj = _mm_sub_ps(zero, _mm_mul_ps(tm, vt));
+      const __m128 newJt = _mm_min_ps(maxF, _mm_max_ps(minF, _mm_add_ps(oldJt, dj)));
+      const __m128 delta = _mm_sub_ps(newJt, oldJt);
+      alignas(16) float jtArr[4], dArr[4];
+      _mm_store_ps(jtArr, newJt);
+      _mm_store_ps(dArr, delta);
+      for (int lane = 0; lane < 4; ++lane) cs[lane]->jt2 = jtArr[lane];
+      apply4(cs[0]->t2 * dArr[0], cs[1]->t2 * dArr[1], cs[2]->t2 * dArr[2], cs[3]->t2 * dArr[3]);
+    }
+  }
+#endif
+
+  // Resolve todas as cores independentes em paralelo (com Wide-SIMD 4x); apenas o ultimo balde (fallback) roda sequencialmente.
   void SolveContactsColored(std::vector<Rigidbody>& rb) {
     for (uint32_t colIdx = 0; colIdx < ConstraintColorGraph::kMaxColors - 1; ++colIdx) {
       const auto& bucket = colorGraph_.buckets[colIdx];
       if (bucket.empty()) continue;
       JobSystem::Get().ParallelFor(bucket.size(), 64, [&](size_t b, size_t e) {
-        for (size_t i = b; i < e; ++i) {
+        size_t i = b;
+#ifdef NEWTOON_SIMD_SSE2
+        for (; i + 4 <= e; i += 4) {
+          Solve4ContactsWide(bucket[i], bucket[i + 1], bucket[i + 2], bucket[i + 3], rb);
+        }
+#endif
+        for (; i < e; ++i) {
           SolveSingleContact(contacts_[bucket[i]], rb);
         }
       });
@@ -582,23 +863,47 @@ class PhysicsWorld {
   }
 
   struct NarrowResult {
-    std::vector<Pt> pts;
-    bool hit = false;
+    Pt pts[8];
+    uint8_t count = 0;
+  };
+
+  struct PairEntry {
+    uint64_t key = 0;
+    PairInfo info;
+  };
+
+  struct WarmPoint {
+    Vec3 p, n;
+    float jn = 0.f, jt1 = 0.f, jt2 = 0.f;
+  };
+  struct WarmManifold {
+    WarmPoint pts[8];
+    uint8_t count = 0;
+  };
+  struct WarmEntry {
+    uint64_t key = 0;
+    WarmManifold manifold;
   };
 
   ConstraintColorGraph colorGraph_;
+  std::vector<Entity> activeIndices_;
   std::vector<Mat3> invIw_;
-  std::vector<char> invIwReady_;
+  std::vector<uint32_t> invIwStamp_, islandStamp_;
+  uint32_t frameStamp_ = 0;
   std::vector<Shape> cache_;
   std::vector<AABB> boxes_;
   std::vector<char> valid_;
-  BVH bvh_;
+  BVH4 bvh_;
   size_t bvhBodyCount_ = 0, refitSteps_ = 0;
   std::vector<std::vector<std::pair<Entity, Entity>>> chunkPairs_;
   std::vector<std::pair<Entity, Entity>> pairs_;
   std::vector<NarrowResult> narrowResults_;
   std::vector<Contact> contacts_;
-  std::unordered_map<uint64_t, PairInfo> curPairs_, prevPairs_;
+  std::vector<PairEntry> curPairs_, prevPairs_;
+  std::vector<WarmEntry> warmCache_, nextWarmCache_;
+  std::vector<Entity> islandParent_;
+  std::vector<uint8_t> islandRank_, islandAwake_, islandSeen_;
+  std::vector<Transform> prevTransforms_;
   std::vector<CollisionEvent> events_;
   float acc_ = 0.f;
 };

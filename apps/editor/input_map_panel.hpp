@@ -17,6 +17,7 @@
 #include "sui_panel.hpp"
 #include "theme_colors.hpp"
 #include "ui_scrollbar.hpp"
+#include "usability_hints.hpp"   // confirmacao em dois cliques (Reset e Delete map)
 #include "spriteui_host.hpp"
 
 #include <SDL3/SDL.h>
@@ -204,6 +205,7 @@ class Panel {
     for (const HitBox& h : hits_) if (inside(bx, by, h.x, h.y, h.w, h.h)) hit = &h;   // o ultimo desenhado vence
     if (!hit) {
       focus_ = {};   // clique fora de campo termina a digitacao
+      arm_.Cancel();   // e desarma a confirmacao pendente
       return;
     }
     dispatch(*hit, ed);
@@ -215,6 +217,9 @@ class Panel {
     const int si = h.scheme, ri = h.row;
     const bool validS = si >= 0 && static_cast<size_t>(si) < schemes.size();
     const bool validR = validS && ri >= 0 && static_cast<size_t>(ri) < schemes[static_cast<size_t>(si)].rows.size();
+    // Reset e Delete map apagam configuracao sem desfazer: o primeiro clique so "arma" o botao (o texto pede confirmacao),
+    // o segundo, no mesmo botao, executa. Qualquer outro clique desarma.
+    if (h.kind != Hit::ResetDefaults && h.kind != Hit::SchemeDelete) arm_.Cancel();
     switch (h.kind) {
       case Hit::AddController:
         if (schemes.size() < kMaxSchemes) {
@@ -226,6 +231,7 @@ class Panel {
         }
         break;
       case Hit::ResetDefaults:
+        if (!arm_.Click(kArmReset)) break;
         ed.inputMap = InputMap::defaults();
         focus_ = {};
         dirty_ = true;
@@ -242,6 +248,7 @@ class Panel {
         break;
       case Hit::SchemeDelete:
         if (validS && schemes.size() > 1) {
+          if (!arm_.Click(kArmDeleteBase + si)) break;
           schemes.erase(schemes.begin() + si);
           focus_ = {};
           dirty_ = true;
@@ -419,7 +426,9 @@ class Panel {
     y += lh + kGap;
 
     toolButton(x0, y, 200.f, T("+ Add controller map"), Hit::AddController, -1, -1, colors_.button);
-    toolButton(x0 + 210.f, y, 150.f, T("Reset to defaults"), Hit::ResetDefaults, -1, -1, colors_.button);
+    const bool resetArmed = arm_.Armed(kArmReset);
+    toolButton(x0 + 210.f, y, 150.f, resetArmed ? T("Confirm reset?") : T("Reset to defaults"), Hit::ResetDefaults, -1, -1,
+               resetArmed ? colors_.danger : colors_.button);
     body_.addText(x0 + 380.f, y + (kRowH - lh) * 0.5f, T("Saved in Project/input_map.json"), kSmall, theme_.textDim, bodyW_ - 380.f);
     y += kRowH + kPad;
 
@@ -433,7 +442,7 @@ class Panel {
       body_.addText(x0 + 250.f, y + (kRowH - lh) * 0.5f, T("Controller"), kSmall, theme_.textDim, 90.f);
       const std::string pad = s.pad < 0 ? std::string(T("Keyboard only")) : "Gamepad " + std::to_string(s.pad + 1);
       toolButton(x0 + 330.f, y, 180.f, pad, Hit::SchemeController, S, -1, colors_.field);
-      if (schemes.size() > 1) toolButton(x0 + 520.f, y, 110.f, T("Delete map"), Hit::SchemeDelete, S, -1, colors_.danger);
+      if (schemes.size() > 1) toolButton(x0 + 520.f, y, 110.f, arm_.Armed(kArmDeleteBase + S) ? T("Confirm delete?") : T("Delete map"), Hit::SchemeDelete, S, -1, colors_.danger);
       y += kRowH + kGap;
 
       // Cabecalhos da tabela.
@@ -571,6 +580,9 @@ class Panel {
   std::vector<std::string> texts_;
   int backspaces_ = 0;
   bool dirty_ = false;
+  // Confirmacao em dois cliques: chaves do botao armado (Reset = 1; Delete map = 100 + indice do mapa).
+  static constexpr int kArmReset = 1, kArmDeleteBase = 100;
+  editor::usability::ConfirmArm arm_;
 
   bool prevKeys_[tool::kMaxKeys] = {};
   bool prevBtn_[tool::kMaxPads][16] = {};

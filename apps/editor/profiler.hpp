@@ -42,6 +42,8 @@ enum class Zone : int {
   ScenePrepLights,     // dentro de ScenePrepare: luzes, Light Prism e assinaturas das sombras
   ScenePrepOcclusion,  // dentro de ScenePrepare: rasterizacao do buffer de oclusao (CPU)
   DrawList,            // dentro de GpuRender ou CpuRender: material, LOD, culling por objeto e lista de desenho
+  // Fases da fisica Newtoon (world.stats, soma dos passos do quadro): cada uma esta DENTRO de Physics.
+  PhysicsIntegrate, PhysicsPrepare, PhysicsBroadphase, PhysicsNarrowphase, PhysicsSolver, PhysicsCCD, PhysicsFinish,
   Count
 };
 inline const char* zoneName(Zone z) {
@@ -50,7 +52,9 @@ inline const char* zoneName(Zone z) {
                             "Game view render", "Post-processing (FXAA, sharpen)", "Skybox (images)", "UI draw",
                             "Present (VSync)", "Physics simulation",
                             "  Scene prep > lights, shadow signature", "  Scene prep > occlusion buffer",
-                            "  Render > culling + draw list"};
+                            "  Render > culling + draw list",
+                            "  Physics > integrate", "  Physics > prepare", "  Physics > broadphase", "  Physics > narrowphase",
+                            "  Physics > solver", "  Physics > CCD", "  Physics > finish"};
   static_assert(sizeof(n) / sizeof(n[0]) == static_cast<size_t>(Zone::Count), "um nome por zona");
   return n[static_cast<int>(z)];
 }

@@ -11,6 +11,9 @@
 #include "i18n.hpp"
 #include "scenes_model.hpp"
 #include "ui_scrollbar.hpp"
+#include "usability_hints.hpp"   // motivo de botao bloqueado e dica da lista vazia
+#include "config_preset.hpp"     // lista de configs (render + fisica) da pasta do projeto
+#include "tooltip.hpp"           // balao da engrenagem (um Tooltip proprio da janela; o host o desenha)
 #include "spriteui_host.hpp"
 #include "window_frame.hpp"
 #include "window_help_icon.hpp"
@@ -27,7 +30,13 @@
 #include "SpriteUi/Widgets/WindowFrame.hpp"
 #include "SpriteUi/Widgets/WindowFramePaint.hpp"
 
+#include <SDL3/SDL.h>   // SDL_ShowOpenFileDialog (botao "Escolher arquivo...")
+
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <map>
+#include <mutex>
 #include <limits>
 #include <cmath>
 #include <cstddef>
@@ -72,6 +81,9 @@ struct Theme {
   static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth
   static constexpr float kHelpSize = 18.f;    // diametro do "?"
   static constexpr float kHelpGap = 4.f;      // entre grip, "?" e titulo
+  static constexpr float kGearSize = 18.f;    // lado do icone de engrenagem ao lado do nome da cena
+  static constexpr float kPopupWidth = 380.f; // largura da janelinha de config da cena
+  static constexpr std::size_t kPopupMaxPresets = 5;  // configs visiveis na janelinha (alem de "Padrao do jogo")
   // Filhos do painel: rotulo, barra de botoes, linha do campo de nome (com Confirmar e Cancelar), status, lista de
   // cenas, linha do titulo dos assets (com Assign) e os assets.
   static constexpr std::size_t kChildren = 6 + kMaxAssets;
@@ -117,7 +129,9 @@ struct Shaped {
 class View {
  public:
   // O que o host deve fazer depois do quadro (salvar, abrir, apagar, ajuda, fechar...).
-  enum class Action { None, Save, Reload, Open, Delete, Confirm, Assign, RemoveAsset, Help, Close };
+  // ScenePreset: o usuario escolheu a config de uma cena (engrenagem); o host le presetScene()/presetChoice() e chama
+  // Editor::setScenePreset.
+  enum class Action { None, Save, Reload, Open, Delete, Confirm, Assign, RemoveAsset, Help, Close, ScenePreset };
 
   View(Model& model, const sui::TextAtlasSet& text) : model_{model}, text_{text} { buildTree(); }
 
@@ -596,7 +610,10 @@ class View {
     for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
       if (event.target != rows_h_[i]) continue;
       const std::size_t ri = listFirst_ + i;
-      if (ri < rows_.size() && model_.mode == NameMode::None) model_.selected = rows_[ri].name;   // com criar/renomear/apagar em curso a selecao fica
+      if (ri < rows_.size() && model_.mode == NameMode::None) {   // com criar/renomear/apagar em curso a selecao fica
+        model_.selected = rows_[ri].name;
+        model_.status.clear();   // o aviso anterior (ex.: "ja esta aberta") era sobre a selecao antiga
+      }
       // Duplo clique abre a cena (mesmas regras do botao Open: nunca a atual, nunca com confirmacao em curso).
       if (ri < rows_.size() && doubleClick_ && model_.mode == NameMode::None && SM::ActionsFor(model_.selected, model_.current).open) {
         actions.push_back(Action::Open);
@@ -634,16 +651,24 @@ class View {
 
     if (model_.mode != NameMode::None) return;   // com uma confirmacao em curso, so Confirmar e Cancelar agem
     const SM::Actions acts = SM::ActionsFor(model_.selected, model_.current);
-    if (event.target == open_ && acts.open) {
-      actions.push_back(Action::Open);
+    namespace UH = editor::usability;
+    // Botao bloqueado: em vez de nao fazer nada, mostra o motivo na linha de aviso da janela.
+    const auto blocked = [&](UH::SceneAct act) {
+      if (const char* why = UH::SceneActionBlockedReason(act, model_.selected, model_.current)) model_.status = why;
+    };
+    if (event.target == open_) {
+      if (acts.open) actions.push_back(Action::Open);
+      else blocked(UH::SceneAct::Open);
       return;
     }
-    if (event.target == rename_ && acts.rename) {
-      SM::BeginName(model_, NameMode::Rename);
+    if (event.target == rename_) {
+      if (acts.rename) SM::BeginName(model_, NameMode::Rename);
+      else blocked(UH::SceneAct::Rename);
       return;
     }
-    if (event.target == delete_ && acts.remove) {   // apagar pede confirmacao antes
-      SM::BeginDelete(model_);
+    if (event.target == delete_) {   // apagar pede confirmacao antes
+      if (acts.remove) SM::BeginDelete(model_);
+      else blocked(UH::SceneAct::Delete);
       return;
     }
 
@@ -826,6 +851,11 @@ class View {
            rows_[ri].current ? colors_.help : colors_.text, Theme::kLabelSize + 1.f, barReserve);
     }
 
+    // Nenhuma cena: orienta a criar (a lista ficava em branco).
+    if (rows_.empty()) {
+      if (const char* hint = editor::usability::ScenesEmptyHint(0)) line(rows_h_[0], T(hint), colors_.textDim, Theme::kLabelSize);
+    }
+
     // Campo de nome: placeholder quando vazio, caret quando focado. Em apagar, mostra a pergunta (sem edicao).
     const SU::Rect fr = nodeRect(nameField_);
     if (model_.mode == NameMode::Delete) {
@@ -863,7 +893,7 @@ class View {
       button(assetRemove_[i], "x");
     }
 
-    if (!model_.status.empty()) line(status_, model_.status, colors_.warning);
+    if (!model_.status.empty()) line(status_, T(model_.status.c_str()), colors_.warning);   // T: as mensagens do modelo vem em ingles (chave)
   }
 
   Model& model_;

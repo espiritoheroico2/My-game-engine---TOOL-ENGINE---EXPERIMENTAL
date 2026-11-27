@@ -7,8 +7,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <vector>
+
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+#define NEWTOON_BVH_SSE2 1
+#include <immintrin.h>
+#endif
 
 namespace Newtoon {
 
@@ -144,6 +150,263 @@ class BVH {
     return idx;
   }
   std::vector<Entity> ids_;
+  size_t rejected_ = 0;
+};
+
+// ------------------------------------------------------------------ Morton Codes + BVH4 (4-way SIMD BVH)
+// Expande 10 bits para 30 bits intercalados (Z-order curve) para construir LBVH com alta localidade de cache.
+inline uint32_t ExpandBits10(uint32_t v) noexcept {
+  v = (v * 0x00010001u) & 0xFF0000FFu;
+  v = (v * 0x00000101u) & 0x0F00F00Fu;
+  v = (v * 0x00000011u) & 0xC30C30C3u;
+  v = (v * 0x00000005u) & 0x49249249u;
+  return v;
+}
+
+inline uint32_t MortonCode3D(const Vec3& p, const Vec3& worldMin, const Vec3& invExtent) noexcept {
+  const float nx = std::clamp((p.x - worldMin.x) * invExtent.x, 0.f, 1.f);
+  const float ny = std::clamp((p.y - worldMin.y) * invExtent.y, 0.f, 1.f);
+  const float nz = std::clamp((p.z - worldMin.z) * invExtent.z, 0.f, 1.f);
+  const uint32_t xx = ExpandBits10(static_cast<uint32_t>(std::min(nx * 1023.f, 1023.f)));
+  const uint32_t yy = ExpandBits10(static_cast<uint32_t>(std::min(ny * 1023.f, 1023.f)));
+  const uint32_t zz = ExpandBits10(static_cast<uint32_t>(std::min(nz * 1023.f, 1023.f)));
+  return (xx << 2) | (yy << 1) | zz;
+}
+
+// No SoA de 4 filhos para BVH4: testa 4 AABBs simultaneamente via SIMD (inspirado na BroadPhaseQuadTree do Jolt).
+struct alignas(16) BVH4Node {
+  static constexpr int32_t kEmpty = 0x7FFFFFFF;
+  float minX[4]{}, minY[4]{}, minZ[4]{};
+  float maxX[4]{}, maxY[4]{}, maxZ[4]{};
+  int32_t child[4]{kEmpty, kEmpty, kEmpty, kEmpty}; // >= 0: no interno; < 0: folha (~entity); kEmpty: vazio
+};
+
+class BVH4 {
+ public:
+  static constexpr int kStack = 128;
+  static constexpr size_t kMaxEntities = size_t{1} << 30;
+  std::vector<BVH4Node> nodes;
+
+  void Build(const std::vector<AABB>& boxes, const std::vector<char>& valid) {
+    if (valid.size() != boxes.size()) throw std::invalid_argument("BVH4::Build: valid e boxes devem ter o mesmo tamanho");
+    nodes.clear();
+    mortonItems_.clear();
+    rejected_ = 0;
+
+    Vec3 wMin{1e30f, 1e30f, 1e30f}, wMax{-1e30f, -1e30f, -1e30f};
+    for (size_t i = 0; i < boxes.size(); ++i) {
+      if (!valid[i]) continue;
+      if (!IsUsableBox(boxes[i])) { ++rejected_; continue; }
+      wMin = Min(wMin, boxes[i].min);
+      wMax = Max(wMax, boxes[i].max);
+      mortonItems_.push_back({0, static_cast<Entity>(i)});
+    }
+    if (mortonItems_.empty()) return;
+    if (mortonItems_.size() > kMaxEntities) { mortonItems_.clear(); throw std::length_error("BVH4::Build: entidades demais"); }
+
+    const Vec3 ext = wMax - wMin;
+    const Vec3 invExt{ext.x > 1e-6f ? 1.f / ext.x : 0.f, ext.y > 1e-6f ? 1.f / ext.y : 0.f, ext.z > 1e-6f ? 1.f / ext.z : 0.f};
+    for (auto& item : mortonItems_) {
+      const AABB& b = boxes[item.entity];
+      const Vec3 c = (b.min + b.max) * 0.5f;
+      item.key = (static_cast<uint64_t>(MortonCode3D(c, wMin, invExt)) << 32) | item.entity;
+    }
+    std::sort(mortonItems_.begin(), mortonItems_.end(), [](const MortonItem& a, const MortonItem& b) { return a.key < b.key; });
+
+    nodes.reserve(mortonItems_.size() / 2 + 4);
+    BuildRange(boxes, 0, mortonItems_.size());
+  }
+
+  bool Refit(const std::vector<AABB>& boxes, const std::vector<char>& valid) {
+    if (valid.size() != boxes.size() || nodes.empty()) return false;
+    rejected_ = 0;
+    nodeBounds_.resize(nodes.size());
+    for (size_t i = nodes.size(); i-- > 0;) {
+      BVH4Node& n = nodes[i];
+      AABB total{{1e30f, 1e30f, 1e30f}, {-1e30f, -1e30f, -1e30f}};
+      bool hasAny = false;
+      for (int k = 0; k < 4; ++k) {
+        const int32_t ch = n.child[k];
+        if (ch == BVH4Node::kEmpty) continue;
+        AABB cb;
+        if (ch < 0) {
+          const Entity e = static_cast<Entity>(~ch);
+          if (e >= boxes.size() || !valid[e] || !IsUsableBox(boxes[e])) { ++rejected_; return false; }
+          cb = boxes[e];
+        } else {
+          if (static_cast<size_t>(ch) >= nodes.size()) return false;
+          cb = nodeBounds_[static_cast<size_t>(ch)];
+        }
+        n.minX[k] = cb.min.x; n.minY[k] = cb.min.y; n.minZ[k] = cb.min.z;
+        n.maxX[k] = cb.max.x; n.maxY[k] = cb.max.y; n.maxZ[k] = cb.max.z;
+        total.min = Min(total.min, cb.min);
+        total.max = Max(total.max, cb.max);
+        hasAny = true;
+      }
+      if (!hasAny) return false;
+      nodeBounds_[i] = total;
+    }
+    return true;
+  }
+
+  bool Empty() const { return nodes.empty(); }
+  size_t RejectedCount() const { return rejected_; }
+
+  template <class F>
+  void Query(const AABB& q, F&& f) const {
+    if (nodes.empty()) return;
+    int32_t stack[kStack];
+    int sp = 0;
+    stack[sp++] = 0;
+#ifdef NEWTOON_BVH_SSE2
+    const __m128 qMinX = _mm_set1_ps(q.min.x), qMinY = _mm_set1_ps(q.min.y), qMinZ = _mm_set1_ps(q.min.z);
+    const __m128 qMaxX = _mm_set1_ps(q.max.x), qMaxY = _mm_set1_ps(q.max.y), qMaxZ = _mm_set1_ps(q.max.z);
+#endif
+    while (sp > 0) {
+      const BVH4Node& n = nodes[static_cast<size_t>(stack[--sp])];
+#ifdef NEWTOON_BVH_SSE2
+      const __m128 ox = _mm_and_ps(_mm_cmple_ps(_mm_loadu_ps(n.minX), qMaxX), _mm_cmpge_ps(_mm_loadu_ps(n.maxX), qMinX));
+      const __m128 oy = _mm_and_ps(_mm_cmple_ps(_mm_loadu_ps(n.minY), qMaxY), _mm_cmpge_ps(_mm_loadu_ps(n.maxY), qMinY));
+      const __m128 oz = _mm_and_ps(_mm_cmple_ps(_mm_loadu_ps(n.minZ), qMaxZ), _mm_cmpge_ps(_mm_loadu_ps(n.maxZ), qMinZ));
+      int mask = _mm_movemask_ps(_mm_and_ps(_mm_and_ps(ox, oy), oz));
+      while (mask) {
+        const int k = CountTrailingZeros4(mask);
+        mask &= (mask - 1);
+        const int32_t ch = n.child[k];
+        if (ch == BVH4Node::kEmpty) continue;
+        if (ch < 0) f(static_cast<Entity>(~ch));
+        else if (sp < kStack) stack[sp++] = ch;
+      }
+#else
+      for (int k = 0; k < 4; ++k) {
+        const int32_t ch = n.child[k];
+        if (ch == BVH4Node::kEmpty) continue;
+        if (n.minX[k] <= q.max.x && n.maxX[k] >= q.min.x &&
+            n.minY[k] <= q.max.y && n.maxY[k] >= q.min.y &&
+            n.minZ[k] <= q.max.z && n.maxZ[k] >= q.min.z) {
+          if (ch < 0) f(static_cast<Entity>(~ch));
+          else if (sp < kStack) stack[sp++] = ch;
+        }
+      }
+#endif
+    }
+  }
+
+  template <class F>
+  void RayQuery(const Vec3& o, const Vec3& d, float& maxT, F&& visit) const {
+    if (nodes.empty()) return;
+    const Vec3 inv{std::fabs(d.x) > 1e-12f ? 1.f / d.x : 1e12f,
+                   std::fabs(d.y) > 1e-12f ? 1.f / d.y : 1e12f,
+                   std::fabs(d.z) > 1e-12f ? 1.f / d.z : 1e12f};
+    int32_t stack[kStack];
+    int sp = 0;
+    stack[sp++] = 0;
+#ifdef NEWTOON_BVH_SSE2
+    const __m128 ox = _mm_set1_ps(o.x), oy = _mm_set1_ps(o.y), oz = _mm_set1_ps(o.z);
+    const __m128 ix = _mm_set1_ps(inv.x), iy = _mm_set1_ps(inv.y), iz = _mm_set1_ps(inv.z);
+    const __m128 zero = _mm_setzero_ps();
+#endif
+    while (sp > 0) {
+      const BVH4Node& n = nodes[static_cast<size_t>(stack[--sp])];
+#ifdef NEWTOON_BVH_SSE2
+      const __m128 tMaxV = _mm_set1_ps(maxT);
+      const __m128 x1 = _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(n.minX), ox), ix);
+      const __m128 x2 = _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(n.maxX), ox), ix);
+      const __m128 y1 = _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(n.minY), oy), iy);
+      const __m128 y2 = _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(n.maxY), oy), iy);
+      const __m128 z1 = _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(n.minZ), oz), iz);
+      const __m128 z2 = _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(n.maxZ), oz), iz);
+      const __m128 t0 = _mm_max_ps(_mm_max_ps(zero, _mm_min_ps(x1, x2)), _mm_max_ps(_mm_min_ps(y1, y2), _mm_min_ps(z1, z2)));
+      const __m128 t1 = _mm_min_ps(_mm_min_ps(tMaxV, _mm_max_ps(x1, x2)), _mm_min_ps(_mm_max_ps(y1, y2), _mm_max_ps(z1, z2)));
+      int mask = _mm_movemask_ps(_mm_cmple_ps(t0, t1));
+      while (mask) {
+        const int k = CountTrailingZeros4(mask);
+        mask &= (mask - 1);
+        const int32_t ch = n.child[k];
+        if (ch == BVH4Node::kEmpty) continue;
+        if (ch < 0) visit(static_cast<Entity>(~ch), maxT);
+        else if (sp < kStack) stack[sp++] = ch;
+      }
+#else
+      for (int k = 0; k < 4; ++k) {
+        const int32_t ch = n.child[k];
+        if (ch == BVH4Node::kEmpty) continue;
+        const AABB b{{n.minX[k], n.minY[k], n.minZ[k]}, {n.maxX[k], n.maxY[k], n.maxZ[k]}};
+        if (RayAABB(o, inv, b, maxT) < 0.f) continue;
+        if (ch < 0) visit(static_cast<Entity>(~ch), maxT);
+        else if (sp < kStack) stack[sp++] = ch;
+      }
+#endif
+    }
+  }
+
+ private:
+  struct MortonItem { uint64_t key = 0; Entity entity = kNoEntity; };
+
+  static int CountTrailingZeros4(int mask) noexcept {
+    if (mask & 1) return 0;
+    if (mask & 2) return 1;
+    if (mask & 4) return 2;
+    return 3;
+  }
+
+  static void SetChildBounds(BVH4Node& n, int slot, const AABB& b) noexcept {
+    n.minX[slot] = b.min.x; n.minY[slot] = b.min.y; n.minZ[slot] = b.min.z;
+    n.maxX[slot] = b.max.x; n.maxY[slot] = b.max.y; n.maxZ[slot] = b.max.z;
+  }
+
+  AABB BuildRange(const std::vector<AABB>& boxes, size_t b, size_t e) {
+    const int32_t idx = static_cast<int32_t>(nodes.size());
+    nodes.emplace_back();
+    const size_t count = e - b;
+
+    AABB total{{1e30f, 1e30f, 1e30f}, {-1e30f, -1e30f, -1e30f}};
+    if (count <= 4) {
+      for (size_t k = 0; k < count; ++k) {
+        const Entity ent = mortonItems_[b + k].entity;
+        const AABB& cb = boxes[ent];
+        SetChildBounds(nodes[static_cast<size_t>(idx)], static_cast<int>(k), cb);
+        nodes[static_cast<size_t>(idx)].child[k] = ~static_cast<int32_t>(ent);
+        total.min = Min(total.min, cb.min);
+        total.max = Max(total.max, cb.max);
+      }
+      for (size_t k = count; k < 4; ++k) {
+        nodes[static_cast<size_t>(idx)].minX[k] = 1e30f;
+        nodes[static_cast<size_t>(idx)].maxX[k] = -1e30f;
+      }
+      return total;
+    }
+
+    // Divide o intervalo ordenado por Morton em 4 fatias contiguas
+    const size_t cuts[5] = {
+        b,
+        b + count / 4,
+        b + count / 2,
+        b + (3 * count) / 4,
+        e};
+    for (int k = 0; k < 4; ++k) {
+      const size_t cb = cuts[k], ce = cuts[k + 1];
+      if (ce - cb == 1) {
+        const Entity ent = mortonItems_[cb].entity;
+        const AABB& box = boxes[ent];
+        SetChildBounds(nodes[static_cast<size_t>(idx)], k, box);
+        nodes[static_cast<size_t>(idx)].child[k] = ~static_cast<int32_t>(ent);
+        total.min = Min(total.min, box.min);
+        total.max = Max(total.max, box.max);
+      } else {
+        const int32_t childIdx = static_cast<int32_t>(nodes.size());
+        const AABB box = BuildRange(boxes, cb, ce);
+        SetChildBounds(nodes[static_cast<size_t>(idx)], k, box);
+        nodes[static_cast<size_t>(idx)].child[k] = childIdx;
+        total.min = Min(total.min, box.min);
+        total.max = Max(total.max, box.max);
+      }
+    }
+    return total;
+  }
+
+  std::vector<MortonItem> mortonItems_;
+  std::vector<AABB> nodeBounds_;
   size_t rejected_ = 0;
 };
 

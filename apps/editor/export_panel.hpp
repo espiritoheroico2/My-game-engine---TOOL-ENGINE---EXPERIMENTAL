@@ -12,6 +12,7 @@
 #include "sui_panel.hpp"
 #include "theme_colors.hpp"
 #include "ui_scrollbar.hpp"
+#include "usability_hints.hpp"   // motivo de o botao Export estar bloqueado
 #include "spriteui_host.hpp"
 
 #include <SDL3/SDL.h>
@@ -246,6 +247,13 @@ class Panel {
     canvas_.addText(kPad + (width - labelLayout.size.x) * 0.5f, y + (kButtonH - labelLayout.lineHeight) * 0.5f, label, kFont,
                     buttonEnabled_ ? theme_.text : theme_.textDim, width);
     y += kButtonH + kGap;
+
+    // Botao apagado sem aviso de campos faltando = a plataforma escolhida nao e suportada: diz isso junto ao botao.
+    if (missing.empty()) {
+      if (const char* why = editor::usability::ExportBlockedReason(false, platformAvailable(platform))) {
+        y += canvas_.addParagraph(kPad, y, T(why), kFont - 1.f, colors_.warning, width) + kGap;
+      }
+    }
 
     if (!result_.empty()) {
       y += kGap;

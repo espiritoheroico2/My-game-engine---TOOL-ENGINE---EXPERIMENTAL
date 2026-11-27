@@ -242,8 +242,19 @@ struct SpawnerComp {
   long long total = 0, spawned = 0; int perFrame = 1;
   float height = 15.f, area = 20.f;
   bool armed = false, logged = false;
+  bool physics = true;   // true: "test ecsf" (esferas com fisica, caindo); false: "test ecs" (sem fisica, movendo)
   double startedAt = -1.0;
   uint32_t seed = 2463534242u;
+};
+
+// Movimento de uma instancia do teste "test ecs" (sem fisica): a posicao local oscila em torno de `base`, sobre
+// um caminho de Lissajous. Atualizado por Editor::tickMovers a cada quadro de Play; so mexe no Transform.
+struct MoverComp {
+  float base[3] = {0.f, 0.f, 0.f};   // centro do movimento (local ao ECScall)
+  float amp = 4.f;                   // amplitude em metros
+  float freq = 0.5f;                 // ciclos por segundo (aproximado)
+  float phase = 0.f;                 // fase inicial (rad)
+  float t = 0.f;                     // tempo acumulado em segundos
 };
 
 // Emissor de particulas: taxa, vida, velocidade, cores ao longo da vida, area de emissao, rota e redemoinho.

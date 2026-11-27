@@ -1673,6 +1673,7 @@ enum FormId : int {
     kPhysEnabled = 200, kPhysGravX, kPhysGravY, kPhysGravZ,
     kPhysPreset0 = 210,                        // 210 a 216: gravidades prontas
     kPhysIterations = 220, kPhysStepHz, kPhysColliders, kPhysSimRadius,
+    kPhysSoftStep, kPhysWarmStart, kPhysIslands, kPhysInterp, kPhysContactHz, kPhysContactDamp,
     // Optimizing (300)
     kOptFps = 300, kOptChunkCache, kOptUiScale, kOptIdle, kOptSimplify, kOptSimplifyDist, kOptSimplifyAmount,
     // Language (400)
@@ -1821,6 +1822,14 @@ void addPhysicsRows(Editor& ed, editor::settings_form::Rows& rows) {
     rows.push_back(Check(kPhysColliders, T("Draw colliders in the Scene view"), ps.drawColliders));
     rows.push_back(Slide(kPhysSimRadius, T("Simulation radius (0 = everything)"), ps.simRadius, 0.f, 1000.f));
     rows.push_back(Dim(T("Bodies outside the radius around the camera stop moving until the camera gets closer. Saves CPU in large scenes.")));
+    rows.push_back(Head(T("Newtoon solver")));
+    rows.push_back(Check(kPhysSoftStep, T("Soft Step contacts"), ps.softStep));
+    rows.push_back(Check(kPhysWarmStart, T("Warm starting"), ps.warmStarting));
+    rows.push_back(Check(kPhysIslands, T("Simulation islands (groups sleep together)"), ps.islands));
+    rows.push_back(Check(kPhysInterp, T("Render interpolation"), ps.interpolation));
+    rows.push_back(Slide(kPhysContactHz, T("Contact stiffness (Hz)"), ps.contactHertz, 5.f, 120.f));
+    rows.push_back(Slide(kPhysContactDamp, T("Contact damping ratio"), ps.contactDampingRatio, 0.f, 5.f));
+    rows.push_back(Dim(T("Soft Step and warm starting keep stacks stable. Interpolation smooths motion on high refresh rate screens. Changes apply the next time you press Play.")));
     if (ed.playing && ed.play.built) {
         const auto& s = ed.play.world.stats;
         rows.push_back(Head(T("Live")));
@@ -2034,6 +2043,12 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
         case kPhysStepHz: ed.sceneInfo.physics.stepHz = static_cast<int>(value + 0.5f); break;
         case kPhysColliders: ed.sceneInfo.physics.drawColliders = on; break;
         case kPhysSimRadius: ed.sceneInfo.physics.simRadius = value; break;
+        case kPhysSoftStep: ed.sceneInfo.physics.softStep = on; break;
+        case kPhysWarmStart: ed.sceneInfo.physics.warmStarting = on; break;
+        case kPhysIslands: ed.sceneInfo.physics.islands = on; break;
+        case kPhysInterp: ed.sceneInfo.physics.interpolation = on; break;
+        case kPhysContactHz: ed.sceneInfo.physics.contactHertz = value; ::editor::clampPhysicsSettings(ed.sceneInfo.physics); break;
+        case kPhysContactDamp: ed.sceneInfo.physics.contactDampingRatio = value; ::editor::clampPhysicsSettings(ed.sceneInfo.physics); break;
         // Optimizing
         case kOptFps: ed.fpsMode = index; ed.fpsDirty = true; ed.settingsDirty = true; break;
         case kOptChunkCache:
