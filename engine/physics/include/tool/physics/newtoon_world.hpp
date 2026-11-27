@@ -111,6 +111,11 @@ class PhysicsWorld {
   };
   struct PairInfo { Entity a = kNoEntity, b = kNoEntity; Vec3 p, n; float depth = 0, impulse = 0; bool trigger = false; };
   struct Pt { Vec3 p, n; float depth; };
+  // Limite de pontos de contato por par (manifold) no caminho caixa-caixa/casco. Mantem os de MAIOR profundidade.
+  // Padrao 8 (= comportamento anterior). Testado com 4: os testes de pilha/sono de newtoon_advanced falham
+  // (pilha instavel, ilha nao dorme), entao NAO baixe para 4 sem revisar o solver. Menos pontos = menos linhas
+  // no solver. Maximo permitido: 8 (tamanho do WarmManifold e do buffer narrowResults_).
+  static constexpr size_t kMaxManifoldPoints = 8;
 
   std::vector<ShapeInput> shapeInputs_;
 
@@ -551,9 +556,10 @@ class PhysicsWorld {
       }
       out.push_back({mid, bn, std::max(best, 1e-4f)});
     }
-    if (out.size() - first > 8) {
-      std::sort(out.begin() + static_cast<long>(first), out.end(), [](const Pt& x, const Pt& y) { return x.depth > y.depth; });
-      out.resize(first + 8);
+    if (out.size() - first > kMaxManifoldPoints) {
+      // Fica so com os kMaxManifoldPoints mais profundos (stable_sort: empates mantem a ordem -> deterministico).
+      std::stable_sort(out.begin() + static_cast<long>(first), out.end(), [](const Pt& x, const Pt& y) { return x.depth > y.depth; });
+      out.resize(first + kMaxManifoldPoints);
     }
     return true;
   }

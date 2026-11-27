@@ -4,6 +4,18 @@ Resumo do estudo de render de milhões de objetos (instâncias, células, cullin
 
 Documentos do repositório que tratam do mesmo assunto: `../planos/02_RENDER_DRAW_CALLS.md` (arquitetura-alvo e etapas P0 a P6), `../planos/00_ROADMAP.md` (seção "Pesquisa de milhões de objetos"), `../planos/12_OTIMIZACAO_FISICA_ECS.md`.
 
+## Estado atual
+
+Medido no Vulkan, AMD RX 6500 XT, 1280x720, 120 quadros, 5.000 esferas com física:
+
+- Antes do filtro: quadro 45,7 ms; buffer de oclusão 25,3 ms.
+- Depois do filtro de 8 px: quadro 19,1 ms; buffer de oclusão 0,8 ms.
+- Instâncias estáticas (`--instances 5000`, câmera fixa): 9,1 ms -> 7,7 ms.
+- Sem oclusão (`--no-occlusion`) com esferas: 18,4 ms.
+- Cache de oclusores estáticos: testado, ganho pequeno (7,76 ms câmera fixa) e piora em câmera móvel (8,92 -> 9,30 ms). Foi removido.
+- RHI: compute, UAV, draw indireto e readBuffer no backend Diligent, testados só em Vulkan.
+- Culling na GPU: em andamento (fase 1: frustum por compute + draw indireto, sem HiZ).
+
 ## 1. Resumo
 
 ### Linha de base medida
@@ -26,10 +38,10 @@ Origem: medição informada para este estudo. Data e comando exatos não estão 
 
 ### O que existe hoje (conferido no código)
 
-- `GpuRenderer::drawDynamic(slot, ...)`, `drawIndexed` e `drawIndexedRange`; o RHI não tem draw indireto (`../planos/12_OTIMIZACAO_FISICA_ECS.md`).
+- `GpuRenderer::drawDynamic(slot, ...)`, `drawIndexed` e `drawIndexedRange`; o RHI tem draw indireto e compute no backend Diligent (testados só em Vulkan; ver "Estado atual").
 - O shader PBR já lê um buffer de instâncias (`Instances` em `pbrStorageNames`, `gpu_renderer.hpp`).
 - O helper `engine/render/include/tool/render/indirect_plan.hpp` existe e é coberto por `tests/test_render_helpers.cpp`, mas não tem chamador no renderer.
-- Compute: o RHI prevê o estágio compute em `ShaderStage`; os documentos dizem que o RHI ainda não tem compute nem buffers estruturados de uso geral. Confirmar na Etapa E0.
+- Compute: o RHI prevê o estágio compute em `ShaderStage` e o backend Diligent já implementa compute e UAV (StorageRW), testados em Vulkan. D3D12 e GL ainda não foram testados.
 - A apresentação da cena é lida de volta para a CPU a cada quadro (`../estudos/AUDITORIA_DESEMPENHO.md`); o zero-copy ainda não existe.
 - Culling por frustum na CPU existe; o culling por oclusão por software é o custo de 78 ms acima.
 
@@ -57,6 +69,6 @@ Regra comum a todas: medir antes e depois na mesma máquina e cena; separar CPU 
 
 ## 3. Riscos
 
-- Compute e draw indireto não existem no RHI; E4 e E6 são mudanças de API em Vulkan e Direct3D 12 e precisam de GPU para validar. O ambiente de desenvolvimento citado nos documentos não tem GPU, então o gate de cada uma exige a máquina do usuário.
+- Compute e draw indireto já existem no backend Diligent, mas só foram testados em Vulkan; E4 e E6 ainda precisam de validação em Direct3D 12 e de GPU para medir. O ambiente de desenvolvimento citado nos documentos não tem GPU, então o gate de cada uma exige a máquina do usuário.
 - Sombras, transparência e partículas passam pelo mesmo caminho de instâncias; a transparência exige ordenação, que o draw indireto sozinho não resolve.
 - A física em milhares de corpos (`FISICA_OTIMIZACAO.md`) e as partículas (`../planos/13_FUNCIONALIDADES_FUTURAS.md`, item f) disputam o mesmo tempo de quadro; medir cada uma separada.

@@ -48,6 +48,48 @@ inline int runSelfTest(const std::string& samplesDir) {
   std::error_code ec; fs::remove_all(tmp, ec);
   ed.project.root = tmp; ed.project.ensure();
   ed.sceneInfo.name = "Main"; ed.createDefaultContent(); check(ed.saveScene(), "save default scene");
+  { // material como asset: o MeshRenderer com material usa o albedo do arquivo; sem material volta aos campos locais
+    material_asset::MaterialAsset a; a.name = "SelfTestRed";
+    a.albedo[0] = 0.9f; a.albedo[1] = 0.1f; a.albedo[2] = 0.2f; a.albedo[3] = 0.5f;
+    a.roughness = 0.25f; a.metallic = 0.75f; a.blend = material_asset::Blend::Alpha;
+    std::string merr; const std::string root = ed.project.root.string();
+    check(material_asset::save(root, a, merr), "material: saved in <project>/Materials");
+    MeshRenderer mr;   // campos locais: cor padrao, opacidade 1
+    auto resolve = [&](const MeshRenderer& r) {
+      tool::Material m{{r.color[0], r.color[1], r.color[2]}, r.roughness, r.metallic, r.castShadow, r.receiveShadow};
+      m.opacity = r.opacity;
+      const material_asset::MaterialAsset* ma = r.material[0] ? ed.materials.find(root, r.material) : nullptr;
+      if (ma) applyMaterialAsset(m, *ma);
+      return m;
+    };
+    std::snprintf(mr.material, sizeof mr.material, "%s", "SelfTestRed");
+    const tool::Material withMat = resolve(mr);
+    check(std::fabs(withMat.albedo.x - 0.9f) < 1e-4f && std::fabs(withMat.albedo.y - 0.1f) < 1e-4f && std::fabs(withMat.roughness - 0.25f) < 1e-4f &&
+          std::fabs(withMat.metallic - 0.75f) < 1e-4f && std::fabs(withMat.opacity - 0.5f) < 1e-4f, "material: the drawn Material uses the file values (albedo, roughness, metallic, alpha)");
+    mr.material[0] = 0;
+    const tool::Material noMat = resolve(mr);
+    check(std::fabs(noMat.albedo.x - mr.color[0]) < 1e-4f && std::fabs(noMat.opacity - 1.f) < 1e-4f, "material: without material the local fields are used");
+    std::snprintf(mr.material, sizeof mr.material, "%s", "NaoExiste");
+    check(std::fabs(resolve(mr).albedo.x - mr.color[0]) < 1e-4f, "material: a missing material falls back to the local fields");
+    std::string e2;
+    check(material_asset::remove(material_asset::pathFor(root, "SelfTestRed"), e2), "material: temp file removed");
+    // Campos novos: tiling/offset, normal map, cutoff e dupla face passam do arquivo ate o Material resolvido (e sao presos).
+    material_asset::MaterialAsset b; b.name = "SelfTestUv";
+    b.uvTiling[0] = 2.f; b.uvTiling[1] = 2.f; b.uvOffset[0] = 0.25f; b.normalMap = "Assets/n.png"; b.normalStrength = 5.f;
+    b.alphaCutoff = 0.4f; b.doubleSided = true; b.blend = material_asset::Blend::Alpha;
+    check(material_asset::save(root, b, merr), "material uv: saved");
+    MeshRenderer mr2; std::snprintf(mr2.material, sizeof mr2.material, "%s", "SelfTestUv");
+    const tool::Material uvm = resolve(mr2);
+    const material_asset::MaterialAsset* got = ed.materials.find(root, "SelfTestUv");
+    check(got && std::string(normalMapOf(got)) == "Assets/n.png", "material uv: normal map path is kept");
+    check(std::fabs(uvm.uvTiling[0] - 2.f) < 1e-4f && std::fabs(uvm.uvTiling[1] - 2.f) < 1e-4f && std::fabs(uvm.uvOffset[0] - 0.25f) < 1e-4f,
+          "material uv: tiling and offset reach the drawn Material");
+    check(std::fabs(uvm.normalStrength - 2.f) < 1e-4f, "material uv: normal strength is clamped to 2");
+    check(std::fabs(uvm.alphaCutoff - 0.4f) < 1e-4f && uvm.doubleSided, "material uv: alpha cutoff (Alpha blend) and double sided are applied");
+    b.blend = material_asset::Blend::Opaque; b.uvTiling[0] = -3.f;
+    check(material_asset::clamped(b).uvTiling[0] == 1.f, "material uv: non-positive tiling is clamped to 1");
+    check(material_asset::remove(material_asset::pathFor(root, "SelfTestUv"), e2), "material uv: temp file removed");
+  }
   { // bounds e assinatura de sombra invalidam caches quando geometria, estado ou transformacao mudam
     tool::Mesh probe = tool::Mesh::cube(0.5f);
     const Editor::Bounds oldBounds = ed.meshBounds(probe);
@@ -922,6 +964,27 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(::editor::settings_model::ClampSimplifyAmount(2.f) == ::editor::settings_model::kSimplifyAmountMax &&
           ::editor::settings_model::ClampSimplifyAmount(-1.f) == 0.f && ::editor::settings_model::ClampSimplifyDistance(1.f) == ::editor::settings_model::kSimplifyDistanceMin,
           "simplify settings: amount and distance are clamped to their ranges");
+  }
+
+  { // escala de render efetiva: com FSR vale 1/fator do modo de qualidade; sem FSR vale o slider
+    RenderSettings r; r.fsrQuality = 1;   // Quality = 1.5x
+    check(std::fabs(effectiveRenderScale(r, 0.8f) - 0.8f) < 1e-6f, "effective render scale: no FSR uses the slider");
+    r.fsr1 = true;
+    check(std::fabs(effectiveRenderScale(r, 0.8f) - 1.f / 1.5f) < 1e-6f, "effective render scale: FSR 1 on = 1 / quality factor");
+    r.fsrQuality = 3;   // Performance = 2.0x
+    check(std::fabs(effectiveRenderScale(r, 0.8f) - 0.5f) < 1e-6f, "effective render scale: Performance mode = 0.5");
+    r.fsrQuality = ::editor::kFsrQualityCustom; r.fsrCustomScale = 0.6f;
+    check(std::fabs(effectiveRenderScale(r, 0.8f) - 0.6f) < 1e-6f, "effective render scale: Custom mode uses its own factor");
+    r.fsr1 = false; r.fsr4 = true; r.fsrQuality = 1;
+    check(std::fabs(effectiveRenderScale(r, 0.8f) - 1.f / 1.5f) < 1e-6f, "effective render scale: FSR 4 on also takes over the scale");
+    // persistencia: ida e volta, padroes e migracao da chave antiga "fsr1Sharpness"
+    RenderSettings s; s.fsr4 = true; s.frameGen = true; s.fsrQuality = 4; s.fsrSharpness = 0.55f;
+    const RenderSettings back = loadRenderSettings(saveRenderSettings(s));
+    check(back.fsr4 && back.frameGen && back.fsrQuality == 4 && std::fabs(back.fsrSharpness - 0.55f) < 1e-4f, "FSR settings survive save and load");
+    const RenderSettings none = loadRenderSettings(tool::Json::object());
+    check(!none.fsr4 && !none.frameGen && none.fsrQuality == 1 && std::fabs(none.fsrSharpness - 0.2f) < 1e-6f, "FSR settings: missing keys give the defaults");
+    tool::Json old = tool::Json::object(); old.set("fsr1Sharpness", 0.7);
+    check(std::fabs(loadRenderSettings(old).fsrSharpness - 0.7f) < 1e-4f, "FSR settings: old fsr1Sharpness key is still read");
   }
 
   fs::remove_all(tmp, ec);

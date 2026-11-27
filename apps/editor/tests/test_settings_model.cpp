@@ -24,11 +24,13 @@ void Check(bool ok, const char* expr, int line) {
 
 void TestTabNamesMatchTheBar() {
   CHECK(kTabCount == 7);
-  CHECK(std::strcmp(kTabNames[0], "Appearance") == 0);
-  CHECK(std::strcmp(kTabNames[1], "API/Graphics") == 0);
-  CHECK(std::strcmp(kTabNames[3], "Physics") == 0);
-  CHECK(std::strcmp(kTabNames[5], "Optimizing") == 0);
-  CHECK(std::strcmp(kTabNames[6], "Language") == 0);
+  CHECK(std::strcmp(kTabNames[kTabGraphics], "Graphics and API") == 0);
+  CHECK(std::strcmp(kTabNames[kTabQuality], "Quality") == 0);
+  CHECK(std::strcmp(kTabNames[kTabLighting], "Lighting and shadows") == 0);
+  CHECK(std::strcmp(kTabNames[kTabPhysics], "Physics") == 0);
+  CHECK(std::strcmp(kTabNames[kTabInterface], "Interface") == 0);
+  CHECK(std::strcmp(kTabNames[kTabLanguage], "Language") == 0);
+  CHECK(std::strcmp(kTabNames[kTabProject], "Project") == 0);
 }
 
 void TestOptimizingLimits() {

@@ -22,3 +22,9 @@ build_log.txt
 
 # Log de build (saida grande, nao versionar)
 build.log
+
+# Engine Book (documento gerado, nao versionar)
+Engine Book.docx
+
+# SDK AMD FidelityFX (FSR 4 / frame generation): binarios grandes, opcional, fora do git
+third_party/fidelityfx/

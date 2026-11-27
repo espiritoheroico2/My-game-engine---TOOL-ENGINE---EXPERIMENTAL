@@ -52,6 +52,7 @@ struct MeshRenderer {
   float roughness = 0.5f, metallic = 0.f;
   char model[160] = "";
   char texture[160] = "";
+  char material[64] = "";   // nome do material (<projeto>/Materials/<nome>.json); vazio = sem material, usa os campos locais
   bool castShadow = true, receiveShadow = true;
   int node = -1;
   float emissive[3] = {1.f, 1.f, 1.f};
@@ -62,6 +63,13 @@ struct MeshRenderer {
   float fogColor[3] = {0.6f, 0.65f, 0.7f};
   float fogStart = 5.f, fogEnd = 50.f;
   float fogAmount = 1.f;
+  // Campos locais de material avancado (valem so sem material atribuido; com material, vem dele). Padroes = comportamento antigo.
+  char normalMap[160] = "";             // textura de normais (espaco tangente); vazio = sem
+  float normalStrength = 1.f;           // 0..2
+  float uvTiling[2] = {1.f, 1.f};       // repeticoes da UV (> 0)
+  float uvOffset[2] = {0.f, 0.f};       // deslocamento da UV
+  float alphaCutoff = 0.f;              // 0..1; > 0 descarta pixels transparentes (objeto com opacidade < 1)
+  bool doubleSided = false;             // desenha as duas faces
 };
 
 // Material trocado so em uma parte (indice) de um modelo importado.
@@ -112,7 +120,12 @@ struct PhysicsComp {
   float linearDamping = 0.01f, angularDamping = 0.05f, gravityScale = 1.f;
   bool useGravity = true, freezeRotation = false, ccd = false, trigger = false;
   bool overrideGravity = false;
+  bool showCollider = false;   // "Ver collision shape": desenha so o colisor deste objeto na Scene
   float gravity[3] = {0.f, -9.81f, 0.f};
+  // Colisor "Simplified hull": em objetos com modelo (shape 3), usa a capa simplificada (casco com <= 24 pontos,
+  // cacheada por malha) em vez de recalcular o colisor a partir de todos os vertices. Padrao false = modo atual.
+  // Salvo no JSON como "simplified"; ausente = false.
+  bool simplifiedHull = false;
 };
 
 // Tipos de "tool" (comportamento pronto) que um objeto pode ter.
@@ -505,6 +518,14 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     o.set("castShadow", mr->castShadow); o.set("receiveShadow", mr->receiveShadow); o.set("node", mr->node);
     o.set("emissive", ser::vec(mr->emissive, 3)); o.set("emissiveIntensity", static_cast<double>(mr->emissiveIntensity)); o.set("emissionOn", mr->emissionOn); o.set("opacity", static_cast<double>(mr->opacity));
     o.set("fogOn", mr->fogOn); o.set("fogColor", ser::vec(mr->fogColor, 3)); o.set("fogStart", static_cast<double>(mr->fogStart)); o.set("fogEnd", static_cast<double>(mr->fogEnd)); o.set("fogAmount", static_cast<double>(mr->fogAmount));
+    if (mr->material[0]) o.set("material", std::string(mr->material));   // so quando ha material (cenas sem material ficam iguais)
+    // Campos avancados: so gravados quando diferem do padrao (cenas antigas ficam identicas).
+    if (mr->normalMap[0]) o.set("normalMap", std::string(mr->normalMap));
+    if (mr->normalStrength != 1.f) o.set("normalStrength", static_cast<double>(mr->normalStrength));
+    if (mr->uvTiling[0] != 1.f || mr->uvTiling[1] != 1.f) o.set("uvTiling", ser::vec(mr->uvTiling, 2));
+    if (mr->uvOffset[0] != 0.f || mr->uvOffset[1] != 0.f) o.set("uvOffset", ser::vec(mr->uvOffset, 2));
+    if (mr->alphaCutoff != 0.f) o.set("alphaCutoff", static_cast<double>(mr->alphaCutoff));
+    if (mr->doubleSided) o.set("doubleSided", true);
     j.set("mesh", o);
   }
   if (auto* po = w.get<PartOverrides>(e)) {
@@ -534,7 +555,9 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     Json o = Json::object(); o.set("body", p->body); o.set("collider", p->collider); o.set("mass", static_cast<double>(p->mass)); o.set("friction", static_cast<double>(p->friction));
     o.set("bounciness", static_cast<double>(p->bounciness)); o.set("linearDamping", static_cast<double>(p->linearDamping)); o.set("angularDamping", static_cast<double>(p->angularDamping));
     o.set("gravityScale", static_cast<double>(p->gravityScale)); o.set("useGravity", p->useGravity); o.set("freezeRotation", p->freezeRotation); o.set("ccd", p->ccd); o.set("trigger", p->trigger);
-    o.set("overrideGravity", p->overrideGravity); o.set("gravity", ser::vec(p->gravity, 3)); j.set("physics", o);
+    o.set("overrideGravity", p->overrideGravity); o.set("showCollider", p->showCollider); o.set("gravity", ser::vec(p->gravity, 3));
+    if (p->simplifiedHull) o.set("simplified", true); // so grava quando ligado (cenas antigas ficam identicas)
+    j.set("physics", o);
   }
   if (auto* tl = w.get<ToolsComp>(e)) {
     Json arr = Json::array();
@@ -613,6 +636,13 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     m.fogOn = ser::flag(o, "fogOn", false); ser::readVec(o["fogColor"], m.fogColor, 3);
     m.fogStart = ser::num(o, "fogStart", 5.f); m.fogEnd = ser::num(o, "fogEnd", 50.f);
     m.fogAmount = ser::clampNum(o, "fogAmount", 1.f, 0.f, 1.f);
+    ser::copyStr(m.material, sizeof m.material, o["material"].asString());   // ausente = vazio
+    ser::copyStr(m.normalMap, sizeof m.normalMap, o["normalMap"].asString());
+    m.normalStrength = ser::clampNum(o, "normalStrength", 1.f, 0.f, 2.f);
+    ser::readVec(o["uvTiling"], m.uvTiling, 2); ser::readVec(o["uvOffset"], m.uvOffset, 2);
+    for (float& t : m.uvTiling) if (!(t > 0.f)) t = 1.f;   // tiling precisa ser > 0
+    m.alphaCutoff = ser::clampNum(o, "alphaCutoff", 0.f, 0.f, 1.f);
+    m.doubleSided = ser::flag(o, "doubleSided", false);
     if (m.shape < 0 || m.shape > 9) m.shape = 0;
     w.add<MeshRenderer>(e, m);
   }
@@ -651,6 +681,8 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     p.linearDamping = ser::clampNum(o, "linearDamping", 0.01f, 0.f, 100.f); p.angularDamping = ser::clampNum(o, "angularDamping", 0.05f, 0.f, 100.f);
     p.gravityScale = ser::clampNum(o, "gravityScale", 1.f, -10.f, 10.f); p.useGravity = ser::flag(o, "useGravity", true); p.freezeRotation = ser::flag(o, "freezeRotation", false);
     p.ccd = ser::flag(o, "ccd", false); p.trigger = ser::flag(o, "trigger", false); p.overrideGravity = ser::flag(o, "overrideGravity", false);
+    p.showCollider = ser::flag(o, "showCollider", false);   // ausente = false
+    p.simplifiedHull = ser::flag(o, "simplified", false);   // ausente = modo atual
     ser::readVec(o["gravity"], p.gravity, 3); for (float& g : p.gravity) g = std::clamp(g, -1000.f, 1000.f);
     w.add<PhysicsComp>(e, p);
   }

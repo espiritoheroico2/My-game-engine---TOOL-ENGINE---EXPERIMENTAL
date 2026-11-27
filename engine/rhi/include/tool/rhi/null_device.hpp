@@ -38,6 +38,10 @@ public:
   }
   // Registra um pipeline. Exige vs e ps validos, senao erro TOOL-E133.
   PipelineId createPipeline(const PipelineDesc& d) override {
+    if (!d.cs.isNull()) { // pipeline de compute: so valida o shader (supportsCompute() do Null e falso; dispatch e no-op)
+      if (!valid(d.cs, Kind::Shader)) { debug().report("TOOL-E133", Severity::Error, "pipeline com shader invalido"); return kNullHandle; }
+      Handle h = ids_.create(); kind_[h.index] = Kind::Pipeline; return h;
+    }
     if (!valid(d.vs, Kind::Shader) || !valid(d.ps, Kind::Shader)) {
       debug().report("TOOL-E133", Severity::Error, "pipeline com shader invalido"); return kNullHandle;
     }

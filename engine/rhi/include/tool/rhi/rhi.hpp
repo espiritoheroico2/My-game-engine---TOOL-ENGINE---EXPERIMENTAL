@@ -54,14 +54,20 @@ enum class Format : u8 { RGBA8, RGBA8_SRGB, BGRA8, RGBA16F, R32F, D32F, D24S8 };
 // Descarte de faces: None, Back (padrao) ou Front.
 enum class CullMode : u8 { None, Back, Front };
 // Uso de um buffer: vertices, indices, uniform (cbuffer) ou storage (StructuredBuffer).
-enum class BufferUsage : u8 { Vertex, Index, Uniform, Storage };
+// StorageRW = buffer lido/escrito pela GPU em compute (UAV, StructuredBuffer/RWStructuredBuffer);
+// Indirect = argumentos de draw indireto (DrawIndexedIndirectArgs), tambem gravavel por compute (UAV raw).
+enum class BufferUsage : u8 { Vertex, Index, Uniform, Storage, StorageRW, Indirect };
+
+// Layout dos argumentos de drawIndexedIndirect (igual ao D3D12/Vulkan/Diligent: 5 x 32 bits).
+struct DrawIndexedIndirectArgs { u32 indexCount = 0, instanceCount = 0, firstIndex = 0; i32 baseVertex = 0; u32 firstInstance = 0; };
 // Estagio do shader: vertex, pixel (fragment) ou compute.
 enum class ShaderStage : u8 { Vertex, Pixel, Compute };
 
 // Descricao de um buffer: tamanho em bytes, uso, se muda por quadro e stride (storage).
 struct BufferDesc { size_t size = 0; BufferUsage usage = BufferUsage::Vertex; bool dynamic = false; u32 elementStride = 0; };
 // Descricao de uma textura 2D: dimensoes, niveis de mip, formato e se e alvo de renderizacao.
-struct TextureDesc { u32 width = 1, height = 1, mips = 1; Format format = Format::RGBA8; bool renderTarget = false; };
+// `storage` = a textura tambem pode ser escrita como UAV/imagem de armazenamento (ex.: saida de um upscaler externo como o FSR 4).
+struct TextureDesc { u32 width = 1, height = 1, mips = 1; Format format = Format::RGBA8; bool renderTarget = false; bool storage = false; };
 // `source` = HLSL (backends reais compilam para SPIR-V/GLSL/DXIL); `bytecode` = binario ja compilado (opcional).
 enum class ShaderLang : u8 { HLSL, GLSL };
 // Descricao de um shader: codigo HLSL/GLSL (ou bytecode), estagio e nome da funcao de entrada.
@@ -81,6 +87,10 @@ struct PipelineDesc {
   std::vector<std::string> textureNames; // slot i -> textura no shader de pixel; esta interface nao expoe sampler (Load/texelFetch = Nearest)
   std::vector<std::string> storageNames; // slot i -> nome de um StructuredBuffer somente leitura (SRV) em VS e PS (setStorage)
   std::string name;
+  // Pipeline de COMPUTE: se `cs` nao for nulo, vs/ps sao ignorados e o pipeline e de compute. Os slots usam
+  // uniformNames (cbuffer), storageNames (SRV de leitura) e storageRWNames (UAV, setStorageRW).
+  Handle cs;
+  std::vector<std::string> storageRWNames; // slot i -> nome de um RWStructuredBuffer/RWByteAddressBuffer no compute
 };
 
 using BufferId = Handle;
@@ -141,6 +151,15 @@ public:
   // Desenha a partir de um deslocamento do index buffer (firstIndex), sem base de vertice. Usado para desenhar
   // lotes diferentes de um mesmo buffer dentro de um quadro.
   virtual void drawIndexedRange(u32 firstIndex, u32 indexCount, u32 instances = 1) = 0;
+  // ---- Compute / GPU-driven (padrao: no-op, para backends sem suporte; ver IDevice::supportsCompute) ----
+  // Despacha o compute shader do pipeline ligado (setPipeline com PipelineDesc::cs) em gx*gy*gz grupos.
+  // Pode ser chamado dentro ou fora de begin()/end() (compute nao usa alvo de render), mas nao dentro de um render pass ativo no Vulkan:
+  // chame antes de begin() ou depois de end(). Barreiras UAV->SRV/INDIRECT sao feitas pelo backend.
+  virtual void dispatch(u32 /*gx*/, u32 /*gy*/, u32 /*gz*/) {}
+  // Liga o buffer (BufferUsage::StorageRW ou Indirect) como UAV ao slot de PipelineDesc::storageRWNames.
+  virtual void setStorageRW(u32 /*slot*/, BufferId /*b*/) {}
+  // Desenho indireto indexado: os argumentos (DrawIndexedIndirectArgs) vem de `args` no byte `offset`, gravados pela GPU.
+  virtual void drawIndexedIndirect(BufferId /*args*/, u32 /*offset*/) {}
   // Fecha a lista. Depois disso ela pode ser enviada com IDevice::submit().
   virtual void end() = 0;
 };
@@ -196,6 +215,11 @@ public:
   virtual int readTextureAsync(TextureId t, int slot, std::vector<u8>& rgba, u32& w, u32& h) {
     (void)slot; return readTexture(t, rgba, w, h) ? 1 : -1;
   }
+  // Leitura sincrona (espera a GPU) do conteudo de um buffer para a CPU. Para testes e depuracao; devolve false em falha/sem suporte.
+  virtual bool readBuffer(BufferId, std::vector<u8>&) { return false; }
+  // Capacidades: compute shader + UAV, e draw indireto. Falso por padrao (Null, GL sem compute).
+  virtual bool supportsCompute() const { return false; }
+  virtual bool supportsIndirect() const { return false; }
   // Nome do adaptador (GPU) em uso, para diagnostico.
   virtual std::string deviceName() const { return "null"; }
   // Importa um buffer criado por outra biblioteca na mesma GPU (ex.: IBuffer do Diligent da Light Prism). O handle NAO

@@ -188,6 +188,10 @@ class View {
                     listContentH(), listViewH());
     listFirst_ = static_cast<std::size_t>(std::lround(listScroll_ / Theme::kRowHeight));
 
+    // Engrenagem de cada cena + janelinha de config: tratados a mao (fora da arvore de layout). Se o clique foi deles,
+    // o roteador da SpriteUI nao o recebe (nao seleciona a linha por baixo).
+    if (gearAndPopup(in, actions)) barUse = true;
+
     applyVisuals();
     auto scene = bridge_.Extract(tree_);
     SU::Input::UIInputSnapshot input;
@@ -306,6 +310,19 @@ class View {
   [[nodiscard]] SU::Rect helpRect() const { return helpRectNow(); }
   [[nodiscard]] SU::Rect rectOf(SU::UIHandle handle) const { return nodeRect(handle); }
 
+  // ---- config por cena (engrenagem) ----
+  // Pasta do projeto, para listar <projeto>/Configs. O host chama quando abre/troca de projeto.
+  void setProjectDir(std::string dir) { projectDir_ = std::move(dir); }
+  // Config atual de uma cena (vazio = padrao do jogo), so para marcar a escolha na janelinha. O host chama ao sincronizar.
+  void setScenePreset(const std::string& scene, const std::string& path) { presets_[scene] = path; }
+  // Cena e arquivo escolhidos, validos quando o quadro devolveu Action::ScenePreset (arquivo vazio = padrao do jogo).
+  [[nodiscard]] const std::string& presetScene() const { return presetScene_; }
+  [[nodiscard]] const std::string& presetChoice() const { return presetChoice_; }
+  // Tooltip da janela: o host chama tooltip().draw(canvas, w, h) no fim do quadro (o View registra o alvo no Frame).
+  editor::tooltip::Tooltip& tooltip() { return tip_; }
+  // Janelinha de config aberta? (o host pode usar para esconder outros baloes)
+  [[nodiscard]] bool presetPopupOpen() const { return popup_; }
+
  private:
   static constexpr std::size_t kNone = static_cast<std::size_t>(-1);
 
@@ -323,6 +340,144 @@ class View {
 
   // "?" logo depois do grip; o titulo comeca depois dele.
   SU::Rect helpRectNow() const { return frame_.helpRect(); }
+
+  // ---------- Engrenagem e janelinha de config da cena ----------
+  // Item da janelinha: kind 0 = "Padrao do jogo", 1 = config da pasta Configs, 2 = "Escolher arquivo...", 3 = "Fechar".
+  struct PopItem {
+    int kind = 0;
+    SU::Rect r{};
+    std::string label;   // texto mostrado
+    std::string path;    // arquivo da config (so kind 1)
+  };
+
+  // Resultado do seletor de arquivo do SDL (a callback roda em outra thread: guarda o caminho sob mutex e o Frame le).
+  struct PickSlot {
+    std::mutex m;
+    std::string path;
+    bool ready = false;
+  };
+  static PickSlot& pickSlot() { static PickSlot s; return s; }
+  static void SDLCALL onFilePicked(void*, const char* const* files, int) {
+    if (!files || !*files) return;   // cancelado ou erro: nada a fazer
+    PickSlot& s = pickSlot();
+    std::lock_guard<std::mutex> lock(s.m);
+    s.path = *files;
+    s.ready = true;
+  }
+
+  // Dois caminhos apontam para o mesmo arquivo? (compara pelo sistema de arquivos; se falhar, compara o texto)
+  static bool samePath(const std::string& a, const std::string& b) {
+    if (a.empty() || b.empty()) return a == b;
+    std::error_code ec;
+    const bool eq = std::filesystem::equivalent(a, b, ec);
+    return ec ? a == b : eq;
+  }
+
+  // Retangulo da engrenagem da linha visivel `i`: encostada a direita da linha, antes da barra de rolagem da lista.
+  SU::Rect gearRect(std::size_t i) const {
+    const SU::Rect rr = nodeRect(rows_h_[i]);
+    const float barReserve = listBar_.visible() ? ui_scrollbar::kWidth + 4.f : 0.f;
+    return {{rr.position.x + rr.size.x - barReserve - Theme::kGearSize - 6.f,
+             rr.position.y + (rr.size.y - Theme::kGearSize) * 0.5f},
+            {Theme::kGearSize, Theme::kGearSize}};
+  }
+
+  // Calcula a janelinha de config: retangulo, titulo e a lista de itens clicaveis (recalculada a cada quadro).
+  void layoutPopup() {
+    popItems_.clear();
+    const float pad = 8.f, titleH = 24.f, rowH = Theme::kRowHeight, btnH = 30.f;
+    const std::size_t n = std::min(presetList_.size(), Theme::kPopupMaxPresets);
+    const float w = std::max(120.f, std::min(Theme::kPopupWidth, content_.size.x - 16.f));
+    const float h = pad + titleH + static_cast<float>(1 + n) * rowH + pad + btnH + pad;
+    const float x = content_.position.x + (content_.size.x - w) * 0.5f;
+    float y = content_.position.y + 40.f;
+    y = std::max(content_.position.y, std::min(y, content_.position.y + content_.size.y - h));
+    popRect_ = {{x, y}, {w, h}};
+    float cy = y + pad + titleH;
+    popItems_.push_back({0, {{x + pad, cy}, {w - 2.f * pad, rowH}}, T("Game default"), {}});
+    cy += rowH;
+    for (std::size_t i = 0; i < n; ++i, cy += rowH)
+      popItems_.push_back({1, {{x + pad, cy}, {w - 2.f * pad, rowH}}, presetList_[i].name, presetList_[i].path});
+    cy += pad;
+    const float bw = (w - 3.f * pad) * 0.5f;
+    popItems_.push_back({2, {{x + pad, cy}, {bw, btnH}}, T("Choose file..."), {}});
+    popItems_.push_back({3, {{x + 2.f * pad + bw, cy}, {bw, btnH}}, T("Close"), {}});
+  }
+
+  // Grava a escolha: lembra na janela e pede ao host (Action::ScenePreset) para gravar na cena.
+  void choosePreset(const std::string& scene, const std::string& path, std::vector<Action>& actions) {
+    presets_[scene] = path;
+    presetScene_ = scene;
+    presetChoice_ = path;
+    actions.push_back(Action::ScenePreset);
+  }
+
+  // Engrenagens (tooltip, clique que abre a janelinha) e a janelinha (clique nos itens). Devolve true se consumiu o
+  // ponteiro neste quadro (o roteador da SpriteUI nao deve ver esse clique).
+  bool gearAndPopup(const FrameInput& in, std::vector<Action>& actions) {
+    const SU::Vec2 p{in.pointerX, in.pointerY};
+    // Tooltip: o tempo vem do relogio (a janela redesenha por eventos, entao limita o salto entre quadros).
+    const auto now = std::chrono::steady_clock::now();
+    const float dt = lastTipTime_.time_since_epoch().count() == 0
+                         ? 0.f : std::min(0.25f, std::chrono::duration<float>(now - lastTipTime_).count());
+    lastTipTime_ = now;
+    tip_.beginFrame(in.pointerX, in.pointerY, dt);
+    tipText_ = T("Add custom settings to this scene");   // vive ate o draw() do tooltip (membro)
+
+    // Escolha feita no seletor de arquivo (outra thread): vale para a cena que abriu o seletor.
+    {
+      PickSlot& s = pickSlot();
+      std::lock_guard<std::mutex> lock(s.m);
+      if (s.ready) {
+        s.ready = false;
+        if (!pickScene_.empty()) choosePreset(pickScene_, s.path, actions);
+        pickScene_.clear();
+        popup_ = false;
+      }
+    }
+
+    gearHover_ = kNone;
+    if (!frame_.minimized() && !popup_) {
+      for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
+        if (listFirst_ + i >= rows_.size()) break;
+        const SU::Rect g = gearRect(i);
+        if (!inside(content_, {g.position.x + g.size.x * 0.5f, g.position.y + g.size.y * 0.5f})) continue;   // linha rolada para fora
+        if (!inside(g, p)) continue;
+        gearHover_ = i;
+        tip_.target(g.position.x, g.position.y, g.size.x, g.size.y, tipText_.c_str());
+        if (in.pointerPressed && model_.mode == NameMode::None) {   // abre a janelinha para esta cena
+          popup_ = true;
+          popupScene_ = rows_[listFirst_ + i].name;
+          presetList_ = editor::config_preset::list(projectDir_);   // le a pasta Configs na hora de abrir
+          return true;
+        }
+      }
+    }
+    if (!popup_) return false;
+
+    tip_.suppress(true);   // com a janelinha aberta nao mostra balao por cima
+    layoutPopup();
+    popHover_ = kNone;
+    for (std::size_t i = 0; i < popItems_.size(); ++i)
+      if (inside(popItems_[i].r, p)) popHover_ = i;
+    if (!in.pointerPressed) return inside(popRect_, p);   // o ponteiro sobre a janelinha nao age nas linhas de baixo
+    if (!inside(popRect_, p)) { popup_ = false; return true; }   // clique fora fecha
+    if (popHover_ == kNone) return true;
+    const PopItem item = popItems_[popHover_];
+    switch (item.kind) {
+      case 0: choosePreset(popupScene_, {}, actions); popup_ = false; break;          // padrao do jogo
+      case 1: choosePreset(popupScene_, item.path, actions); popup_ = false; break;   // config da pasta
+      case 2: {   // seletor de arquivo (JSON); a resposta chega pela callback e e lida no proximo quadro
+        pickScene_ = popupScene_;
+        pickDefault_ = editor::config_preset::folder(projectDir_);
+        static const SDL_DialogFileFilter kFilters[] = {{"Config (*.json)", "json"}};
+        SDL_ShowOpenFileDialog(&onFilePicked, nullptr, nullptr, kFilters, 1, pickDefault_.c_str(), false);
+        break;
+      }
+      default: popup_ = false; break;   // Fechar
+    }
+    return true;
+  }
 
   // Botoes da moldura: X fecha, "?" pede a Help, minimizar recolhe (a propria moldura). Arraste e redimensionamento
   // nao passam por aqui: o host do dock decide o gesto e move a moldura.
@@ -847,8 +1002,34 @@ class View {
     for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
       const std::size_t ri = listFirst_ + i;
       if (ri >= rows_.size()) break;
+      // Reserva tambem o espaco da engrenagem (a direita do nome) para o texto nao passar por baixo dela.
       line(rows_h_[i], rows_[ri].current ? rows_[ri].name + T(" (open)") : rows_[ri].name,
-           rows_[ri].current ? colors_.help : colors_.text, Theme::kLabelSize + 1.f, barReserve);
+           rows_[ri].current ? colors_.help : colors_.text, Theme::kLabelSize + 1.f, barReserve + Theme::kGearSize + 10.f);
+    }
+
+    // Engrenagem: dentes (barras e quadrados nas diagonais) + disco + furo na cor da linha. Mais clara no hover.
+    auto gear = [&](SU::Rect g, SU::Vec4 col, SU::Vec4 bg) {
+      const float s = g.size.x, cx = g.position.x + s * 0.5f, cy = g.position.y + s * 0.5f;
+      const float t = s * 0.26f;   // espessura dos dentes
+      solid(panelHandle_, {{g.position.x, cy - t * 0.5f}, {s, t}}, col, 0.8f);   // dentes horizontais
+      solid(panelHandle_, {{cx - t * 0.5f, g.position.y}, {t, s}}, col, 0.8f);   // dentes verticais
+      const float d = s * 0.30f;   // distancia dos dentes diagonais ao centro
+      for (const float sx : {-1.f, 1.f})
+        for (const float sy : {-1.f, 1.f})
+          solid(panelHandle_, {{cx + sx * d - t * 0.5f, cy + sy * d - t * 0.5f}, {t, t}}, col, 0.8f);
+      const float bd = s * 0.72f, hd = s * 0.30f;   // disco do corpo e furo central
+      auto body = editor::window_help_icon::BuildCircleItems(panelHandle_, {{cx - bd * 0.5f, cy - bd * 0.5f}, {bd, bd}}, col, 0.85f, paint);
+      out.insert(out.end(), body.begin(), body.end());
+      auto hole = editor::window_help_icon::BuildCircleItems(panelHandle_, {{cx - hd * 0.5f, cy - hd * 0.5f}, {hd, hd}}, bg, 0.9f, paint);
+      out.insert(out.end(), hole.begin(), hole.end());
+    };
+    for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
+      const std::size_t ri = listFirst_ + i;
+      if (ri >= rows_.size()) break;
+      const SU::Rect g = gearRect(i);
+      if (!inside(content_, {g.position.x + g.size.x * 0.5f, g.position.y + g.size.y * 0.5f})) continue;   // linha rolada para fora
+      const SU::Vec4 bg = rows_[ri].name == model_.selected ? colors_.rowSelected : hovered_ == rows_h_[i] ? colors_.fieldFocus : colors_.field;
+      gear(g, gearHover_ == i ? colors_.text : colors_.textDim, bg);
     }
 
     // Nenhuma cena: orienta a criar (a lista ficava em branco).
@@ -894,6 +1075,35 @@ class View {
     }
 
     if (!model_.status.empty()) line(status_, T(model_.status.c_str()), colors_.warning);   // T: as mensagens do modelo vem em ingles (chave)
+
+    // Janelinha de config da cena (por cima de tudo): titulo, "Padrao do jogo", configs da pasta, Escolher arquivo, Fechar.
+    if (popup_) {
+      const float pad = 8.f;
+      solid(panelHandle_, {{popRect_.position.x - 1.f, popRect_.position.y - 1.f}, {popRect_.size.x + 2.f, popRect_.size.y + 2.f}},
+            colors_.textDim, 1.1f);   // contorno
+      solid(panelHandle_, popRect_, panelColor_, 1.2f);   // fundo
+      const Shaped title = shapeFit(std::string(T("Scene config")) + ": " + popupScene_, Theme::kFontSize, popRect_.size.x - 2.f * pad);
+      text(panelHandle_, title, {popRect_.position.x + pad, popRect_.position.y + pad + (24.f - title.layout.lineHeight) * 0.5f},
+           colors_.text, 1.5f);
+      const auto cur = presets_.find(popupScene_);
+      // Config atual da cena (vazio = padrao). O valor guardado pode ser relativo ao projeto: vira absoluto para comparar.
+      const std::string current = cur == presets_.end() ? std::string{}
+                                                        : editor::config_preset::absoluteFromStored(projectDir_, cur->second);
+      for (std::size_t i = 0; i < popItems_.size(); ++i) {
+        const PopItem& it = popItems_[i];
+        const bool isButton = it.kind >= 2;
+        const bool active = it.kind == 0 ? current.empty() : it.kind == 1 && samePath(current, it.path);
+        const bool hot = popHover_ == i;
+        const SU::Vec4 bg = isButton ? (hot ? colors_.buttonHover : colors_.button)
+                                     : active ? colors_.rowSelected : (hot ? colors_.fieldFocus : colors_.field);
+        solid(panelHandle_, it.r, bg, 1.3f);
+        const std::string label = active ? "> " + it.label : it.label;   // "> " marca a config em uso
+        const Shaped s = shapeFit(label, Theme::kFontSize, it.r.size.x - 2.f * Theme::kGap);
+        const float tx = isButton ? it.r.position.x + (it.r.size.x - s.layout.size.x) * 0.5f : it.r.position.x + Theme::kFieldInset;
+        text(panelHandle_, s, {tx, it.r.position.y + (it.r.size.y - s.layout.lineHeight) * 0.5f},
+             active ? colors_.help : colors_.text, 1.5f);
+      }
+    }
   }
 
   Model& model_;
@@ -926,6 +1136,23 @@ class View {
   std::size_t removed_ = kNone;
   float lastX_ = 0.f, lastY_ = 0.f;
   bool doubleClick_ = false;
+
+  // Config por cena (engrenagem + janelinha).
+  std::string projectDir_;                      // pasta do projeto (lista <projeto>/Configs)
+  std::map<std::string, std::string> presets_;  // cena -> arquivo de config escolhido (vazio = padrao do jogo)
+  editor::tooltip::Tooltip tip_;                // balao da engrenagem (o host o desenha)
+  std::string tipText_;                         // texto do balao: precisa viver ate o draw()
+  std::chrono::steady_clock::time_point lastTipTime_{};
+  std::size_t gearHover_ = kNone;               // linha visivel cuja engrenagem esta sob o mouse
+  bool popup_ = false;                          // janelinha de config aberta
+  std::string popupScene_;                      // cena da janelinha
+  SU::Rect popRect_{};
+  std::vector<PopItem> popItems_;
+  std::size_t popHover_ = kNone;
+  std::vector<editor::config_preset::Entry> presetList_;   // configs da pasta, lidas ao abrir a janelinha
+  std::string pickScene_;                       // cena que abriu o seletor de arquivo (aguardando a resposta)
+  std::string pickDefault_;                     // pasta inicial do seletor (precisa viver durante a chamada)
+  std::string presetScene_, presetChoice_;      // ultima escolha (lida pelo host com Action::ScenePreset)
 
   // Moldura: cores (SpriteUI, definidas em buildTree) e geometria padrao (window_frame::Frame).
   SW::WindowFrameColors frameColors_{};

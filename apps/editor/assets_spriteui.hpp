@@ -13,6 +13,7 @@
 // contexto sao botoes na barra de acoes.
 #include "window_palette.hpp"
 #include "assets_model.hpp"
+#include "assets_tips.hpp"
 #include "i18n.hpp"
 #include "spriteui_host.hpp"
 #include "window_frame.hpp"
@@ -36,6 +37,7 @@
 #include <cstdint>
 #include <optional>
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -122,10 +124,16 @@ class View {
 
   View(AM::State& state, const sui::TextAtlasSet& text) : state_{state}, text_{text} { buildTree(); }
 
+  // Provedor de miniatura (opcional): dado o item, devolve true e preenche o retangulo UV (u, v, w, h) dentro do
+  // atlas kMaterialSlice. Usado para os materiais (.json em Materials/); false = icone generico do tipo.
+  using ThumbProvider = std::function<bool(const AM::Item&, float uv[4])>;
+  void setThumbProvider(ThumbProvider p) { thumb_ = std::move(p); }
+
   // Calcula um quadro e devolve o pacote para desenhar. `actions` recebe o que foi pedido neste quadro.
   SR::FramePacket Frame(float windowWidth, float windowHeight, const FrameInput& in, std::vector<Action>& actions) {
     frame_.refreshStyle();
     actions.clear();
+    tips_.clear();   // as dicas sao refeitas a cada quadro (retangulos mudam com rolagem e layout)
     now_ = in.timeSeconds;
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
 
@@ -205,6 +213,7 @@ class View {
     addContent(extra, paint);
     addScrollbar(extra, paint);
     scene.renderItems.insert(scene.renderItems.end(), extra.begin(), extra.end());
+    collectTips();   // depois do layout e da barra de rolagem: todos os retangulos ja estao prontos
     return extractor_.Build(in.frameId, scene.renderItems, nullptr, clips);
   }
 
@@ -273,6 +282,14 @@ class View {
   [[nodiscard]] SU::Rect helpRect() const { return helpRectNow(); }
   [[nodiscard]] SU::Rect rectOf(SU::UIHandle handle) const { return nodeRect(handle); }
 
+  // Dica de um controle: retangulo em coordenadas de tela e texto ja traduzido.
+  struct Tip {
+    float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
+    std::string text;
+  };
+  // Dicas do ultimo quadro, na ordem de registro (o host usa a ultima que contem o mouse: a mais "por cima").
+  [[nodiscard]] const std::vector<Tip>& tips() const { return tips_; }
+
  private:
   static constexpr std::size_t kNone = static_cast<std::size_t>(-1);
   static constexpr int kMaxRows = AM::kListRows;   // linhas montadas (a grade usa as 4 primeiras)
@@ -296,6 +313,69 @@ class View {
       case window_frame::Event::Close: actions.push_back(Action::Close); break;
       case window_frame::Event::Help: actions.push_back(Action::Help); break;
       default: break;
+    }
+  }
+
+  // ---------- Dicas (tooltips) ----------
+  // Registra uma dica para o retangulo `r` pelo id da tabela assets_tips (traduzida pelo pacote de idioma).
+  void addTip(const SU::Rect& r, const char* id) {
+    if (r.size.x <= 0.f || r.size.y <= 0.f) return;
+    const char* english = editor::assets_tips::Lookup(id);
+    if (!english) return;
+    tips_.push_back({r.position.x, r.position.y, r.size.x, r.size.y, editor::T(english)});
+  }
+
+  // Id da dica de um item da grade conforme o tipo (material = .json dentro de Materials/).
+  static const char* itemTipId(const AM::Item& it) {
+    if (it.dir || it.kind == AssetKind::Folder) return "itemFolder";
+    switch (it.kind) {
+      case AssetKind::Model: return "itemModel";
+      case AssetKind::Audio: return "itemAudio";
+      case AssetKind::Scene: return "itemScene";
+      case AssetKind::Image: return "itemImage";
+      case AssetKind::Text: return it.rel.rfind("Materials/", 0) == 0 ? "itemMaterial" : "itemText";
+      default: return "itemFile";
+    }
+  }
+
+  // Monta as dicas do quadro para todos os controles. Ordem: do fundo para o topo (o ultimo que contem o mouse vence).
+  void collectTips() {
+    addTip(nodeRect(status_), "status");
+    if (state_.textOpen) addTip(nodeRect(grid_), "textArea");   // fora do editor de texto a grade nao tem dica propria
+    addTip(helpRectNow(), "help");
+    addTip(nodeRect(up_), "up");
+    for (std::size_t i = 0; i < Theme::kMaxCrumbs; ++i) {
+      if (crumbFirst_ + i < crumbs_.size()) addTip(nodeRect(crumb_[i]), "crumb");
+    }
+    addTip(nodeRect(import_), "import");
+    addTip(nodeRect(newFolder_), "newFolder");
+    addTip(nodeRect(newFile_), "newFile");
+    addTip(nodeRect(list_), "viewList");
+    addTip(nodeRect(icons_), "viewIcons");
+    addTip(nodeRect(filter_), "search");
+    // Itens da grade (cada celula com item); com o texto aberto nenhuma celula age.
+    for (int r = 0; r < kMaxRows; ++r) {
+      for (int c = 0; c < kMaxCols; ++c) {
+        const std::size_t v = cellVisible(r, c);
+        if (v == kNone) continue;
+        addTip(nodeRect(cell_[r][c]), itemTipId(state_.items[visible_[v]]));
+      }
+    }
+    if (bar_.visible()) {
+      const ui_scrollbar::Rect& t = bar_.track();
+      addTip(SU::Rect{{t.x, t.y}, {t.w, t.h}}, "scrollbar");
+    }
+    // Barra de acoes: com o texto aberto, Open vira Save e Rename vira Close.
+    addTip(nodeRect(open_), state_.textOpen ? "save" : "open");
+    addTip(nodeRect(add_), "add");
+    addTip(nodeRect(assign_), "assign");
+    addTip(nodeRect(rename_), state_.textOpen ? "closeText" : "rename");
+    addTip(nodeRect(delete_), "delete");
+    // Campo de nome e botoes de confirmacao (so aparecem durante criar/renomear/apagar).
+    addTip(nodeRect(nameField_), "nameField");
+    if (!state_.textOpen && state_.mode != AM::State::Mode::None) {
+      addTip(nodeRect(confirm_), "confirm");
+      addTip(nodeRect(cancel_), "cancel");
     }
   }
 
@@ -939,7 +1019,21 @@ class View {
       text(filter_, fs, origin, placeholder ? colors_.textDim : colors_.text, 0.9f);
     }
 
-    drawGrid(solid, text);
+    // Miniatura de material: quadrado texturizado (atlas kMaterialSlice) no lugar do icone; uv vem do provedor.
+    auto thumb = [&](SU::UIHandle owner, SU::Rect r, const float* uv, float z) {
+      SR::UIRenderItem item;
+      item.handle = owner;
+      item.layout.resolvedPosition = r.position;
+      item.layout.resolvedSize = r.size;
+      item.tintPremultipliedLinear = {1.f, 1.f, 1.f, 1.f};
+      item.uvRect[0] = uv[0]; item.uvRect[1] = uv[1]; item.uvRect[2] = uv[2]; item.uvRect[3] = uv[3];
+      item.textureSlice = sui::kMaterialSlice;
+      item.clipIndex = SR::NoClipIndex;
+      item.zOrder = z;
+      item.paintOrder = paint++;
+      out.push_back(item);
+    };
+    drawGrid(solid, text, thumb);
 
     // Barra de acoes. Com o texto aberto, "Save" e "Close" tomam o lugar de Open e Rename.
     if (state_.textOpen) {
@@ -1001,8 +1095,8 @@ class View {
 
   // Desenha o conteudo da grade: texto aberto, ou itens (icones ou lista), ou "pasta vazia".
   // Desenha a area principal: texto aberto (com linhas e cursor), mensagem de vazio ou os itens em lista/grade de icones.
-  template <typename SolidFn, typename TextFn>
-  void drawGrid(SolidFn& solid, TextFn& text) {
+  template <typename SolidFn, typename TextFn, typename ThumbFn>
+  void drawGrid(SolidFn& solid, TextFn& text, ThumbFn& thumb) {
     const SU::Rect grid = nodeRect(grid_);
     if (state_.textOpen) {
       // Linhas do texto a partir da rolagem; caret no fim.
@@ -1049,13 +1143,13 @@ class View {
           // Icone centralizado; nome embaixo, cortado.
           const float ix = cr.position.x + (cr.size.x - Theme::kIconSize) * 0.5f;
           const float iy = cr.position.y + 6.f;
-          drawIcon(solid, text, cell, {{ix, iy}, {Theme::kIconSize, Theme::kIconSize}}, it.kind, it.dir, true);
+          drawItemIcon(solid, text, thumb, cell, {{ix, iy}, {Theme::kIconSize, Theme::kIconSize}}, it, true);
           const Shaped name = fitShape(it.name, Theme::kLabelSize, cr.size.x - 8.f);
           text(cell, name, {cr.position.x + (cr.size.x - name.layout.size.x) * 0.5f, iy + Theme::kIconSize + 4.f},
                colors_.text, 0.5f);
         } else {
           // Lista: icone pequeno, nome, tipo e tamanho alinhados.
-          drawIcon(solid, text, cell, {{cr.position.x + 8.f, cr.position.y + 5.f}, {16.f, 16.f}}, it.kind, it.dir, false);
+          drawItemIcon(solid, text, thumb, cell, {{cr.position.x + 8.f, cr.position.y + 5.f}, {16.f, 16.f}}, it, false);
           const Shaped name = fitShape(it.name, Theme::kLabelSize + 1.f, cr.size.x * 0.55f - 40.f);
           const float cy = cr.position.y + (cr.size.y - name.layout.lineHeight) * 0.5f;
           text(cell, name, {cr.position.x + 32.f, cy}, colors_.text, 0.5f);
@@ -1070,6 +1164,17 @@ class View {
         }
       }
     }
+  }
+
+  // Icone de um item: miniatura do material se o provedor tem uma; senao o icone generico do tipo.
+  template <typename SolidFn, typename TextFn, typename ThumbFn>
+  void drawItemIcon(SolidFn& solid, TextFn& text, ThumbFn& thumb, SU::UIHandle owner, SU::Rect r, const AM::Item& it, bool withTag) {
+    float uv[4];
+    if (!it.dir && thumb_ && thumb_(it, uv)) {
+      thumb(owner, r, uv, 0.45f);
+      return;
+    }
+    drawIcon(solid, text, owner, r, it.kind, it.dir, withTag);
   }
 
   // Icone do tipo: pasta (aba + corpo) ou bloco colorido com a sigla do tipo (3D, SND, SCN, IMG, TXT).
@@ -1115,6 +1220,7 @@ class View {
 
   AM::State& state_;
   const sui::TextAtlasSet& text_;
+  ThumbProvider thumb_;   // miniaturas de material (opcional; ver setThumbProvider)
   Colors colors_;
   SU::Vec4 panelColor_{};
 
@@ -1132,6 +1238,7 @@ class View {
   std::vector<AM::Crumb> crumbs_;
   std::size_t crumbFirst_ = 0;
   std::vector<std::pair<SU::UIHandle, bool>> enabled_;
+  std::vector<Tip> tips_;   // dicas do quadro atual (ver collectTips)
   std::size_t pickedItem_ = kNone;
   std::size_t activatedItem_ = kNone;
   std::string pickedCrumb_;

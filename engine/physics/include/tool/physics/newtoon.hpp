@@ -2,3 +2,4 @@
 #pragma once
 #include "newtoon_world.hpp"
 #include "newtoon_2d.hpp"
+#include "newtoon_hull.hpp"

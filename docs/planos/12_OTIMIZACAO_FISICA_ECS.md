@@ -2,6 +2,16 @@
 
 Documento de referência para as mudanças vindas do relatório "Otimização de Física e ECS em Game Engine" e das correções feitas sobre ele.
 
+## Estado atual
+
+- Teste ECS: `test ecs: N` cria N instâncias sem física que oscilam pelo espaço (`MoverComp`, `tickMovers`). `test ecsf: N` cria N esferas com física, caindo (o teste antigo). O `--ecs N` do bench continua com física.
+- Física, bench ECS (5.000 esferas, headless): solver 2,9-3,0 ms com soft step e warm starting desligados; 3,7-3,9 ms com os padrões ligados (quadro 5,3 -> 6,4 ms). Decisão do usuário: manter ligados.
+- Escala 100k: 3D ~11,5 ms/passo; 2D ~9,3 ms/passo (antes do broadphase novo era ~62 ms).
+- Simplify de colisão: gerador de capa k-DOP (até 24 pontos, cache por malha, flag `simplifiedHull`). Ainda NÃO é usada pela narrowphase, que só trata caixa e esfera. A redução do manifold para 4 pontos quebrou 3 testes de estabilidade, por isso ficou em 8.
+- RHI: compute, UAV (StorageRW), draw indireto (Indirect) e readBuffer implementados no backend Diligent. Testado na GPU com `rhi_compute_test.exe vulkan` (RESULTADO OK). D3D12, D3D11 e GL NÃO testados.
+- Culling na GPU: em andamento (fase 1: frustum por compute + draw indireto, sem HiZ).
+- Verificação: selftest 256 checks, 0 falhas; `ctest -R "Editor\."` 72/72; `tool_physics_tests` 26/0; escala ok.
+
 ## Estado da verificação
 
 - `cmake --build --preset editor`: sem erros.
@@ -49,7 +59,7 @@ O commit `82269d9` tinha `newtoon_world.hpp` usando `Transform`, `velocity` e `I
 ## Não aplicado (e por quê)
 
 - **`GlobalTransform` + `syncTransformsParallel` (components.hpp):** removidos. Não tinham nenhum chamador, e a matriz global já é calculada por `worldMatrix` onde é usada. Se um caminho de render precisar de cache de matriz global no futuro, ele deve ser reintroduzido junto com a medição.
-- **Plano indireto por quadro (`gpu_renderer.hpp`):** a chamada `planIndirectArgs` em todo quadro foi removida, junto com o membro `opaqueIndirectPlan_` e o accessor, que não tinham chamadores. O RHI não tem draw indireto (`drawIndexed` e `drawIndexedRange` apenas). O helper `indirect_plan.hpp` continua no repositório, coberto por `tests/test_render_helpers.cpp`, para quando houver draw indireto.
+- **Plano indireto por quadro (`gpu_renderer.hpp`):** a chamada `planIndirectArgs` em todo quadro foi removida, junto com o membro `opaqueIndirectPlan_` e o accessor, que não tinham chamadores. Na época, o RHI não tinha draw indireto; hoje o backend Diligent tem (ver "Estado atual", item RHI). O helper `indirect_plan.hpp` continua no repositório, coberto por `tests/test_render_helpers.cpp`, pronto para ser ligado ao renderer.
 - **Streaming de instâncias (`GpuInstanceStreamer`, `indirect_plan`, `gpu_renderer` reescrito):** o relatório reescreve arquivos grandes do renderizador com APIs de Diligent e Light Prism que não foram verificadas contra o repositório. Precisa de build e de medição de GPU.
 - **Light Prism (`ClusterActiveMark.compute.hlsl`, early-out em `ClusterCullCount`, shaders GLSL 430):** mudanças de shader sem medição de GPU. Podem ser aplicadas depois que houver um perfil do quadro.
 

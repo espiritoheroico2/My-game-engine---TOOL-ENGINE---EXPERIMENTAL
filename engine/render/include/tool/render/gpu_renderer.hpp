@@ -6,6 +6,7 @@
 #include "tool/render/indirect_plan.hpp"
 #include "tool/render/render_queue.hpp"
 #include "tool/render/frustum_cull.hpp"
+#include "tool/render/fsr1.hpp"
 #include "tool/render/render_stats.hpp"
 #include "tool/render/soft_renderer.hpp"
 #include "tool/rhi/rhi.hpp"
@@ -65,6 +66,10 @@ struct ShadowCB { Mat4 lightViewProj; };
 struct ShadowInstanceGPU { Mat4 world; };
 struct BatchCB { u32 first; u32 pad[3]; };
 struct BloomCB { f32 srcSize[2]; f32 haloSize[2]; f32 dir[2]; f32 threshold, strength; };
+// Culling GPU (frustum_cull.hlsl): planos do frustum e descritor de lote (32 B, igual a CullBatch do HLSL).
+struct CullCB { f32 planes[6][4]; };
+struct CullBatchGPU { u32 first, count, indexCount, argsIndex; f32 sphere[4]; };
+static_assert(sizeof(CullCB) == 96 && sizeof(CullBatchGPU) == 32 && sizeof(rhi::DrawIndexedIndirectArgs) == 20, "layout do culling GPU");
 static_assert(sizeof(FrameCB) == 144 && sizeof(ObjectCB) == 160 && sizeof(ShadowCB) == 64 && sizeof(ShadowInstanceGPU) == 64 && sizeof(BatchCB) == 16 && sizeof(BloomCB) == 32, "layout de cbuffer");
 static_assert(sizeof(InstanceGPU) == sizeof(ObjectCB), "layout de instancia deve bater com ObjectCB");
 
@@ -77,9 +82,20 @@ inline const std::vector<std::string>& pbrUniformNames() {
   static const std::vector<std::string> n = {"FrameBuffer", "BatchBuffer", "GlobalLightCB", "SunLightCB", "CsmCB", "IblCB", "ClusterGridCB", "PointShadowCB"};
   return n;
 }
-inline const std::vector<std::string>& pbrTextureNames() {
+// Slot 11 ("NormalMap", normal map do material) so existe nos backends que compilam o HLSL; o GLSL 430 pre-gerado (OpenGL)
+// ainda nao tem esse mapa, entao la o nome fica de fora e o material ignora normal map/tiling/cutoff.
+inline constexpr u32 kNormalMapSlot = 11;
+inline const std::vector<std::string>& pbrTextureNames(bool withNormalMap = false) {
   static const std::vector<std::string> n = {"AlbedoMap", "CsmMap0", "CsmMap1", "CsmMap2", "CsmMap3", "PointShadowMap0", "PointShadowMap1", "PointShadowMap2", "PointShadowMap3", "AoMap", "IblBrdfLut"};
-  return n;
+  static const std::vector<std::string> nn = [] { auto v = n; v.push_back("NormalMap"); return v; }();
+  return withNormalMap ? nn : n;
+}
+
+// Empacota forca do normal map (0..2) e alpha cutoff (0..1) em UM float exato (24 bits): forcaQ*1024 + cutoffQ, cada metade
+// 0..1023. Vai em InstanceGPU.fogParams[3] (sobra do layout de 160 B); o VS do pbr.hlsl desfaz (UnpackNormalCutoff).
+inline f32 packMaterialExtra(f32 normalStrength, f32 alphaCutoff) {
+  auto q = [](f32 v01) { return static_cast<f32>(static_cast<int>(std::clamp(v01, 0.f, 1.f) * 1023.f + 0.5f)); };
+  return q(normalStrength * 0.5f) * 1024.f + q(alphaCutoff);
 }
 inline const std::vector<std::string>& pbrStorageNames() {
   static const std::vector<std::string> n = {"PointLightsBuffer", "SpotLightsBuffer", "LightGrid", "LightIndexList", "Instances"};
@@ -135,10 +151,15 @@ public:
     legacyVs_ = mk(legacyVs); legacyPs_ = mk(legacyPs);
     rhi::PipelineDesc pd; pd.vs = vs_; pd.ps = ps_; pd.name = "pbr";
     pd.layout = {{3, 0}, {3, 12}, {2, 24}}; pd.vertexStride = 32;
-    pd.uniformNames = pbrUniformNames(); pd.textureNames = pbrTextureNames(); pd.storageNames = pbrStorageNames();
+    normalSlot_ = !gl;   // normal map do material so no HLSL (ver pbrTextureNames)
+    pd.uniformNames = pbrUniformNames(); pd.textureNames = pbrTextureNames(normalSlot_); pd.storageNames = pbrStorageNames();
     colorFmt_ = rhi::Format::RGBA8_SRGB;
     pd.color = colorFmt_;
     pipe_ = dev.createPipeline(pd);
+    {   // variante dupla face (material.doubleSided): mesmo pipeline sem cull de faces
+      rhi::PipelineDesc dd = pd; dd.name = "pbr_ds"; dd.cull = rhi::CullMode::None;
+      pipeDs_ = dev.createPipeline(dd);
+    }
 
     rhi::ShaderDesc emi = ps; emi.entry = "EmissionPS"; emi.name = "pbr.emi";
     emiPs_ = mk(emi);
@@ -149,6 +170,7 @@ public:
 
     rhi::PipelineDesc td = pd; td.name = "transparent"; td.blend = true; td.depthWrite = false;
     transPipe_ = dev.createPipeline(td);
+    { rhi::PipelineDesc dd = td; dd.name = "transparent_ds"; dd.cull = rhi::CullMode::None; transPipeDs_ = dev.createPipeline(dd); }
 
     rhi::ShaderDesc svs = vs, sps = ps;
     svs.name = "shadow.vs"; sps.name = "shadow.ps"; svs.source = sh; sps.source = sh;
@@ -208,6 +230,31 @@ public:
       bloomCbV_ = dev.createBuffer({sizeof(BloomCB), rhi::BufferUsage::Uniform, true}, nullptr);
       bloomCbComp_ = dev.createBuffer({sizeof(BloomCB), rhi::BufferUsage::Uniform, true}, nullptr);
     }
+
+    // Culling de frustum por compute (fase 1, so o passe opaco). Opcional: se o backend nao tem compute/indirect ou o
+    // shader falhar, o renderer segue no caminho CPU de sempre.
+    if (dev.supportsCompute() && dev.supportsIndirect() && !gl) {
+      std::string cullSrc;
+      if (loadHlsl(hlslDir, "frustum_cull.hlsl", cullSrc)) {
+        rhi::ShaderDesc cs; cs.stage = rhi::ShaderStage::Compute; cs.entry = "CullInstancesCS"; cs.name = "frustum_cull.cs"; cs.source = cullSrc;
+        cullCs_ = dev.createShader(cs);
+        if (!cullCs_.isNull()) {
+          rhi::PipelineDesc cd2; cd2.cs = cullCs_; cd2.name = "frustum_cull";
+          cd2.uniformNames = {"CullCB"}; cd2.storageNames = {"CullBatches", "SrcInstances"}; cd2.storageRWNames = {"DstInstances", "DrawArgs"};
+          cullPipe_ = dev.createPipeline(cd2);
+        }
+        cullCb_ = dev.createBuffer({sizeof(CullCB), rhi::BufferUsage::Uniform, true}, nullptr);
+      }
+      if (cullPipe_.isNull() || cullCb_.isNull()) debug().report("TOOL-W143", Severity::Warning, "culling de frustum na GPU indisponivel; usando o caminho CPU");
+    }
+
+    // FSR 1 (EASU + RCAS em pixel shader). Opcional: em OpenGL (GLSL pre-gerado) ou se o shader/pipeline falhar, fica
+    // indisponivel e o chamador cai no upscale de sempre (fsr1Available() == false).
+    fsrOk_ = false; fsrWarned_ = false; fsrWhy_.clear();
+    if (!gl) {
+      fsrOk_ = fsr_.init(dev, hlslDir, colorFmt_);
+      if (!fsrOk_) fsrWhy_ = fsr_.whyNot();
+    } else fsrWhy_ = "OpenGL nao tem o FSR 1";
 
     static const float fsTri[9] = {-1.f, -1.f, 0.f, 3.f, -1.f, 0.f, -1.f, 3.f, 0.f};
     static const u32 fsIdx[3] = {0, 1, 2};
@@ -386,6 +433,9 @@ public:
     const render::Frustum cameraFrustum = render::frustumFromViewProj(vp.m, dev_->backend() != rhi::Backend::GLES);
 
     // Avaliacao paralela de frustum culling e flags de fila para milhares de objetos
+    // Culling GPU ligado: a fila opaca principal recebe TODOS os opacos (o compute descarta os fora do frustum). O frustum
+    // da CPU continua so para os passes que ainda nao usam o culling GPU (prepasso e emissao, fase 1): `prepass` = visivel.
+    const bool gpuCull = gpuCullActive();
     const size_t drawTotal = draws_.size();
     queueItems_.resize(drawTotal);
     if (drawTotal > 0) {
@@ -395,11 +445,12 @@ public:
           const render::SphereBounds worldBounds = render::transformSphere(d.world.m, d.mesh->bounds);
           const bool cameraVisible = render::sphereInFrustum(cameraFrustum, worldBounds);
           const bool emissive = !(d.mat.emissive.x <= 0.f && d.mat.emissive.y <= 0.f && d.mat.emissive.z <= 0.f);
-          queueItems_[i] = {cameraVisible, false, cameraVisible && emissive, true, d.mat.castShadow && d.mesh->count > 0};
+          queueItems_[i] = {gpuCull || cameraVisible, false, cameraVisible && emissive, !gpuCull || cameraVisible, d.mat.castShadow && d.mesh->count > 0};
         }
       });
     }
     render::buildRenderQueues(queueItems_, renderQueues_);
+    cpuVisibleOpaque_ = static_cast<u32>(renderQueues_.prepass.size());   // visiveis pelo frustum da CPU (referencia p/ comparar com a GPU)
 
     tdraws_.erase(std::remove_if(tdraws_.begin(), tdraws_.end(), [&](const Draw& d) {
       const render::SphereBounds worldBounds = render::transformSphere(d.world.m, d.mesh->bounds);
@@ -629,15 +680,11 @@ public:
     };
 
     render::PassTimer opaqueTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Opaque)]};
-    cl_ = dev_->beginCommands();
-    cl_->begin(color_, depth_, clear_.x, clear_.y, clear_.z, clearAlpha_);
-    bindScene(cl_.get(), pipe_);
-
+    // A lista do passe opaco so abre (begin) depois do compute de culling: dispatch nao pode ficar dentro de um render pass.
     planQueuedBatches(renderQueues_.opaque, opaqueItemsScratch_, opaquePlan_, [&](u32 index) {
       const Draw& d = draws_[index];
       const u64 meshId = reinterpret_cast<u64>(d.mesh);
-      const u64 texId = d.tex.isNull() ? 0u : (static_cast<u64>(d.tex.generation) << 32) | d.tex.index;
-      return BatchItem{meshId, texId};
+      return BatchItem{meshId, textureKey(d)};
     }, 4096);
 
     // Empacotamento paralelo das instancias opacas no SSBO
@@ -651,24 +698,54 @@ public:
         }
       });
       if (!ensureBuffer(instBuf_, instCap_, instCpu_.size(), sizeof(InstanceGPU))) {
-        cl_->end(); dev_->submit(*cl_); cl_.reset();
         lastError_ = "storage buffer de instancias indisponivel";
         releaseImports();
         return;
       }
       dev_->updateBuffer(instBuf_, instCpu_.data(), instCpu_.size() * sizeof(InstanceGPU));
-      cl_->setStorage(4, instBuf_);
     }
 
+    // Culling de frustum na GPU (fase 1: so este passe; sombras, prepasso, emissao e transparentes seguem no caminho CPU).
+    // Fica ativo no quadro se o compute foi criado, ha lotes e o dispatch cabe (gy <= 65535 grupos); senao o quadro usa o
+    // caminho CPU (a fila opaca pode ter instancias fora da tela, que a GPU recorta no rasterizador: so perde desempenho).
+    gpuCullFrame_ = gpuCullActive() && opaqueCount > 0 && !opaquePlan_.batches.empty() && opaquePlan_.batches.size() <= 65535u;
+    if (gpuCullFrame_) gpuCullFrame_ = runGpuCull(opaqueCount, cameraFrustum);
+
+    cl_ = dev_->beginCommands();
+    cl_->begin(color_, depth_, clear_.x, clear_.y, clear_.z, clearAlpha_);
+    bindScene(cl_.get(), pipe_);
+    // Caminho GPU: o VS le do buffer compactado (mesma faixa de cada lote, entao BatchCB.first continua valendo).
+    if (opaqueCount > 0) cl_->setStorage(4, gpuCullFrame_ ? compactBuf_ : instBuf_);
+
+    u32 batchIndex = 0;
+    rhi::PipelineId curPipe = pipe_;   // pipeline ligado agora (pipe_ ou a variante dupla face)
     for (const InstanceBatch& b : opaquePlan_.batches) {
       BatchCB bc{};
       bc.first = b.first;
       uploadBatchCb(bc);
       cl_->setUniform(1, batchCb_);
       const Draw& d = draws_[renderQueues_.opaque[opaquePlan_.order[b.first]]];
+      // Dupla face: troca para o pipeline sem cull (rebind da cena) quando o lote pede; volta ao normal no lote seguinte.
+      {
+        const rhi::PipelineId want = (d.mat.doubleSided && !pipeDs_.isNull()) ? pipeDs_ : pipe_;
+        if (want != curPipe) {
+          curPipe = want;
+          bindScene(cl_.get(), curPipe);
+          cl_->setStorage(4, gpuCullFrame_ ? compactBuf_ : instBuf_);
+          cl_->setUniform(1, batchCb_);   // o rebind zera os slots: religa o BatchCB deste lote (ja gravado acima)
+        }
+      }
       cl_->setTexture(0, d.tex.isNull() ? white_ : d.tex);
+      if (normalSlot_) cl_->setTexture(kNormalMapSlot, d.ntex.isNull() ? white_ : d.ntex);
       cl_->setVertexBuffer(d.mesh->vertex); cl_->setIndexBuffer(d.mesh->index);
-      recordDraw(*cl_, render::RenderPassId::Opaque, d.mesh->count, b.count);
+      if (gpuCullFrame_) {
+        // instanceCount vem da GPU; nas estatisticas entra o total do lote (limite superior, so a GPU sabe o visivel).
+        cl_->drawIndexedIndirect(cullArgsBuf_, batchIndex * static_cast<u32>(sizeof(rhi::DrawIndexedIndirectArgs)));
+        stats_.passes[static_cast<std::size_t>(render::RenderPassId::Opaque)].recordDraw(d.mesh->count, b.count);
+      } else {
+        recordDraw(*cl_, render::RenderPassId::Opaque, d.mesh->count, b.count);
+      }
+      ++batchIndex;
     }
     cl_->end(); dev_->submit(*cl_); cl_.reset();
     opaqueTimer.stop();
@@ -724,8 +801,7 @@ public:
       transparentItemsScratch_.reserve(tdraws_.size());
       for (const Draw& d : tdraws_) {
         const u64 meshId = reinterpret_cast<u64>(d.mesh);
-        const u64 texId = d.tex.isNull() ? 0u : (static_cast<u64>(d.tex.generation) << 32) | d.tex.index;
-        transparentItemsScratch_.push_back({meshId, texId});
+        transparentItemsScratch_.push_back({meshId, textureKey(d)});
       }
       planAdjacentInstanceBatches(transparentItemsScratch_, transparentPlan_, 4096);
       transCpu_.resize(transparentPlan_.order.size());
@@ -746,13 +822,24 @@ public:
       tl->beginKeep(color_, depth_);
       bindScene(tl.get(), transPipe_);
       if (!transCpu_.empty()) tl->setStorage(4, transInstBuf_);
+      rhi::PipelineId curTrans = transPipe_;
       for (const InstanceBatch& b : transparentPlan_.batches) {
         BatchCB bc{};
         bc.first = b.first;
         uploadBatchCb(bc);
         tl->setUniform(1, batchCb_);
         const Draw& d = tdraws_[transparentPlan_.order[b.first]];
+        {   // dupla face: pipeline transparente sem cull (rebind da cena quando o lote muda)
+          const rhi::PipelineId want = (d.mat.doubleSided && !transPipeDs_.isNull()) ? transPipeDs_ : transPipe_;
+          if (want != curTrans) {
+            curTrans = want;
+            bindScene(tl.get(), curTrans);
+            if (!transCpu_.empty()) tl->setStorage(4, transInstBuf_);
+            tl->setUniform(1, batchCb_);
+          }
+        }
         tl->setTexture(0, d.tex.isNull() ? white_ : d.tex);
+        if (normalSlot_) tl->setTexture(kNormalMapSlot, d.ntex.isNull() ? white_ : d.ntex);
         tl->setVertexBuffer(d.mesh->vertex);
         tl->setIndexBuffer(d.mesh->index);
         recordDraw(*tl, render::RenderPassId::Transparent, d.mesh->count, b.count);
@@ -762,6 +849,18 @@ public:
 
     out_ = color_;
     if (bloomOn_ && !bloomA_.isNull() && !bloomThrPipe_.isNull()) { runBloom(); out_ = outFull_; }
+    // FSR 1: amplia a imagem renderizada (w_ x h_) para o tamanho de saida pedido; a leitura (readback) passa a vir dela.
+    fsrActive_ = false;
+    if (fsrWant_ && (fsrOutW_ != w_ || fsrOutH_ != h_)) {
+      rhi::TextureId up;
+      if (fsrOk_) up = fsr_.run(out_, w_, h_, fsrOutW_, fsrOutH_, fsrSharp_);
+      if (!up.isNull()) { out_ = up; fsrActive_ = true; }
+      else {   // falhou: desliga o FSR 1 e avisa UMA vez (o chamador amplia pelo caminho normal)
+        fsrOk_ = false;
+        if (fsrWhy_.empty()) fsrWhy_ = "falha ao rodar o FSR 1";
+        if (!fsrWarned_) { fsrWarned_ = true; debug().report("TOOL-W144", Severity::Warning, "FSR 1 desligado: " + fsrWhy_); }
+      }
+    }
     releaseImports();
     drawCount_ = static_cast<u32>(opaquePlan_.batches.size());
   }
@@ -769,11 +868,45 @@ public:
   bool readback(std::vector<u8>& rgba, u32& w, u32& h) { return dev_ && dev_->readTexture(out_, rgba, w, h); }
   int readbackAsync(int slot, std::vector<u8>& rgba, u32& w, u32& h) { return dev_ ? dev_->readTextureAsync(out_, slot, rgba, w, h) : -1; }
   void setBloom(bool on, f32 threshold, f32 strength) { bloomOn_ = on; bloomThr_ = threshold; bloomStr_ = strength; }
+  // ---- FSR 1 (upscale na GPU) ----
+  // Pede (on) que end() amplie a cena renderizada em w x h para outW x outH com EASU + RCAS (sharpness 0..1).
+  // So vale se fsr1Available(); se o chamador pedir sem suporte, avisa UMA vez e a imagem sai no tamanho de render.
+  void setFsr1(bool on, f32 sharpness, u32 outW, u32 outH) {
+    fsrWant_ = on; fsrSharp_ = sharpness; fsrOutW_ = outW; fsrOutH_ = outH;
+    if (on && !fsrOk_ && !fsrWarned_) { fsrWarned_ = true; debug().report("TOOL-W144", Severity::Warning, "FSR 1 indisponivel neste backend: " + (fsrWhy_.empty() ? std::string("sem suporte") : fsrWhy_)); }
+  }
+  // O backend e os shaders suportam o FSR 1.
+  bool fsr1Available() const { return fsrOk_; }
+  // O ultimo end() entregou a imagem ampliada pelo FSR 1 (o readback tem outW x outH).
+  bool fsr1Active() const { return fsrActive_; }
+  const std::string& fsr1Why() const { return fsrWhy_; }
   rhi::TextureId colorTarget() const { return color_; }
   rhi::TextureId depthTarget() const { return depth_; }
   u32 width() const { return w_; }
   u32 height() const { return h_; }
   u32 draws() const { return drawCount_; }
+  // ---- Culling de frustum na GPU (compute + draw indireto), fase 1: so o passe opaco principal ----
+  // Liga/desliga. Mesmo ligado, so vale se o backend tem compute+indirect e o shader foi criado (gpuCullActive()).
+  void setGpuCulling(bool on) { gpuCull_ = on; }
+  bool gpuCullActive() const { return gpuCull_ && dev_ && !cullPipe_.isNull() && !cullCb_.isNull(); }
+  // O ultimo quadro usou o caminho GPU no passe opaco.
+  bool gpuCullUsedLastFrame() const { return gpuCullFrame_; }
+  // Opacos visiveis pelo frustum da CPU no ultimo quadro (referencia para comparar com a GPU).
+  u32 cpuVisibleOpaque() const { return cpuVisibleOpaque_; }
+  // Le da GPU (espera o fim do quadro: so para teste/bench) a soma de instanceCount dos draws indiretos do ultimo quadro.
+  bool readGpuVisibleCount(u32& out) {
+    out = 0;
+    if (!gpuCullFrame_ || !dev_) return false;
+    std::vector<u8> raw;
+    const size_t nb = opaquePlan_.batches.size();
+    if (!dev_->readBuffer(cullArgsBuf_, raw) || raw.size() < nb * sizeof(rhi::DrawIndexedIndirectArgs)) return false;
+    for (size_t i = 0; i < nb; ++i) {
+      rhi::DrawIndexedIndirectArgs a{};
+      std::memcpy(&a, raw.data() + i * sizeof a, sizeof a);
+      out += a.instanceCount;
+    }
+    return true;
+  }
   size_t cachedMeshes() const { return meshes_.size(); }
   const render::RenderViewStats& renderStats() const { return stats_; }
   const LightPrism::ClusterSystem* clusters() const { return clusters_.get(); }
@@ -795,7 +928,13 @@ private:
   }
 
   struct GpuMesh { rhi::BufferId vertex, index; u32 count = 0; const void* posKey = nullptr; size_t nVert = 0, nIdx = 0, vCap = 0, iCap = 0; u64 lastUse = 0; u32 rev = 0; bool dynamic = false; render::SphereBounds bounds; };
-  struct Draw { const GpuMesh* mesh; Mat4 world; Material mat; rhi::TextureId tex; f32 tw, th; };
+  struct Draw { const GpuMesh* mesh; Mat4 world; Material mat; rhi::TextureId tex; f32 tw, th; rhi::TextureId ntex; };
+  // Chave de lote de textura: albedo (32 bits) + normal map (31 bits) + dupla face (1 bit). Instancias com chaves diferentes
+  // nunca entram no mesmo lote (a textura/pipeline mudam por lote).
+  static u64 textureKey(const Draw& d) {
+    auto pack = [](const rhi::TextureId& t) -> u64 { return t.isNull() ? 0u : (static_cast<u64>(t.generation & 0x7FFFu) << 16) | (t.index & 0xFFFFu); };
+    return (pack(d.tex) << 32) | (pack(d.ntex) << 1) | (d.mat.doubleSided ? 1u : 0u);
+  }
   struct ShadowQueue { BatchPlan plan; std::vector<const Draw*> orderedDraws; size_t instanceBase = 0; };
   struct PointFaceSignature { u64 light = 0, casters = 0; bool operator==(const PointFaceSignature&) const = default; };
   struct PointFaceCache { PointFaceSignature signature{}; bool valid = false, targetResetPending = false, renderFailed = false; };
@@ -1003,6 +1142,7 @@ private:
 
   void release() {
     if (!dev_) return;
+    fsr_.release(); fsrOk_ = false; fsrActive_ = false; fsrWant_ = false;
     releaseImports();
     for (auto& [k, g] : meshes_) freeMesh(g);
     meshes_.clear();
@@ -1013,9 +1153,11 @@ private:
     for (auto& [k, t] : texs_) dev_->destroy(t);
     texs_.clear();
     if (!white_.isNull()) { dev_->destroy(white_); white_ = kNullHandle; }
+    for (auto* h : {&cullPipe_, &cullCs_, &cullCb_, &cullBatchBuf_, &compactBuf_, &cullArgsBuf_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
+    cullBatchCap_ = compactCap_ = cullArgsCap_ = 0; gpuCullFrame_ = false;
     for (auto* h : {&frameCb_, &objCb_, &batchCb_, &instBuf_, &emiInstBuf_, &transInstBuf_, &shadowInstBuf_, &prepassInstBuf_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &brdfTex_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &pointClearPipe_, &vs_, &ps_, &legacyVs_, &legacyPs_, &shVs_, &shPs_, &ptVs_, &ptPs_, &pointClearPs_,
                     &prePipe_, &ssaoPipe_, &blurPipe_, &fsVb_, &fsIb_, &ssaoCb_, &preVs_, &prePs_, &fsVs_, &ssaoPs_, &blurPs_,
-                    &emiPipe_, &emiPs_, &transPipe_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
+                    &emiPipe_, &emiPs_, &transPipe_, &pipeDs_, &transPipeDs_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     for (auto& t : shColor_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     for (auto& t : pointStrip_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     pointW_ = 0; pointOn_ = false; pointCount_ = 0; pointFaceCache_ = {};
@@ -1026,6 +1168,10 @@ private:
   }
 
   rhi::IDevice* dev_ = nullptr;
+  // FSR 1: passe, pedido do chamador e estado (disponivel / ativo no ultimo quadro / aviso ja dado).
+  render::Fsr1Pass fsr_;
+  bool fsrOk_ = false, fsrWant_ = false, fsrActive_ = false, fsrWarned_ = false;
+  f32 fsrSharp_ = 0.2f; u32 fsrOutW_ = 0, fsrOutH_ = 0; std::string fsrWhy_;
   std::unique_ptr<LightPrism::IGraphicsDevice> lp_;
   std::unique_ptr<LightPrism::ClusterSystem> clusters_;
   rhi::ShaderId vs_, ps_, legacyVs_, legacyPs_, shVs_, shPs_, ptVs_, ptPs_, pointClearPs_, preVs_, prePs_, fsVs_, ssaoPs_, blurPs_;
@@ -1035,6 +1181,14 @@ private:
   u64 batchCbUploads_ = 0;
   rhi::BufferId frameCb_, objCb_, batchCb_, instBuf_, emiInstBuf_, transInstBuf_, shadowInstBuf_, prepassInstBuf_, shCb_, csmCb_, iblCb_, pointCb_;
   u32 instCap_ = 0, emiInstCap_ = 0, transInstCap_ = 0, shadowInstCap_ = 0, prepassInstCap_ = 0;
+  // Culling GPU: pipeline de compute, cbuffer de planos, descritores de lote, buffer compactado (UAV+SRV) e args indiretos.
+  rhi::ShaderId cullCs_; rhi::PipelineId cullPipe_;
+  rhi::BufferId cullCb_, cullBatchBuf_, compactBuf_, cullArgsBuf_;
+  u32 cullBatchCap_ = 0, compactCap_ = 0, cullArgsCap_ = 0;
+  std::vector<CullBatchGPU> cullBatchCpu_;
+  std::vector<rhi::DrawIndexedIndirectArgs> cullArgsCpu_;
+  bool gpuCull_ = true, gpuCullFrame_ = false;
+  u32 cpuVisibleOpaque_ = 0;
   std::vector<InstanceGPU> instCpu_, emiCpu_, transCpu_;
   std::vector<ShadowInstanceGPU> prepassCpu_;
   std::array<ShadowQueue, LightPrism::kMaxCsmCascades> csmQueues_;
@@ -1062,7 +1216,13 @@ private:
     f32 tw = 0, th = 0;
     if (white_.isNull() && dev_) white_ = makeWhite();
     const rhi::TextureId tex = textureFor(mat.albedoMap, tw, th);
-    return Draw{g, world, mat, tex, tw, th};
+    // Normal map do material: so cria/usa textura se o pipeline tem o slot; sem mapa fica a textura branca (nao e lida: forca 0).
+    f32 nw = 0, nh = 0;
+    rhi::TextureId ntex = normalSlot_ && mat.normalMap ? textureFor(mat.normalMap, nw, nh) : white_;
+    if (nw <= 0.f) ntex = white_;   // textura invalida: sem normal map
+    Draw d{g, world, mat, tex, tw, th, ntex};
+    if (nw <= 0.f) d.mat.normalMap = nullptr;   // marca "sem mapa" (makeInstanceGPU zera a forca)
+    return d;
   }
   rhi::TextureId shColor_[LightPrism::kMaxCsmCascades], shDepth_; u32 shW_ = 0; int shRes_ = 0;
   u32 shadowCount_ = 0;
@@ -1084,8 +1244,14 @@ private:
     oc.color[0] = d.mat.albedo.x; oc.color[1] = d.mat.albedo.y; oc.color[2] = d.mat.albedo.z; oc.color[3] = alpha;
     oc.metallic = d.mat.metallic; oc.roughness = d.mat.roughness; oc.receiveShadow = d.mat.receiveShadow ? 1.f : 0.f;
     oc.texInfo[0] = d.tw; oc.texInfo[1] = d.th; oc.texInfo[2] = d.tw > 0.f ? 1.f : 0.f;
+    // Material avancado nas sobras do layout de 160 B: tiling xy em pad/texInfo.w, offset xy em emissive.w/fogColor.w,
+    // forca do normal map + alpha cutoff empacotados em fogParams.w (fillFog zera, entao grava depois dele).
+    oc.pad = d.mat.uvTiling[0]; oc.texInfo[3] = d.mat.uvTiling[1];
+    oc.emissive[3] = d.mat.uvOffset[0];
     oc.emissive[0] = d.mat.emissive.x; oc.emissive[1] = d.mat.emissive.y; oc.emissive[2] = d.mat.emissive.z;
     fillFog(oc, d.mat);
+    oc.fogColor[3] = d.mat.uvOffset[1];
+    oc.fogParams[3] = packMaterialExtra(d.mat.normalMap ? d.mat.normalStrength : 0.f, d.mat.alphaCutoff);
     InstanceGPU inst{};
     std::memcpy(inst.world, &oc.world, sizeof oc.world);
     std::memcpy(inst.color, oc.color, sizeof oc.color);
@@ -1097,19 +1263,60 @@ private:
     return inst;
   }
 
-  bool ensureBuffer(rhi::BufferId& buf, u32& cap, size_t required, size_t stride) {
+  bool ensureBuffer(rhi::BufferId& buf, u32& cap, size_t required, size_t stride,
+                    rhi::BufferUsage usage = rhi::BufferUsage::Storage, bool dynamic = true) {
     if (required == 0) return true;
     if (required <= cap && !buf.isNull()) return true;
     u32 newCap = cap ? cap : 64u;
     while (newCap < required) newCap *= 2u;
     if (!buf.isNull()) dev_->destroy(buf);
-    buf = dev_->createBuffer({static_cast<size_t>(newCap) * stride, rhi::BufferUsage::Storage, true, static_cast<u32>(stride)}, nullptr);
+    buf = dev_->createBuffer({static_cast<size_t>(newCap) * stride, usage, dynamic, usage == rhi::BufferUsage::Indirect ? 0u : static_cast<u32>(stride)}, nullptr);
     cap = newCap;
     return !buf.isNull();
   }
 
+  // Roda o compute de culling dos lotes opacos (opaquePlan_) sobre instBuf_ -> compactBuf_ + args indiretos (cullArgsBuf_).
+  // Chamado fora de qualquer render pass. Devolve false se algum recurso faltar (o quadro cai no caminho CPU).
+  bool runGpuCull(size_t opaqueCount, const render::Frustum& fr) {
+    const size_t nb = opaquePlan_.batches.size();
+    if (!ensureBuffer(compactBuf_, compactCap_, opaqueCount, sizeof(InstanceGPU), rhi::BufferUsage::StorageRW, false) ||
+        !ensureBuffer(cullBatchBuf_, cullBatchCap_, nb, sizeof(CullBatchGPU)) ||
+        !ensureBuffer(cullArgsBuf_, cullArgsCap_, nb, sizeof(rhi::DrawIndexedIndirectArgs), rhi::BufferUsage::Indirect, false)) return false;
+    cullBatchCpu_.resize(nb);
+    cullArgsCpu_.assign(nb, rhi::DrawIndexedIndirectArgs{});
+    u32 maxCount = 0;
+    for (size_t i = 0; i < nb; ++i) {
+      const InstanceBatch& b = opaquePlan_.batches[i];
+      const Draw& d = draws_[renderQueues_.opaque[opaquePlan_.order[b.first]]];
+      CullBatchGPU& cb = cullBatchCpu_[i];
+      cb.first = b.first; cb.count = b.count; cb.indexCount = d.mesh->count; cb.argsIndex = static_cast<u32>(i);
+      const render::SphereBounds& sb = d.mesh->bounds;
+      cb.sphere[0] = sb.center[0]; cb.sphere[1] = sb.center[1]; cb.sphere[2] = sb.center[2];
+      cb.sphere[3] = sb.valid ? sb.radius : -1.f;   // raio < 0 = bounds invalidos: nunca culla
+      cullArgsCpu_[i].indexCount = d.mesh->count;   // instanceCount = 0: o compute acumula (atomico) so os visiveis
+      maxCount = std::max(maxCount, b.count);
+    }
+    CullCB cc{};
+    for (int p = 0; p < 6; ++p) { cc.planes[p][0] = fr.p[p].n[0]; cc.planes[p][1] = fr.p[p].n[1]; cc.planes[p][2] = fr.p[p].n[2]; cc.planes[p][3] = fr.p[p].d; }
+    dev_->updateBuffer(cullCb_, &cc, sizeof cc);
+    dev_->updateBuffer(cullBatchBuf_, cullBatchCpu_.data(), nb * sizeof(CullBatchGPU));
+    dev_->updateBuffer(cullArgsBuf_, cullArgsCpu_.data(), nb * sizeof(rhi::DrawIndexedIndirectArgs));
+    auto cs = dev_->beginCommands();
+    cs->setPipeline(cullPipe_);
+    cs->setUniform(0, cullCb_);
+    cs->setStorage(0, cullBatchBuf_);
+    cs->setStorage(1, instBuf_);
+    cs->setStorageRW(0, compactBuf_);
+    cs->setStorageRW(1, cullArgsBuf_);
+    cs->dispatch((maxCount + 63u) / 64u, static_cast<u32>(nb), 1);   // x = instancias do lote (64 por grupo), y = lote
+    dev_->submit(*cs);
+    return true;
+  }
+
   void addDraw(Draw&& d) { (d.mat.opacity < 1.f ? tdraws_ : draws_).push_back(std::move(d)); }
   rhi::PipelineId transPipe_;
+  rhi::PipelineId pipeDs_, transPipeDs_;   // variantes sem cull (material dupla face); nulas = cai no pipeline normal
+  bool normalSlot_ = false;                // pipeline tem o slot kNormalMapSlot (normal map)
   rhi::TextureId color_, depth_, gbuf_, aoRaw_, ao_;
   rhi::TextureId glow_;
   rhi::ShaderId emiPs_; rhi::PipelineId emiPipe_;

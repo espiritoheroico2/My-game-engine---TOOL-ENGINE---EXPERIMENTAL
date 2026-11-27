@@ -134,6 +134,7 @@ struct Values {
   float texW = 1.f, texH = 1.f;
   bool playing = false, paused = false, freeFly = false, ctrlDown = false;
   bool showGrid = false, showGizmos = false, showCulled = false, showPostFx = false;
+  bool showColliders = false;   // barra flutuante: "Ver collision shape" (sceneInfo.physics.drawColliders)
   int gizmoMode = 0;
   bool localSpace = false;   // Q: gizmo e arrasto seguem os eixos do objeto (false = eixos do mundo)
   bool snapOn = false;
@@ -170,6 +171,7 @@ struct Values {
 struct Requests {
   bool playToggle = false, pauseToggle = false, stepOnce = false, snapToContact = false;
   std::optional<bool> grid, gizmos, culled, postFx, snapOn, localSpace;
+  std::optional<bool> colliders;   // novo valor de "Ver collision shape" (barra flutuante)
   std::optional<int> gizmoMode;
   std::optional<float> snapStep;
   std::optional<std::uint64_t> select;
@@ -364,7 +366,7 @@ private:
   };
 
   // Botoes da barra e da barra flutuante. O id diz o que o clique faz.
-  enum class Btn : std::uint8_t { PlayStop, Pause, Step, Grid, Gizmos, Culled, PostFx, Mode0, Mode1, Mode2, Magnet, Space, SnapContact, EditCanvas, AddPoint, RemovePoint, AddLine, DottedLine, RemoveLine };
+  enum class Btn : std::uint8_t { PlayStop, Pause, Step, Grid, Gizmos, Culled, PostFx, Colliders, Mode0, Mode1, Mode2, Magnet, Space, SnapContact, EditCanvas, AddPoint, RemovePoint, AddLine, DottedLine, RemoveLine };
   // Botao da barra: caixa, acao e se esta habilitado.
   struct Button {
     sui::Box box;
@@ -616,6 +618,7 @@ private:
       case Btn::Gizmos: out.gizmos = !v.showGizmos; break;
       case Btn::Culled: out.culled = !v.showCulled; break;
       case Btn::PostFx: out.postFx = !v.showPostFx; break;
+      case Btn::Colliders: out.colliders = !v.showColliders; break;
       case Btn::Mode0: out.gizmoMode = 0; break;
       case Btn::Mode1: out.gizmoMode = 1; break;
       case Btn::Mode2: out.gizmoMode = 2; break;
@@ -870,6 +873,7 @@ private:
     addButton(bar, x, by, kBtnH, T("Scale (R)"), Btn::Mode2, mode == 2, true, 8.f);
     x += 4.f;
     addButton(bar, x, by, kBtnH, T("Magnet"), Btn::Magnet, v.snapOn, true, 8.f);
+    addButton(bar, x, by, kBtnH, T("View collision shape"), Btn::Colliders, v.showColliders, true, 8.f);   // liga/desliga o desenho dos colisores
     x += 4.f;
     addButton(bar, x, by, kBtnH, v.localSpace ? T("Local (Q)") : T("World (Q)"), Btn::Space, v.localSpace, true, 8.f);
     if (v.selCanvas) addButton(bar, x, by, kBtnH, T("Edit canvas"), Btn::EditCanvas, v.canvasEdit, true, 8.f);
@@ -912,6 +916,7 @@ private:
     addWidth(T("Scale (R)"), 8.f);
     cursor += 4.f;
     addWidth(T("Magnet"), 8.f);
+    addWidth(T("View collision shape"), 8.f);   // mesma regra do botao
     cursor += 4.f;
     addWidth(v.localSpace ? T("Local (Q)") : T("World (Q)"), 8.f);
     if (v.selCanvas) addWidth(T("Edit canvas"), 8.f);

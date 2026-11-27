@@ -196,7 +196,15 @@ struct Mesh {
 // castShadow / receiveShadow: por objeto, independentes (ver lighting.hpp).
 // emissive: radiancia linear emitida pelo objeto (cor x intensidade); nao e iluminada, so soma na cor (e o bloom usa o brilho).
 struct Material { Vec3 albedo{0.8f, 0.8f, 0.8f}; f32 roughness = 0.5f; f32 metallic = 0.f; bool castShadow = true, receiveShadow = true; const Texture* albedoMap = nullptr; Vec3 emissive{0.f, 0.f, 0.f}; f32 opacity = 1.f; /* <1: passe transparente (mistura) */
-  Vec3 fogColor{0.6f, 0.65f, 0.7f}; f32 fogStart = 5.f, fogEnd = 50.f, fogAmount = 0.f; /* neblina por distancia; 0 = sem */ };
+  Vec3 fogColor{0.6f, 0.65f, 0.7f}; f32 fogStart = 5.f, fogEnd = 50.f, fogAmount = 0.f; /* neblina por distancia; 0 = sem */
+  // Campos de material avancado (so o GpuRenderer usa; o renderer por software ignora). Padroes = comportamento antigo.
+  const Texture* normalMap = nullptr;      // mapa de normais em espaco tangente; nullptr = sem
+  f32 normalStrength = 1.f;                // 0..2; lerp entre a normal da malha (0) e a do mapa (1)
+  f32 uvTiling[2] = {1.f, 1.f};            // repeticoes da UV (> 0)
+  f32 uvOffset[2] = {0.f, 0.f};            // deslocamento da UV
+  f32 alphaCutoff = 0.f;                   // 0..1; > 0 descarta pixels com alfa menor (so passe Alpha)
+  bool doubleSided = false;                // true: pipeline sem cull de faces
+};
 
 // Camera: posicao, alvo, FOV vertical em radianos e planos de corte. Ortografica usa orthoHeight.
 struct Camera {

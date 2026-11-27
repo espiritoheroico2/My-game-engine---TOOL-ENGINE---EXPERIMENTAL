@@ -23,7 +23,7 @@ target_link_libraries(tool_newtoon_scale_test PRIVATE tool::physics)
 
 # Fisica Newtoon (2D e 3D): executavel proprio, para validar a fisica sem depender do tool_tests (que tem o SpriteUI).
 add_executable(tool_physics_tests main.cpp test_newtoon_jobs.cpp test_newtoon_bvh.cpp test_newtoon_advanced.cpp
-  test_newtoon_2d.cpp test_newtoon_module_smoke.cpp)
+  test_newtoon_2d.cpp test_newtoon_module_smoke.cpp test_newtoon_hull.cpp)
 target_link_libraries(tool_physics_tests PRIVATE tool::physics)
 add_test(NAME tool_physics_tests COMMAND tool_physics_tests)
 
@@ -31,3 +31,10 @@ add_test(NAME tool_physics_tests COMMAND tool_physics_tests)
 add_executable(tool_canvas_tests main.cpp test_canvas.cpp)
 target_link_libraries(tool_canvas_tests PRIVATE tool::canvas)
 add_test(NAME tool_canvas_tests COMMAND tool_canvas_tests)
+
+# Particulas (engine/particles): executavel proprio de testes e benchmark de 1 milhao de particulas (sem add_test; rodar manualmente).
+add_executable(tool_particles_tests main.cpp test_particles.cpp)
+target_link_libraries(tool_particles_tests PRIVATE tool::particles)
+add_test(NAME Particles.Core COMMAND tool_particles_tests)
+add_executable(tool_particles_bench particles_bench.cpp)
+target_link_libraries(tool_particles_bench PRIVATE tool::particles)

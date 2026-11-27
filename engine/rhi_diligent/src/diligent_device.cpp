@@ -7,7 +7,11 @@
 #include "NativeWindow.h"
 
 #if TOOL_HAS_VULKAN
+#include <vulkan/vulkan.h> // os headers *Vk.h do Diligent usam VkImage/VkDevice sem incluir este arquivo
 #include "EngineFactoryVk.h"
+#include "RenderDeviceVk.h"
+#include "DeviceContextVk.h"
+#include "TextureVk.h"
 #endif
 #if TOOL_HAS_OPENGL
 #include "EngineFactoryOpenGL.h"
@@ -19,6 +23,8 @@
 #include "EngineFactoryD3D11.h"
 #endif
 
+#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <unordered_map>
 
@@ -91,8 +97,19 @@ public:
       bd.Mode = d.elementStride ? dl::BUFFER_MODE_STRUCTURED : dl::BUFFER_MODE_RAW;
       bd.ElementByteStride = d.elementStride;
       break;
+    case BufferUsage::StorageRW: // UAV + SRV: a GPU escreve em compute e pode ler depois como StructuredBuffer
+      bd.BindFlags = dl::BIND_UNORDERED_ACCESS | dl::BIND_SHADER_RESOURCE;
+      bd.Mode = d.elementStride ? dl::BUFFER_MODE_STRUCTURED : dl::BUFFER_MODE_RAW;
+      bd.ElementByteStride = d.elementStride;
+      break;
+    case BufferUsage::Indirect: // argumentos de draw indireto, gravaveis por compute (RWByteAddressBuffer)
+      bd.BindFlags = dl::BIND_INDIRECT_DRAW_ARGS | dl::BIND_UNORDERED_ACCESS;
+      bd.Mode = dl::BUFFER_MODE_RAW;
+      break;
     }
-    if (d.dynamic || d.usage == BufferUsage::Uniform) { bd.Usage = dl::USAGE_DYNAMIC; bd.CPUAccessFlags = dl::CPU_ACCESS_WRITE; }
+    const bool gpuWritable = d.usage == BufferUsage::StorageRW || d.usage == BufferUsage::Indirect;
+    if (gpuWritable) bd.Usage = dl::USAGE_DEFAULT; // UAV nao aceita IMMUTABLE nem DYNAMIC; dados iniciais sao copiados na criacao
+    else if (d.dynamic || d.usage == BufferUsage::Uniform) { bd.Usage = dl::USAGE_DYNAMIC; bd.CPUAccessFlags = dl::CPU_ACCESS_WRITE; }
     else if (data) bd.Usage = dl::USAGE_IMMUTABLE;
     else bd.Usage = dl::USAGE_DEFAULT;
     dl::BufferData init{data, data ? d.size : 0};
@@ -119,6 +136,7 @@ public:
       td.Format = dl::TEX_FORMAT_RGBA8_UNORM;
     }
     td.BindFlags = isDepth ? dl::BIND_DEPTH_STENCIL : (d.renderTarget ? (dl::BIND_RENDER_TARGET | dl::BIND_SHADER_RESOURCE) : dl::BIND_SHADER_RESOURCE);
+    if (d.storage && !isDepth) td.BindFlags |= dl::BIND_UNORDERED_ACCESS; // imagem de armazenamento (VK_IMAGE_USAGE_STORAGE_BIT)
     td.Usage = dl::USAGE_DEFAULT;
     if (d.renderTarget || isDepth) { td.ClearValue.Format = td.Format; if (isDepth) { td.ClearValue.DepthStencil.Depth = 1.f; } }
     dl::RefCntAutoPtr<dl::ITexture> t;
@@ -157,6 +175,27 @@ public:
 
   // Cria o PSO grafico (shaders, estado, layout) e um SRB para os recursos do pipeline.
   PipelineId createPipeline(const PipelineDesc& d) override {
+    if (!d.cs.isNull()) { // pipeline de compute: so o shader de compute e os recursos (sem estado grafico)
+      auto* cs = obj<dl::IShader>(d.cs, Kind::Shader);
+      if (!cs) { debug().report("TOOL-E133", Severity::Error, "pipeline de compute com shader invalido"); return kNullHandle; }
+      if (!supportsCompute()) { debug().report("TOOL-E133", Severity::Error, "compute nao suportado neste backend"); return kNullHandle; }
+      dl::ComputePipelineStateCreateInfo cci;
+      cci.PSODesc.Name = d.name.empty() ? "tool compute pipeline" : d.name.c_str();
+      cci.PSODesc.PipelineType = dl::PIPELINE_TYPE_COMPUTE;
+      cci.PSODesc.ResourceLayout.DefaultVariableType = dl::SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC;
+      cci.pCS = cs;
+      dl::RefCntAutoPtr<dl::IPipelineState> cpso;
+      device->CreateComputePipelineState(cci, &cpso);
+      if (!cpso) { debug().report("TOOL-E153", Severity::Error, "falha ao criar pipeline de compute '" + d.name + "'"); return kNullHandle; }
+      Handle h = ids_.create();
+      put(h.index, Kind::Pipeline, cpso, 0);
+      PipelineData pd;
+      cpso->CreateShaderResourceBinding(&pd.srb, true);
+      pd.compute = true;
+      pd.uniformNames = d.uniformNames; pd.storageNames = d.storageNames; pd.storageRWNames = d.storageRWNames;
+      pipelines_[h.index] = std::move(pd);
+      return h;
+    }
     auto* vs = obj<dl::IShader>(d.vs, Kind::Shader);
     auto* ps = obj<dl::IShader>(d.ps, Kind::Shader);
     if (!vs || !ps) { debug().report("TOOL-E133", Severity::Error, "pipeline com shader invalido"); return kNullHandle; }
@@ -324,7 +363,8 @@ public:
     else if (swapchain && t == backbufferHandle_) tex = swapchain->GetCurrentBackBufferRTV()->GetTexture();
     if (!tex) return false;
     const auto& td = tex->GetDesc();
-    if (td.Format != dl::TEX_FORMAT_RGBA8_UNORM && td.Format != dl::TEX_FORMAT_RGBA8_UNORM_SRGB && td.Format != dl::TEX_FORMAT_BGRA8_UNORM && td.Format != dl::TEX_FORMAT_BGRA8_UNORM_SRGB) return false;
+    const bool half4 = td.Format == dl::TEX_FORMAT_RGBA16_FLOAT; // convertido para RGBA8 (satura em 0..1) so para testes/diagnostico
+    if (!half4 && td.Format != dl::TEX_FORMAT_RGBA8_UNORM && td.Format != dl::TEX_FORMAT_RGBA8_UNORM_SRGB && td.Format != dl::TEX_FORMAT_BGRA8_UNORM && td.Format != dl::TEX_FORMAT_BGRA8_UNORM_SRGB) return false;
     // A textura de leitura e reaproveitada enquanto o tamanho/formato nao mudam (criar uma por quadro era lento).
     if (!staging_ || stagingW_ != td.Width || stagingH_ != td.Height || stagingFmt_ != td.Format) {
       dl::TextureDesc sd = td;
@@ -347,6 +387,17 @@ public:
     for (u32 y = 0; y < h; ++y) {
       const u8* src = static_cast<const u8*>(m.pData) + static_cast<size_t>(y) * m.Stride;
       u8* dst = rgba.data() + static_cast<size_t>(y) * w * 4;
+      if (half4) { // 4 meios-floats por pixel -> RGBA8 saturado; NaN/negativo viram 0
+        const auto* hs = reinterpret_cast<const std::uint16_t*>(src);
+        for (u32 i = 0; i < w * 4; ++i) {
+          const std::uint16_t hv = hs[i];
+          const int e = (hv >> 10) & 31, mant = hv & 1023;
+          float f = e == 0 ? mant / 1024.f * (1.f / 16384.f) : (e == 31 ? (mant ? 0.f : 1e30f) : (1.f + mant / 1024.f) * std::ldexp(1.f, e - 15));
+          if (hv & 0x8000u) f = 0.f;
+          dst[i] = static_cast<u8>(f >= 1.f ? 255 : static_cast<int>(f * 255.f + 0.5f));
+        }
+        continue;
+      }
       if (!bgra) std::memcpy(dst, src, static_cast<size_t>(w) * 4);
       else for (u32 x = 0; x < w; ++x) { dst[x * 4] = src[x * 4 + 2]; dst[x * 4 + 1] = src[x * 4 + 1]; dst[x * 4 + 2] = src[x * 4]; dst[x * 4 + 3] = src[x * 4 + 3]; }
     }
@@ -417,7 +468,36 @@ public:
     return it == objs_.end() ? nullptr : static_cast<T*>(it->second.RawPtr());
   }
   // Dados de um pipeline: SRB e nomes dos slots de uniform, textura e storage.
-  struct PipelineData { dl::RefCntAutoPtr<dl::IShaderResourceBinding> srb; std::vector<std::string> uniformNames, textureNames, storageNames; };
+  struct PipelineData { dl::RefCntAutoPtr<dl::IShaderResourceBinding> srb; std::vector<std::string> uniformNames, textureNames, storageNames, storageRWNames; bool compute = false; };
+
+  // Compute so existe nos backends que o Diligent suporta de verdade; OpenGL antes do 4.3 e GLES 3.0 nao tem.
+  bool supportsCompute() const override {
+    if (!device) return false;
+    return device->GetDeviceInfo().Features.ComputeShaders == dl::DEVICE_FEATURE_STATE_ENABLED;
+  }
+  // Draw indireto: Vulkan/D3D11/D3D12 sempre; GL so com compute (4.3 inclui indirect draw).
+  bool supportsIndirect() const override { return supportsCompute(); }
+
+  // Leitura sincrona de um buffer: copia para um buffer STAGING, espera a GPU e copia para a CPU.
+  bool readBuffer(BufferId b, std::vector<u8>& out) override {
+    auto* buf = obj<dl::IBuffer>(b, Kind::Buffer);
+    if (!buf) return false;
+    const dl::Uint64 size = buf->GetDesc().Size;
+    dl::BufferDesc sd; sd.Name = "tool readback buffer"; sd.Size = size;
+    sd.Usage = dl::USAGE_STAGING; sd.BindFlags = dl::BIND_NONE; sd.CPUAccessFlags = dl::CPU_ACCESS_READ;
+    dl::RefCntAutoPtr<dl::IBuffer> st;
+    device->CreateBuffer(sd, nullptr, &st);
+    if (!st) return false;
+    ctx->CopyBuffer(buf, 0, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION, st, 0, size, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    ctx->WaitForIdle(); // WaitForIdle envia (Flush) os comandos pendentes e espera
+    dl::PVoid p = nullptr;
+    ctx->MapBuffer(st, dl::MAP_READ, kind == Backend::GLES ? dl::MAP_FLAG_NONE : dl::MAP_FLAG_DO_NOT_WAIT, p);
+    if (!p) return false;
+    out.resize(static_cast<size_t>(size));
+    std::memcpy(out.data(), p, static_cast<size_t>(size));
+    ctx->UnmapBuffer(st, dl::MAP_READ);
+    return true;
+  }
   // Dados do pipeline do handle, ou nulo.
   PipelineData* pipelineData(Handle h) { auto it = pipelines_.find(h.index); return it == pipelines_.end() ? nullptr : &it->second; }
   // Verdadeiro se h e o handle do backbuffer desta swapchain.
@@ -519,7 +599,8 @@ public:
   }
   // Liga o PSO e guarda os dados do pipeline (nomes dos slots) para setUniform, setTexture e setStorage.
   void setPipeline(PipelineId p) override {
-    if (!check()) return;
+    auto* pdc = d_.pipelineData(p);
+    if (!(pdc && pdc->compute) && !check()) return; // compute nao precisa de begin()/end()
     auto* pso = d_.obj<dl::IPipelineState>(p, DiligentDevice::Kind::Pipeline);
     if (!pso) { d_.err("setPipeline com handle invalido"); pipe_ = nullptr; return; }
     d_.ctx->SetPipelineState(pso);
@@ -545,11 +626,12 @@ public:
   }
   // Liga o buffer uniforme ao nome do slot em VS e PS. Exige setPipeline antes.
   void setUniform(u32 slot, BufferId b) override {
-    if (!check()) return;
+    if (!okBind()) return;
     auto* buf = d_.obj<dl::IBuffer>(b, DiligentDevice::Kind::Buffer);
     if (!buf) { d_.err("uniform buffer invalido"); return; }
     if (!pipe_ || slot >= pipe_->uniformNames.size()) { d_.err("setUniform: slot sem nome (defina PipelineDesc::uniformNames e chame setPipeline antes)"); return; }
-    for (auto st : {dl::SHADER_TYPE_VERTEX, dl::SHADER_TYPE_PIXEL})
+    for (auto st : {dl::SHADER_TYPE_VERTEX, dl::SHADER_TYPE_PIXEL, dl::SHADER_TYPE_COMPUTE}) // GetVariableByName devolve nulo no estagio que nao existe
+      if (pipe_->compute != (st != dl::SHADER_TYPE_COMPUTE))
       if (auto* var = pipe_->srb->GetVariableByName(st, pipe_->uniformNames[slot].c_str())) var->Set(buf);
   }
   // Liga a textura ao nome do slot no pixel shader. Exige setPipeline antes.
@@ -562,14 +644,51 @@ public:
   }
   // Liga o buffer como SRV de StructuredBuffer ao nome do slot em VS e PS.
   void setStorage(u32 slot, BufferId b) override {
-    if (!check()) return;
+    if (!okBind()) return;
     auto* buf = d_.obj<dl::IBuffer>(b, DiligentDevice::Kind::Buffer);
     if (!buf) { d_.err("storage buffer invalido"); return; }
     if (!pipe_ || slot >= pipe_->storageNames.size()) { d_.err("setStorage: slot sem nome (defina PipelineDesc::storageNames e chame setPipeline antes)"); return; }
-    for (dl::SHADER_TYPE st : {dl::SHADER_TYPE_VERTEX, dl::SHADER_TYPE_PIXEL}) {
+    // Grafico: VS e PS. Compute: so o CS.
+    const dl::SHADER_TYPE sts[] = {dl::SHADER_TYPE_VERTEX, dl::SHADER_TYPE_PIXEL, dl::SHADER_TYPE_COMPUTE};
+    for (dl::SHADER_TYPE st : sts) {
+      if (pipe_->compute != (st == dl::SHADER_TYPE_COMPUTE)) continue;
       if (auto* var = pipe_->srb->GetVariableByName(st, pipe_->storageNames[slot].c_str()))
         var->Set(buf->GetDefaultView(dl::BUFFER_VIEW_SHADER_RESOURCE));
     }
+  }
+  // Liga o buffer como UAV (escrita pela GPU) ao nome do slot no compute shader.
+  void setStorageRW(u32 slot, BufferId b) override {
+    if (!okBind()) return;
+    auto* buf = d_.obj<dl::IBuffer>(b, DiligentDevice::Kind::Buffer);
+    if (!buf) { d_.err("storageRW buffer invalido"); return; }
+    if (!pipe_ || !pipe_->compute || slot >= pipe_->storageRWNames.size()) { d_.err("setStorageRW: exige pipeline de compute e slot nomeado (PipelineDesc::storageRWNames)"); return; }
+    auto* view = buf->GetDefaultView(dl::BUFFER_VIEW_UNORDERED_ACCESS);
+    if (!view) { d_.err("setStorageRW: buffer sem UAV (use BufferUsage::StorageRW ou Indirect)"); return; }
+    if (auto* var = pipe_->srb->GetVariableByName(dl::SHADER_TYPE_COMPUTE, pipe_->storageRWNames[slot].c_str())) var->Set(view);
+    else d_.err("setStorageRW: nome nao encontrado no shader");
+  }
+  // Despacha o compute: o Commit com TRANSITION leva os UAVs/SRVs ao estado certo (barreira automatica).
+  void dispatch(u32 gx, u32 gy, u32 gz) override {
+    if (!d_.supportsCompute()) return; // sem suporte: no-op
+    if (!pipe_ || !pipe_->compute) { d_.err("dispatch sem pipeline de compute"); return; }
+    d_.ctx->CommitShaderResources(pipe_->srb, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    dl::DispatchComputeAttribs da; da.ThreadGroupCountX = gx; da.ThreadGroupCountY = gy; da.ThreadGroupCountZ = gz;
+    d_.ctx->DispatchCompute(da);
+  }
+  // Draw indexado com argumentos vindos de um buffer escrito pela GPU. O buffer passa de UAV para INDIRECT_ARGUMENT (TRANSITION).
+  void drawIndexedIndirect(BufferId args, u32 offset) override {
+    if (!d_.supportsIndirect()) return; // sem suporte: no-op
+    if (!check()) return;
+    if (!pipe_ || pipe_->compute || !vb_ || !ib_) { d_.err("drawIndexedIndirect sem pipeline grafico/vertex/index buffer"); return; }
+    auto* buf = d_.obj<dl::IBuffer>(args, DiligentDevice::Kind::Buffer);
+    if (!buf) { d_.err("buffer de argumentos indiretos invalido"); return; }
+    d_.ctx->CommitShaderResources(pipe_->srb, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    dl::DrawIndexedIndirectAttribs ia;
+    ia.IndexType = dl::VT_UINT32; ia.pAttribsBuffer = buf; ia.DrawArgsOffset = offset;
+    ia.Flags = dl::DRAW_FLAG_NONE;
+    ia.AttribsBufferStateTransitionMode = dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    d_.ctx->DrawIndexedIndirect(ia);
+    ++d_.stats_.draws; // triangulos desconhecidos na CPU (quem decide e a GPU)
   }
   // Viewport dentro do alvo atual, em pixels. Nao altera o scissor.
   void setViewport(u32 x, u32 y, u32 w, u32 h) override {
@@ -624,6 +743,8 @@ public:
 private:
   // Confirma que a lista esta aberta. Senao gera erro.
   bool check() { if (!open_) d_.err("comando fora de begin()/end()"); return open_; }
+  // Ligacao de recursos: com pipeline de compute ligado dispensa begin()/end(); senao exige lista aberta.
+  bool okBind() { return (pipe_ && pipe_->compute) || check(); }
   // Define o scissor como o alvo inteiro. Necessario porque ScissorEnable esta ligado em todas as pipelines e o
   // Diligent nao define o scissor em SetViewports: sem isto, no Vulkan e no D3D12 o retangulo fica vazio e nada e
   // desenhado (Scene e Jogo ficam pretos ao trocar a API). No GL o padrao seria o tamanho da janela, que corta alvos
@@ -759,5 +880,102 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
   dev->adapter = dev->device->GetAdapterInfo().Description;
   return dev;
 }
+
+// ---- Acesso nativo ao Vulkan (ver diligent_device.hpp) ----
+#if TOOL_HAS_VULKAN
+namespace {
+// Converte o IDevice para o DiligentDevice com backend Vulkan; nulo caso contrario.
+DiligentDevice* asVulkan(IDevice& dev) {
+  auto* d = dynamic_cast<DiligentDevice*>(&dev);
+  return (d && d->kind == Backend::Vulkan) ? d : nullptr;
+}
+} // namespace
+
+bool vulkanNative(IDevice& dev, VulkanNative& out) {
+  auto* d = asVulkan(dev);
+  if (!d) return false;
+  // O caminho: IRenderDevice -> QueryInterface(IID_RenderDeviceVk) -> IRenderDeviceVk::GetVk*.
+  dl::RefCntAutoPtr<dl::IRenderDeviceVk> rd(d->device, dl::IID_RenderDeviceVk);
+  if (!rd) return false;
+  out.instance = rd->GetVkInstance();
+  out.physicalDevice = rd->GetVkPhysicalDevice();
+  out.device = rd->GetVkDevice();
+  return out.device != nullptr;
+}
+
+void* vulkanImage(IDevice& dev, TextureId t) {
+  auto* d = asVulkan(dev);
+  if (!d) return nullptr;
+  auto* tex = d->obj<dl::ITexture>(t, DiligentDevice::Kind::Texture);
+  if (!tex) return nullptr;
+  dl::RefCntAutoPtr<dl::ITextureVk> tv(tex, dl::IID_TextureVk);
+  return tv ? reinterpret_cast<void*>(tv->GetVkImage()) : nullptr;
+}
+
+unsigned vulkanFormat(IDevice& dev, TextureId t) {
+  auto* d = asVulkan(dev);
+  if (!d) return 0;
+  auto* tex = d->obj<dl::ITexture>(t, DiligentDevice::Kind::Texture);
+  if (!tex) return 0;
+  switch (tex->GetDesc().Format) { // valores de VkFormat (vulkan_core.h)
+  case dl::TEX_FORMAT_RGBA8_UNORM: return 37;      // VK_FORMAT_R8G8B8A8_UNORM
+  case dl::TEX_FORMAT_RGBA8_UNORM_SRGB: return 43; // VK_FORMAT_R8G8B8A8_SRGB
+  case dl::TEX_FORMAT_BGRA8_UNORM: return 44;      // VK_FORMAT_B8G8R8A8_UNORM
+  case dl::TEX_FORMAT_RGBA16_FLOAT: return 97;     // VK_FORMAT_R16G16B16A16_SFLOAT
+  case dl::TEX_FORMAT_R32_FLOAT: return 100;       // VK_FORMAT_R32_SFLOAT
+  case dl::TEX_FORMAT_D32_FLOAT: return 126;       // VK_FORMAT_D32_SFLOAT
+  default: return 0;
+  }
+}
+
+bool vulkanTransition(IDevice& dev, TextureId t, int vkImageLayout) {
+  auto* d = asVulkan(dev);
+  if (!d) return false;
+  auto* tex = d->obj<dl::ITexture>(t, DiligentDevice::Kind::Texture);
+  if (!tex) return false;
+  dl::RefCntAutoPtr<dl::IDeviceContextVk> cv(d->ctx, dl::IID_DeviceContextVk);
+  if (!cv) return false;
+  cv->TransitionImageLayout(tex, static_cast<VkImageLayout>(vkImageLayout));
+  return true;
+}
+
+void* vulkanCommandBuffer(IDevice& dev) {
+  auto* d = asVulkan(dev);
+  if (!d) return nullptr;
+  dl::RefCntAutoPtr<dl::IDeviceContextVk> cv(d->ctx, dl::IID_DeviceContextVk);
+  if (!cv) return nullptr;
+  d->ctx->Flush(); // envia o que esta pendente: encerra qualquer render pass aberto e entrega um command buffer limpo
+  return reinterpret_cast<void*>(cv->GetVkCommandBuffer());
+}
+
+void vulkanAfterExternal(IDevice& dev, TextureId t, int vkImageLayout) {
+  auto* d = asVulkan(dev);
+  if (!d) return;
+  auto* tex = d->obj<dl::ITexture>(t, DiligentDevice::Kind::Texture);
+  if (!tex) return;
+  dl::RefCntAutoPtr<dl::ITextureVk> tv(tex, dl::IID_TextureVk);
+  dl::RefCntAutoPtr<dl::IDeviceContextVk> cv(d->ctx, dl::IID_DeviceContextVk);
+  if (!tv || !cv) return;
+  tv->SetLayout(static_cast<VkImageLayout>(vkImageLayout)); // anota o layout em que o comando externo deixou a imagem (nao faz transicao)
+  // O Diligent so envia o command buffer se tiver contado algum comando proprio; o que o FFX gravou nao conta. Uma
+  // transicao real de layout (para SHADER_READ_ONLY_OPTIMAL = 5) conta como comando e garante o envio.
+  if (vkImageLayout != 5) cv->TransitionImageLayout(tex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
+void vulkanEndExternal(IDevice& dev) {
+  auto* d = asVulkan(dev);
+  if (!d) return;
+  d->ctx->Flush();           // envia o command buffer com o que o FFX gravou (InvalidateState sozinho o descartaria)
+  d->ctx->InvalidateState(); // o Diligent nao viu o que foi gravado por fora
+}
+#else
+bool vulkanNative(IDevice&, VulkanNative&) { return false; }
+void* vulkanImage(IDevice&, TextureId) { return nullptr; }
+unsigned vulkanFormat(IDevice&, TextureId) { return 0; }
+bool vulkanTransition(IDevice&, TextureId, int) { return false; }
+void* vulkanCommandBuffer(IDevice&) { return nullptr; }
+void vulkanAfterExternal(IDevice&, TextureId, int) {}
+void vulkanEndExternal(IDevice&) {}
+#endif
 
 } // namespace tool::rhi

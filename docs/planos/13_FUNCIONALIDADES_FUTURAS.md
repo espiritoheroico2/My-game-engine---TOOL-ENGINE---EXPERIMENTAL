@@ -4,6 +4,19 @@ Nove funcionalidades pedidas pelo usuário. Nenhuma está implementada. Cada ite
 
 Documentos relacionados: `07_UI_DE_JOGO.md`, `08_PARTICULAS.md`, `09_TEXTURAS_E_MATERIAIS.md`, `../estudos/RENDER_MILHOES.md`, `../engineering/00_ROADMAP_EXECUCAO.md`.
 
+## Concluídas (fora da lista a-i)
+
+Estes itens já estão prontos no código e não são parte das funcionalidades a-i:
+
+- Presets de configuração em `<projeto>/Configs` (render + physics), com Edit config / Save / Delete em Settings; engrenagem na janela Scenes para config por cena.
+- Tooltips nas opções de Settings.
+- Toggle "View collision shape" na barra da Scene e por objeto no Inspector (bloco Physics).
+- RHI com compute, UAV, draw indireto e readBuffer (backend Diligent; testado só em Vulkan).
+
+## Pendentes
+
+Continuam pendentes, sem implementação: HiZ (oclusão por profundidade na GPU, ver `../estudos/RENDER_MILHOES.md`), colisão por casco na narrowphase (hoje só caixa e esfera, ver `10_FISICA.md`), fontes (a), imagens em UI (c), escala de elementos (d), 2D (e), Pong (i), partículas (f) e materiais (g).
+
 ## Resumo
 
 | Id | Funcionalidade | Prioridade | Depende de |
@@ -190,7 +203,7 @@ Ordem sugerida: b, d, h (pequenas, destravam o resto) → a, c, e, g → f, i.
 - Todas as partículas do quadro viram quads voltados para a câmera, agrupados por cor: no máximo 64 lotes por vista, uma chamada de desenho por lote. Há teste de profundidade, culling por frustum e orçamento global `particleBudget` de 100 mil.
 - Simulação em paralelo, um emissor por tarefa (`tool::parallelFor`).
 - Sem alpha real; cor em 4 níveis por canal.
-- O RHI não tem compute nem draw indireto; o documento 08 marca simulação em GPU como "não agora".
+- O RHI tem compute, UAV e draw indireto no backend Diligent (testados só em Vulkan, ver `../planos/12_OTIMIZACAO_FISICA_ECS.md`); o documento 08 ainda marca simulação em GPU como "não agora".
 - Não há malha por partícula, fluido, fumaça com volume, nuvem nem faíscas.
 
 **O que muda na engine.**

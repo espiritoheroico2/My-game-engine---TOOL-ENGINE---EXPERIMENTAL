@@ -89,10 +89,34 @@ inline bool remove(const std::string& path, std::string& err) {
   return true;
 }
 
-// Preset a usar numa cena: o caminho da cena se o arquivo existir; senao o padrao do jogo (defaultPath).
+// Caminho a gravar na cena: RELATIVO a pasta do projeto (ex.: "Configs/preset 1.json") quando o arquivo esta dentro de
+// <projeto>/Configs; absoluto (como veio) quando esta fora. Vazio continua vazio (padrao do jogo).
+inline std::string toStored(const std::string& projectDir, const std::string& path) {
+  if (path.empty()) return {};
+  std::error_code ec;
+  const fs::path root = fs::weakly_canonical(fs::path(projectDir), ec);
+  const fs::path file = fs::weakly_canonical(fs::path(path), ec);
+  const fs::path cfg = fs::weakly_canonical(fs::path(folder(projectDir)), ec);
+  if (ec || root.empty() || file.empty()) return path;
+  // Dentro de Configs: o caminho relativo a Configs nao comeca com ".." (e nao e vazio).
+  const fs::path inCfg = file.lexically_relative(cfg);
+  if (inCfg.empty() || *inCfg.begin() == "..") return path;
+  return file.lexically_relative(root).generic_string();   // sempre com "/" para o JSON ser igual em qualquer sistema
+}
+
+// Inverso de toStored: caminho relativo vira absoluto a partir da pasta do projeto; absoluto e vazio ficam como estao.
+inline std::string absoluteFromStored(const std::string& projectDir, const std::string& stored) {
+  if (stored.empty()) return {};
+  const fs::path p(stored);
+  if (p.is_absolute()) return stored;
+  return (fs::path(projectDir) / p).string();
+}
+
+// Preset a usar numa cena: o caminho da cena (relativo ao projeto ou absoluto) se o arquivo existir; senao o padrao do jogo.
 inline std::string resolveForScene(const std::string& projectDir, const std::string& scenePresetPath) {
   std::error_code ec;
-  if (!scenePresetPath.empty() && fs::is_regular_file(scenePresetPath, ec)) return scenePresetPath;
+  const std::string abs = absoluteFromStored(projectDir, scenePresetPath);
+  if (!abs.empty() && fs::is_regular_file(abs, ec)) return abs;
   return defaultPath(projectDir);
 }
 

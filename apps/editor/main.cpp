@@ -40,6 +40,7 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "narrative_panel.hpp"
 #include "editor_info_panel.hpp"
 #include "assets_sprite_panel.hpp"
+#include "material_preview.hpp"
 #include "settings_changes.hpp"
 #include "settings_panel.hpp"
 #include "sui_palette.hpp"
@@ -54,6 +55,10 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "settings_model.hpp"
 #include "ui_style.hpp"
 #include "pointer_guard.hpp"
+#include "config_preset.hpp"     // presets de configuracao (Settings, topo) e config por cena
+#include "tooltip.hpp"           // balao de ajuda (Settings e Scenes)
+#include "usability_hints.hpp"   // ConfirmArm: confirmacao em dois cliques do Delete
+#include <mutex>
 
 // Estado do botao esquerdo visto pelo editor (pointer_guard.hpp): detecta soltura perdida.
 static editor::pointer_guard::State gPointerGuard;
@@ -345,6 +350,9 @@ void syncScenesPanel(Editor& ed, editor::scenesui::Panel& panel) {
     scenesAt = scenesNow;
     ed.refreshScenes();
   }
+  // Config por cena (engrenagem): pasta do projeto e a config guardada na cena aberta (relativa ao projeto ou absoluta).
+  panel.view().setProjectDir(ed.project.root.string());
+  panel.view().setScenePreset(ed.sceneInfo.name, ed.sceneInfo.presetPath);
   m.scenes = ed.sceneList;
   m.current = ed.sceneInfo.name;
   m.assets = ed.sceneInfo.assets;
@@ -434,6 +442,10 @@ void applyScenesActions(Editor& ed, editor::scenesui::Panel& panel, const std::v
         if (i < ed.sceneInfo.assets.size()) ed.sceneInfo.assets.erase(ed.sceneInfo.assets.begin() + static_cast<std::ptrdiff_t>(i));
         break;
       }
+      case A::ScenePreset:   // engrenagem: grava a config escolhida na cena (relativa ao projeto se estiver em Configs)
+        ed.setScenePreset(panel.view().presetScene(), panel.view().presetChoice());
+        ed.refreshScenes();
+        break;
       case A::Help: editor::openHelp("scenes"); break;
       case A::Close:
         ed.showScenes = false;
@@ -447,6 +459,17 @@ void applyScenesActions(Editor& ed, editor::scenesui::Panel& panel, const std::v
 // --- janela Assets (SpriteUI) -------------------------------------------------------------------------------------
 // Lista a pasta atual (so quando muda a pasta, a revisao dos assets ou a cada 2 s) e passa a selecao e a pasta para
 // as outras partes do editor: a janela Scenes oferece Assign para o item selecionado; as importacoes usam a pasta.
+// Cache das miniaturas de material da janela Assets (material_preview.hpp). A textura do material (se houver) e lida
+// do disco pelo image_io, so quando a miniatura e gerada (arquivo novo ou alterado).
+editor::material_preview::ThumbCache& materialThumbs() {
+  static editor::material_preview::ThumbCache cache = [] {
+    editor::material_preview::ThumbCache c;
+    c.setTextureLoader([](const std::string& path, tool::Texture& out) { return editor::loadImageFile(path, out, nullptr); });
+    return c;
+  }();
+  return cache;
+}
+
 void syncAssetsPanel(Editor& ed, editor::assetsui::Panel& panel) {
   namespace AM = editor::assets_model;
   AM::State& s = panel.model();
@@ -486,9 +509,19 @@ void syncAssetsPanel(Editor& ed, editor::assetsui::Panel& panel) {
       }
       s.items.push_back(std::move(it));
     }
+    // A pasta de materiais fica ao lado de Assets/ (<projeto>/Materials): na raiz da janela aparece como a pasta
+    // "Materials", onde cada .json mostra a miniatura do material. So aparece se a pasta existe.
+    if (s.folder == AM::kRoot && std::filesystem::is_directory(ed.project.root / "Materials", ec)) {
+      AM::Item mi;
+      mi.name = "Materials";
+      mi.rel = "Materials";
+      mi.dir = true;
+      mi.kind = editor::AssetKind::Folder;
+      s.items.push_back(std::move(mi));
+    }
     AM::Sort(s.items);
   }
-  ed_::ui().folder = s.folder;        // importacoes (processImports) usam a pasta desta janela
+  ed_::ui().folder = s.folder;       // importacoes (processImports) usam a pasta desta janela
   ed_::ui().selected = s.selected;    // a janela Scenes oferece Assign para o item selecionado
 }
 
@@ -775,6 +808,36 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
   h.assetChosen = [&ed](ed_::AssetKind, const std::string& rel) {
     if (!rel.empty()) ed.assignAsset(rel);
     ed.lib.invalidate(rel);
+  };
+  // Materiais (<projeto>/Materials): lista, avisos de recurso nao suportado e "criar a partir do objeto".
+  h.materialNames = [&ed] { return editor::material_asset::listNames(ed.project.root.string()); };
+  h.materialFlags = [&ed](const std::string& name) {
+    const auto* a = ed.materials.find(ed.project.root.string(), name);
+    if (!a) return 1;
+    return (a->blend == editor::material_asset::Blend::Additive ? 2 : 0) | (a->shader == "unlit" ? 4 : 0);
+  };
+  h.materialFromObject = [&ed] {
+    tool::World& w = ed.scene.world();
+    auto* mr = w.get<ed_::MeshRenderer>(ed.selected);
+    if (!mr) return;
+    editor::material_asset::MaterialAsset a;
+    if (const auto* nm = w.get<ed_::Name>(ed.selected)) a.name = nm->text;
+    if (a.name.empty()) a.name = "Material";
+    for (int i = 0; i < 3; ++i) { a.albedo[i] = mr->color[i]; a.emissive[i] = mr->emissive[i]; }
+    a.albedo[3] = mr->opacity;
+    a.blend = mr->opacity < 1.f ? editor::material_asset::Blend::Alpha : editor::material_asset::Blend::Opaque;
+    a.roughness = mr->roughness; a.metallic = mr->metallic;
+    a.emissiveStrength = mr->emissionOn ? mr->emissiveIntensity : 0.f;
+    a.texture = mr->texture;
+    // Campos avancados do objeto viram campos do material (clamped() prende as faixas ao salvar).
+    a.normalMap = mr->normalMap; a.normalStrength = mr->normalStrength; a.doubleSided = mr->doubleSided;
+    a.uvTiling[0] = mr->uvTiling[0]; a.uvTiling[1] = mr->uvTiling[1]; a.uvOffset[0] = mr->uvOffset[0]; a.uvOffset[1] = mr->uvOffset[1];
+    a.alphaCutoff = mr->alphaCutoff;
+    std::string err;
+    if (!editor::material_asset::save(ed.project.root.string(), a, err)) { tool::logWarn("Could not save the material: " + err); return; }
+    ed.materials.invalidate();
+    std::snprintf(mr->material, sizeof mr->material, "%s", editor::material_asset::sanitizeName(a.name).c_str());   // atribui o material criado
+    ed.statusLine = "Material saved: " + a.name;
   };
   h.previewSound = [&ed](const std::string& rel) { ed.previewSound(rel); };
   h.stopSound = [&ed] { ed.mixer.stop(ed.previewVoice); };
@@ -1193,6 +1256,7 @@ void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img,
   v.showGizmos = ed.showGizmos;
   v.showCulled = ed.showCulled;
   v.showPostFx = ed.showPostInScene;
+  v.showColliders = ed.sceneInfo.physics.drawColliders;   // botao "Ver collision shape" da barra flutuante
   v.gizmoMode = ed.gizmoMode;
   v.localSpace = ed.gizmoLocal;
   v.snapOn = ed.snapOn;
@@ -1230,6 +1294,8 @@ void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img,
   if (ed.showGizmos) {
     vo::buildSceneIcons(ed, proj, v.above);
     vo::buildPhysics(ed, proj, v.above);
+  } else {
+    vo::buildPhysics(ed, proj, v.above, true);   // gizmos off: so os objetos com "Ver collision shape" proprio ligado
   }
   gSceneValues = std::move(v);
 }
@@ -1271,6 +1337,7 @@ void applySceneRequests(Editor& ed, const scene_panel::Requests& r) {
   if (r.gizmos) ed.showGizmos = *r.gizmos;
   if (r.culled) ed.showCulled = *r.culled;
   if (r.postFx) ed.showPostInScene = *r.postFx;
+  if (r.colliders) { ed.sceneInfo.physics.drawColliders = *r.colliders; ed.settingsDirty = true; }   // marca a cena como modificada
   if (r.gizmoMode) ed.gizmoMode = *r.gizmoMode;
   if (r.localSpace) ed.gizmoLocal = *r.localSpace;
   if (r.snapOn) ed.snapOn = *r.snapOn;
@@ -1406,15 +1473,19 @@ void sceneKeysAndNavigation(Editor& ed, bool hovered) {
 
 // Textura da Scene: renderiza (ou reusa, com a cena ociosa) no tamanho da imagem.
 SDL_Texture* updateSceneTexture(Editor& ed, SDL_Renderer* sdl, const tool::Camera& cam, int w, int h, int& tw, int& th) {
-  const int rw = std::max(64, static_cast<int>(static_cast<float>(w) * ed.renderScale));
-  const int rh = std::max(36, static_cast<int>(static_cast<float>(h) * ed.renderScale));
+  const float scaleNow = ed.renderScaleNow();   // escala efetiva: slider, ou a do modo de qualidade do FSR
+  const int rw = std::max(64, static_cast<int>(static_cast<float>(w) * scaleNow));
+  const int rh = std::max(36, static_cast<int>(static_cast<float>(h) * scaleNow));
   const bool soft = ed.softScaling();   // upscaling/AA por software: a textura tem o tamanho da janela
   tw = soft ? w : rw;
   th = soft ? h : rh;
   const bool reuse = ed.viewsIdle() && ed.sceneTex.tex && ed.sceneTex.w == tw && ed.sceneTex.h == th;
   if (!reuse) {
+    // FSR 1 (GPU): a imagem volta ja ampliada para w x h; viewOutW/H diz o tamanho real do buffer devolvido.
+    ed.fsrOutW = soft && ed.fsr1Usable() ? w : 0; ed.fsrOutH = soft && ed.fsr1Usable() ? h : 0;
     const tool::u8* raw = ed.renderView(cam, rw, rh, true, editor::Zone::SceneRender, ed.showPostInScene ? &ed.sceneInfo.render.post : nullptr);
-    const tool::u8* pixels = soft ? ed.finishView(ed.sceneUp, raw, rw, rh, w, h) : raw;
+    ed.fsrOutW = ed.fsrOutH = 0;
+    const tool::u8* pixels = soft ? ed.finishView(ed.sceneUp, raw, ed.viewOutW, ed.viewOutH, w, h) : raw;
     ed.sceneTex.ensure(sdl, tw, th);
     if (ed.sceneTex.tex) SDL_UpdateTexture(ed.sceneTex.tex, nullptr, pixels, tw * 4);
   }
@@ -1444,8 +1515,10 @@ SDL_Texture* updateGameTexture(Editor& ed, SDL_Renderer* sdl, std::size_t i, con
   th = soft ? h : rh;
   const bool reuse = ed.viewsIdle() && ed.gameTex[i].tex && ed.gameTex[i].w == tw && ed.gameTex[i].h == th;
   if (!reuse) {
+    ed.fsrOutW = soft && ed.fsr1Usable() ? w : 0; ed.fsrOutH = soft && ed.fsr1Usable() ? h : 0;   // FSR 1 (GPU), ver updateSceneTexture
     const tool::u8* raw = ed.renderView(cam, rw, rh, false, editor::Zone::GameRender, &fx, i);
-    const tool::u8* pixels = soft ? ed.finishView(ed.gameUp[i], raw, rw, rh, w, h) : raw;
+    ed.fsrOutW = ed.fsrOutH = 0;
+    const tool::u8* pixels = soft ? ed.finishView(ed.gameUp[i], raw, ed.viewOutW, ed.viewOutH, w, h) : raw;
     ed.gameTex[i].ensure(sdl, tw, th);
     if (ed.gameTex[i].tex) SDL_UpdateTexture(ed.gameTex[i].tex, nullptr, pixels, tw * 4);
   }
@@ -1460,8 +1533,9 @@ void buildGameCell(Editor& ed, SDL_Renderer* sdl, std::size_t i, tool::Entity e,
   auto* c = ed.scene.world().get<ed_::CameraComp>(e);
   if (!t || !c) return;
   const int w = std::clamp(static_cast<int>(cell.w), 32, 1920), h = std::clamp(static_cast<int>(cell.h), 32, 1080);
-  int rw = std::max(32, static_cast<int>(static_cast<float>(w) * ed.renderScale));
-  int rh = std::max(18, static_cast<int>(static_cast<float>(h) * ed.renderScale));
+  const float scaleNow = ed.renderScaleNow();   // escala efetiva (ver updateSceneTexture)
+  int rw = std::max(32, static_cast<int>(static_cast<float>(w) * scaleNow));
+  int rh = std::max(18, static_cast<int>(static_cast<float>(h) * scaleNow));
   const bool fixedRes = !fill && ed.fixedRes(rw, rh);   // resolucao fixa: a imagem mantem a proporcao (Contain)
   const tool::Camera cam = ed.cameraFor(e);
   const tool::PostFx fx = tool::combinePostFx(ed.sceneInfo.render.post, c->post);
@@ -1642,9 +1716,12 @@ inline Row Slide(int id, std::string label, float value, float lo, float hi, boo
   Row r; r.kind = RowKind::Slider; r.id = id; r.label = std::move(label); r.value = value; r.lo = lo; r.hi = hi;
   r.isInt = asInt; r.note = std::move(note); r.enabled = enabled; return r;
 }
-inline Row Check(int id, std::string label, bool on, bool enabled = true) {
+// Toggle (liga/desliga). O painel o desenha como trilho + bolinha; o RowKind::Check do modelo guarda o mesmo dado.
+inline Row Toggle(int id, std::string label, bool on, bool enabled = true) {
   Row r; r.kind = RowKind::Check; r.id = id; r.label = std::move(label); r.on = on; r.enabled = enabled; return r;
 }
+// Nome antigo (caixa de selecao): agora tambem vira toggle; mesmo id e mesmo dado.
+inline Row Check(int id, std::string label, bool on, bool enabled = true) { return Toggle(id, std::move(label), on, enabled); }
 inline Row Drop(int id, std::string label, std::vector<std::string> options, int index, bool enabled = true) {
   Row r; r.kind = RowKind::Dropdown; r.id = id; r.label = std::move(label); r.options = std::move(options); r.index = index;
   r.enabled = enabled; return r;
@@ -1666,6 +1743,8 @@ inline std::string channel(const char* key, const char* c) { return std::string(
 // ficam juntas. Os ids de Tags com varios itens (Remove link, Rename) somam o indice da ligacao ou da tag.
 enum FormId : int {
     // Game (100)
+    // Config presets (50): topo de Settings (os numeros batem com settings_form::DefaultTip)
+    kCfgEdit = 50, kCfgName, kCfgSave, kCfgDelete,
     kGameGridScene = 100, kGameGridGame, kGameGizmos, kGameSplit, kGameSplitFill, kGameSkyEnabled,
     kGameSkyFace0 = 110,                       // 110 a 115: um combo por lado do cubo
     kGameSkyRed = 120, kGameSkyGreen, kGameSkyBlue, kGameSkyAlpha,
@@ -1676,6 +1755,8 @@ enum FormId : int {
     kPhysSoftStep, kPhysWarmStart, kPhysIslands, kPhysInterp, kPhysContactHz, kPhysContactDamp,
     // Optimizing (300)
     kOptFps = 300, kOptChunkCache, kOptUiScale, kOptIdle, kOptSimplify, kOptSimplifyDist, kOptSimplifyAmount,
+    kOptFsr, kOptFsrSharp,   // FSR 1 (upscale na GPU): 307 e 308 (dicas em settings_form::DefaultTip)
+    kOptFsr4, kOptFrameGen, kOptFsrQuality, kOptFsrCustomScale,   // FSR 4, frame generation, modo de qualidade e fator personalizado: 309 a 312
     // Language (400)
     kLangPack = 400, kLangReload, kLangExport,
     // Tags (500)
@@ -1709,6 +1790,89 @@ struct TagsFormState {
     std::string renameBuf;
 };
 TagsFormState gTagsForm;
+
+// Estado das linhas do topo de Settings (presets de configuracao).
+struct ConfigFormState {
+    std::string name = "preset 1";      // "Config Name:" (valor padrao pedido)
+    std::string msg;                    // feedback curto (Saved / erro); fica ate a proxima acao
+    editor::usability::ConfirmArm arm;  // Delete: 1o clique arma, 2o apaga
+};
+ConfigFormState gCfgForm;
+
+// Arquivo escolhido no dialogo nativo ([Edit config]); o SDL responde em outra thread, entao entra sob trava.
+std::mutex& cfgPickMutex() { static std::mutex m; return m; }
+std::string& cfgPickPath() { static std::string p; return p; }
+
+// Abre o browser de arquivo (.json) na pasta <projeto>/Configs.
+void openConfigPicker(Editor& ed) {
+    static std::string startDir;   // precisa viver ate o dialogo responder
+    startDir = editor::config_preset::folder(ed.project.root.string()) + "/";
+    static const SDL_DialogFileFilter filters[] = {{"Config (*.json)", "json"}};
+    SDL_ShowOpenFileDialog([](void*, const char* const* files, int) {
+        if (files && files[0]) { std::lock_guard<std::mutex> lk(cfgPickMutex()); cfgPickPath() = files[0]; }
+    }, nullptr, nullptr, filters, 1, startDir.c_str(), false);
+}
+
+// Chamar uma vez por quadro antes de settingsValues(): aplica no ed.sceneInfo o arquivo escolhido no dialogo.
+void applyPendingConfigPick(Editor& ed) {
+    std::string path;
+    { std::lock_guard<std::mutex> lk(cfgPickMutex()); path.swap(cfgPickPath()); }
+    if (path.empty()) return;
+    std::string err;
+    if (editor::config_preset::load(path, ed.sceneInfo, err)) {
+        ed.settingsDirty = true; ed.requestFrame();
+        gCfgForm.name = std::filesystem::path(path).stem().string();
+        gCfgForm.msg = std::string(T("Loaded")) + ": " + gCfgForm.name;
+    } else gCfgForm.msg = std::string(T("Could not load")) + ": " + err;
+}
+
+// <projeto>/Configs/<nome limpo>.json do campo Config Name, ou "" se o nome for invalido.
+std::string cfgPathForName(Editor& ed) {
+    const std::string clean = editor::config_preset::sanitizeName(gCfgForm.name);
+    if (clean.empty()) return {};
+    return (std::filesystem::path(editor::config_preset::folder(ed.project.root.string())) / (clean + ".json")).string();
+}
+
+// Linhas do topo de Settings: Edit config, Config Name, Save e Delete.
+void addConfigRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
+    (void)ed;
+    rows.push_back(Head(T("Configuration presets")));
+    rows.push_back(Btn(kCfgEdit, T("Edit config")));
+    rows.push_back(Txt(kCfgName, T("Config Name:"), gCfgForm.name));
+    rows.push_back(Btn(kCfgSave, T("Save")));
+    rows.push_back(Btn(kCfgDelete, gCfgForm.arm.Armed(kCfgDelete) ? T("Confirm delete?") : T("Delete")));
+    if (!gCfgForm.msg.empty()) rows.push_back(Dim(gCfgForm.msg));
+}
+
+// Camada de tooltip no fim do quadro, por cima de tudo: desenha o balao do Settings (tip) e, se dado, o da janela Scenes.
+// Usa a mesma fonte ja carregada (TextAtlasSet) e o mesmo renderizador SpriteUI das janelas.
+struct TooltipLayer {
+    editor::tooltip::Tooltip tip;                         // balao do Settings
+    editor::sui::Canvas canvas;
+    editor::sui::SpriteUiSdlRenderer& sdl;
+    ToolEngine::SpriteUi::Rendering::RenderExtractor extractor;
+    ToolEngine::SpriteUi::Rendering::FramePacket packet;
+    std::uint64_t frameId = 0;
+    TooltipLayer(const editor::sui::TextAtlasSet& text, editor::sui::SpriteUiSdlRenderer& r) : canvas{text}, sdl{r} {}
+    // `extra`: outro Tooltip a desenhar no mesmo quadro (o da Scenes); pode ser nullptr.
+    bool draw(SDL_Renderer* renderer, float w, float h, editor::tooltip::Tooltip* extra) {
+        namespace SR = ToolEngine::SpriteUi::Rendering;
+        canvas.clear();
+        canvas.setFontScale(editor::ui_style::textScale());
+        canvas.setTextZ(0.99f);
+        tip.draw(canvas, w, h);
+        if (extra) extra->draw(canvas, w, h);
+        if (!tip.visible() && !(extra && extra->visible())) return true;   // nada a desenhar neste quadro
+        std::vector<SR::UIRenderItem> items;
+        const std::vector<SR::ClipRectGPU> clips{{0.f, 0.f, w, h}};
+        std::uint64_t paint = 1;
+        canvas.appendItems(items, 0.f, 0.f, 0.f, 0.f, h, editor::sui::handleFor(0), 0u, paint);
+        packet = extractor.Build(++frameId, items, nullptr, clips);
+        if (!SR::IsFramePacketValid(packet)) return true;
+        return sdl.draw(renderer, packet);
+    }
+};
 
 // Caminho do Sol (Global Light) desta cena, ou nullptr: a primeira entidade com o componente.
 ed_::GlobalLight* settingsSunLight(Editor& ed) {
@@ -1757,28 +1921,76 @@ void addGameRows(Editor& ed, editor::settings_form::Rows& rows) {
         rows.push_back(Slide(kGameSkyRed, channel("Solid color (sides without image)", "R"), ed.sceneInfo.sky.solid[0], 0.f, 1.f));
         rows.push_back(Slide(kGameSkyGreen, channel("Solid color (sides without image)", "G"), ed.sceneInfo.sky.solid[1], 0.f, 1.f));
         rows.push_back(Slide(kGameSkyBlue, channel("Solid color (sides without image)", "B"), ed.sceneInfo.sky.solid[2], 0.f, 1.f));
-        rows.push_back(Slide(kGameSkyAlpha, channel("Solid color (sides without image)", "A"), ed.sceneInfo.sky.solid[3], 0.f, 1.f));   // as 4 linhas viram um seletor de cor com alfa (settings_panel.hpp)
+        // Sem linha de alfa: skybox.hpp nao usa o alfa da cor solida (tirado da tela por nao ter efeito).
         rows.push_back(Dim(T("Each side shows its image in the direction you look at. Used by the Scene and Game views; 2D cameras have no skybox.")));
     }
     rows.push_back(Head(T("Audio")));
     rows.push_back(Note(F("Audio output: %s", ed.audioTried ? (ed.audioOk ? "ready" : "not available") : "starts on Play")));
 }
 
-// Linhas da secao Optimizing (aba 4).
-void addOptimizingRows(Editor& ed, editor::settings_form::Rows& rows) {
+// Tamanho (saida) usado para mostrar a resolucao de render do FSR: o tamanho fixo do Game, ou 1920x1080 de referencia
+// quando o Game acompanha a janela.
+static void fsrOutputSize(Editor& ed, int& w, int& h) {
+    if (!ed.fixedRes(w, h)) { w = 1920; h = 1080; }
+}
+
+// Bloco "Upscaling FSR" (categoria Graphics and API, logo abaixo da escolha de API).
+void addFsrRows(Editor& ed, editor::settings_form::Rows& rows) {
     using namespace formrow;
-    rows.push_back(Head(T("Frame and cache")));
-    rows.push_back(Drop(kOptFps, T("Frame rate limit"), {"VSync", "30 FPS", "60 FPS", "120 FPS", "Unlimited"}, ed.fpsMode));
-    rows.push_back(Slide(kOptChunkCache, T("Mesh chunk cache"), static_cast<float>(ed.chunkCacheMax),
-                         static_cast<float>(::editor::settings_model::kChunkCacheMin), static_cast<float>(::editor::settings_model::kChunkCacheMax), true));
+    auto& r = ed.sceneInfo.render;
+    const bool fsr1Ok = ed.apiActive != 0 && ed.gpuDev && ed.gpu.fsr1Available();
+    const bool fsr4Ok = ed.fsr4Supported();
+    const bool fgOk = ed.frameGenSupported();
+    rows.push_back(Head(T("Upscaling FSR")));
+    rows.push_back(Toggle(kOptFsr, T("Upscaling FSR 1"), r.fsr1, fsr1Ok));
+    if (!fsr1Ok) rows.push_back(Dim(T("FSR 1 is not available on this graphics API or GPU; the software upscaler is used instead.")));
+    rows.push_back(Toggle(kOptFsr4, T("Upscaling FSR 4"), r.fsr4, fsr4Ok));
+    if (!fsr4Ok) {   // motivo: Vulkan nao ativo ou o texto de status da consulta real
+        rows.push_back(Dim(ed.apiActive == 0 || !ed.gpuDev ? std::string(T("FSR 4 needs the Vulkan graphics API."))
+                                                           : tool::fidelityfx::fsr4Status()));
+    } else {
+        rows.push_back(Dim(T("FSR 4 enters the next step (motion vectors). Your choice is saved, but it is not applied yet.")));
+    }
+    rows.push_back(Toggle(kOptFrameGen, T("Frame generation (FSR 3.1)"), r.frameGen, fgOk));
+    if (!fgOk) rows.push_back(Dim(T("Frame generation is not integrated yet.")));
+    const bool anyFsr = r.fsr1 || r.fsr4;
+    rows.push_back(Drop(kOptFsrQuality, T("FSR quality mode"),
+                        {std::string(T("Ultra Quality (1.3x)")), std::string(T("Quality (1.5x)")), std::string(T("Balanced (1.7x)")),
+                         std::string(T("Performance (2.0x)")), std::string(T("Ultra Performance (3.0x)")), std::string(T("Custom"))},
+                        ::editor::clampFsrQuality(r.fsrQuality)));
+    if (::editor::clampFsrQuality(r.fsrQuality) == ::editor::kFsrQualityCustom)
+        rows.push_back(Slide(kOptFsrCustomScale, T("Custom render factor"), r.fsrCustomScale, 0.5f, 1.f, false, {}, true));
+    rows.push_back(Slide(kOptFsrSharp, T("Sharpness"), r.fsrSharpness, 0.f, 1.f, false, {}, fsr1Ok && r.fsr1));
+    if (anyFsr) {   // resolucao de render resultante
+        int ow = 0, oh = 0;
+        fsrOutputSize(ed, ow, oh);
+        const float s = ed.renderScaleNow();
+        const int rw = std::max(1, static_cast<int>(static_cast<float>(ow) * s)), rh = std::max(1, static_cast<int>(static_cast<float>(oh) * s));
+        rows.push_back(Note(F("Render %dx%d -> %dx%d", rw, rh, ow, oh)));
+    }
+    rows.push_back(Dim(T("While FSR is on, the render scale comes from the quality mode.")));
+}
+
+// Linhas extras da categoria Interface (depois dos presets): escala da interface e renderizacao ociosa.
+void addInterfaceExtraRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
     rows.push_back(Head(T("Interface")));
     rows.push_back(Slide(kOptUiScale, T("UI scale"), ed.theme.scale, ::editor::settings_model::kInterfaceScaleMin, ::editor::settings_model::kInterfaceScaleMax));
-    rows.push_back(Check(kOptIdle, T("Idle rendering"), ed.idleRendering));
+    rows.push_back(Toggle(kOptIdle, T("Idle rendering"), ed.idleRendering));
+}
+
+// Linhas da categoria Quality (depois dos controles fixos): cache de malhas e simplificacao.
+void addOptimizingRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
+    rows.push_back(Head(T("Mesh cache")));
+    rows.push_back(Slide(kOptChunkCache, T("Mesh chunk cache"), static_cast<float>(ed.chunkCacheMax),
+                         static_cast<float>(::editor::settings_model::kChunkCacheMin), static_cast<float>(::editor::settings_model::kChunkCacheMax), true));
     rows.push_back(Head(T("Mesh simplification")));
     rows.push_back(Check(kOptSimplify, T("Simplify distant meshes"), ed.simplifyFar));
     rows.push_back(Slide(kOptSimplifyDist, T("Simplify beyond (m)"), ed.simplifyDistance,
                          ::editor::settings_model::kSimplifyDistanceMin, ::editor::settings_model::kSimplifyDistanceMax));
     rows.push_back(Slide(kOptSimplifyAmount, T("Faces removed"), ed.simplifyAmount, 0.f, ::editor::settings_model::kSimplifyAmountMax));
+    // (o bloco FSR agora fica em Graphics and API: addFsrRows)
 }
 
 // Linhas da secao Language (drawLanguageTab).
@@ -1859,7 +2071,7 @@ void addLightingRows(Editor& ed, editor::settings_form::Rows& rows) {
         rows.push_back(Slide(kLitSunR, channel("Light color", "R"), g->color[0], 0.f, 1.f));
         rows.push_back(Slide(kLitSunG, channel("Light color", "G"), g->color[1], 0.f, 1.f));
         rows.push_back(Slide(kLitSunB, channel("Light color", "B"), g->color[2], 0.f, 1.f));
-        rows.push_back(Slide(kLitSunA, channel("Light color", "A"), g->color[3], 0.f, 1.f));   // as 4 linhas viram um seletor de cor com alfa
+        // Sem linha de alfa: sunLight() nao usa o alfa da cor do Sol (tirado da tela por nao ter efeito).
         rows.push_back(Slide(kLitSunIntensity, T("Intensity"), g->intensity, 0.f, 20.f));
         rows.push_back(Slide(kLitSunAzimuth, T("Direction (azimuth)"), g->azimuth, 0.f, 360.f, false, F("%.0f deg", g->azimuth)));
         rows.push_back(Slide(kLitSunElevation, T("Height (elevation)"), g->elevation, -10.f, 90.f, false, F("%.0f deg", g->elevation)));
@@ -1943,7 +2155,12 @@ void addLightingRows(Editor& ed, editor::settings_form::Rows& rows) {
     rows.push_back(Slide(kLitAmbient, T("Ambient intensity"), L.ambientIntensity, 0.f, 4.f));
     rows.push_back(Slide(kLitPreExposure, T("Pre-exposure"), L.preExposure, 0.1f, 4.f));
     rows.push_back(Dim(T("Each object chooses Cast shadow / Receive shadow in the Inspector. The sun and the nearest point/spot lights that have Cast shadow on cast shadows. Lower quality = more FPS.")));
-    // Pos-processamento global (postFxUi): so mostra os controles com o efeito ligado.
+}
+
+// Linhas de pos-processamento global (categoria Quality, depois dos controles fixos): so mostra os controles com o efeito ligado.
+void addPostRows(Editor& ed, editor::settings_form::Rows& rows) {
+    using namespace formrow;
+    auto& r = ed.sceneInfo.render;
     rows.push_back(Head(T("Global post-processing")));
     const tool::PostFx& p = r.post;
     rows.push_back(Check(kLitPostEnabled, T("Enable post-processing"), p.enabled));
@@ -2019,7 +2236,28 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
     auto& r = ed.sceneInfo.render;
     auto& L = r.lighting;
     auto u32v = [](float v) { return static_cast<tool::u32>(v < 0.f ? 0.f : v + 0.5f); };
+    if (id != kCfgDelete) gCfgForm.arm.Cancel();   // mexer em outra linha desarma o Delete
     switch (id) {
+        // Presets de configuracao (topo de Settings)
+        case kCfgEdit: openConfigPicker(ed); break;
+        case kCfgName: gCfgForm.name = text; break;
+        case kCfgSave: {
+            std::string err;
+            if (editor::config_preset::save(ed.project.root.string(), gCfgForm.name, ed.sceneInfo, err))
+                gCfgForm.msg = std::string(T("Saved")) + ": " + editor::config_preset::sanitizeName(gCfgForm.name);
+            else gCfgForm.msg = std::string(T("Could not save")) + ": " + err;
+            break;
+        }
+        case kCfgDelete: {
+            const std::string path = cfgPathForName(ed);
+            std::error_code ec;
+            if (path.empty() || !std::filesystem::is_regular_file(path, ec)) { gCfgForm.msg = T("No config with that name"); break; }
+            if (!gCfgForm.arm.Click(kCfgDelete)) break;   // 1o clique: so arma (o botao passa a pedir confirmacao)
+            std::string err;
+            gCfgForm.msg = editor::config_preset::remove(path, err) ? std::string(T("Deleted")) + ": " + gCfgForm.name
+                                                                    : std::string(T("Could not delete")) + ": " + err;
+            break;
+        }
         // Game
         case kGameGridScene: ed.showGridScene = on; ed.settingsDirty = true; break;
         case kGameGridGame: ed.showGridGame = on; ed.settingsDirty = true; break;
@@ -2065,6 +2303,12 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
         case kOptSimplify: ed.simplifyFar = on; ed.settingsDirty = true; break;
         case kOptSimplifyDist: ed.simplifyDistance = ::editor::settings_model::ClampSimplifyDistance(value); ed.settingsDirty = true; break;
         case kOptSimplifyAmount: ed.simplifyAmount = ::editor::settings_model::ClampSimplifyAmount(value); ed.settingsDirty = true; break;
+        case kOptFsr: r.fsr1 = on; ed.settingsDirty = true; ed.requestFrame(); break;
+        case kOptFsrSharp: r.fsrSharpness = std::clamp(value, 0.f, 1.f); ed.settingsDirty = true; ed.requestFrame(); break;
+        case kOptFsr4: r.fsr4 = on; ed.fsr4NoteShown = false; ed.settingsDirty = true; ed.requestFrame(); break;
+        case kOptFrameGen: r.frameGen = on; ed.settingsDirty = true; break;   // so guarda a escolha (ainda nao integrado)
+        case kOptFsrQuality: r.fsrQuality = ::editor::clampFsrQuality(index); ed.settingsDirty = true; ed.requestFrame(); break;
+        case kOptFsrCustomScale: r.fsrCustomScale = std::clamp(value, 0.5f, 1.f); ed.settingsDirty = true; ed.requestFrame(); break;
         // Language
         case kLangPack: {
             auto& i18n = editor::I18n::get();
@@ -2238,7 +2482,7 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
 editor::settings_panel::Values settingsValues(Editor& ed) {
   editor::settings_panel::Values v;
   auto& L = ed.sceneInfo.render.lighting;
-  v.tab = ed.settingsTab < 0 ? 1 : std::clamp(ed.settingsTab, 0, editor::settings_model::kTabCount - 1);
+  v.tab = ed.settingsTab < 0 ? editor::settings_model::kTabGraphics : std::clamp(ed.settingsTab, 0, editor::settings_model::kTabCount - 1);
   v.palette = static_cast<int>(editor::palette::activeIndex());
   {   // paleta Custom: cores-base (0..4) e tokens (5..12), cada um R, G, B
     const auto& c = editor::palette::custom();
@@ -2255,13 +2499,17 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   v.apiBuilt = settingsApiBuilt();
   v.apiStatus = F("Active API: %s", ed.apiStatus.c_str());
   // Cada dominio tem sua própria seção; física não fica misturada com a API gráfica.
-  v.form[2] = [&] { editor::settings_form::Rows rows; addGameRows(ed, rows); return rows; }();
-  v.form[3] = [&] { editor::settings_form::Rows rows; addPhysicsRows(ed, rows); return rows; }();
-  v.form[4] = [&] { editor::settings_form::Rows rows; addLightingRows(ed, rows); return rows; }();
-  v.form[5] = [&] { editor::settings_form::Rows rows; addOptimizingRows(ed, rows); return rows; }();
-  v.form[6] = [&] { editor::settings_form::Rows rows; addLanguageRows(ed, rows); return rows; }();
+  namespace smod = ::editor::settings_model;   // categorias: Graphics and API, Quality, Lighting, Physics, Interface, Language, Project
+  v.form[smod::kTabGraphics] = [&] { editor::settings_form::Rows rows; addFsrRows(ed, rows); return rows; }();   // bloco FSR (abaixo da API)
+  v.form[smod::kTabQuality] = [&] { editor::settings_form::Rows rows; addOptimizingRows(ed, rows); addPostRows(ed, rows); return rows; }();
+  v.form[smod::kTabLighting] = [&] { editor::settings_form::Rows rows; addLightingRows(ed, rows); return rows; }();
+  v.form[smod::kTabPhysics] = [&] { editor::settings_form::Rows rows; addPhysicsRows(ed, rows); return rows; }();
+  v.form[smod::kTabInterface] = [&] {   // presets no topo; escala da interface e idle depois dos temas (mesma lista de linhas)
+    editor::settings_form::Rows rows; addConfigRows(ed, rows); addInterfaceExtraRows(ed, rows); return rows; }();
+  v.form[smod::kTabLanguage] = [&] { editor::settings_form::Rows rows; addLanguageRows(ed, rows); return rows; }();
   {
-    editor::settings_form::Rows& g = v.form[editor::settings_panel::kGraphicsTab];
+    editor::settings_form::Rows& g = v.form[smod::kTabProject];   // cena (grade, split, skybox, audio), tags e editor externo
+    addGameRows(ed, g);
     addTagsRows(ed, g);
     addProjectRows(ed, g);
   }
@@ -2272,7 +2520,8 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   v.fixedSize = ed.fixedRes(fw, fh);
   v.fixedW = fw;
   v.fixedH = fh;
-  v.renderScale = ed.renderScale;
+  v.scaleLocked = ed.fsrControlsScale();   // FSR ligado: o slider mostra a escala derivada e fica desabilitado
+  v.renderScale = ed.renderScaleNow();
   v.upscale = ed.upscaleMode;
   v.aa = ed.aaMode;
   v.pixelFilter = ed.pixelFilter;
@@ -2722,6 +2971,9 @@ static int runEditorMain(int argc, char** argv) {
   SDL_SetRenderVSync(renderer, 0); // o limite so e ativado se o usuario selecionar VSync ou um FPS fixo
 
   Editor ed;
+  // --no-gpu-cull: desliga o culling de frustum por compute (so para comparar A/B no bench; o caminho CPU volta a valer).
+  for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--no-gpu-cull") == 0) ed.gpuCullEnabled = false;
+  for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--gpu-cull-drop-cpu-frustum") == 0) ed.gpuCullKeepCpuFrustum = false;
   editor::I18n::get().scan("assets/lang");
   editor::I18n::get().select(editor::kDefaultLanguage);   // ingles sem configuracao salva
   ed.theme.scan("assets/themes");
@@ -2907,6 +3159,8 @@ static int runEditorMain(int argc, char** argv) {
   std::unique_ptr<editor::scenesui::Panel> scenesPanel;
   if (uiReady) scenesPanel = std::make_unique<editor::scenesui::Panel>(uiText, uiRenderer);
   gScenesPanel = scenesPanel.get();
+  std::unique_ptr<TooltipLayer> tipLayer;   // balao de ajuda (Settings e Scenes), desenhado no fim do quadro
+  if (uiReady) tipLayer = std::make_unique<TooltipLayer>(uiText, uiRenderer);
   std::unique_ptr<editor::NarrativePanel> narrativePanel;   // Narrative Controller em SpriteUI (dados: ed.narrative)
   if (uiReady) narrativePanel = std::make_unique<editor::NarrativePanel>(uiText, uiRenderer, ed.narrative);
   std::unique_ptr<editor::infoui::Panel> editorInfoPanel;   // Editor info em SpriteUI (rascunho em editor_info_model.hpp)
@@ -3000,6 +3254,16 @@ static int runEditorMain(int argc, char** argv) {
     ed.prof.beginFrame();
     // Areas dos paineis SpriteUI para o roteador: vem do quadro anterior (o layout so muda ao redimensionar).
     gPanelRouter.beginFrame();
+    if (tipLayer) {   // tooltip do Settings: tempo parado do mouse; botao apertado ou menu aberto escondem o balao
+      float tmx = 0.f, tmy = 0.f;
+      const bool down = (SDL_GetMouseState(&tmx, &tmy) & SDL_BUTTON_LMASK) != 0;
+      static Uint64 lastTipNs = SDL_GetTicksNS();
+      const Uint64 nowNs = SDL_GetTicksNS();
+      const float tdt = std::min(0.25f, static_cast<float>(nowNs - lastTipNs) * 1e-9f);   // salto grande (idle) vale no maximo 0,25 s
+      lastTipNs = nowNs;
+      tipLayer->tip.beginFrame(tmx, tmy, tdt);
+      if (down || (menuPanel && menuPanel->popupOpen())) tipLayer->tip.suppress();
+    }
     namespace pr = editor::panel_router;
     if (menuPanel) {
       int screenW = 0, screenH = 0;
@@ -3273,6 +3537,20 @@ static int runEditorMain(int argc, char** argv) {
     }
     if (assetsPanel && onPass(editor::dock_host::Kind::Assets) && dockShown(editor::dock_host::Kind::Assets, ed.showAssets)) {   // Assets: janela SpriteUI flutuante (lista, grade, acoes e texto)
       syncAssetsPanel(ed, *assetsPanel);
+      {   // Miniaturas de material: orcamento por quadro e provedor que o painel consulta ao desenhar cada item
+        auto& thumbs = materialThumbs();
+        thumbs.beginFrame(static_cast<double>(SDL_GetTicks()) / 1000.0);
+        const std::string projDir = ed.project.root.string();
+        assetsPanel->view().setThumbProvider([&](const editor::assets_model::Item& it, float uv[4]) {
+          if (it.kind != editor::AssetKind::Text || it.rel.rfind("Materials/", 0) != 0) return false;   // so .json de Materials/
+          const int slot = thumbs.get((ed.project.root / it.rel).string(), projDir, [&](int s, const std::uint8_t* px) {
+            uiRenderer.uploadMaterialThumb(renderer, s, px);
+          });
+          if (slot < 0) return false;   // ainda nao gerada (orcamento do quadro) ou arquivo invalido: icone generico
+          editor::material_preview::slotUv(slot, uv);
+          return true;
+        });
+      }
       std::vector<editor::assetsui::View::Action> assetsActs;
       int winW = 0, winH = 0;
       SDL_GetWindowSize(window, &winW, &winH);
@@ -3282,6 +3560,17 @@ static int runEditorMain(int argc, char** argv) {
         ed.showAssets = false;
       } else {
         applyAssetsActions(ed, *assetsPanel, assetsActs);
+        if (assetsPanel && tipLayer) {
+          // Dicas do Assets: mesmo Tooltip global; so recebe o balao quem esta sob o ponteiro e nao coberto por outra janela.
+          float amx = 0.f, amy = 0.f;
+          SDL_GetMouseState(&amx, &amy);
+          if (gPanelRouter.mayReceive(editor::panel_router::kAssetsHandle, amx, amy))
+            for (const auto& t : assetsPanel->view().tips()) tipLayer->tip.target(t.x, t.y, t.w, t.h, t.text.c_str());
+          // Idle rendering: enquanto o balao nao apareceu, pede quadros para contar o tempo parado.
+          const auto ar = assetsPanel->rect();
+          if (tipLayer->tip.stillSeconds() < editor::tooltip::kDelay && amx >= ar.position.x && amy >= ar.position.y &&
+              amx < ar.position.x + ar.size.x && amy < ar.position.y + ar.size.y) ed.requestFrame();
+        }
       }
     }
     if (scenesPanel && onPass(editor::dock_host::Kind::Scenes) && dockShown(editor::dock_host::Kind::Scenes, ed.showScenes)) {   // Scenes: janela SpriteUI flutuante
@@ -3354,10 +3643,22 @@ static int runEditorMain(int argc, char** argv) {
     if (settingsPanel && onPass(editor::dock_host::Kind::Settings)) {   // Configuracoes: faixa de abas e conteudo da janela
       const bool shown = ed.showSettings && gSettingsFrame;
       editor::settings_changes::Requests requests;
+      if (shown) applyPendingConfigPick(ed);   // arquivo escolhido em [Edit config] (dialogo em outra thread)
       const editor::settings_panel::Values values = shown ? settingsValues(ed) : editor::settings_panel::Values{};
       if (!settingsPanel->draw(renderer, gSettingsRect, shown, values, requests)) {
         tool::logError(std::string("Settings SpriteUI render failed: ") + SDL_GetError());
         settingsPanel.reset();
+      } else if (tipLayer) {
+        // Dicas do Settings: so recebe o balao quem esta sob o ponteiro e nao coberto por outra janela.
+        float mx = 0.f, my = 0.f;
+        SDL_GetMouseState(&mx, &my);
+        if (shown) {
+          if (settingsPanel->overlayOpen()) tipLayer->tip.suppress();
+          if (gPanelRouter.mayReceive(editor::panel_router::kSettingsHandle, mx, my))
+            for (const auto& t : settingsPanel->tips()) tipLayer->tip.target(t.x, t.y, t.w, t.h, t.text.c_str());
+          // Idle rendering: sem eventos nao ha quadro novo; enquanto o balao ainda nao apareceu, pede quadros.
+          if (tipLayer->tip.stillSeconds() < editor::tooltip::kDelay && settingsPanel->containsPoint(mx, my)) ed.requestFrame();
+        }
       }
       SettingsEditorTarget target{ed};
       editor::settings_changes::ApplyChanges(target, requests);
@@ -3374,6 +3675,17 @@ static int runEditorMain(int argc, char** argv) {
         tool::logError(std::string("Inspector SpriteUI render failed: ") + SDL_GetError());
         inspPanel.reset();
         gInspectorPanel = nullptr;
+      } else if (tipLayer && shown) {
+        // Dicas do Inspector: mesmo Tooltip do Settings (beginFrame no inicio do quadro, desenho no fim).
+        // So recebe o balao quem esta sob o ponteiro e nao coberto por menu/Settings/Scenes; lista de escolha ou
+        // seletor de cor abertos suprimem o balao (registerTips cuida disso).
+        float imx = 0.f, imy = 0.f;
+        SDL_GetMouseState(&imx, &imy);
+        if (!gPanelRouter.coveredBySui(imx, imy)) inspPanel->registerTips(tipLayer->tip);
+        // Idle rendering: sem eventos nao ha quadro novo; enquanto o balao nao apareceu, pede quadros.
+        if (tipLayer->tip.stillSeconds() < editor::tooltip::kDelay &&
+            imx >= gInspectorVisible.x && imy >= gInspectorVisible.y && imx < gInspectorVisible.x + gInspectorVisible.w &&
+            imy < gInspectorVisible.y + gInspectorVisible.h) ed.requestFrame();
       }
     }
     if (menuPanel && floatPass) {
@@ -3471,6 +3783,12 @@ static int runEditorMain(int argc, char** argv) {
         cursorWarningLogged = true;
       }
     }
+    if (tipLayer) {   // baloes de ajuda (Settings e Scenes) por cima de tudo
+      int tw = 0, th = 0;
+      SDL_GetWindowSize(window, &tw, &th);
+      editor::tooltip::Tooltip* sceneTip = (scenesPanel && ed.showScenes) ? &scenesPanel->view().tooltip() : nullptr;   // so com a Scenes aberta (alvo antigo nao reaparece)
+      if (!tipLayer->draw(renderer, static_cast<float>(tw), static_cast<float>(th), sceneTip)) tool::logError(std::string("Tooltip render failed: ") + SDL_GetError());
+    }
     if (gDock && !playerMode) gDock->overlay(renderer);   // faixas de abas e guias do arraste: por cima de tudo
     if (gScriptPanel && !gScriptPanel->render(renderer, window, ed, SDL_GetTicks() / 1000.0)) tool::logError(std::string("Script render failed: ") + SDL_GetError());   // janela flutuante: por cima das docadas
     if (!screenshotPath.empty() && maxFrames > 0 && frame + 1 >= maxFrames) {
@@ -3565,6 +3883,12 @@ static int runEditorMain(int argc, char** argv) {
                       benchPhysStart.steps, pe.steps, benchPhysStart.awake, pe.awake, benchPhysStart.pairs, pe.pairs, benchPhysStart.contacts, pe.contacts,
                       benchPhysStart.colorsUsed, pe.colorsUsed, benchPhysStart.largestColorBucket, pe.largestColorBucket);
           std::printf("ECS bench:   last frame: %llu draws, %llu triangles, %llu culled\n", static_cast<unsigned long long>(ed.prof.last.draws), static_cast<unsigned long long>(ed.prof.last.tris), static_cast<unsigned long long>(ed.prof.last.culled));
+          // Culling GPU: instancias visiveis segundo a GPU (readback sincrono, so aqui) x visiveis pelo frustum da CPU do renderer.
+          { tool::u32 gpuVis = 0;
+            if (ed.gpu.gpuCullUsedLastFrame() && ed.gpu.readGpuVisibleCount(gpuVis))
+              std::printf("ECS bench:   GPU frustum culling: ON, visible on GPU %u, visible by CPU frustum (same list) %u, editor frustum on GPU %s\n", gpuVis, ed.gpu.cpuVisibleOpaque(), ed.gpuFrustumActive ? "yes" : "no");
+            else
+              std::printf("ECS bench:   GPU frustum culling: OFF (CPU path)\n"); }
           { size_t renderables = 0;
             ed.scene.world().each<editor::MeshRenderer, editor::Transform>([&](tool::Entity e, editor::MeshRenderer&, editor::Transform&) { if (!ed.scene.world().has<editor::Inactive>(e)) ++renderables; });
             std::printf("ECS bench:   renderable entities: %zu\n", renderables); }

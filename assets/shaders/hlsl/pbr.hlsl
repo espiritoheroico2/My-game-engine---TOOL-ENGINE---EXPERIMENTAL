@@ -45,6 +45,7 @@ cbuffer BatchBuffer : register(b6) {
 };
 #endif
 Texture2D AlbedoMap : register(t0);
+Texture2D NormalMap : register(t18); // mapa de normais em espaco tangente (material); so lido quando a forca (normalStrength) > 0. Load, sem sampler
 Texture2D<float> AoMap : register(t14); // SSAO (ssao.hlsl): 1 = sem oclusao; so afeta a luz ambiente, como na Light Prism  // Load, sem sampler: amostragem "mais proximo" com repeticao
 
 struct VSIn  { float3 pos : ATTRIB0; float3 normal : ATTRIB1; float2 uv : ATTRIB2;
@@ -65,7 +66,18 @@ struct VSOut {
   nointerpolation float3 emissive  : TEXCOORD8;
   nointerpolation float4 fogColor  : TEXCOORD9;  // neblina: vem do VS para o PS nao ler b6 (limite de UBO)
   nointerpolation float4 fogParams : TEXCOORD10;
+  nointerpolation float4 uvXform   : TEXCOORD11; // material: x,y = tiling de UV; z,w = offset de UV (tiling 0 = 1, de instancias antigas)
+  nointerpolation float2 normalInfo : TEXCOORD12; // material: x = forca do normal map (0 = sem mapa), y = alpha cutoff (0 = desligado)
 };
+
+// Decodifica forca do normal map (0..2) e alpha cutoff (0..1) empacotados em UM float (sobra de fogParams.w):
+// valor = forcaQ * 1024 + cutoffQ, cada metade em 0..1023 (soma < 2^20, exata em float32). Veja gpu_renderer.hpp (packMaterialExtra).
+float2 UnpackNormalCutoff(float packed) {
+  float v = floor(packed + 0.5f);
+  float sq = floor(v / 1024.0f);
+  float cq = v - sq * 1024.0f;
+  return float2(sq * (2.0f / 1023.0f), cq * (1.0f / 1023.0f));
+}
 
 VSOut VSMain(VSIn i) {
   VSOut o;
@@ -79,6 +91,8 @@ VSOut VSMain(VSIn i) {
   float4 instanceEmissive = emissive;
   float4 instanceFogColor = fogColor;
   float4 instanceFogParams = fogParams;
+  // Sobras de 4 floats do layout (pad, texInfo.w, emissive.w, fogColor.w): tiling e offset de UV do material.
+  float4 instanceUvXform = float4(_pad1, texInfo.w, emissive.w, fogColor.w);
 #else
   InstanceData d = Instances[batchInfo.x + i.iid];
   float4x4 instanceWorld = d.world;
@@ -90,6 +104,7 @@ VSOut VSMain(VSIn i) {
   float4 instanceEmissive = d.emissive;
   float4 instanceFogColor = d.fogColor;
   float4 instanceFogParams = d.fogParams;
+  float4 instanceUvXform = float4(d._pad1, d.texInfo.w, d.emissive.w, d.fogColor.w);   // tiling xy, offset xy
 #endif
   float4 wp = mul(instanceWorld, float4(i.pos, 1.0));
   o.worldPos = wp.xyz;
@@ -104,6 +119,8 @@ VSOut VSMain(VSIn i) {
   o.emissive = instanceEmissive.rgb;
   o.fogColor = instanceFogColor;
   o.fogParams = instanceFogParams;
+  o.uvXform = instanceUvXform;
+  o.normalInfo = UnpackNormalCutoff(instanceFogParams.w);
   return o;
 }
 
@@ -125,15 +142,44 @@ float2 BrdfLutBilinear(float NoV, float rough) {
 }
 
 float4 PSMain(VSOut i) : SV_Target {
+  // UV do material: uv * tiling + offset (tiling 0 vem de instancia sem material = 1). Vale para albedo e normal map.
+  float2 tiling = float2(abs(i.uvXform.x) > 1e-6f ? i.uvXform.x : 1.0f, abs(i.uvXform.y) > 1e-6f ? i.uvXform.y : 1.0f);
+  float2 uv = i.uv * tiling + i.uvXform.zw;
+  // Derivadas ANTES de qualquer discard/ramo (precisam de todos os pixels do quad): base TBN sem tangentes na malha.
+  float3 dp1 = ddx(i.worldPos), dp2 = ddy(i.worldPos);
+  float2 duv1 = ddx(uv), duv2 = ddy(uv);
+
   float3 albedo = i.baseColor.rgb;
+  float texA = 1.0f;
   if (i.texInfo.z > 0.5) {
-    int2 tp = int2(clamp(int(frac(i.uv.x) * i.texInfo.x), 0, int(i.texInfo.x) - 1), clamp(int(frac(i.uv.y) * i.texInfo.y), 0, int(i.texInfo.y) - 1));
-    albedo *= AlbedoMap.Load(int3(tp, 0)).rgb;
+    int2 tp = int2(clamp(int(frac(uv.x) * i.texInfo.x), 0, int(i.texInfo.x) - 1), clamp(int(frac(uv.y) * i.texInfo.y), 0, int(i.texInfo.y) - 1));
+    float4 tex = AlbedoMap.Load(int3(tp, 0));
+    albedo *= tex.rgb;
+    texA = tex.a;
   }
+  // Alpha cutoff (so materiais em Alpha, cutoff > 0): descarta o pixel abaixo do corte. Cutoff 0 = caminho opaco intacto.
+  if (i.normalInfo.y > 0.0f && i.baseColor.a * texA < i.normalInfo.y) discard;
   float metal = i.material.x;
   float rough = i.material.y;
   float receive = i.material.z;
   float3 N = normalize(i.normal);
+  // Normal map em espaco tangente (forca 0 = sem mapa). Quadro de cotangentes (Schuler / "perturb normal"): T e B saem das
+  // derivadas da posicao e da UV, sem precisar de tangentes na malha. Convencao OpenGL (verde para cima): o V da imagem
+  // cresce para baixo, entao o canal verde e invertido. A forca faz lerp entre a normal da malha (0) e a perturbada (1);
+  // ate 2 extrapola (efeito mais marcante).
+  if (i.normalInfo.x > 0.0f) {
+    uint nw, nh; NormalMap.GetDimensions(nw, nh);
+    int2 np = int2(clamp(int(frac(uv.x) * nw), 0, int(nw) - 1), clamp(int(frac(uv.y) * nh), 0, int(nh) - 1));
+    float3 tn = NormalMap.Load(int3(np, 0)).xyz * 2.0f - 1.0f;
+    tn.y = -tn.y;
+    float3 dp2perp = cross(dp2, N);
+    float3 dp1perp = cross(N, dp1);
+    float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+    float invmax = rsqrt(max(max(dot(T, T), dot(B, B)), 1e-12f));   // UV degenerada: T e B ~0, cai na normal da malha
+    float3 Np = normalize(T * (tn.x * invmax) + B * (tn.y * invmax) + N * tn.z);
+    N = normalize(lerp(N, Np, i.normalInfo.x));
+  }
   SurfaceData s;
   s.N = N;
   s.V = normalize(i.toCam);

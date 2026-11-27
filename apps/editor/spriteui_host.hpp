@@ -35,6 +35,11 @@ namespace ST = ToolEngine::SpriteUi::Text;
 // --------------------------------------------------------------------------------------------------------------
 // textureSlice dos sprites de icone (ver uploadIcons). 0 = pixel branco, 1 = glifos.
 inline constexpr std::uint32_t kIconSlice = 2u;
+// Atlas das miniaturas de material da janela Assets (material_preview.hpp): grade de kMaterialCols x kMaterialCols
+// miniaturas de kMaterialCell pixels; textura criada na primeira miniatura enviada.
+inline constexpr std::uint32_t kMaterialSlice = 3u;
+inline constexpr int kMaterialCols = 8;
+inline constexpr int kMaterialCell = 128;
 // Texturas de vista (imagem da Scene e do Jogo): slices a partir de kViewSliceBase, uma por slot. O painel liga o
 // SDL_Texture ao slot antes de desenhar; a Image da SpriteUI usa o slice do slot.
 inline constexpr std::uint32_t kViewSliceBase = 8u;
@@ -73,6 +78,21 @@ class SpriteUiSdlRenderer {
     SDL_SetTextureBlendMode(icons_, SDL_BLENDMODE_BLEND);
     SDL_SetTextureScaleMode(icons_, SDL_SCALEMODE_LINEAR);
     return SDL_UpdateTexture(icons_, nullptr, rgba, width * 4);
+  }
+
+  // Envia uma miniatura de material (kMaterialCell x kMaterialCell RGBA) para o slot `slot` do atlas de materiais.
+  // Cria o atlas (estatico, vazio) na primeira chamada. Slot fora da grade e ignorado.
+  bool uploadMaterialThumb(SDL_Renderer* renderer, int slot, const std::uint8_t* rgba) {
+    if (!renderer || !rgba || slot < 0 || slot >= kMaterialCols * kMaterialCols) return false;
+    if (!materials_) {
+      materials_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
+                                     kMaterialCols * kMaterialCell, kMaterialCols * kMaterialCell);
+      if (!materials_) return false;
+      SDL_SetTextureBlendMode(materials_, SDL_BLENDMODE_BLEND);
+      SDL_SetTextureScaleMode(materials_, SDL_SCALEMODE_LINEAR);
+    }
+    const SDL_Rect r{(slot % kMaterialCols) * kMaterialCell, (slot / kMaterialCols) * kMaterialCell, kMaterialCell, kMaterialCell};
+    return SDL_UpdateTexture(materials_, &r, rgba, kMaterialCell * 4);
   }
 
   // Liga a textura de um slot de vista (ou nullptr para soltar). Slots fora da faixa sao ignorados.
@@ -137,6 +157,8 @@ class SpriteUiSdlRenderer {
   void destroy() {
     if (atlas_) SDL_DestroyTexture(atlas_);
     if (icons_) SDL_DestroyTexture(icons_);
+    if (materials_) SDL_DestroyTexture(materials_);
+    materials_ = nullptr;
     for (SDL_Texture*& t : sizeTex_) {
       if (t) SDL_DestroyTexture(t);
       t = nullptr;
@@ -168,6 +190,7 @@ class SpriteUiSdlRenderer {
   SDL_Texture* textureFor(SDL_Renderer* renderer, std::uint32_t slice) {
     if (slice == SR::WhiteTextureSlice) return nullptr;
     if (slice == kIconSlice) return icons_;
+    if (slice == kMaterialSlice) return materials_;
     if (slice >= kViewSliceBase && slice - kViewSliceBase < kViewSlots) return views_[slice - kViewSliceBase];
     if (slice >= TextAtlasSet::kFirstSlice && slice < TextAtlasSet::kFirstSlice + TextAtlasSet::kSlots) {
       SDL_Texture*& tex = sizeTex_[slice - TextAtlasSet::kFirstSlice];
@@ -284,6 +307,7 @@ class SpriteUiSdlRenderer {
 
   SDL_Texture* atlas_ = nullptr;
   SDL_Texture* icons_ = nullptr;
+  SDL_Texture* materials_ = nullptr;   // atlas das miniaturas de material (uploadMaterialThumb)
   SDL_Texture* views_[kViewSlots] = {};
   const TextAtlasSet* textSet_ = nullptr;          // conjunto de atlas por tamanho (opcional)
   SDL_Texture* sizeTex_[TextAtlasSet::kSlots] = {};   // uma textura por tamanho, criada sob demanda

@@ -243,7 +243,36 @@ struct RenderSettings {
   bool occlusionCull = true;       // pula objetos inteiramente escondidos atras de objetos grandes (perspectiva; sombras continuam corretas)
   float drawDistance = 0.f;        // distancia de desenho (0 = usa o Far de cada camera); vale para Scene e Game
   tool::PostFx post;               // vale para todas as cameras; cada camera pode somar/substituir com o seu (postfx.hpp)
+  // FSR 1 (AMD, upscale na GPU: EASU + RCAS). So age com "Render scale" abaixo de 1 e API GPU (Vulkan/D3D). Chaves
+  // ausentes na cena = estes padroes, entao cenas antigas abrem iguais (FSR desligado).
+  bool fsr1 = false;               // liga o upscale FSR 1 no lugar do upscale de software
+  // Novos controles de FSR (Settings > Graphics and API). Chave ausente = padrao: cenas antigas abrem iguais.
+  bool fsr4 = false;               // escolha do FSR 4 (so guarda a escolha enquanto o renderer nao tem motion vectors)
+  bool frameGen = false;           // escolha do Frame generation (FSR 3.1); ainda sem efeito (nao integrado)
+  int fsrQuality = 1;              // modo de qualidade do FSR: 0 Ultra Quality .. 4 Ultra Performance, 5 Personalizado (padrao 1 = Quality)
+  float fsrSharpness = 0.2f;       // nitidez do RCAS (FSR 1), 0 (sem) a 1 (maxima). Le tambem a chave antiga "fsr1Sharpness"
+  float fsrCustomScale = 0.67f;    // fator de render do modo Personalizado (render / saida), 0.5 a 1.0
 };
+
+// ---- Modos de qualidade do FSR e escala de render efetiva --------------------------------------------------------
+// Fator de ampliacao de cada modo (saida / render): Ultra Quality 1.3x, Quality 1.5x, Balanced 1.7x, Performance 2.0x,
+// Ultra Performance 3.0x. O indice 5 (Personalizado) usa fsrCustomScale no lugar.
+inline constexpr int kFsrQualityCount = 6;
+inline constexpr int kFsrQualityCustom = 5;
+inline constexpr float kFsrQualityFactor[5] = {1.3f, 1.5f, 1.7f, 2.0f, 3.0f};
+// Modo de qualidade preso em 0..5 (valor lido de arquivo pode estar fora da faixa).
+[[nodiscard]] inline int clampFsrQuality(int q) { return std::clamp(q, 0, kFsrQualityCount - 1); }
+// Escala de render (render / saida) do modo de qualidade: 1 / fator. Personalizado: o slider proprio (0.5 a 1.0).
+[[nodiscard]] inline float fsrRenderScale(const RenderSettings& r) {
+  const int q = clampFsrQuality(r.fsrQuality);
+  if (q == kFsrQualityCustom) return std::clamp(r.fsrCustomScale, 0.5f, 1.f);
+  return 1.f / kFsrQualityFactor[q];
+}
+// Escala de render EFETIVA, calculada num unico lugar (o renderer usa so esta): com o FSR 1 ou o FSR 4 ligado vale a
+// escala derivada do modo de qualidade; sem FSR vale o slider de Render scale.
+[[nodiscard]] inline float effectiveRenderScale(const RenderSettings& r, float sliderScale) {
+  return (r.fsr1 || r.fsr4) ? fsrRenderScale(r) : sliderScale;
+}
 
 // Fisica do MUNDO desta cena (Settings > Physics). `gravity` vale para todos os corpos, em QUALQUER eixo (x, y ou z);
 // um objeto com "vector physics" (PhysicsComp::overrideGravity) ignora este valor.
@@ -373,6 +402,9 @@ inline tool::Json saveRenderSettings(const RenderSettings& r) {
   tool::Json o = tool::Json::object();
   o.set("lighting", saveLightingSettings(r.lighting)); o.set("post", ser::postFx(r.post));
   o.set("frustumCull", r.frustumCull); o.set("occlusionCull", r.occlusionCull); o.set("drawDistance", static_cast<double>(r.drawDistance));
+  o.set("fsr1", r.fsr1); o.set("fsrSharpness", static_cast<double>(r.fsrSharpness));
+  o.set("fsr4", r.fsr4); o.set("frameGen", r.frameGen); o.set("fsrQuality", r.fsrQuality);
+  o.set("fsrCustomScale", static_cast<double>(r.fsrCustomScale));
   return o;
 }
 // Todo valor lido do arquivo e limitado a uma faixa segura (um .scene.json editado a mao nao pode travar o render).
@@ -389,6 +421,12 @@ inline RenderSettings loadRenderSettings(const tool::Json& o) {
   }
   if (o.has("post")) r.post = ser::readPostFx(o["post"]);
   r.frustumCull = ser::flag(o, "frustumCull", true); r.occlusionCull = ser::flag(o, "occlusionCull", true); r.drawDistance = ser::clampNum(o, "drawDistance", 0.f, 0.f, 20000.f);
+  r.fsr1 = ser::flag(o, "fsr1", false);
+  // Nitidez: chave nova "fsrSharpness"; cenas antigas tinham "fsr1Sharpness" (migrada aqui, sem perder o valor).
+  r.fsrSharpness = ser::clampNum(o, o.has("fsrSharpness") ? "fsrSharpness" : "fsr1Sharpness", 0.2f, 0.f, 1.f);
+  r.fsr4 = ser::flag(o, "fsr4", false); r.frameGen = ser::flag(o, "frameGen", false);
+  r.fsrQuality = clampFsrQuality(static_cast<int>(ser::num(o, "fsrQuality", 1.f)));
+  r.fsrCustomScale = ser::clampNum(o, "fsrCustomScale", 0.67f, 0.5f, 1.f);
   return r;
 }
 

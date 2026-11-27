@@ -64,14 +64,16 @@ namespace W = SU::Widgets;
 namespace SR = SU::Rendering;
 namespace ST = SU::Text;
 
-inline constexpr int kGraphicsTab = 1;   // indice da secao API/Graphics em kTabNames
-inline constexpr std::size_t kAppearanceTab = 0;   // indice da secao Appearance em kTabNames
+inline constexpr int kGraphicsTab = sm::kTabGraphics;   // categoria "Graphics and API" (API, resolucao, FSR, escala, FPS)
+inline constexpr int kQualityTab = sm::kTabQuality;     // categoria "Quality" (AA, sombras, RT, pos-processamento, malhas)
+inline constexpr std::size_t kAppearanceTab = static_cast<std::size_t>(sm::kTabInterface);   // categoria "Interface" (temas, raios, texto, cores)
 
 // Valores que a janela mostra. O main.cpp copia do Editor a cada quadro.
 struct Values {
     int tab = kGraphicsTab;
     // Linhas extra de cada secao (settings_form.hpp), desenhadas depois dos controles fixos da secao.
     // Lighting, Game, Optimizing e Language usam so estas linhas; API/Graphics recebe Physics, Tags e Project.
+    // Categoria Graphics and API: as linhas dela (bloco FSR) saem logo abaixo da escolha de API, antes de resolucao e escala.
     std::array<editor::settings_form::Rows, sm::kTabCount> form{};
     int api = 0;
     std::array<bool, sb::kApiCount> apiBuilt{};
@@ -82,7 +84,8 @@ struct Values {
     bool fixedSize = false;   // o Game tem tamanho fixo (mostra a linha "renders at")
     int fixedW = 0;
     int fixedH = 0;
-    float renderScale = 1.f;
+    float renderScale = 1.f;      // escala MOSTRADA: o slider, ou a derivada do modo de qualidade quando o FSR manda
+    bool scaleLocked = false;     // FSR ligado: o slider de Render scale fica desabilitado (mostra o valor derivado)
     int upscale = 0;
     int aa = 0;
     bool pixelFilter = false;
@@ -153,6 +156,25 @@ class SettingsPanel {
     SettingsPanel(const SettingsPanel&) = delete;
     // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e desenhado pelo painel, abaixo do cabecalho.
     framed::Chrome& chrome() { return chrome_; }
+
+    // Dica (tooltip) de uma opcao: retangulo em coordenadas de TELA (as mesmas do mouse) e o texto ja traduzido.
+    struct Tip {
+        float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
+        std::string text;
+    };
+    // Dicas do ultimo quadro desenhado (so a parte visivel, recortada na area de conteudo). O host registra cada uma em
+    // Tooltip::target. O vetor e refeito a cada draw(); fica vazio com a janela escondida.
+    [[nodiscard]] const std::vector<Tip>& tips() const { return tips_; }
+    // true se o ponto (coordenadas da tela) esta sobre a janela visivel (o host usa para pedir quadros do balao).
+    [[nodiscard]] bool containsPoint(float x, float y) const { return inside(x, y); }
+    // true se ha lista de combo ou seletor de cor aberto: o host suprime o balao para nao ficar por cima da lista.
+    [[nodiscard]] bool overlayOpen() const {
+        if (colorPopup_.isOpen() || graphicsDropdownOpen()) return true;
+        for (const auto& pool : formPool_)
+            for (const auto& s : pool)
+                if (s->kind == settings_form::RowKind::Dropdown && s->dropdown.control.open) return true;
+        return false;
+    }
     SettingsPanel& operator=(const SettingsPanel&) = delete;
 
     // true quando o evento foi da janela (faixa de abas ou, na aba Graficos, o conteudo). Texto e teclas vao so ao
@@ -223,7 +245,7 @@ class SettingsPanel {
     bool draw(SDL_Renderer* renderer, sui::Box rect, bool visible, const Values& v, sc::Requests& out) {
         rect_ = rect;
         visible_ = visible;
-        if (!visible) return true;
+        if (!visible) { tips_.clear(); return true; }
         out.insert(out.end(), pending_.begin(), pending_.end());
         pending_.clear();
         strip_.clear();
@@ -248,9 +270,10 @@ class SettingsPanel {
         layoutDropdowns();
         // Textos dos controles so existem com a secao aberta: recolhida, os rotulos antigos sobrariam por cima.
         if (open_[kGraphicsTab]) {
-            dropdownTexts();
+            dropdownTexts(true);
             radioTexts();
         }
+        if (open_[kQualityTab]) dropdownTexts(false);
         drawScrollbar();
 
         const std::vector<SR::ClipRectGPU> clips{
@@ -263,7 +286,8 @@ class SettingsPanel {
         const float bottom = rect_.y + rect_.h;
         items.push_back(sui::Canvas::solidItem(rect_.x, rect_.y, rect_.w, rect_.h, panelColor_, 0.f, owner, kContentClip, paint++));
         canvas_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y + Metrics::kStripH, bottom, owner, kContentClip, paint);
-        if (open_[kGraphicsTab]) appendControls(items, paint);
+        if (open_[kGraphicsTab]) appendControls(items, paint, true);
+        if (open_[kQualityTab]) appendControls(items, paint, false);
         if (open_[kAppearanceTab]) appendAppearance(items, paint);
         appendForm(items, paint);
         colorPopup_.setLook(colorLook());
@@ -385,16 +409,27 @@ class SettingsPanel {
         colorGroups_.clear();   // refeitos por layoutForm a cada passada
         tokenPrev_ = tokenNext_ = sui::Box{};
         appearanceOpen_ = false;
+        tips_.clear();   // as dicas sao refeitas a cada passada do layout
         float y = top;
         for (std::size_t i = 0; i < sm::kTabCount; ++i) {
             headers_[i] = sui::Box{Metrics::kPad, y, headerW, Metrics::kHeaderH};
             drawHeader(i, y, headerW);
             y += Metrics::kHeaderH + Metrics::kGap;
             if (!open_[i]) continue;
-            if (i == kGraphicsTab) {
-                y = layoutGraphicsBody(v, y);
-            } else if (i == kAppearanceTab) {
+            if (i == kAppearanceTab) {
+                // Formulario de presets de configuracao PRIMEIRO (topo da janela), depois temas e estilo.
+                y = layoutForm(i, v.form[i], y);
                 y = layoutAppearance(v, y);
+                y += 2.f * Metrics::kGap;
+                continue;
+            }
+            if (i == static_cast<std::size_t>(kGraphicsTab)) {
+                y = layoutGraphicsBody(v, y);   // inclui as linhas do bloco FSR (v.form), logo abaixo da API
+                y += 2.f * Metrics::kGap;
+                continue;
+            }
+            if (i == static_cast<std::size_t>(kQualityTab)) {
+                y = layoutQualityBody(v, y);   // controles fixos primeiro; depois as linhas (pos-processamento, malhas)
             } else if (v.form[i].empty()) {
                 canvas_.addText(Metrics::kPad, y, std::string(T("Not available in this version yet")), Metrics::kFont,
                                 theme_.textDim, headerW);
@@ -422,13 +457,19 @@ class SettingsPanel {
     }
 
     // Corpo da secao Settings (graficos), a partir de y. Devolve o y final.
+    // Ordem: status, escolha de API, bloco FSR (linhas de v.form), resolucao, Render scale, upscale de software e FPS.
     float layoutGraphicsBody(const Values& v, float y) {
         text(Metrics::kPad, y, v.apiStatus, Metrics::kFont, textWidth());
         y += Metrics::kTextH + 6.f;
         y = layoutApis(v, y);
+        y = layoutForm(static_cast<std::size_t>(kGraphicsTab), v.form[kGraphicsTab], y);   // bloco "Upscaling FSR"
         y = layoutQuality(v, y);
-        y = layoutGpu(v, y);
         return y;
+    }
+
+    // Corpo da categoria Quality: anti-aliasing, sombras e ray tracing (controles fixos), depois as linhas da categoria.
+    float layoutQualityBody(const Values& v, float y) {
+        return layoutGpu(v, y);
     }
 
     // Corpo da secao Appearance: escolha da paleta (a linha marcada e a ativa).
@@ -443,6 +484,9 @@ class SettingsPanel {
                              selected ? theme_.accent : theme_.surface, 0.2f, editor::ui_style::buttonRadius());
             const std::string name = k < editor::palette::kCount ? std::string(T(presets[k].name)) : std::string(T("Custom"));
             canvas_.addText(Metrics::kPad + 10.f, y + 5.f, name, Metrics::kFont, theme_.text, textWidth() - 20.f);
+            tip(Metrics::kPad, y, textWidth(), Metrics::kRowH,
+                k < editor::palette::kCount ? "Applies this color theme to the whole editor."
+                                            : "Your own color theme. Edit the colors below.");
             y += Metrics::kRowH + Metrics::kGap;
         }
         y += Metrics::kGap;
@@ -456,6 +500,7 @@ class SettingsPanel {
                 themeRows_[k] = sui::Box{Metrics::kPad, y, textWidth(), Metrics::kRowH};
                 canvas_.addSolid(themeRows_[k].x, y, themeRows_[k].w, Metrics::kRowH, theme_.surface, 0.2f, editor::ui_style::buttonRadius());
                 canvas_.addText(Metrics::kPad + 10.f, y + 5.f, v.themeFiles[k], Metrics::kFont, theme_.text, textWidth() - 20.f);
+                tip(Metrics::kPad, y, textWidth(), Metrics::kRowH, "Applies this theme file from the themes folder.");
                 y += Metrics::kRowH + Metrics::kGap;
             }
             y += Metrics::kGap;
@@ -483,6 +528,7 @@ class SettingsPanel {
                              editor::ui_style::buttonRadius());
             canvas_.addText(baseBtns_[b].x + 4.f, y + 5.f, std::string(T(editor::palette::kBaseNames[b])), Metrics::kSmallFont,
                             theme_.text, bw - 12.f);
+            tip(baseBtns_[b].x, y, baseBtns_[b].w, Metrics::kRowH, "Selects this base color of the custom theme to edit.");
         }
         y += Metrics::kRowH + Metrics::kGap;
         canvas_.addText(Metrics::kPad, y, std::string(T("Advanced colors")), Metrics::kFont, theme_.textDim, textWidth());
@@ -496,6 +542,7 @@ class SettingsPanel {
         canvas_.addText(tokenPrev_.x + Metrics::kRowH + 6.f, y + 5.f,
                         std::string(T(editor::palette::kTokenNames[colorSlot_ >= 5 ? colorSlot_ - 5 : 0])), Metrics::kFont,
                         theme_.text, textWidth() - 2.f * Metrics::kRowH - 12.f);
+        tip(Metrics::kPad, y, textWidth(), Metrics::kRowH, "Use the arrows to choose which detailed color of the custom theme to edit.");
         y += Metrics::kRowH + Metrics::kGap;
         // Cor da paleta escolhida: a amostra abre o seletor (o mesmo popup do Inspector). Sem o seletor aberto, a linha
         // mostra o valor do modelo; com ele aberto, mostra a cor que esta sendo editada.
@@ -509,6 +556,7 @@ class SettingsPanel {
                          SU::Vec4{shown[0], shown[1], shown[2], 1.f}, 0.24f);
         canvas_.addText(customSwatch_.position.x + 40.f, y + 5.f, std::string(T("Color")) + "   " + im::HexText(shown), Metrics::kFont,
                         theme_.text, customSwatch_.size.x - 46.f);
+        tip(Metrics::kPad, y, textWidth(), Metrics::kRowH, "Click to open the color picker for the selected color.");
         y += Metrics::kRowH + Metrics::kGap;
         return y + Metrics::kGap;
     }
@@ -542,6 +590,11 @@ class SettingsPanel {
         s.typedHi = typedHi;
         s.modelValue = value;
         layoutValueBox(s, kFixedSection, k, y, shown);
+        // Dica do slider fixo: texto do raio dos botoes, das janelas ou da escala do texto.
+        tip(Metrics::kPad, y, textWidth(), Metrics::kRowH,
+            k == kFixedButtonRadius   ? "How rounded the corners of buttons and fields are."
+            : k == kFixedWindowRadius ? "How rounded the corners of windows are."
+                                      : "Scales all the text of the editor interface.");
         return y + Metrics::kRowH + Metrics::kGap;
     }
 
@@ -598,14 +651,15 @@ class SettingsPanel {
         y += Metrics::kHeadingH;
         const float radioH = static_cast<float>(builtApis(v)) * Metrics::kRadioRowH;
         apis_.border = rectOf(Metrics::kPad + labelW_, y, controlW_, radioH);
+        tip(Metrics::kPad, y, textWidth(), radioH, "Graphics API used to draw the editor and the game. Only the APIs built into this version appear.");
         return y + radioH + 6.f;
     }
 
     // Posiciona a secao de qualidade (resolucao, upscale, anti-aliasing...); devolve o Y seguinte.
     float layoutQuality(const Values& v, float y) {
-        heading(y, T("Quality"));
+        heading(y, T("Resolution and frame rate"));
         y += Metrics::kHeadingH;
-        controlRow(resolution_, y, T("Game resolution"));
+        controlRow(resolution_, y, T("Game resolution"), "Size of the image the game renders. 'Match window' follows the window size.");
         y += Metrics::kRowH + Metrics::kGap;
         if (v.resMode == sm::kResolutionCustom) {
             stepper(y, T("Width"), sc::Field::CustomW, v.customW, sm::kCustomWidthMin, sm::kCustomWidthMax);
@@ -614,19 +668,22 @@ class SettingsPanel {
             y += Metrics::kRowH + Metrics::kGap;
         }
         scale_.border = rectOf(Metrics::kPad + labelW_, y, controlW_ - Metrics::kValueW, Metrics::kRowH);
-        text(Metrics::kPad, y + 6.f, T("Render scale"), Metrics::kFont, labelW_ - 6.f);
+        // Com o FSR ligado o slider fica apagado e mostra a escala derivada do modo de qualidade (1 / fator).
+        const bool scaleOff = v.scaleLocked || v.resMode != 0;
+        const SU::Vec4 scaleInk = scaleOff ? theme_.textDim : theme_.text;
+        canvas_.addText(Metrics::kPad, y + 6.f, std::string(v.scaleLocked ? T("Render scale (set by FSR)") : T("Render scale")),
+                        Metrics::kFont, scaleInk, labelW_ - 6.f);
+        tip(Metrics::kPad, y, textWidth(), Metrics::kRowH,
+            v.scaleLocked ? "While FSR is on, the render scale comes from the FSR quality mode. Turn FSR off to use the slider."
+                          : "Multiplies the render resolution. Lower is faster, higher is sharper.");
         drawValueBox(Elm::SliderValueText(scale_), y);
         y += Metrics::kRowH + Metrics::kGap;
         text(Metrics::kPad, y, T("Below 1.0 renders fewer pixels (faster); above 1.0 renders more pixels (sharper, slower)."),
              Metrics::kSmallFont, textWidth());
         y += Metrics::kTextH + Metrics::kGap;
-        controlRow(upscale_, y, T("Upscaling (software)"));
+        controlRow(upscale_, y, T("Upscaling (software)"), "Filter used to enlarge the image when it is drawn bigger than it was rendered.");
         y += Metrics::kRowH + Metrics::kGap;
-        controlRow(aa_, y, T("Anti-aliasing (software)"));
-        y += Metrics::kRowH + Metrics::kGap;
-        checkRow(pixel_, y, T("Sharp pixels when enlarging (no smoothing)"));
-        y += Metrics::kRowH + Metrics::kGap;
-        controlRow(fps_, y, T("Frame rate limit"));
+        controlRow(fps_, y, T("Frame rate limit"), "Limits how many frames per second the editor draws. VSync follows the monitor.");
         y += Metrics::kRowH + Metrics::kGap;
         if (v.fixedSize) {
             char line[96];
@@ -639,15 +696,22 @@ class SettingsPanel {
 
     // Posiciona a secao de detalhes de GPU (sombras, etc); devolve o Y seguinte.
     float layoutGpu(const Values& v, float y) {
-        heading(y, T("GPU details"));
+        heading(y, T("Anti-aliasing and filtering"));
         y += Metrics::kHeadingH;
-        checkRow(shadows_, y, T("Enable shadows"));
+        controlRow(aa_, y, T("Anti-aliasing (software)"), "Smooths jagged edges. FXAA is a fast screen filter.");
         y += Metrics::kRowH + Metrics::kGap;
-        controlRow(shadowQuality_, y, T("Shadow quality"));
+        checkRow(pixel_, y, T("Sharp pixels when enlarging (no smoothing)"), "Keeps hard pixel edges when the image is enlarged, good for pixel art.", v.pixelFilter);
         y += Metrics::kRowH + Metrics::kGap;
-        checkRow(rayTracing_, y, T("Enable ray tracing"));
+        heading(y, T("Shadows and ray tracing"));
+        y += Metrics::kHeadingH;
+        checkRow(shadows_, y, T("Enable shadows"), "Turns shadows on or off. Shadows cost performance.", v.shadows);
         y += Metrics::kRowH + Metrics::kGap;
-        checkRow(rtAo_, y, T("Ray-traced ambient occlusion (CPU)"));
+        controlRow(shadowQuality_, y, T("Shadow quality"), "Resolution of the shadow maps. Higher is sharper and slower.");
+        y += Metrics::kRowH + Metrics::kGap;
+        checkRow(rayTracing_, y, T("Enable ray tracing"), "Uses ray tracing for lighting effects when available.", v.rayTracing);
+        y += Metrics::kRowH + Metrics::kGap;
+        checkRow(rtAo_, y, T("Ray-traced ambient occlusion (CPU)"), "Darkens corners and creases using rays computed on the CPU. Needs ray tracing.",
+                 v.rayTracing && v.rtAo, v.rayTracing);
         y += Metrics::kRowH + Metrics::kGap + 4.f;
         for (const std::string* line : {&v.adapter, &v.pixelsLine, &v.gpuErrorLine, &v.gpuStatsLine}) {
             text(Metrics::kPad, y, *line, Metrics::kFont, textWidth());
@@ -660,15 +724,43 @@ class SettingsPanel {
 
     [[nodiscard]] float textWidth() const { return rect_.w - 2.f * Metrics::kPad; }
 
+    // Registra a dica de uma opcao. (x, y, w, h) em coordenadas locais da janela (ja com a rolagem); `key` e o texto em
+    // ingles (chave de traducao). O retangulo e recortado na area de conteudo visivel e convertido para a tela.
+    void tip(float x, float y, float w, float h, const char* key) {
+        if (!key || !*key) return;
+        const float top = Metrics::kStripH, bottom = rect_.h;   // area de conteudo (local)
+        const float y0 = std::max(y, top), y1 = std::min(y + h, bottom);
+        if (y1 <= y0 || w <= 0.f) return;   // opcao rolada para fora da janela
+        tips_.push_back({rect_.x + x, rect_.y + y0, w, y1 - y0, std::string(T(key))});
+    }
+
     // Linha com rotulo a esquerda e combo a direita.
-    void controlRow(Elm::Dropdown& dd, float y, const char* label) {
+    void controlRow(Elm::Dropdown& dd, float y, const char* label, const char* tipKey = nullptr) {
         dd.border = rectOf(Metrics::kPad + labelW_, y, controlW_, Metrics::kRowH);
         text(Metrics::kPad, y + 6.f, label, Metrics::kFont, labelW_ - 6.f);
+        tip(Metrics::kPad, y, textWidth(), Metrics::kRowH, tipKey);   // dica sobre a linha inteira
     }
-    // Linha com rotulo a esquerda e caixa de marcar a direita.
-    void checkRow(Elm::Checkbox& cb, float y, const char* label) {
+    // Toggle (trilho arredondado + bolinha): o controle unico que substituiu as caixas de selecao, igual nos controles
+    // fixos e nas linhas genericas. (x, y) e o canto do trilho; `on` liga; `enabled` false apaga; `hot` realca o contorno.
+    // O clique continua vindo do Elm::Checkbox (estado e evento); so o desenho mudou. Desenha no canvas (z do controle).
+    void drawToggle(float x, float rowY, bool on, bool enabled, bool hot) {
+        constexpr float kW = 42.f, kH = 22.f, kKnob = 16.f;
+        const float y = rowY + (Metrics::kRowH - kH) * 0.5f;
+        const SU::Vec4 rim = hot && enabled ? theme_.accent : theme_.divider;
+        const SU::Vec4 fill = !enabled ? theme_.surface : (on ? theme_.accent : btnColor_);
+        const SU::Vec4 knob = enabled ? theme_.text : theme_.textDim;
+        canvas_.addSolid(x, y, kW, kH, rim, 0.22f, kH * 0.5f);                           // contorno do trilho
+        canvas_.addSolid(x + 1.5f, y + 1.5f, kW - 3.f, kH - 3.f, fill, 0.23f, (kH - 3.f) * 0.5f);   // preenchimento
+        const float kx = on ? x + kW - kKnob - 3.f : x + 3.f;                            // bolinha: direita = ligado
+        canvas_.addSolid(kx, y + (kH - kKnob) * 0.5f, kKnob, kKnob, knob, 0.25f, kKnob * 0.5f);
+    }
+
+    // Linha com rotulo a esquerda e toggle a direita. `on` e o valor mostrado (vem dos Values, sem atraso de um quadro).
+    void checkRow(Elm::Checkbox& cb, float y, const char* label, const char* tipKey, bool on, bool enabled = true) {
         cb.border = rectOf(Metrics::kPad + labelW_, y, controlW_, Metrics::kRowH);
-        text(Metrics::kPad, y + 6.f, label, Metrics::kFont, labelW_ - 6.f);
+        canvas_.addText(Metrics::kPad, y + 6.f, label, Metrics::kFont, enabled ? theme_.text : theme_.textDim, labelW_ - 6.f);
+        drawToggle(Metrics::kPad + labelW_, y, on, enabled, contains(cb.border, hover_));
+        tip(Metrics::kPad, y, textWidth(), Metrics::kRowH, tipKey);
     }
 
     // Tamanho personalizado: rotulo, valor e os botoes - e +. Cada clique muda kCustomStep (limites do modelo).
@@ -677,6 +769,9 @@ class SettingsPanel {
         const float plusX = x + controlW_ - Metrics::kStepW;
         const float minusX = plusX - Metrics::kStepW - Metrics::kGap;
         text(Metrics::kPad, y + 6.f, label, Metrics::kFont, labelW_ - 6.f);
+        tip(Metrics::kPad, y, textWidth(), Metrics::kRowH,
+            field == sc::Field::CustomW ? "Width of the game image in pixels (custom resolution)."
+                                        : "Height of the game image in pixels (custom resolution).");
         text(x, y + 6.f, std::to_string(value), Metrics::kFont, minusX - x - Metrics::kGap);
         steps_.push_back({field, {minusX, y, Metrics::kStepW, Metrics::kRowH}, {plusX, y, Metrics::kStepW, Metrics::kRowH}, value,
                           minValue, maxValue});
@@ -713,12 +808,16 @@ class SettingsPanel {
 
     // ---------- Textos dos elementos ----------
     // Texto do valor escolhido dentro de cada combo (a caixa do combo ja foi desenhada pelo elemento).
-    void dropdownTexts() {
-        dropdownValue(resolution_);
-        dropdownValue(upscale_);
-        dropdownValue(aa_);
-        dropdownValue(fps_);
-        dropdownValue(shadowQuality_);
+    // `graphics` true: combos da categoria Graphics and API; false: os da Quality.
+    void dropdownTexts(bool graphics) {
+        if (graphics) {
+            dropdownValue(resolution_);
+            dropdownValue(upscale_);
+            dropdownValue(fps_);
+        } else {
+            dropdownValue(aa_);
+            dropdownValue(shadowQuality_);
+        }
     }
 
     // Texto da opcao escolhida dentro da caixa do combo.
@@ -799,7 +898,8 @@ class SettingsPanel {
         sb::SyncCheckbox(rayTracing_, v.rayTracing);
         sb::SyncCheckbox(rtAo_, v.rayTracing && v.rtAo);
         rayTracingEnabled_ = v.rayTracing;
-        scaleEnabled_ = v.resMode == 0;   // a escala so vale com a resolucao de janela
+        scaleEnabled_ = v.resMode == 0 && !v.scaleLocked;   // so vale com a resolucao de janela e sem FSR mandando na escala
+        scale_.states.disabled = !scaleEnabled_;
     }
 
     // Opcoes do combo de resolucao do jogo.
@@ -897,6 +997,7 @@ class SettingsPanel {
         if (n == 4) text += "   A " + std::to_string(static_cast<int>(c[3] * 100.f + 0.5f)) + "%";
         canvas_.addText(g.box.position.x + 40.f, y + 5.f, text, Metrics::kFont, ink, g.box.size.x - 46.f);
         colorGroups_.push_back(g);
+        tip(Metrics::kPad, y, textWidth(), Metrics::kRowH, rowTip(rows[k]));   // dica do grupo de cor (primeira linha)
         return y + Metrics::kRowH + Metrics::kGap;
     }
 
@@ -942,8 +1043,23 @@ class SettingsPanel {
         return *p;
     }
 
-    // Posiciona uma linha generica do formulario (slider, combo, campo, cor...) e devolve o Y seguinte.
+    // Dica da linha: Row::tip se houver, senao a dica padrao do id (settings_form::DefaultTip). nullptr = sem dica.
+    [[nodiscard]] static const char* rowTip(const settings_form::Row& row) {
+        return row.tip.empty() ? settings_form::DefaultTip(row.id) : row.tip.c_str();
+    }
+
+    // Posiciona uma linha generica e registra a dica sobre a linha inteira (rotulo + controle).
     float layoutFormRow(std::size_t i, std::size_t k, const settings_form::Row& row, float y) {
+        const float y0 = y;
+        const float next = layoutFormRowImpl(i, k, row, y);
+        using settings_form::RowKind;
+        if (row.kind != RowKind::Heading && row.kind != RowKind::Note && row.kind != RowKind::Gap)
+            tip(Metrics::kPad, y0, textWidth(), next - y0 - Metrics::kGap, rowTip(row));
+        return next;
+    }
+
+    // Posiciona uma linha generica do formulario (slider, combo, campo, cor...) e devolve o Y seguinte.
+    float layoutFormRowImpl(std::size_t i, std::size_t k, const settings_form::Row& row, float y) {
         using settings_form::RowKind;
         FormSlot& s = slotFor(i, k, row.kind);
         s.id = row.id;
@@ -1007,11 +1123,9 @@ class SettingsPanel {
                 s.check.states.disabled = !row.enabled;
                 s.box = rectOf(Metrics::kPad, y, textWidth(), Metrics::kRowH);
                 s.check.border = rectOf(x, y, controlW_, Metrics::kRowH);
-                if (row.enabled && contains(s.box, hover_)) {   // hover: a linha inteira pinta com o destaque do tema
-                    canvas_.addSolid(s.box.position.x, s.box.position.y, s.box.size.x, s.box.size.y, theme_.accent, 0.2f,
-                                     editor::ui_style::buttonRadius());
-                }
+                // Toggle (mesmo desenho dos controles fixos): o hover realca o contorno do trilho, sem pintar a linha.
                 canvas_.addText(Metrics::kPad, y + 6.f, row.label, Metrics::kFont, ink, labelW_ - 6.f);
+                drawToggle(x, y, row.on, row.enabled, contains(s.box, hover_));
                 return y + Metrics::kRowH + Metrics::kGap;
             }
             case RowKind::Dropdown: {
@@ -1310,8 +1424,7 @@ class SettingsPanel {
                         if (s.hidden) break;
                         append(items, paint, Elm::BuildSliderItems(s.slider, sliderStyle_, z, paint), kContentClip);
                         break;
-                    case RowKind::Check:
-                        append(items, paint, Elm::BuildCheckboxItems(s.check, checkStyle_, z, paint), kContentClip);
+                    case RowKind::Check:   // toggle: ja desenhado no canvas (drawToggle), nada a acrescentar aqui
                         break;
                     case RowKind::Dropdown: {
                         Elm::DropdownStyle style = dropdownStyle_;
@@ -1337,21 +1450,23 @@ class SettingsPanel {
     }
 
     // ---------- Itens de desenho ----------
-    void appendControls(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint) {
+    // `graphics` true: controles da categoria Graphics and API (API, resolucao, escala, upscale, FPS);
+    // false: os da Quality (AA e qualidade de sombra). Os toggles sao desenhados no canvas (drawToggle).
+    void appendControls(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint, bool graphics) {
         constexpr float z = Metrics::kControlZ;
-        append(items, paint, Elm::BuildRadioGroupItems(apis_, radioStyle_, z, paint), kContentClip);
+        if (graphics) append(items, paint, Elm::BuildRadioGroupItems(apis_, radioStyle_, z, paint), kContentClip);
         for (const Elm::Dropdown* dd : allDropdowns()) {
+            if (isGraphicsDropdown(dd) != graphics) continue;
             // Hover: o combo sob o ponteiro pinta com a cor de destaque do tema (amarelo no tema Ember, por exemplo).
             Elm::DropdownStyle style = dropdownStyle_;
             if (dd->border.Contains(hover_) && !dd->control.disabled) style.button = theme_.accent;
             append(items, paint, Elm::BuildDropdownButtonItems(*dd, style, z, paint), kContentClip);
         }
-        append(items, paint, Elm::BuildSliderItems(scale_, sliderStyle_, z, paint), kContentClip);
-        append(items, paint, Elm::BuildCheckboxItems(pixel_, checkStyle_, z, paint), kContentClip);
-        append(items, paint, Elm::BuildCheckboxItems(shadows_, checkStyle_, z, paint), kContentClip);
-        append(items, paint, Elm::BuildCheckboxItems(rayTracing_, checkStyle_, z, paint), kContentClip);
-        append(items, paint, Elm::BuildCheckboxItems(rtAo_, checkStyle_, z, paint), kContentClip);
+        if (graphics) append(items, paint, Elm::BuildSliderItems(scale_, sliderStyle_, z, paint), kContentClip);
     }
+
+    // O combo e da categoria Graphics and API (resolucao, upscale, FPS)? Os demais (AA, qualidade de sombra) sao da Quality.
+    [[nodiscard]] bool isGraphicsDropdown(const Elm::Dropdown* dd) const { return dd == &resolution_ || dd == &upscale_ || dd == &fps_; }
 
     // Lista aberta de um combo: fundo e linhas com z acima dos controles. Os textos vem de overlay_.
     void appendPopups(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint) {
@@ -1416,8 +1531,8 @@ class SettingsPanel {
         if (appearanceSliderPointer(phase, p)) return true;
         if (phase == Elm::PointerPhase::Down && scrollbarPointer(p)) return true;
         if (formPointer(phase, p)) return true;
-        if (!open_[kGraphicsTab]) return true;
-        if (phase == Elm::PointerPhase::Down && stepperClick(p)) return true;
+        if (!open_[kGraphicsTab] && !open_[kQualityTab]) return true;
+        if (open_[kGraphicsTab] && phase == Elm::PointerPhase::Down && stepperClick(p)) return true;
         contentPointer(phase, p);
         return true;
     }
@@ -1429,7 +1544,7 @@ class SettingsPanel {
         if (colorPopup_.isOpen()) colorPopup_.pointer(Elm::PointerPhase::Up, p, window_);
         if (appearanceSliderPointer(Elm::PointerPhase::Up, p)) return;
         if (formPointer(Elm::PointerPhase::Up, p)) return;
-        if (open_[kGraphicsTab]) contentPointer(Elm::PointerPhase::Up, p);
+        if (open_[kGraphicsTab] || open_[kQualityTab]) contentPointer(Elm::PointerPhase::Up, p);
     }
 
     // Clique no cabecalho de secao: abre ou fecha.
@@ -1525,21 +1640,25 @@ class SettingsPanel {
             applyDropdown(*slot.dd, phase, p, slot.field);
             return;
         }
-        const Elm::RadioEvents radio = apis_.OnPointer(event(phase, p, apis_.border));
-        if (radio.valueChanged) pending_.push_back({sc::Field::Api, sb::ReadApiRadio(apis_), 0.f, false});
-        applyDropdown(resolution_, phase, p, sc::Field::ResMode);
-        if (scaleEnabled_) {
-            const Elm::SliderEvents slide = scale_.OnPointer(event(phase, p, scale_.border));
-            if (slide.valueChanged) pending_.push_back({sc::Field::RenderScale, 0, scale_.Value(), false});
+        if (open_[kGraphicsTab]) {   // categoria Graphics and API
+            const Elm::RadioEvents radio = apis_.OnPointer(event(phase, p, apis_.border));
+            if (radio.valueChanged) pending_.push_back({sc::Field::Api, sb::ReadApiRadio(apis_), 0.f, false});
+            applyDropdown(resolution_, phase, p, sc::Field::ResMode);
+            if (scaleEnabled_) {   // com o FSR ligado a escala e do FSR: o slider nao recebe o ponteiro
+                const Elm::SliderEvents slide = scale_.OnPointer(event(phase, p, scale_.border));
+                if (slide.valueChanged) pending_.push_back({sc::Field::RenderScale, 0, scale_.Value(), false});
+            }
+            applyDropdown(upscale_, phase, p, sc::Field::Upscale);
+            applyDropdown(fps_, phase, p, sc::Field::Fps);
         }
-        applyDropdown(upscale_, phase, p, sc::Field::Upscale);
-        applyDropdown(aa_, phase, p, sc::Field::Aa);
-        applyCheck(pixel_, phase, p, sc::Field::PixelFilter);
-        applyDropdown(fps_, phase, p, sc::Field::Fps);
-        applyCheck(shadows_, phase, p, sc::Field::Shadows);
-        applyCheck(rayTracing_, phase, p, sc::Field::RayTracing);
-        if (rayTracingEnabled_) applyCheck(rtAo_, phase, p, sc::Field::RtAo);
-        applyDropdown(shadowQuality_, phase, p, sc::Field::ShadowQuality);
+        if (open_[kQualityTab]) {   // categoria Quality
+            applyDropdown(aa_, phase, p, sc::Field::Aa);
+            applyCheck(pixel_, phase, p, sc::Field::PixelFilter);
+            applyCheck(shadows_, phase, p, sc::Field::Shadows);
+            applyCheck(rayTracing_, phase, p, sc::Field::RayTracing);
+            if (rayTracingEnabled_) applyCheck(rtAo_, phase, p, sc::Field::RtAo);
+            applyDropdown(shadowQuality_, phase, p, sc::Field::ShadowQuality);
+        }
     }
 
     // Botao: OnPointer abre ou fecha. Lista aberta: o soltar numa linha escolhe a opcao (ChooseAt). Clique fora do
@@ -1648,6 +1767,7 @@ class SettingsPanel {
     float contentH_ = 0.f;                // altura do conteudo da aba Graficos (do ultimo layout)
     std::vector<Stepper> steps_;
     sc::Requests pending_;
+    std::vector<Tip> tips_;   // dicas do quadro (refeitas a cada layoutSections)
     // Cor personalizada: a linha mostra o modelo (customModel_); o seletor edita a copia customRgb_ e avisa cada mudanca.
     SU::Rect customSwatch_{};
     float customModel_[3] = {0.f, 0.f, 0.f};

@@ -36,6 +36,8 @@
 #include "inspector_bridge.hpp"
 #include "color_popup.hpp"
 #include "inspector_model.hpp"
+#include "inspector_tips.hpp"   // tabela de dicas por controle
+#include "tooltip.hpp"          // balao de ajuda compartilhado do editor
 #include "project.hpp"
 #include "text_edit_keys.hpp"
 #include "slider_value_edit.hpp"
@@ -70,6 +72,28 @@ namespace Wd = SU::Widgets;
 namespace Edit = SU::Widgets;
 namespace SR = SU::Rendering;
 namespace ST = SU::Text;
+
+// Memoria "texto traduzido -> chave em ingles": as dicas sao achadas pela chave em ingles do rotulo, mas os
+// controles recebem o texto ja traduzido. Cada T() abaixo anota de qual chave veio o ponteiro devolvido.
+namespace detail {
+inline std::unordered_map<const void*, const char*>& KeyOf() {
+    static std::unordered_map<const void*, const char*> map;
+    return map;
+}
+}  // namespace detail
+
+// T() local do Inspector: igual ao editor::T, mas lembra a chave em ingles quando o texto foi traduzido.
+inline const char* T(const char* key) {
+    const char* out = editor::T(key);
+    if (out != key) detail::KeyOf()[out] = key;
+    return out;
+}
+
+// Chave em ingles de um rotulo mostrado (o proprio texto se nao veio de T() ou nao foi traduzido).
+inline const char* EnglishKey(const char* shown) {
+    const auto it = detail::KeyOf().find(shown);
+    return it == detail::KeyOf().end() ? shown : it->second;
+}
 
 // Dados do objeto que o painel le. Os ponteiros valem so no quadro; o main.cpp monta a cada quadro.
 struct Context {
@@ -150,6 +174,9 @@ struct Hooks {
     std::function<void()> removeParticles;                         // tira as particulas do objeto
     std::function<void(int)> addResource;                          // adiciona um recurso (im::Resource)
     std::function<void(int)> removeResource;                       // tira um recurso (im::Resource)
+    std::function<std::vector<std::string>()> materialNames;       // materiais do projeto (<projeto>/Materials)
+    std::function<int(const std::string&)> materialFlags;          // 1 = nao encontrado, 2 = mistura aditiva, 4 = shader unlit
+    std::function<void()> materialFromObject;                      // "Create from object": salva os campos do MeshRenderer como material e o atribui
 };
 
 // Metricas do painel, em pixels logicos.
@@ -203,6 +230,9 @@ class InspectorPanel {
         overlay_.setFontScale(editor::ui_style::textScale());
         width_ = std::max(140.f, width);
         controls_.clear();
+        tips_.clear();             // dicas do quadro (refeitas junto com os controles)
+        detail::KeyOf().clear();   // anotacoes texto traduzido -> chave: valem so para este quadro
+        tipKey_ = nullptr;
         clampScroll();   // limite calculado no quadro anterior (o corpo visivel e o conteudo ja medido)
         frames_.clear();
         canvas_.clear();
@@ -329,6 +359,25 @@ class InspectorPanel {
         return sdl_.draw(renderer, packet_);
     }
 
+    // Registra as dicas deste quadro no Tooltip do editor (chamar DEPOIS de draw, que fixa origem e area visivel).
+    // Cada dica e cortada pela area visivel do corpo (controle rolado para fora nao responde). Com lista de escolha
+    // ou seletor de cor aberto, o balao e suprimido para nao cobrir o menu.
+    void registerTips(editor::tooltip::Tooltip& tip) const {
+        if (!shown_) return;
+        if (popup_.isOpen()) { tip.suppress(); return; }
+        for (const auto& [k, dd] : drops_) {
+            if (dd.control.open) { tip.suppress(); return; }
+        }
+        const float vx0 = visible_.x, vy0 = visible_.y, vx1 = visible_.x + visible_.w, vy1 = visible_.y + visible_.h;
+        for (const TipRect& t : tips_) {
+            const float x0 = std::max(t.box.position.x + origin_.x, vx0);
+            const float y0 = std::max(t.box.position.y + origin_.y, vy0);
+            const float x1 = std::min(t.box.position.x + t.box.size.x + origin_.x, vx1);
+            const float y1 = std::min(t.box.position.y + t.box.size.y + origin_.y, vy1);
+            if (x1 > x0 && y1 > y0) tip.target(x0, y0, x1 - x0, y1 - y0, t.text.c_str());
+        }
+    }
+
     // true quando o ponteiro esta sobre um campo que pede cursor de texto.
     [[nodiscard]] bool wantsTextCursor(float x, float y) const {
         if (!shown_ || !sui::Box{visible_.x, visible_.y, visible_.w, visible_.h}.contains(x, y)) return false;
@@ -429,6 +478,28 @@ class InspectorPanel {
         return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y && p.y < r.position.y + r.size.y;
     }
 
+    // Dica de um controle: retangulo local ao bloco e o texto ja traduzido.
+    struct TipRect {
+        SU::Rect box{};
+        std::string text;
+    };
+
+    // Registra a dica do controle na caixa `box` (local). O id e o rotulo mostrado (vira a chave em ingles) ou, se
+    // tipKey_ foi preenchido pelo chamador, esse id explicito (rotulos repetidos ou montados em tempo de execucao).
+    // Sem dica na tabela, nao registra nada.
+    void tipAt(const SU::Rect& box, const char* shown) {
+        const char* id = tipKey_ ? tipKey_ : EnglishKey(shown);
+        tipKey_ = nullptr;   // o id explicito vale so para o proximo controle
+        const char* english = editor::inspector_tips::Lookup(id);
+        if (!english) return;
+        tips_.push_back({box, editor::T(english)});
+    }
+
+    // Dica da linha inteira (rotulo + controle) na altura atual y_. Chamar antes de nextRow().
+    void tipRow(const char* shown) {
+        tipAt(rect(innerX_, y_, width_ - innerX_ - Metrics::kPad, Metrics::kRowH), shown);
+    }
+
     // Registra um controle do quadro e devolve a referencia para o chamador preencher.
     Control& add(Kind kind, const SU::Rect& box, std::uint32_t key) {
         Control c;
@@ -449,6 +520,7 @@ class InspectorPanel {
     bool beginSection(im::Section s, const char* title) {
         const float top = y_;
         const float w = width_ - 2.f * Metrics::kPad;
+        tipAt(rect(Metrics::kPad, y_, w, Metrics::kHeadH), title);   // dica do cabecalho da secao
         Control& c = add(Kind::Header, rect(Metrics::kPad, y_, w, Metrics::kHeadH), nextKey());
         c.section = s;
         c.disabled = false;   // abrir e fechar vale mesmo com o objeto travado
@@ -479,6 +551,7 @@ class InspectorPanel {
     // digitado (Enter ou sair do campo confirma, com o mesmo limite do deslizante; Esc cancela).
     void slider(const char* text, float* target, im::Range range, bool enabled = true) {
         label(y_, text);
+        tipRow(text);   // dica da linha
         const float sw = ctrlW_ - Metrics::kValueW;
         Control& c = add(Kind::Slider, rect(ctrlX_, y_, sw, Metrics::kRowH), nextKey());
         c.disabled = disabled_ || !enabled;
@@ -525,6 +598,7 @@ class InspectorPanel {
     // Linha X/Y/Z: rotulo e tres campos numericos.
     void vecRow(const char* text, float* v, int decimals, im::Range range = {-1e9f, 1e9f}) {
         label(y_, text);
+        tipRow(text);   // dica da linha
         const float cell = (ctrlW_ - 2.f * Metrics::kGap) / 3.f;
         static const char axes[3] = {'X', 'Y', 'Z'};
         for (int i = 0; i < 3; ++i) {
@@ -536,12 +610,14 @@ class InspectorPanel {
     // Numero sozinho na linha (near, far, ortho size).
     void numberRow(const char* text, float* target, int decimals, im::Range range = {-1e9f, 1e9f}, std::function<void()> changed = {}) {
         label(y_, text);
+        tipRow(text);   // dica da linha
         numberCell(ctrlX_, ctrlW_, 0, target, decimals, range, std::move(changed));
         nextRow();
     }
 
     // Caixa de selecao com rotulo a direita. A escrita passa por "set" (campo do objeto ou hook).
     void check(const char* text, bool value, std::function<void(bool)> set, bool enabled = true) {
+        tipRow(text);   // dica da linha
         Control& c = add(Kind::Check, rect(ctrlX_, y_, ctrlW_, Metrics::kRowH), nextKey());
         c.disabled = disabled_ || !enabled;
         c.checked = value;
@@ -559,6 +635,7 @@ class InspectorPanel {
     // Lista de escolha com rotulo a esquerda.
     void drop(const char* text, std::vector<std::string> options, std::size_t index, std::function<void(std::size_t)> set, bool enabled = true) {
         label(y_, text);
+        tipRow(text);   // dica da linha
         Control& c = add(Kind::Drop, rect(ctrlX_, y_, ctrlW_, Metrics::kRowH), nextKey());
         c.disabled = disabled_ || !enabled;
         c.options = std::move(options);
@@ -573,6 +650,7 @@ class InspectorPanel {
     // Amostra de cor (abre o seletor) com o HEX ao lado.
     void swatch(const char* text, float* rgb, bool enabled = true) {
         label(y_, text);
+        tipRow(text);   // dica da linha
         Control& c = add(Kind::Swatch, rect(ctrlX_, y_, Metrics::kSwatchW, Metrics::kRowH), nextKey());
         c.disabled = disabled_ || !enabled;
         c.rgb = rgb;
@@ -586,6 +664,7 @@ class InspectorPanel {
     // Campo de texto (nome, alvo da luz). Escreve a cada tecla no buffer do componente.
     void textRow(const char* text, char* buf, std::size_t cap, bool enabled = true) {
         label(y_, text);
+        tipRow(text);   // dica da linha
         Control& c = add(Kind::Text, rect(ctrlX_, y_, ctrlW_, Metrics::kRowH), nextKey());
         c.disabled = disabled_ || !enabled;
         c.text = buf;
@@ -599,6 +678,7 @@ class InspectorPanel {
 
     // Botao com rotulo. Fica na area de controles, a partir de x.
     void button(float x, const char* text, std::function<void()> onClick, float w = Metrics::kButtonW) {
+        tipAt(rect(x, y_, w, Metrics::kRowH), text);   // dica do botao
         Control& c = add(Kind::Button, rect(x, y_, w, Metrics::kRowH), nextKey());
         c.onClick = std::move(onClick);
         canvas_.addText(x + 8.f, y_ + 5.f, text, Metrics::kFont, theme_.text, w - 12.f);   // rotulo: canvas do quadro
@@ -648,6 +728,7 @@ class InspectorPanel {
         if (ctx_.name) textRow(T("Name"), ctx_.name->text, sizeof ctx_.name->text);
         check(T("Active"), ctx_.active, [this](bool on) { hooks_.setActive(on); });
         // Travado: o checkbox funciona mesmo com o resto do bloco so de leitura.
+        tipRow(T("Locked (editor only)"));   // dica da linha
         Control& lk = add(Kind::Check, rect(ctrlX_, y_, ctrlW_, Metrics::kRowH), nextKey());
         lk.disabled = false;
         lk.checked = ctx_.locked;
@@ -667,6 +748,61 @@ class InspectorPanel {
         endSection();
     }
 
+    // Linhas do material: seletor com os materiais do projeto, botoes "Create from object"/"Clear" e avisos.
+    // (O painel ainda nao tem API de tooltip por controle; as explicacoes ficam nos avisos em texto.)
+    void materialRows(MeshRenderer& m) {
+        std::vector<std::string> options{T("(none)")};
+        std::size_t selected = 0;
+        if (hooks_.materialNames) for (const std::string& n : hooks_.materialNames()) {
+            if (n == m.material) selected = options.size();
+            options.push_back(n);
+        }
+        if (m.material[0] && selected == 0) { options.push_back(m.material); selected = options.size() - 1; }   // material que sumiu: mostra o nome
+        const std::vector<std::string> list = options;
+        char* buf = m.material; const std::size_t cap = sizeof m.material;
+        drop(T("Material"), std::move(options), selected, [buf, cap, list](std::size_t i) {
+            std::snprintf(buf, cap, "%s", i == 0 || i >= list.size() ? "" : list[i].c_str());
+        });
+        button(ctrlX_, T("Create from object"), [this] { if (hooks_.materialFromObject) hooks_.materialFromObject(); }, Metrics::kButtonW + 30.f);
+        tipKey_ = "Clear material";   // "Clear" tambem existe no Voxel: id proprio da dica
+        button(ctrlX_ + Metrics::kButtonW + 36.f, T("Clear"), [&m] { m.material[0] = 0; }, 60.f);
+        nextRow();
+        if (!m.material[0]) return;
+        const int flags = hooks_.materialFlags ? hooks_.materialFlags(m.material) : 0;
+        auto note = [&](const char* key) {
+            canvas_.addText(ctrlX_, y_ + 2.f, T(key), Metrics::kSmallFont, theme_.textDim, ctrlW_);
+            nextRow();
+        };
+        if (flags & 1) note("Material not found: using this object's own values.");
+        else note("Values come from the material.");
+        if (flags & 2) note("Additive blend is drawn as alpha blend.");
+        if (flags & 4) note("Unlit shader is drawn as pbr.");
+    }
+
+    // Campos de material avancado do objeto: normal map, forca, tiling/offset de UV, alpha cutoff e dupla face.
+    // Com material atribuido ficam desabilitados ("Values come from the material."): quem manda e o arquivo do material.
+    void advancedMaterialRows(MeshRenderer& m, bool hasMat) {
+        const bool prevDisabled = disabled_;
+        disabled_ = prevDisabled || hasMat;   // todos os controles abaixo ficam cinzas com material
+        assetRow(T("Normal map"), editor::AssetKind::Image, m.normalMap, sizeof m.normalMap);
+        slider(T("Normal strength"), &m.normalStrength, {0.f, 2.f}, m.normalMap[0] != 0);
+        // Tiling (> 0) e offset: dois campos numericos por linha (U e V).
+        const float cell = (ctrlW_ - Metrics::kGap) / 2.f;
+        label(y_, T("UV tiling"));
+        tipRow(T("UV tiling"));   // dica da linha
+        numberCell(ctrlX_, cell, 'U', &m.uvTiling[0], 2, {0.01f, 1000.f});
+        numberCell(ctrlX_ + cell + Metrics::kGap, cell, 'V', &m.uvTiling[1], 2, {0.01f, 1000.f});
+        nextRow();
+        label(y_, T("UV offset"));
+        tipRow(T("UV offset"));   // dica da linha
+        numberCell(ctrlX_, cell, 'U', &m.uvOffset[0], 2, {-1000.f, 1000.f});
+        numberCell(ctrlX_ + cell + Metrics::kGap, cell, 'V', &m.uvOffset[1], 2, {-1000.f, 1000.f});
+        nextRow();
+        slider(T("Alpha cutoff"), &m.alphaCutoff, {0.f, 1.f});
+        checkField(T("Double sided"), &m.doubleSided);
+        disabled_ = prevDisabled;
+    }
+
     // Secao Mesh Renderer: forma/modelo, material, textura, emissao, neblina, sombras e materiais por parte.
     void mesh() {
         MeshRenderer& m = *ctx_.mesh;
@@ -681,17 +817,20 @@ class InspectorPanel {
             }
         }
         assetRow(T("Texture"), editor::AssetKind::Image, m.texture, sizeof m.texture);
+        materialRows(m);
+        const bool hasMat = m.material[0] != 0;   // com material, cor/rugosidade/metalico/opacidade vem dele
         if (m.shape == 3 && m.node >= 0) {
             canvas_.addText(innerX_, y_, T("Imported node. Each part keeps its file material unless you override it below."), Metrics::kSmallFont,
                             theme_.textDim, width_ - innerX_ - Metrics::kPad);
             nextRow();
             partsRows();
         } else {
-            swatch(T("Color"), m.color);
-            slider(T("Roughness"), &m.roughness, {0.05f, 1.f});
-            slider(T("Metallic"), &m.metallic, {0.f, 1.f});
+            swatch(T("Color"), m.color, !hasMat);
+            slider(T("Roughness"), &m.roughness, {0.05f, 1.f}, !hasMat);
+            slider(T("Metallic"), &m.metallic, {0.f, 1.f}, !hasMat);
         }
-        slider(T("Opacity"), &m.opacity, {0.f, 1.f});
+        slider(T("Opacity"), &m.opacity, {0.f, 1.f}, !hasMat);
+        advancedMaterialRows(m, hasMat);
         checkField(T("Enable emission"), &m.emissionOn);
         swatch(T("Emission color"), m.emissive, m.emissionOn);
         slider(T("Emission intensity"), &m.emissiveIntensity, {0.f, 50.f}, m.emissionOn);
@@ -816,6 +955,7 @@ class InspectorPanel {
     void postFx(tool::PostFx& p) {
         const float top = y_;
         const float w = width_ - innerX_ - Metrics::kPad;
+        tipAt(rect(innerX_, y_, w, Metrics::kRowH), T("Post-processing (this camera)"));   // dica do subgrupo
         Control& h = add(Kind::Header, rect(innerX_, y_, w, Metrics::kRowH), nextKey());
         h.section = im::Section::PostFx;
         h.disabled = false;
@@ -871,6 +1011,7 @@ class InspectorPanel {
         slider(T("Friction"), &p.friction, {0.f, 2.f});
         slider(T("Bounciness"), &p.bounciness, {0.f, 1.f});
         checkField(T("Trigger (detects, does not push)"), &p.trigger);
+        checkField(T("View collision shape"), &p.showCollider);   // desenha so o colisor deste objeto na Scene
         if (dynamic) {
             checkField(T("Vector physics (own gravity)"), &p.overrideGravity);
             if (p.overrideGravity) {
@@ -908,6 +1049,7 @@ class InspectorPanel {
         VoxelChunk& vc = *ctx_.voxel;
         if (!beginSection(im::Section::Voxel, T("Voxel chunk (blocks)"))) return;
         label(y_, T("Solid blocks"));
+        tipRow(T("Solid blocks"));   // dica da linha
         canvas_.addText(ctrlX_, y_ + 5.f, F("%u / %d", ctx_.voxelSolid, kChunkBlocks), Metrics::kFont, theme_.text, ctrlW_);
         nextRow();
         numberRow(T("Block size (m)"), &vc.cell, 2, {0.05f, 10.f}, [&vc] { ++vc.revision; });
@@ -918,6 +1060,7 @@ class InspectorPanel {
              [this](std::size_t i) { voxelBrush_ = static_cast<int>(i); });
         if (voxelBrush_ > 0) swatch(T("Brush color"), vc.palette[voxelBrush_]);
         button(innerX_, T("Fill terrain"), [this] { hooks_.voxelFill(); }, Metrics::kButtonW);
+        tipKey_ = "Clear chunk";   // id proprio da dica (o rotulo "Clear" se repete)
         button(innerX_ + Metrics::kButtonW + Metrics::kGap, T("Clear"), [this] { hooks_.voxelClear(); }, Metrics::kButtonW);
         nextRow();
         std::vector<std::string> layers;
@@ -931,6 +1074,7 @@ class InspectorPanel {
             for (int x = 0; x < kChunkSize; ++x) {
                 const unsigned char t = vc.at(x, voxelLayer_, z);
                 Control& c = add(Kind::Cell, rect(innerX_ + static_cast<float>(x) * (kCell + kCellGap), y_, kCell, kCell), nextKey());
+                tipAt(c.box, "Voxel cell");   // dica da celula da grade
                 const SU::Vec4 col = t ? sui::Srgb(vc.palette[t][0], vc.palette[t][1], vc.palette[t][2]) : sui::Srgb(0.18f, 0.18f, 0.2f);
                 canvas_.addSolid(c.box.position.x, c.box.position.y, kCell, kCell, col, Metrics::kZField);
                 c.onClick = [this, x, z, layer = voxelLayer_, brush = voxelBrush_] { hooks_.voxelPaint(x, layer, z, brush); };
@@ -946,6 +1090,7 @@ class InspectorPanel {
     bool sub(im::Section s, const char* title, float& top) {
         top = y_;
         const float w = width_ - innerX_ - Metrics::kPad;
+        tipAt(rect(innerX_, y_, w, Metrics::kRowH), title);   // dica do subgrupo
         Control& h = add(Kind::Header, rect(innerX_, y_, w, Metrics::kRowH), nextKey());
         h.section = s;
         h.disabled = false;
@@ -965,6 +1110,7 @@ class InspectorPanel {
     // Numero inteiro na linha (mesma aparencia do campo numerico; grava arredondado).
     void intRow(const char* text, int* target, int lo, int hi) {
         label(y_, text);
+        tipRow(text);   // dica da linha
         Control& c = add(Kind::Num, rect(ctrlX_, y_, ctrlW_, Metrics::kRowH), nextKey());
         c.value = static_cast<float>(*target);
         c.decimals = 0;
@@ -994,6 +1140,7 @@ class InspectorPanel {
         if (sub(im::Section::ParticleShape, T("Shape and spawn area"), top)) {
             button(ctrlX_, T("Smoke preset"), [this] { hooks_.smokePreset(); }, Metrics::kButtonW);
             nextRow();
+            tipKey_ = "Particle shape";   // "Shape" tambem existe no Mesh Renderer
             drop(T("Shape"), tr({"Dot", "Square", "Triangle", "Star", "Ring", "Streak (motion)", "Smoke"}),
                  static_cast<std::size_t>(std::clamp(p.form, 0, 6)), [&p](std::size_t i) { p.form = static_cast<int>(i); });
             drop(T("Spawn area"), tr({"Point", "Random box", "Random sphere"}), static_cast<std::size_t>(std::clamp(p.area, 0, 2)),
@@ -1025,6 +1172,7 @@ class InspectorPanel {
             nextRow();
             for (int i = 0; i < p.routeCount; ++i) {
                 const std::string name = F("Point %d", i + 1);
+                tipKey_ = "Route point";   // rotulo montado em tempo de execucao ("Point N")
                 vecRow(name.c_str(), p.routePts[i], 2);
                 button(ctrlX_, T("Remove point"), [&p, i] {
                     for (int k = i; k + 1 < p.routeCount; ++k) for (int c = 0; c < 3; ++c) p.routePts[k][c] = p.routePts[k + 1][c];
@@ -1052,6 +1200,7 @@ class InspectorPanel {
             if (p.tornado) {
                 slider(T("Turns per second"), &p.tornadoSpeed, {0.f, 6.f});
                 numberRow(T("Base radius"), &p.tornadoRadius, 2, {0.f, 50.f});
+                tipKey_ = "Tornado height";   // "Height" tambem existe no elemento de UI
                 numberRow(T("Height"), &p.tornadoHeight, 2, {0.f, 100.f});
                 canvas_.addText(innerX_, y_, T("The particles rise and spread out like a funnel. If Trace route is on, the route wins."),
                                 Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
@@ -1131,6 +1280,7 @@ class InspectorPanel {
             selected = options.size() - 1;
         }
         const std::vector<std::string> list = options;
+        tipKey_ = "Canvas camera";   // "Camera" tambem e o titulo da secao Camera
         drop(T("Camera"), std::move(options), selected, [&ui, list](std::size_t i) {
             if (i == 0 || i >= list.size()) ui.camera[0] = 0;
             else std::snprintf(ui.camera, sizeof ui.camera, "%s", list[i].c_str());
@@ -1189,7 +1339,10 @@ class InspectorPanel {
     // Linha de botoes pequenos (cada um com seu texto), a partir da coluna dos controles.
     void smallButtons(std::initializer_list<std::pair<const char*, std::function<void()>>> items) {
         float x = ctrlX_;
+        int idx = 0;
         for (const auto& it : items) {
+            static const char* const kIds[3] = {"Entry Up", "Entry Down", "Entry Remove"};   // ids proprios (Up e Remove se repetem)
+            tipKey_ = kIds[std::min(idx++, 2)];
             button(x, it.first, it.second, 60.f);
             x += 60.f + Metrics::kGap;
         }
@@ -1264,6 +1417,7 @@ class InspectorPanel {
             UiElem* target = &it;
             for (int i = 0; i < it.entryCount && i < kMaxUiEntries; ++i) {
                 const std::string entryLabel = F("%s %d", T("Entry"), i + 1);
+                tipKey_ = "List entry";   // rotulo montado em tempo de execucao ("Entry N")
                 textRow(entryLabel.c_str(), it.entries[i], kUiEntryLen);
                 smallButtons({{T("Up"), [target, i] { editor::canvas_elems::MoveEntry(*target, i, -1); }},
                               {T("Down"), [target, i] { editor::canvas_elems::MoveEntry(*target, i, 1); }},
@@ -1339,6 +1493,7 @@ class InspectorPanel {
                     break;
                 case ToolKind::OnCollision:
                     textRow(T("Only objects with tag"), it.target, sizeof it.target);
+                    tipKey_ = "Collision action";   // "Action" tambem existe na ferramenta Jump
                     drop(T("Action"), tr({"Log to Console", "Destroy the other object", "Destroy this object", "Bounce this object"}),
                          static_cast<std::size_t>(std::clamp(it.mode, 0, 3)), [&it](std::size_t m) { it.mode = static_cast<int>(m); });
                     if (it.mode == 3) numberRow(T("Bounce speed (m/s)"), &it.a, 1, {0.1f, 100.f});
@@ -1385,6 +1540,7 @@ class InspectorPanel {
         }
         checkField(T("Script enabled"), &ctx_.script->enabled);
         label(y_, T("File"));
+        tipRow(T("File"));   // dica da linha
         canvas_.addText(ctrlX_, y_ + 5.f, ctx_.scriptPath.empty() ? std::string(T("(no file)")) : ctx_.scriptPath, Metrics::kSmallFont + 1.f,
                         theme_.textDim, ctrlW_);
         nextRow();
@@ -1427,6 +1583,7 @@ class InspectorPanel {
             label(y_, ctx_.tagNames[i].c_str());
             Control& hit = add(Kind::Button, rect(innerX_, y_, labelW_, Metrics::kRowH), nextKey());
             hit.flat = true;
+            tipAt(hit.box, "Tag name");   // dica do nome da tag (duplo clique renomeia)
             hit.disabled = disabled_;
             hit.onClick = [this, i, builtin] { onTagNameClick(i, builtin); };
             button(ctrlX_, T("Remove"), [this, i] { hooks_.removeTagIndex(i); }, Metrics::kButtonW);
@@ -1474,6 +1631,7 @@ class InspectorPanel {
     // Linha da tag em renomeacao: campo com o nome. Enter grava (hook renameTagIndex); Esc desfaz.
     void tagRenameRow(std::size_t i) {
         label(y_, ctx_.tagNames[i].c_str());
+        tipAt(rect(innerX_, y_, width_ - innerX_ - Metrics::kPad, Metrics::kRowH), "Rename tag");   // dica da linha em renomeacao
         Control& c = add(Kind::Text, rect(ctrlX_, y_, ctrlW_, Metrics::kRowH), nextKey());
         c.text = renameBuf_;
         c.setText = [this](const std::string& t) { std::snprintf(renameBuf_, sizeof renameBuf_, "%s", t.c_str()); };
@@ -1913,6 +2071,8 @@ class InspectorPanel {
 
     im::Expanders expanders_;
     std::vector<Control> controls_;
+    std::vector<TipRect> tips_;        // dicas do quadro (coordenadas locais), refeitas em prepare()
+    const char* tipKey_ = nullptr;     // id explicito da dica do proximo controle (nullptr: usa o rotulo)
     std::vector<SU::Rect> frames_;
 
     std::unordered_map<std::uint32_t, Elm::Slider> sliders_;

@@ -390,10 +390,12 @@ inline void buildSceneIcons(Editor& ed, const vm::Projection& proj, view::ShapeL
 }
 
 // Colisores: esfera = tres circulos, caixa = doze arestas. Cor pelo tipo de corpo (ou gatilho).
-inline void buildPhysics(Editor& ed, const vm::Projection& proj, view::ShapeList& out) {
-  if (!ed.sceneInfo.physics.drawColliders) return;
+// Desenha se (drawColliders global) OU (PhysicsComp::showCollider do objeto). onlyPerObject: ignora o global.
+inline void buildPhysics(Editor& ed, const vm::Projection& proj, view::ShapeList& out, bool onlyPerObject = false) {
+  const bool drawAll = ed.sceneInfo.physics.drawColliders && !onlyPerObject;
   tool::World& w = ed.scene.world();
   w.each<PhysicsComp, Transform>([&](tool::Entity e, PhysicsComp& p, Transform& t) {
+    if (!drawAll && !p.showCollider) return;   // filtro: global ligado ou toggle proprio do componente
     const Newtoon::Collider c = ed.colliderFor(e);
     const Newtoon::Mat3 R = eulerToQuat(t.rot).ToMat3();
     const Newtoon::Vec3 off = R * c.offset;

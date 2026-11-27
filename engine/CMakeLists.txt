@@ -25,7 +25,34 @@ tool_module(math DEPS tool_core)
 tool_module(physics DEPS tool_core) # Newtoon Physics (MIT, autoria do dono da engine): so cabecalhos
 find_package(Threads REQUIRED)
 target_link_libraries(tool_physics INTERFACE Threads::Threads)
+tool_module(particles DEPS tool_core) # Particulas (pool SoA em chunks, emissor, modulos, efeitos JSON): so cabecalhos
+target_link_libraries(tool_particles INTERFACE Threads::Threads)
 tool_module(rhi DEPS tool_debug)
+
+# FidelityFX opcional (FSR 4 / frame generation): so entra se third_party/fidelityfx/include/ffx_api.hpp existir.
+# A pasta fica no .gitignore; sem ela a build segue normal com TOOL_WITH_FIDELITYFX=0.
+set(TOOL_FIDELITYFX_DIR ${CMAKE_SOURCE_DIR}/third_party/fidelityfx)
+if(EXISTS ${TOOL_FIDELITYFX_DIR}/include/ffx_api.hpp)
+  set(TOOL_WITH_FIDELITYFX 1)
+  message(STATUS "FidelityFX encontrado: FSR 4/FG habilitados")
+else()
+  set(TOOL_WITH_FIDELITYFX 0)
+  message(STATUS "FidelityFX nao encontrado: FSR 4/FG desabilitados")
+endif()
+add_library(tool_fidelityfx STATIC fidelityfx/src/fidelityfx.cpp)
+target_include_directories(tool_fidelityfx PUBLIC fidelityfx/include)
+target_link_libraries(tool_fidelityfx PUBLIC tool_core tool_debug PRIVATE tool_warnings)
+target_compile_definitions(tool_fidelityfx PUBLIC TOOL_WITH_FIDELITYFX=${TOOL_WITH_FIDELITYFX})
+if(TOOL_WITH_FIDELITYFX)
+  # headers do SDK so para o .cpp interno; nao vazam para quem consome o alvo (SYSTEM: sem avisos de codigo de terceiros)
+  target_include_directories(tool_fidelityfx SYSTEM PRIVATE ${TOOL_FIDELITYFX_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party/DiligentCore/ThirdParty/Vulkan-Headers/include) # vulkan.h (ffx_api_vk.h)
+  # O loader (amd_fidelityfx_loader_vk.dll) e carregado em tempo de execucao: ao lado do exe ou nesta pasta do SDK.
+  target_compile_definitions(tool_fidelityfx PRIVATE TOOL_FIDELITYFX_BIN_DIR="${TOOL_FIDELITYFX_DIR}/bin")
+endif()
+add_library(tool::fidelityfx ALIAS tool_fidelityfx)
+add_executable(tool_fidelityfx_probe fidelityfx/src/probe.cpp)
+target_link_libraries(tool_fidelityfx_probe PRIVATE tool_fidelityfx)
 tool_module(render DEPS tool_math tool_rhi LightPrism::LightPrism) # iluminacao: Light Prism (CPU; a ponte GPU fica em rhi_diligent)
 tool_module(narrative DEPS tool_debug)
 tool_module(mod DEPS tool_debug)
@@ -53,6 +80,8 @@ if(TOOL_WITH_DILIGENT)
   target_link_libraries(tool_rhi_diligent PUBLIC tool_rhi)
   set(_dl_libs Diligent-GraphicsEngineVk-static Diligent-GraphicsEngineOpenGL-static)
   target_compile_definitions(tool_rhi_diligent PRIVATE TOOL_HAS_VULKAN=1 TOOL_HAS_OPENGL=1)
+  # vulkan.h para os handles nativos (VkDevice/VkImage/VkCommandBuffer) entregues ao FidelityFX
+  target_include_directories(tool_rhi_diligent SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party/DiligentCore/ThirdParty/Vulkan-Headers/include)
   if(WIN32 AND TOOL_WITH_D3D11)
     target_compile_definitions(tool_rhi_diligent PRIVATE TOOL_HAS_D3D11=1)
     list(APPEND _dl_libs Diligent-GraphicsEngineD3D11-static)

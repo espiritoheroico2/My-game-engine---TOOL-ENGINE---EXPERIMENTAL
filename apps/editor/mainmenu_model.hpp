@@ -166,14 +166,16 @@ inline const std::vector<MenuDef>& definitions() {
         {nullptr, nullptr, Command::None, 0},
         {"Reset layout", "", Command::ResetLayout, 0}, {"Save layout", "", Command::SaveLayout, 0}}},
       {"Options",
-       {{"Appearance and colors...", "", Command::Settings, 0},
-       {"Graphics API...", "", Command::Settings, 1},
-       {"Game view (grid, split)...", "", Command::Settings, 2},
+       // Indices = categorias de settings_model::kTabNames (0 Graphics and API, 1 Quality, 2 Lighting, 3 Physics,
+       // 4 Interface, 5 Language, 6 Project).
+       {{"Appearance and colors...", "", Command::Settings, 4},
+       {"Graphics API...", "", Command::Settings, 0},
+       {"Game view (grid, split)...", "", Command::Settings, 6},
        {"Physics (world gravity)...", "", Command::Settings, 3},
-        {"Lighting and shadows...", "", Command::Settings, 4},
-       {"Language...", "", Command::Settings, 6},
-       {"Tags...", "", Command::Settings, 1},
-       {"Project and export preset...", "", Command::Settings, 1}}},
+        {"Lighting and shadows...", "", Command::Settings, 2},
+       {"Language...", "", Command::Settings, 5},
+       {"Tags...", "", Command::Settings, 6},
+       {"Project and export preset...", "", Command::Settings, 6}}},
   };
   return defs;
 }

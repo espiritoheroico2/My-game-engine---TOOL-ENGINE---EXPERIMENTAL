@@ -16,7 +16,7 @@ if(TOOL_WITH_QUICKJS AND TARGET qjs)
   target_compile_definitions(tool_editor PRIVATE TOOL_WITH_QUICKJS=1)
 endif()
 if(TOOL_WITH_DILIGENT)
-  target_link_libraries(tool_editor PRIVATE tool::rhi_diligent)
+  target_link_libraries(tool_editor PRIVATE tool::rhi_diligent tool::fidelityfx)   # fidelityfx: consulta de suporte ao FSR 4
   target_compile_definitions(tool_editor PRIVATE TOOL_EDITOR_GPU=1)
 endif()
 if(TOOL_WITH_SPRITEUI)
@@ -200,6 +200,24 @@ if(TOOL_WITH_SPRITEUI)
     target_link_libraries(editor_config_preset_tests PRIVATE tool::audio_miniaudio)
   endif()
   add_test(NAME Editor.ConfigPreset COMMAND editor_config_preset_tests)
+
+  # Material como asset (material_asset.hpp): JSON ida e volta, clamp, salvar/listar/carregar/apagar. Sem janela.
+  add_executable(editor_material_asset_tests tests/test_material_asset.cpp)
+  target_include_directories(editor_material_asset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_material_asset_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_material_asset_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.MaterialAsset COMMAND editor_material_asset_tests)
+
+  # Miniatura de material (material_preview.hpp): 128x128 em CPU, cache por mtime, limite por quadro. Sem janela.
+  add_executable(editor_material_preview_tests tests/test_material_preview.cpp)
+  target_include_directories(editor_material_preview_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_material_preview_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_material_preview_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.MaterialPreview COMMAND editor_material_preview_tests)
 
   # Tooltip (tooltip.hpp): espera de 0,5 s, reinicio e posicao do balao. Sem janela.
   add_executable(editor_tooltip_tests tests/test_tooltip.cpp)

@@ -23,6 +23,17 @@ inline Newtoon::Collider Editor::colliderFor(tool::Entity e) {
   if (m && m->shape == 2) { c.extents = {0.5f * sx, 0.25f, 0.5f * sz}; c.offset = {0.f, -0.25f, 0.f}; } // plano: laje fina cuja face de cima e o plano
   else if (m && m->shape == 3) if (const tool::Mesh* mesh = meshOf(*m); mesh && !mesh->pos.empty()) { // modelo: caixa envolvente da malha
     tool::Vec3 lo = mesh->pos[0], hi = lo;
+    if (p && p->simplifiedHull) {
+      // Modo "Simplified hull": usa a capa simplificada (<= kDefaultHullMaxPoints pontos) guardada no cache por malha
+      // (chave = ponteiro + numero de vertices), sem varrer todos os vertices a cada Play.
+      // Obs.: a narrowphase ainda trata o colisor como caixa; a capa por enquanto fornece a caixa/offset (ver docs).
+      auto hull = Newtoon::GlobalHullCache().Get(mesh, mesh->pos.size(), Newtoon::kDefaultHullMaxPoints, [&] {
+        std::vector<Newtoon::Vec3> pts; pts.reserve(mesh->pos.size());
+        for (auto& v : mesh->pos) pts.push_back({v.x, v.y, v.z});
+        return pts;
+      });
+      if (!hull->Empty()) { lo = {hull->bounds.min.x, hull->bounds.min.y, hull->bounds.min.z}; hi = {hull->bounds.max.x, hull->bounds.max.y, hull->bounds.max.z}; }
+    } else
     for (auto& v : mesh->pos) { lo = {std::min(lo.x, v.x), std::min(lo.y, v.y), std::min(lo.z, v.z)}; hi = {std::max(hi.x, v.x), std::max(hi.y, v.y), std::max(hi.z, v.z)}; }
     c.extents = {0.5f * (hi.x - lo.x) * sx, 0.5f * (hi.y - lo.y) * sy, 0.5f * (hi.z - lo.z) * sz};
     c.offset = {0.5f * (hi.x + lo.x) * sx, 0.5f * (hi.y + lo.y) * sy, 0.5f * (hi.z + lo.z) * sz};

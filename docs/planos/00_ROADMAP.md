@@ -40,6 +40,18 @@ Regra: nenhum item vira **[F]** por texto. So testes automatizados ou observacao
 
 ---
 
+## Estado atual
+
+- **Teste ECS:** `test ecs: N` cria N instâncias SEM física que oscilam pelo espaço (MoverComp, tickMovers). `test ecsf: N` cria N esferas COM física, caindo (o teste antigo). O `--ecs N` do bench continua com física.
+- **Oclusão** (Vulkan, RX 6500 XT, 1280x720, 120 quadros; 5.000 esferas com física): antes do filtro, quadro 45,7 ms e buffer de oclusão 25,3 ms; depois do filtro de 8 px, quadro 19,1 ms e buffer de oclusão 0,8 ms. Instâncias estáticas (`--instances 5000`, câmera fixa): 9,1 ms -> 7,7 ms. Sem oclusão (`--no-occlusion`) com esferas: 18,4 ms. Cache de oclusores estáticos: testado, ganho pequeno (7,76 ms câmera fixa) e piora em câmera móvel (8,92 -> 9,30 ms); foi removido.
+- **Física:** solver 2,9-3,0 ms com soft step e warm starting desligados; 3,7-3,9 ms com os padrões ligados (quadro 5,3 -> 6,4 ms, bench ECS de 5.000 esferas headless). Decisão do usuário: manter ligados. Escala 100k: 3D ~11,5 ms/passo; 2D ~9,3 ms/passo (antes do broadphase novo era ~62 ms).
+- **Colisão:** gerador de capa k-DOP (até 24 pontos, cache por malha, flag `simplifiedHull`). Ainda NÃO usada pela narrowphase (só caixa e esfera). Redução do manifold para 4 pontos quebrou 3 testes de estabilidade; ficou em 8.
+- **Toggle "View collision shape"** na barra flutuante da Scene e por objeto no bloco Physics do Inspector.
+- **Configurações:** presets em `<projeto>/Configs` (JSON, render + physics); botões Edit config / Save / Delete no topo de Settings; tooltips nas opções de Settings; engrenagem na janela Scenes para config por cena (`presetPath` relativo ao projeto).
+- **RHI:** compute, UAV (StorageRW), draw indireto (Indirect) e readBuffer implementados no backend Diligent; testado na GPU com `rhi_compute_test.exe vulkan` (RESULTADO OK). D3D12, D3D11 e GL NÃO testados.
+- **Culling na GPU:** em andamento (fase 1: frustum por compute + draw indireto, sem HiZ).
+- **Verificação:** selftest 256 checks, 0 falhas; `ctest -R "Editor\."` 72/72; `tool_physics_tests` 26/0; escala ok.
+
 ## 1. Estado da versao
 
 ### 1.1 Funcionando e integrado [F]

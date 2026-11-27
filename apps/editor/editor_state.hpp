@@ -16,6 +16,7 @@
 #include "profiler.hpp"
 #include "perf_warnings.hpp"
 #include "project.hpp"
+#include "material_cache.hpp"  // materiais como asset (MeshRenderer.material)
 #include "config_preset.hpp"   // config (render + fisica) por cena: aplicada ao abrir a cena
 #include "project_settings.hpp"
 #include "script.hpp"
@@ -41,6 +42,7 @@
 #include "settings_model.hpp"
 #ifdef TOOL_EDITOR_GPU
 #include "tool/rhi/diligent_device.hpp"
+#include "tool/fidelityfx/fidelityfx.hpp"   // FSR 4 / frame generation (consulta de suporte)
 #endif
 #include "tool/rhi/null_device.hpp"
 #include "tool/scene/scene.hpp"
@@ -123,6 +125,7 @@ struct Editor {
   // projeto / cena
   Project project;
   AssetLib lib{&project};
+  MaterialCache materials;       // materiais do projeto (<projeto>/Materials), lidos do disco so quando mudam
   SceneFile sceneInfo;           // nome da cena atual, orientacao do split, assets alocados, render (sombras/pos-proc.)
   ProjectSettings projSettings;  // Project/project.json: ligacoes de tags e preset de exportacao
   FrameProfiler prof;            // dados do Profiler (tempos por zona, contadores)
@@ -296,6 +299,14 @@ struct Editor {
   int apiChoice = 0, apiActive = 0;   // apiActive: API em uso; apiChoice: o que esta ativo agora (0 = CPU)
   int apiRequested = 0;               // o que o usuario escolheu (radio e projeto); sobrevive a uma falha de inicializacao
   int apiPending = -1;                // troca pedida que ainda nao foi aplicada (-1 = nenhuma)
+  // Culling de frustum de objetos na GPU (compute + draw indireto, so passe opaco). Desligavel por --no-gpu-cull (A/B no bench).
+  // Ver gpuCullKeepCpuFrustum: por padrao a CPU segue filtrando por objeto; com o drop, a GPU e a unica fonte do frustum.
+  bool gpuCullEnabled = true;
+  // Padrao: a CPU continua filtrando por objeto (barato: so os visiveis viram Draw no renderer) e o compute vira 2o filtro.
+  // Medido (5000 instancias, Vulkan): largar o frustum da CPU manda os ~5000 objetos ao renderer (Draw/Material, empacotar e
+  // subir 160 B cada) e custou +1 a +1,5 ms por quadro. --gpu-cull-drop-cpu-frustum deixa SO a GPU como fonte do frustum.
+  bool gpuCullKeepCpuFrustum = true;
+  bool gpuFrustumActive = false;      // este quadro: GPU ativa e culling GPU de objetos valendo (calculado em renderView)
   int apiPendingFrames = 0;           // quadros desenhados com o aviso "Trocando" antes de aplicar
   float renderScale = 0.5f;
   bool renderScaleSet = false; // o usuario mexeu na escala: nao sobrescrever ao trocar de API
@@ -303,7 +314,51 @@ struct Editor {
   // upscaleMode: 0 = desligado (SDL escala linear), 1 = bilinear, 2 = bicubic, 3 = Lanczos2. aaMode: 0 = desligado, 1 = FXAA.
   int upscaleMode = 2, aaMode = 0;
   std::vector<tool::u8> sceneUp, gameUp[2], aaScratch;
-  bool softScaling() const { return upscaleMode != 0 || aaMode != 0; }
+  // FSR 1 (GPU): quem chama renderView define fsrOutW/H (tamanho final da imagem; 0 = sem FSR). Depois de renderView,
+  // viewOutW/H e o tamanho REAL do buffer devolvido: = fsrOutW/H se o FSR rodou; senao o tamanho de render (w x h).
+  int fsrOutW = 0, fsrOutH = 0, viewOutW = 0, viewOutH = 0;
+  bool fsrUnavailableWarned = false;   // o aviso "FSR 1 indisponivel" sai uma unica vez
+  // O FSR 1 vale para esta vista: ligado na cena, API GPU ativa e o renderer GPU o suporta.
+  bool fsr1Usable() const { return sceneInfo.render.fsr1 && apiActive != 0 && gpuDev && gpu.fsr1Available(); }
+  // FSR 4: o driver/GPU suporta (consulta real do modulo fidelityfx, feita uma vez ao criar o dispositivo Vulkan).
+  bool fsr4Supported() const {
+#if defined(TOOL_EDITOR_GPU)
+    return apiActive != 0 && gpuDev && tool::fidelityfx::supportsFsr4();
+#else
+    return false;
+#endif
+  }
+  // Frame generation (FSR 3.1): ainda nao consultado/integrado, entao sempre false.
+  bool frameGenSupported() const {
+#if defined(TOOL_EDITOR_GPU)
+    return tool::fidelityfx::supportsFrameGen();
+#else
+    return false;
+#endif
+  }
+  // Algum FSR esta controlando a escala de render (FSR 1 usavel ou FSR 4 escolhido e suportado): o slider de Render
+  // scale fica desabilitado e vale a escala derivada do modo de qualidade.
+  bool fsrControlsScale() const { return fsr1Usable() || (sceneInfo.render.fsr4 && fsr4Supported()); }
+  // Escala de render efetiva: o UNICO lugar que decide entre o slider e o FSR (usa effectiveRenderScale de project.hpp).
+  float renderScaleNow() const {
+    RenderSettings r = sceneInfo.render;
+    r.fsr1 = fsr1Usable();
+    r.fsr4 = r.fsr4 && fsr4Supported();
+    return effectiveRenderScale(r, renderScale);
+  }
+  bool fsr4NoteShown = false;   // o aviso "FSR 4 ainda nao e aplicado" sai uma unica vez no console
+  // Consulta o suporte ao FSR 4 uma vez por dispositivo Vulkan (initVulkan cria o contexto e consulta o driver).
+  void probeFsr4() {
+#if defined(TOOL_EDITOR_GPU)
+    if (!gpuDev || gpuDev->backend() != tool::rhi::Backend::Vulkan) return;
+    tool::rhi::VulkanNative vn;
+    if (!tool::rhi::vulkanNative(*gpuDev, vn)) return;
+    tool::fidelityfx::VulkanHandles vh;
+    vh.instance = vn.instance; vh.physicalDevice = vn.physicalDevice; vh.device = vn.device;
+    (void)tool::fidelityfx::initVulkan(vh, 64, 64, 128, 128);
+#endif
+  }
+  bool softScaling() const { return upscaleMode != 0 || aaMode != 0 || fsr1Usable(); }
   // Converte a imagem renderizada (rw x rh) para a janela (w x h): upscaling + AA. Devolve o buffer final (w x h).
   const tool::u8* finishView(std::vector<tool::u8>& dst, const tool::u8* src, int rw, int rh, int w, int h) {
     const size_t n = static_cast<size_t>(w) * static_cast<size_t>(h) * 4;
@@ -326,7 +381,8 @@ struct Editor {
   int idleFrames = 0;
   // Ocioso = nada muda na tela: sem Play, sem emissor de particulas animando (ou pausado) e sem interacao ha 3 quadros.
   bool fxAnimating = false;   // definido por updateParticles: ha ParticleComp na cena
-  bool viewsIdle() const { return !playing && !(fxAnimating && !paused) && idleFrames > 3; }
+  // "Idle rendering" desligado (Settings): as vistas nunca reaproveitam a textura, redesenham todo quadro.
+  bool viewsIdle() const { return idleRendering && !playing && !(fxAnimating && !paused) && idleFrames > 3; }
   // Ritmo dos quadros (frame_pacing.hpp): ocioso, o laco dorme e so monta a interface quando algo pede. Qualquer codigo
   // (inclusive outra thread) chama requestFrame() para forcar o proximo quadro.
   std::atomic<bool> frameRequested{false};
@@ -357,6 +413,9 @@ struct Editor {
   void shutdownGpu() {
     if (glCtx && gpuWin) SDL_GL_MakeCurrent(gpuWin, glCtx); // o OpenGL precisa do contexto ativo para liberar recursos
     gpu.shutdown();  // libera recursos antes do dispositivo
+#if defined(TOOL_EDITOR_GPU)
+    tool::fidelityfx::shutdown();   // o contexto FFX usa o VkDevice: cai antes do dispositivo
+#endif
     gpuDev.reset();
     if (glCtx) { SDL_GL_DestroyContext(glCtx); glCtx = nullptr; }
     if (gpuWin) { SDL_DestroyWindow(gpuWin); gpuWin = nullptr; }
@@ -447,6 +506,7 @@ struct Editor {
       shutdownGpu(); apiChoice = 0; return;
     }
     if (glCtx) SDL_GL_MakeCurrent(gpuWin, nullptr); // solta o contexto: ele so e usado dentro de renderView
+    probeFsr4();   // consulta real de suporte ao FSR 4 (so Vulkan); o toggle de Settings le o resultado
     apiActive = choice; if (!renderScaleSet) renderScale = 1.f;
     apiStatus = std::string(tool::rhi::toString(gpuDev->backend())) + " - " + gpuDev->deviceName();
     tool::logInfo("Graphics API ready: " + apiStatus);
@@ -623,7 +683,9 @@ struct Editor {
   // Define a config personalizada de uma cena (janela Scenes, engrenagem). `path` vazio = padrao do jogo.
   // Cena aberta: grava em sceneInfo e salva a cena (nao ha flag de "modificada": o save e o jeito de persistir).
   // Outra cena: altera so a chave "presetPath" no arquivo dela, sem abri-la. true se gravou.
-  bool setScenePreset(const std::string& name, const std::string& path) {
+  bool setScenePreset(const std::string& name, const std::string& rawPath) {
+    // Dentro de <projeto>/Configs grava relativo ao projeto; fora, absoluto (config_preset::toStored).
+    const std::string path = config_preset::toStored(project.root.string(), rawPath);
     if (name == sceneInfo.name) { sceneInfo.presetPath = path; return saveScene(); }
     std::string text;
     if (!readTextFile(project.scenePath(name), text)) { statusLine = "cannot read scene '" + name + "'"; return false; }
@@ -903,16 +965,19 @@ struct Editor {
     const tool::u8* out = nullptr;
     const int vi = zone == Zone::GameRender ? 1 : 0;                       // vista: 0 = Scene, 1 = Game
     tool::SoftRenderer& renderer = vi ? rendererGame : rendererScene;      // cada vista tem o seu renderizador CPU
+    viewOutW = w; viewOutH = h;   // renderScene troca por fsrOutW/H se o FSR 1 entregou a imagem ampliada
     {
       ZoneTimer zt(prof, zone);
       out = renderScene(cam, w, h, highlight, vi, gameGridSlot);
     }
+    // Tamanho real do buffer devolvido (o FSR 1 amplia na GPU antes da leitura).
+    const int ow = viewOutW, oh = viewOutH;
     if (out && sceneInfo.sky.enabled && !cam.ortho) { // skybox de imagens: preenche so o fundo (alfa 0), antes do pos-processamento
       ZoneTimer zt(prof, Zone::Sky);
       tool::u8* px = (apiActive != 0 && out == gpuPixels[vi].data()) ? gpuPixels[vi].data() : renderer.pixelsMutable();
       SkyTextures skyTex{};
       for (size_t i = 0; i < 6; ++i) if (sceneInfo.sky.face[i][0]) skyTex[i] = lib.texture(sceneInfo.sky.face[i]); // cache no AssetLib
-      applySkybox(px, w, h, cam, sceneInfo.sky, skyTex);
+      applySkybox(px, ow, oh, cam, sceneInfo.sky, skyTex);
       out = px;
     }
     // Bloom da CPU (o da GPU roda dentro do GpuRenderer, em end()). Depois do ceu e antes do pos-processamento.
@@ -926,7 +991,7 @@ struct Editor {
     if (out && fx && fx->active()) {
       ZoneTimer zt(prof, Zone::PostFx);
       tool::u8* px = (apiActive != 0 && out == gpuPixels[vi].data()) ? gpuPixels[vi].data() : renderer.pixelsMutable();
-      tool::applyPostFx(px, w, h, *fx);
+      tool::applyPostFx(px, ow, oh, *fx);
       out = px;
     }
     return out;
@@ -985,10 +1050,21 @@ private:
       m.fogColor = {mr.fogColor[0], mr.fogColor[1], mr.fogColor[2]};
       m.fogStart = mr.fogStart; m.fogEnd = mr.fogEnd;
     };
+    // Materiais do projeto: o cache le o disco uma vez e confere mudancas 1x por segundo (nunca por objeto/quadro).
+    const std::string matRoot = project.root.string();
+    materials.poll(matRoot);
     auto material = [&](tool::Entity e, const MeshRenderer& mr) {
       tool::Material m{{mr.color[0], mr.color[1], mr.color[2]}, mr.roughness, mr.metallic, mr.castShadow, mr.receiveShadow};
       m.emissive = emissionOf(mr); m.opacity = mr.opacity; applyFog(m, mr);
-      if (mr.texture[0]) m.albedoMap = lib.texture(mr.texture);
+      // Com material atribuido (e encontrado) ele manda em cor, rugosidade, metalico, emissao e opacidade; sem ele, campos locais.
+      const material_asset::MaterialAsset* ma = mr.material[0] ? materials.find(matRoot, mr.material) : nullptr;
+      // Campos avancados locais (normal map, UV, cutoff, dupla face); com material encontrado, applyMaterialAsset sobrepoe.
+      m.normalStrength = mr.normalStrength; m.doubleSided = mr.doubleSided;
+      m.uvTiling[0] = mr.uvTiling[0]; m.uvTiling[1] = mr.uvTiling[1]; m.uvOffset[0] = mr.uvOffset[0]; m.uvOffset[1] = mr.uvOffset[1];
+      m.alphaCutoff = mr.alphaCutoff;
+      if (ma) applyMaterialAsset(m, *ma);
+      if (const char* tex = textureOf(mr, ma); tex[0]) m.albedoMap = lib.texture(tex);
+      if (const char* nm = ma ? normalMapOf(ma) : mr.normalMap; nm[0]) m.normalMap = lib.texture(nm);   // normal map (nullptr se nao carregou)
       if (highlight && e == selected) m.albedo = m.albedo * 1.25f;
       return m;
     };
@@ -1022,6 +1098,12 @@ private:
     // (so camera em perspectiva; ver tool/render/occlusion.hpp). Objeto que projeta sombra nunca e pulado.
     const bool doCull = sceneInfo.render.frustumCull;
     const std::array<tool::Vec4, 6> planes = doCull ? framePlanes(cam, w, h) : std::array<tool::Vec4, 6>{};
+    // Fonte de verdade do frustum POR OBJETO: com o culling GPU ativo (renderer GpuRenderer, passe opaco) a CPU nao refaz
+    // o teste em skipCulled; os planos continuam servindo ao pre-filtro de oclusores e ao culling de chunks.
+    if (apiActive != 0) gpu.setGpuCulling(gpuCullEnabled);
+    const bool objFrustumOnCpu = doCull && (gpuCullKeepCpuFrustum || !(apiActive != 0 && gpuCullEnabled && gpu.gpuCullActive()));
+    gpuFrustumActive = doCull && !objFrustumOnCpu;
+    // Buffer de oclusao do quadro. Fica inativo (sem begin) se a oclusao estiver desligada.
     tool::render::OcclusionBuffer occ;
     if (sceneInfo.render.occlusionCull && !cam.ortho) {
       ZoneTimer occlusionTimer(prof, Zone::ScenePrepOcclusion);
@@ -1032,7 +1114,8 @@ private:
       // (menos oclusao, nunca esconder algo visivel): a distancia usada e a do centro menos o raio.
       constexpr float kOccluderMinPx = 8.f;
       const float tanHalfFov = std::tan(0.5f * cam.fovY);
-      occ.begin(static_cast<tool::u32>(w), static_cast<tool::u32>(h), proj * view);
+      const tool::Mat4 occVp = proj * view;
+      occ.begin(static_cast<tool::u32>(w), static_cast<tool::u32>(h), occVp);
       scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
         if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
         const tool::Mesh* m = lodMeshOf(e, mr, cam);
@@ -1085,14 +1168,14 @@ private:
       // Sombras de pontual/spot: quem projeta continua sempre desenhado (sem culling para essas sombras).
       if (!lf.shadowLights.empty() && mr.castShadow) return false;
       const bool sunCaster = shadows && mr.castShadow;
-      if (!(doCull || occ.active()) && !sunCaster) return false;
+      if (!(objFrustumOnCpu || occ.active()) && !sunCaster) return false;
       const Bounds b = meshBounds(m); const tool::Mat4 wm = worldMat(e);
       const float sc = std::max({std::hypot(wm.m[0][0], wm.m[0][1], wm.m[0][2]), std::hypot(wm.m[1][0], wm.m[1][1], wm.m[1][2]), std::hypot(wm.m[2][0], wm.m[2][1], wm.m[2][2])});
       const tool::Vec3 c = wm.transformPoint(b.center); const float r = b.radius * sc;
       // Quem projeta sombra numa fatia do sol fica na lista (o passe de sombra precisa dele), mesmo fora da camera.
       if (sunCaster && sunShadowNeeded(c, r)) return false;
-      if (!(doCull || occ.active())) return false;
-      if (doCull) for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) { ++prof.counters.culled; return true; }
+      if (!(objFrustumOnCpu || occ.active())) return false;
+      if (objFrustumOnCpu) for (const tool::Vec4& p : planes) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) { ++prof.counters.culled; return true; }
       if (occ.active()) {
         // Caixa do tamanho da esfera (contem a esfera, entao "escondida" aqui vale para o objeto inteiro).
         tool::Vec3 box[8]; int k = 0;
@@ -1147,6 +1230,17 @@ private:
       struct Release { Editor& e; ~Release() { if (e.glCtx && e.gpuWin) SDL_GL_MakeCurrent(e.gpuWin, nullptr); } } release{*this};
       const tool::rhi::DrawStats gpuViewBefore = gpuDev->frameStats();
       gpu.resize(static_cast<tool::u32>(w), static_cast<tool::u32>(h));
+      // FSR 1: so quando a cena renderiza menor que o tamanho final pedido (render scale < 1). Escala 1.0 = caminho de sempre.
+      if (sceneInfo.render.fsr1 && !gpu.fsr1Available() && !fsrUnavailableWarned) {   // aviso UMA vez: o upscale de software segue valendo
+        fsrUnavailableWarned = true;
+        tool::debug().report("TOOL-W144", tool::Severity::Warning, "FSR 1 desligado: " + (gpu.fsr1Why().empty() ? std::string("sem suporte neste backend") : gpu.fsr1Why()));
+      }
+      const bool fsrWant = sceneInfo.render.fsr1 && (fsrOutW > w || fsrOutH > h);
+      if (sceneInfo.render.fsr4 && !fsr4NoteShown) {   // FSR 4 so guarda a escolha: sem motion vectors no renderer ainda
+        fsr4NoteShown = true;
+        tool::debug().report("TOOL-W145", tool::Severity::Warning, "FSR 4 escolhido, mas ainda nao e aplicado: entra na proxima etapa (motion vectors). O render usa a escala do modo de qualidade.");
+      }
+      gpu.setFsr1(fsrWant, sceneInfo.render.fsrSharpness, static_cast<tool::u32>(fsrOutW), static_cast<tool::u32>(fsrOutH));
       gpu.begin(cam, {0.02f, 0.025f, 0.035f}, bgAlpha);
       const bool reGpu = shadows && sigGpuValid && sigGpu == sigNow;
       if (!gpu.setLighting(lightRig, view, proj, reGpu)) {
@@ -1171,6 +1265,8 @@ private:
         }
         gpu.setBloom(sceneInfo.render.lighting.bloom, sceneInfo.render.lighting.bloomThreshold, sceneInfo.render.lighting.bloomStrength);
         gpu.end();
+        // Tamanho da imagem que a GPU entrega: com o FSR 1 ativo e a ampliada (fsrOutW x fsrOutH); senao o tamanho de render.
+        const int ow = gpu.fsr1Active() ? fsrOutW : w, oh = gpu.fsr1Active() ? fsrOutH : h;
         auto viewStats = gpu.renderStats();
         const tool::rhi::DrawStats deviceStats = tool::rhi::drawStatsDelta(gpuDev->frameStats(), gpuViewBefore);
         viewStats.backendDrawCalls = deviceStats.draws;
@@ -1194,20 +1290,20 @@ private:
         // Resize: a leitura assincrona ainda traz o quadro do tamanho antigo. Antes isso caia na rasterizacao da CPU a cada passo
         // do arrasto (163 ms/quadro medido em --bench-resize = o "congelamento"). Agora reamostra o ultimo quadro da GPU (vizinho
         // mais proximo, ~1 ms) ate chegar o quadro do tamanho novo, 1 ou 2 quadros depois.
-        if (rd >= 0 && !gpuPixels[vi].empty() && gpuPixW[vi] > 0 && gpuPixH[vi] > 0 && (gpuPixW[vi] != w || gpuPixH[vi] != h)
+        if (rd >= 0 && !gpuPixels[vi].empty() && gpuPixW[vi] > 0 && gpuPixH[vi] > 0 && (gpuPixW[vi] != ow || gpuPixH[vi] != oh)
             && gpuPixels[vi].size() == static_cast<size_t>(gpuPixW[vi]) * static_cast<size_t>(gpuPixH[vi]) * 4) {
           const int sw = gpuPixW[vi], sh = gpuPixH[vi];
-          gpuScaled.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+          gpuScaled.resize(static_cast<size_t>(ow) * static_cast<size_t>(oh) * 4);
           const tool::u32* src = reinterpret_cast<const tool::u32*>(gpuPixels[vi].data());
           tool::u32* dst = reinterpret_cast<tool::u32*>(gpuScaled.data());
-          for (int y = 0; y < h; ++y) {
-            const tool::u32* srow = src + static_cast<size_t>(y * sh / h) * static_cast<size_t>(sw);
-            for (int x = 0; x < w; ++x) *dst++ = srow[x * sw / w];
+          for (int y = 0; y < oh; ++y) {
+            const tool::u32* srow = src + static_cast<size_t>(y * sh / oh) * static_cast<size_t>(sw);
+            for (int x = 0; x < ow; ++x) *dst++ = srow[x * sw / ow];
           }
           gpuPixels[vi].swap(gpuScaled);
-          gpuPixW[vi] = w; gpuPixH[vi] = h;
+          gpuPixW[vi] = ow; gpuPixH[vi] = oh;
         }
-        const bool haveFrame = rd >= 0 && gpuPixW[vi] == w && gpuPixH[vi] == h && !gpuPixels[vi].empty();
+        const bool haveFrame = rd >= 0 && gpuPixW[vi] == ow && gpuPixH[vi] == oh && !gpuPixels[vi].empty();
         if (apiActive != 0 && haveFrame) {
           if (std::getenv("TOOL_DUMP")) { // depuracao: media de brilho do quadro (para comparar APIs sem olhar a tela)
             const auto& gp = gpuPixels[vi];
@@ -1215,6 +1311,7 @@ private:
             std::fprintf(stderr, "GPU frame mean brightness: %.1f\n", static_cast<double>(sum) / (static_cast<double>(gp.size()) / 4.0 * 3.0));
           }
           prof.counters.tris += tris; prof.counters.draws += draws; prof.counters.shadowCasters += casters;
+          viewOutW = ow; viewOutH = oh;   // tamanho real do buffer (renderView usa para sky e pos-processamento)
           return gpuPixels[vi].data();
         }
         // Sem quadro da GPU ainda (primeiros quadros ou tamanho mudou): este quadro sai pela CPU e a API continua.

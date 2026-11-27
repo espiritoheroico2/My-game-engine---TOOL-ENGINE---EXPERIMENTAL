@@ -13,9 +13,13 @@ namespace editor::settings_model {
 
 inline constexpr int kTabCount = 7;
 
-// Nomes das abas, na ordem da barra (a chave e a mesma usada pela traducao, T(...)).
+// Categorias da janela, na ordem de cima para baixo (a chave e a mesma usada pela traducao, T(...)):
+//   0 Graphics and API (API, resolucao, FSR, render scale, FPS)   1 Quality (AA, sombras, RT, pos-processamento, malhas)
+//   2 Lighting and shadows   3 Physics   4 Interface (temas, raios, texto, cores)   5 Language   6 Project (cena, tags, editor)
+inline constexpr int kTabGraphics = 0, kTabQuality = 1, kTabLighting = 2, kTabPhysics = 3, kTabInterface = 4,
+                     kTabLanguage = 5, kTabProject = 6;
 inline constexpr const char* kTabNames[kTabCount] = {
-    "Appearance", "API/Graphics", "Game", "Physics", "Lighting", "Optimizing", "Language"};
+    "Graphics and API", "Quality", "Lighting and shadows", "Physics", "Interface", "Language", "Project"};
 
 // Limites da aba Optimizing. A escala da interface usa a mesma faixa do tema (70% a 200%);
 // o cache de malhas evita crescer sem limite e o modo ocioso reduz o trabalho entre interacoes.
