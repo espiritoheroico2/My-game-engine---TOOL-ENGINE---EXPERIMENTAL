@@ -106,6 +106,12 @@ if(TOOL_WITH_SPRITEUI)
   target_link_libraries(editor_dock_host_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
   add_test(NAME Editor.DockHost COMMAND editor_dock_host_tests)
 
+  # Input Map, Export, Help e Test map na moldura padrao e no dock (registro, cabecalho, grip, "?", X, borda).
+  add_executable(editor_framed_windows_tests tests/test_framed_windows.cpp)
+  target_include_directories(editor_framed_windows_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_framed_windows_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  add_test(NAME Editor.FramedWindows COMMAND editor_framed_windows_tests)
+
   # Limites de janela solta e guarda do botao do mouse: funcoes puras, sem janela.
   add_executable(editor_pointer_guard_tests tests/test_pointer_guard.cpp)
   target_include_directories(editor_pointer_guard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -312,6 +318,16 @@ add_executable(editor_slider_value_edit_tests tests/test_slider_value_edit.cpp)
 target_include_directories(editor_slider_value_edit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME Editor.SliderValueEdit COMMAND editor_slider_value_edit_tests)
 
+# Valores digitados livremente e alfa padrao das cores (free_values.hpp).
+add_executable(editor_free_values_tests tests/test_free_values.cpp)
+target_include_directories(editor_free_values_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.FreeValues COMMAND editor_free_values_tests)
+
+# Cores de janelas e barras derivadas da paleta em uso (theme_colors.hpp): trocar o tema muda todas.
+add_executable(editor_theme_colors_tests tests/test_theme_colors.cpp)
+target_include_directories(editor_theme_colors_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.ThemeColors COMMAND editor_theme_colors_tests)
+
 # Modelo da janela Hierarchy (hierarchy_model.hpp): arvore, selecao por id, teclas e faixa visivel.
 add_executable(editor_hierarchy_model_tests tests/test_hierarchy_model.cpp)
 target_include_directories(editor_hierarchy_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -351,6 +367,12 @@ add_executable(editor_canvas_edit_tests tests/test_canvas_edit.cpp)
 target_include_directories(editor_canvas_edit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(editor_canvas_edit_tests PRIVATE tool::canvas)
 add_test(NAME Editor.CanvasEdit COMMAND editor_canvas_edit_tests)
+
+# Raio de canto dos elementos de UI (canvas_paint.hpp + components.hpp): limite e gravar/ler no JSON.
+add_executable(editor_canvas_radius_tests tests/test_canvas_radius.cpp)
+target_include_directories(editor_canvas_radius_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_canvas_radius_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+add_test(NAME Editor.CanvasRadius COMMAND editor_canvas_radius_tests)
 
 # Modelo da janela Jogo (game_view_model.hpp): letterbox, divisao entre duas cameras e recorte do preencher.
 add_executable(editor_game_view_model_tests tests/test_game_view_model.cpp)

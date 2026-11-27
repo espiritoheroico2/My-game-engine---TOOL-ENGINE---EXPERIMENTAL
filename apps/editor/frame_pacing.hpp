@@ -16,9 +16,11 @@
 
 namespace editor::frame_pacing {
 
+// Valor de "sem prazo pendente".
 inline constexpr double kNoDeadline = std::numeric_limits<double>::infinity();
 inline constexpr double kMaxWaitMs = 250.0;   // teto da espera: o laco acorda para reconferir fontes que nao geram evento
 
+// Entradas da decisao, montadas pelo main.cpp a cada volta do laco.
 struct Inputs {
   bool eventArrived = false;     // chegou (ou ja esta na fila) algum evento do SDL
   bool playing = false;          // Play: sempre desenha
@@ -29,11 +31,13 @@ struct Inputs {
   double nowSec = 0.0;
 };
 
+// Resposta: desenhar agora ou esperar (waitMs).
 struct Decision {
   bool render = true;    // monta a interface e apresenta
   double waitMs = 0.0;   // so vale com render == false: quanto esperar (> 0, no maximo maxWaitMs)
 };
 
+// Mantem a contagem de quadros de assentamento e decide, a cada volta, entre desenhar e esperar.
 class Pacer {
 public:
   explicit Pacer(int settleFrames = 2, double maxWaitMs = kMaxWaitMs)
@@ -54,6 +58,7 @@ public:
     return {false, std::min(leftMs, maxWaitMs_)};
   }
 
+  // Quadros de assentamento que ainda faltam (usado nos testes).
   int settleLeft() const { return settle_; }
 
 private:

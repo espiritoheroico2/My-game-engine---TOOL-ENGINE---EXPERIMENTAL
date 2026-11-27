@@ -34,6 +34,7 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "inspector_panel.hpp"
 #include "coding_panel.hpp"
 #include "scenes_panel.hpp"
+#include "scenes_ops.hpp"
 #include "narrative_panel.hpp"
 #include "editor_info_panel.hpp"
 #include "assets_sprite_panel.hpp"
@@ -256,23 +257,30 @@ void syncScenesPanel(Editor& ed, editor::scenesui::Panel& panel) {
 void confirmScene(Editor& ed, editor::scenes_model::Model& m) {
   namespace SM = editor::scenes_model;
   if (m.mode == SM::NameMode::New) {
-    if (ed.newScene(m.name)) SM::FinishName(m);
-    else m.status = ed.statusLine;
+    if (ed.newScene(m.name)) {   // cria o arquivo na pasta Scenes, abre a cena nova e seleciona na lista
+      ed.refreshScenes();
+      m.selected = m.name;
+      SM::FinishName(m);
+    } else {
+      m.status = ed.statusLine;
+      m.nameFocus = true;
+    }
     return;
   }
   if (m.mode == SM::NameMode::Rename) {
-    std::error_code ec;
     const bool cur = m.selected == ed.sceneInfo.name;
-    if (cur) ed.saveScene();
-    std::filesystem::rename(ed.project.scenePath(m.selected), ed.project.scenePath(m.name), ec);
-    if (ec) {
-      m.status = ec.message();
+    if (cur) ed.saveScene();   // a cena aberta e salva antes de trocar o nome do arquivo
+    std::string err;
+    if (!editor::scenes_ops::RenameSceneFile(ed.project, m.selected, m.name, err)) {
+      m.status = err;
+      m.nameFocus = true;
       return;
     }
     if (cur) ed.sceneInfo.name = m.name;
     ed.refreshScenes();
     m.selected = m.name;
     SM::FinishName(m);
+    ed.statusLine = "Scene renamed: " + m.selected;
   }
 }
 
@@ -301,9 +309,12 @@ void applyScenesActions(Editor& ed, editor::scenesui::Panel& panel, const std::v
       case A::Reload: ed.refreshScenes(); break;
       case A::Open: ed.openScene(m.selected); break;
       case A::Delete: {
-        std::error_code ec;
-        std::filesystem::remove(ed.project.scenePath(m.selected), ec);
+        std::string err;
+        if (m.selected == ed.sceneInfo.name) err = "Cannot delete the open scene";
+        else editor::scenes_ops::DeleteSceneFile(ed.project, m.selected, err);
         ed.refreshScenes();
+        m.status = err;   // vazio quando apagou
+        m.selected = ed.sceneInfo.name;
         SM::FinishName(m);
         break;
       }
@@ -1558,7 +1569,7 @@ enum FormId : int {
     // Game (100)
     kGameGridScene = 100, kGameGridGame, kGameGizmos, kGameSplit, kGameSplitFill, kGameSkyEnabled,
     kGameSkyFace0 = 110,                       // 110 a 115: um combo por lado do cubo
-    kGameSkyRed = 120, kGameSkyGreen, kGameSkyBlue,
+    kGameSkyRed = 120, kGameSkyGreen, kGameSkyBlue, kGameSkyAlpha,
     // Physics (200)
     kPhysEnabled = 200, kPhysGravX, kPhysGravY, kPhysGravZ,
     kPhysPreset0 = 210,                        // 210 a 216: gravidades prontas
@@ -1576,7 +1587,7 @@ enum FormId : int {
     // Lighting (700)
     kLitFrustum = 700, kLitOcclusion, kLitDrawDistance,
     kLitSunR, kLitSunG, kLitSunB, kLitSunIntensity, kLitSunAzimuth, kLitSunElevation,
-    kLitAmbR, kLitAmbG, kLitAmbB, kLitSunShadow,
+    kLitAmbR, kLitAmbG, kLitAmbB, kLitSunShadow, kLitSunA,
     kLitTier = 720, kLitCustom, kLitCascades, kLitShadowRes, kLitPcf, kLitMaxLightsCluster, kLitIndicesCluster, kLitAutoRadius,
     kLitMaxPoint = 730, kLitMaxSpot,
     kLitShadows = 740, kLitShadowDistance, kLitSplitLambda, kLitBlend, kLitCasterExt, kLitDepthBias, kLitNormalBias, kLitSnap,
@@ -1646,6 +1657,7 @@ void addGameRows(Editor& ed, editor::settings_form::Rows& rows) {
         rows.push_back(Slide(kGameSkyRed, channel("Solid color (sides without image)", "R"), ed.sceneInfo.sky.solid[0], 0.f, 1.f));
         rows.push_back(Slide(kGameSkyGreen, channel("Solid color (sides without image)", "G"), ed.sceneInfo.sky.solid[1], 0.f, 1.f));
         rows.push_back(Slide(kGameSkyBlue, channel("Solid color (sides without image)", "B"), ed.sceneInfo.sky.solid[2], 0.f, 1.f));
+        rows.push_back(Slide(kGameSkyAlpha, channel("Solid color (sides without image)", "A"), ed.sceneInfo.sky.solid[3], 0.f, 1.f));   // as 4 linhas viram um seletor de cor com alfa (settings_panel.hpp)
         rows.push_back(Dim(T("Each side shows its image in the direction you look at. Used by the Scene and Game views; 2D cameras have no skybox.")));
     }
     rows.push_back(Head(T("Audio")));
@@ -1739,6 +1751,7 @@ void addLightingRows(Editor& ed, editor::settings_form::Rows& rows) {
         rows.push_back(Slide(kLitSunR, channel("Light color", "R"), g->color[0], 0.f, 1.f));
         rows.push_back(Slide(kLitSunG, channel("Light color", "G"), g->color[1], 0.f, 1.f));
         rows.push_back(Slide(kLitSunB, channel("Light color", "B"), g->color[2], 0.f, 1.f));
+        rows.push_back(Slide(kLitSunA, channel("Light color", "A"), g->color[3], 0.f, 1.f));   // as 4 linhas viram um seletor de cor com alfa
         rows.push_back(Slide(kLitSunIntensity, T("Intensity"), g->intensity, 0.f, 20.f));
         rows.push_back(Slide(kLitSunAzimuth, T("Direction (azimuth)"), g->azimuth, 0.f, 360.f, false, F("%.0f deg", g->azimuth)));
         rows.push_back(Slide(kLitSunElevation, T("Height (elevation)"), g->elevation, -10.f, 90.f, false, F("%.0f deg", g->elevation)));
@@ -1912,6 +1925,7 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
         case kGameSkyRed: ed.sceneInfo.sky.solid[0] = value; ed.settingsDirty = true; break;
         case kGameSkyGreen: ed.sceneInfo.sky.solid[1] = value; ed.settingsDirty = true; break;
         case kGameSkyBlue: ed.sceneInfo.sky.solid[2] = value; ed.settingsDirty = true; break;
+        case kGameSkyAlpha: ed.sceneInfo.sky.solid[3] = std::clamp(value, 0.f, 1.f); ed.settingsDirty = true; break;
         // Physics (sem marca de sujo)
         case kPhysEnabled: ed.sceneInfo.physics.enabled = on; break;
         case kPhysGravX: ed.sceneInfo.physics.gravity[0] = value; break;
@@ -1992,7 +2006,7 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
         case kLitOcclusion: r.occlusionCull = on; ed.settingsDirty = true; break;
         case kLitDrawDistance: r.drawDistance = value; ed.settingsDirty = true; break;
         // Lighting: sol (so existe com um GlobalLight na cena)
-        case kLitSunR: case kLitSunG: case kLitSunB: case kLitSunIntensity: case kLitSunAzimuth: case kLitSunElevation:
+        case kLitSunR: case kLitSunG: case kLitSunB: case kLitSunA: case kLitSunIntensity: case kLitSunAzimuth: case kLitSunElevation:
         case kLitAmbR: case kLitAmbG: case kLitAmbB: case kLitSunShadow: {
             ed_::GlobalLight* g = settingsSunLight(ed);
             if (!g) break;
@@ -2000,6 +2014,7 @@ void applyFormRequest(Editor& ed, int id, float value, bool on, int index, const
                 case kLitSunR: g->color[0] = value; break;
                 case kLitSunG: g->color[1] = value; break;
                 case kLitSunB: g->color[2] = value; break;
+                case kLitSunA: g->color[3] = std::clamp(value, 0.f, 1.f); break;
                 case kLitSunIntensity: g->intensity = value; break;
                 case kLitSunAzimuth: g->azimuth = value; break;
                 case kLitSunElevation: g->elevation = value; break;
@@ -2183,6 +2198,7 @@ struct SettingsEditorTarget {
   void setPalette(int i) {
     editor::palette::activeIndex() = static_cast<std::size_t>(std::clamp(i, 0, static_cast<int>(editor::palette::kCustomIndex)));
     ed.settingsDirty = true;
+    ed.requestFrame();   // tema novo: todas as janelas se repintam no proximo quadro
   }
   // Grava uma cor da paleta Custom. Trocar uma cor-base recalcula os tokens; trocar um token so muda ele.
   void setCustomColor(int index, float value) {
@@ -2195,6 +2211,7 @@ struct SettingsEditorTarget {
     syncThemeBase();
     ed.settingsDirty = true;
     ed.themeDirty = true;
+    ed.requestFrame();
   }
   void syncThemeBase() { syncThemeBaseFrom(ed); }
   // Aplica um arquivo de tema da lista: as cores-base vem do arquivo, a paleta vira Custom.
@@ -2211,6 +2228,7 @@ struct SettingsEditorTarget {
     editor::palette::activeIndex() = editor::palette::kCustomIndex;
     ed.settingsDirty = true;
     ed.themeDirty = true;
+    ed.requestFrame();
   }
   void applyApi(int api) { ed.requestApi(api); ed.settingsDirty = true; }   // pedido: a troca acontece no inicio do proximo quadro
   void setResMode(int i) { ed.resMode = i; ed.settingsDirty = true; }
@@ -2245,7 +2263,7 @@ struct SettingsEditorTarget {
   // Linhas genericas (settings_form.hpp): Game, Physics, Optimizing, Language, Lighting, Tags e Project.
   void setForm(int id, float value, bool on, int index, const std::string& text) { applyFormRequest(ed, id, value, on, index, text); }
   void setTextScale(float value) {
-    editor::ui_style::textSetting() = ::editor::settings_model::ClampTextScale(value);
+    editor::ui_style::textSetting() = editor::free_values::ClampTypedTextScale(value);   // digitado vale de 0.5 a 4 (o slider arrasta de 0.8 a 1.6)
     editor::ui_style::refreshScale();
     ed.settingsDirty = true;
   }
@@ -2406,7 +2424,7 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
       ed.simplifyAmount = ::editor::settings_model::ClampSimplifyAmount(editor::ser::num(*j, "simplifyAmount", 0.5f));
       editor::ui_style::buttonRadius() = ::editor::settings_model::ClampButtonRadius(editor::ser::num(*j, "buttonRadius", 3.f));
       editor::ui_style::windowRadius() = ::editor::settings_model::ClampWindowRadius(editor::ser::num(*j, "windowRadius", 6.f));
-      editor::ui_style::textSetting() = ::editor::settings_model::ClampTextScale(editor::ser::num(*j, "textScale", 1.f));
+      editor::ui_style::textSetting() = editor::free_values::ClampTypedTextScale(editor::ser::num(*j, "textScale", 1.f));
       editor::palette::activeIndex() = static_cast<std::size_t>(std::clamp(static_cast<int>(editor::ser::num(*j, "palette", 0.f)), 0, static_cast<int>(editor::palette::kCustomIndex)));
       if ((*j)["paletteCustom"].isArray() && (*j)["paletteCustom"].items().size() >= 39) {   // paleta Custom salva
         auto& c = editor::palette::custom();
@@ -2800,6 +2818,10 @@ static int runEditorMain(int argc, char** argv) {
     addDockWindow(*dockOwner, Kind::Settings, [] { return std::string(T("Settings")); }, [&ed]() -> bool& { return ed.showSettings; }, [&] { return settingsPanel ? &settingsPanel->chrome() : nullptr; });
     addDockWindow(*dockOwner, Kind::Coding, [] { return std::string(T("Coding")); }, [&ed]() -> bool& { return ed.showCoding; }, [&] { return codingPanel ? &codingPanel->chrome() : nullptr; });
     addDockWindow(*dockOwner, Kind::Narrative, [] { return std::string(T("Narrative Controller")); }, [&ed]() -> bool& { return ed.showNarrative; }, [&] { return narrativePanel ? &narrativePanel->chrome() : nullptr; });
+    addDockWindow(*dockOwner, Kind::InputMap, [] { return std::string(T("Input Map")); }, [&ed]() -> bool& { return ed.showInputMap; }, [&] { return inputPanel ? &inputPanel->chrome() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Export, [] { return std::string(T("Export game")); }, [&ed]() -> bool& { return ed.showExport; }, [&] { return exportPanel ? &exportPanel->chrome() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Help, [] { return std::string(T("Help")); }, []() -> bool& { return editor::helpState().open; }, [&] { return helpPanel ? &helpPanel->chrome() : nullptr; });
+    addDockWindow(*dockOwner, Kind::TestMap, [] { return std::string(T("Test map of chunks")); }, []() -> bool& { return editor::testMapState().open; }, [&] { return testMapPanel ? &testMapPanel->chrome() : nullptr; });
     dockOwner->load(kDockLayoutFile);   // organizacao salva na sessao anterior (se houver e for valida)
   }
   // Ritmo dos quadros (frame_pacing.hpp): ocioso e sem nada pedindo, o laco dorme em vez de refazer a interface a cada ~16 ms.
@@ -2892,6 +2914,16 @@ static int runEditorMain(int argc, char** argv) {
       const auto nr = narrativePanel->chrome().frameRect();
       gPanelRouter.add(pr::kNarrativeHandle, {nr.position.x, nr.position.y, nr.size.x, nr.size.y}, ToolEngine::SpriteUi::UILayer::Docked);
     }
+    // Input Map, Export, Help e Test map: moldura padrao; cada uma cobre o ponteiro com o proprio id do dock.
+    auto routeFramed = [&](editor::framed::Chrome* c, editor::dock_host::Kind k, bool open) {
+      if (!c || !open || !c->visible() || c->minimized()) return;
+      const auto fr = c->frameRect();
+      gPanelRouter.add(editor::dock_host::idOf(k), {fr.position.x, fr.position.y, fr.size.x, fr.size.y}, ToolEngine::SpriteUi::UILayer::Docked);
+    };
+    routeFramed(inputPanel ? &inputPanel->chrome() : nullptr, editor::dock_host::Kind::InputMap, ed.showInputMap);
+    routeFramed(exportPanel ? &exportPanel->chrome() : nullptr, editor::dock_host::Kind::Export, ed.showExport);
+    routeFramed(testMapPanel ? &testMapPanel->chrome() : nullptr, editor::dock_host::Kind::TestMap, editor::testMapState().open);
+    routeFramed(helpPanel ? &helpPanel->chrome() : nullptr, editor::dock_host::Kind::Help, editor::helpState().open);
     if (scriptPlayer) {
       static auto lastStart = std::chrono::steady_clock::now();
       const auto now = std::chrono::steady_clock::now();
@@ -2938,13 +2970,21 @@ static int runEditorMain(int argc, char** argv) {
       const bool spriteUiHandled =
           spriteUiDiagnostics.handleEvent(e, ed.showSpriteUiDiagnostics);
       const bool profHandled = !dockHandled && profPanel && profPanel->handleEvent(e, dockShown(editor::dock_host::Kind::Profiler, ed.showProfiler));
-      const bool helpHandled = helpPanel && helpPanel->handleEvent(e, window, editor::helpState().open);   // janela Help SpriteUI
-      const editor::testmap::Action testMapAction = testMapPanel ? testMapPanel->handleEvent(e, editor::testMapState().open, editor::testMapState().side) : editor::testmap::Action::None;
+      // Help, Test map, Input Map e Export: moldura padrao no dock. Clique e roda so chegam a quem esta por cima
+      // (roteador); mover e soltar seguem sempre (arraste de barra e de trilho). Qualquer uso pede um quadro novo.
+      auto framedMayReceive = [&](editor::dock_host::Kind k) {
+        if (e.type != SDL_EVENT_MOUSE_BUTTON_DOWN && e.type != SDL_EVENT_MOUSE_WHEEL) return true;
+        return gPanelRouter.mayReceive(editor::dock_host::idOf(k), pointerX(e), pointerY(e));
+      };
+      using DockKind = editor::dock_host::Kind;
+      const bool helpHandled = !dockHandled && helpPanel && framedMayReceive(DockKind::Help) && helpPanel->handleEvent(e, window, editor::helpState().open);   // janela Help SpriteUI
+      const editor::testmap::Action testMapAction = !dockHandled && testMapPanel && framedMayReceive(DockKind::TestMap) ? testMapPanel->handleEvent(e, editor::testMapState().open, editor::testMapState().side) : editor::testmap::Action::None;
       if (testMapAction == editor::testmap::Action::Generate) testMapGenerate = true;
-      const bool inputHandled = inputPanel && inputPanel->handleEvent(e, ed);   // Input Map (SpriteUI)
-      const editor::exportui::Action exportAction = exportPanel ? exportPanel->handleEvent(e, ed.showExport, ed.projSettings.exportPreset.platform) : editor::exportui::Action::None;
+      const bool inputHandled = !dockHandled && inputPanel && framedMayReceive(DockKind::InputMap) && inputPanel->handleEvent(e, ed);   // Input Map (SpriteUI)
+      const editor::exportui::Action exportAction = !dockHandled && exportPanel && framedMayReceive(DockKind::Export) ? exportPanel->handleEvent(e, ed.showExport, ed.projSettings.exportPreset.platform) : editor::exportui::Action::None;
       if (exportAction == editor::exportui::Action::Platform) ed.projSettings.save(ed.project);   // a escolha de plataforma vai para o projeto
       if (exportAction == editor::exportui::Action::Export) exportRequested = true;
+      if (helpHandled || inputHandled || testMapAction != editor::testmap::Action::None || exportAction != editor::exportui::Action::None) ed.requestFrame();
       const bool menuHandled = menuPanel && menuPanel->handleEvent(e);
       const bool consoleHandled = !dockHandled && consolePanel && consolePanel->handleEvent(e, dockShown(editor::dock_host::Kind::Console, ed.showConsole));
       const bool hierHandled = !dockHandled && hierPanel && dockShown(editor::dock_host::Kind::Hierarchy, ed.showHierarchy) && hierPanel->handleEvent(e);
@@ -3141,22 +3181,28 @@ static int runEditorMain(int argc, char** argv) {
       if (narrativePanel->chrome().consumeClose()) ed.showNarrative = false;
       if (narrativePanel->chrome().consumeHelp()) editor::openHelp("narrative");
     }
-    if (helpPanel && floatPass) {   // por cima das outras janelas; o "?" e F1 abrem o topico em helpState().pending
+    if (helpPanel && onPass(editor::dock_host::Kind::Help)) {   // Help na moldura padrao; o "?" e F1 abrem o topico em helpState().pending
       editor::HelpState& help = editor::helpState();
       if (!help.pending.empty()) {
         helpPanel->openTopic(help.pending);
         help.pending.clear();
       }
-      if (!helpPanel->draw(renderer, window, help.open, editor::helpLanguage())) {
+      if (!helpPanel->draw(renderer, window, dockShown(editor::dock_host::Kind::Help, help.open), editor::helpLanguage())) {
         tool::logError(std::string("Help SpriteUI render failed: ") + SDL_GetError());
         helpPanel.reset();
+      } else {
+        if (helpPanel->chrome().consumeClose()) help.open = false;
+        if (helpPanel->chrome().consumeHelp()) helpPanel->openTopic("start");   // a propria Help: o "?" volta ao topico geral
       }
     }
-    if (testMapPanel && floatPass) {
+    if (testMapPanel && onPass(editor::dock_host::Kind::TestMap)) {   // Test map na moldura padrao (nao ha topico proprio: "?" abre o geral)
       editor::TestMapState& testMap = editor::testMapState();
-      if (!testMapPanel->draw(renderer, window, testMap.open, testMap.side, editor::I18n::get().code())) {
+      if (!testMapPanel->draw(renderer, window, dockShown(editor::dock_host::Kind::TestMap, testMap.open), testMap.side, editor::I18n::get().code())) {
         tool::logError(std::string("Test map SpriteUI render failed: ") + SDL_GetError());
         testMapPanel.reset();
+      } else {
+        if (testMapPanel->chrome().consumeClose()) testMap.open = false;
+        if (testMapPanel->chrome().consumeHelp()) editor::openHelp("start");
       }
       if (testMapGenerate) {
         testMapGenerate = false;
@@ -3226,22 +3272,29 @@ static int runEditorMain(int argc, char** argv) {
       if (!requests.help.empty()) editor::openHelp(requests.help);   // ? da moldura SpriteUI
       applyConsoleRequests(ed, requests);
     }
+    if (inputPanel && onPass(editor::dock_host::Kind::InputMap)) {   // Input Map na moldura padrao
+      if (!inputPanel->draw(renderer, window, ed, dockShown(editor::dock_host::Kind::InputMap, ed.showInputMap))) {
+        tool::logError(std::string("Input map SpriteUI render failed: ") + SDL_GetError());
+        inputPanel.reset();
+      } else {
+        if (inputPanel->chrome().consumeClose()) ed.showInputMap = false;
+        if (inputPanel->chrome().consumeHelp()) editor::openHelp("inputmap");
+      }
     }
-    if (inputPanel && !inputPanel->draw(renderer, window, ed)) {   // Input Map (SpriteUI)
-      tool::logError(std::string("Input map SpriteUI render failed: ") + SDL_GetError());
-      inputPanel.reset();
-    }
-    if (exportPanel) {   // Export game (SpriteUI): plataforma indisponivel volta para a primeira disponivel
+    if (exportPanel && onPass(editor::dock_host::Kind::Export)) {   // Export game na moldura padrao: plataforma indisponivel volta para a primeira disponivel
       auto& ex = ed.projSettings.exportPreset;
       if (!editor::platformAvailable(ex.platform)) {
         for (int i = 0; i < static_cast<int>(editor::kExportPlatforms.size()); ++i) if (editor::platformAvailable(i)) { ex.platform = i; break; }
       }
-      if (!exportPanel->draw(renderer, window, ed.showExport, ex.platform, ed.projSettings.missingInfo(), editor::I18n::get().code())) {
+      if (!exportPanel->draw(renderer, window, dockShown(editor::dock_host::Kind::Export, ed.showExport), ex.platform, ed.projSettings.missingInfo(), editor::I18n::get().code())) {
         tool::logError(std::string("Export SpriteUI render failed: ") + SDL_GetError());
         exportPanel.reset();
-      } else if (exportRequested) {
-        exportPanel->setResult(editor::exportui::runExport(ed));
+      } else {
+        if (exportRequested) exportPanel->setResult(editor::exportui::runExport(ed));
+        if (exportPanel->chrome().consumeClose()) ed.showExport = false;
+        if (exportPanel->chrome().consumeHelp()) editor::openHelp("export");
       }
+    }
     }
     exportRequested = false;
     if (statusPanel) {   // por ultimo: a barra fica por cima do Profiler e da Ajuda (mesmo renderer, depois do RenderDrawData)

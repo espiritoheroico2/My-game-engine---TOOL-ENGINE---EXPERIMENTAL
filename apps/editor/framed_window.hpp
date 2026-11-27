@@ -27,6 +27,11 @@ namespace SR = ToolEngine::SpriteUi::Rendering;
 
 inline constexpr float kFont = 12.f;
 inline constexpr float kTitleFont = 12.f;
+inline constexpr float kHeaderH = 30.f;     // altura padrao do cabecalho da moldura (window_frame::Frame)
+inline constexpr float kBodySlack = 8.f;    // folga das bordas da moldura em volta do corpo
+
+// Altura da moldura para um corpo de `contentH` px (cabecalho padrao mais a folga das bordas).
+inline float frameHeightFor(float contentH) { return contentH + kHeaderH + kBodySlack; }
 
 class Chrome {
  public:

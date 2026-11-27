@@ -2,6 +2,7 @@
 
 #include "mainmenu_model.hpp"
 #include "sui_panel.hpp"
+#include "theme_colors.hpp"
 
 #include "SpriteUi/Widgets/Legacy/MenuBar.hpp"
 
@@ -22,6 +23,7 @@ namespace SW = ToolEngine::SpriteUi::Widgets::Legacy;
 namespace SR = ToolEngine::SpriteUi::Rendering;
 namespace ST = ToolEngine::SpriteUi::Text;
 
+// Barra de menus do topo (File, Edit...) mais os botoes centrais (Play etc). Usa o MenuBar do SpriteUI; as acoes saem como Request numa fila que o host le em draw().
 class MainMenuPanel {
 public:
     MainMenuPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& renderer)
@@ -29,15 +31,13 @@ public:
         bar_.popupWidth = 260.0f;
         bar_.rowHeight = 24.0f;
         bar_.separatorHeight = 8.0f;
-        style_.bar = sui::Srgb(0.055f, 0.075f, 0.11f);
-        style_.headerOpen = sui::Srgb(0.16f, 0.2f, 0.28f);
-        style_.popup = sui::Srgb(0.07f, 0.09f, 0.12f);
-        style_.highlight = sui::Srgb(0.12f, 0.3f, 0.6f);
+        refreshStyle();
     }
 
     MainMenuPanel(const MainMenuPanel&) = delete;
     MainMenuPanel& operator=(const MainMenuPanel&) = delete;
 
+    // Reconstroi os menus a partir do estado (itens habilitados, idioma). Sai cedo se nada mudou.
     void setState(const MenuState& state, Translate translate) {
         if (state_ == state && translate_ == translate) return;
         state_ = state;
@@ -59,6 +59,7 @@ public:
         bar_.SetMenus(std::move(menus));
     }
 
+    // Roteia mouse e teclado para a barra. true = o evento foi consumido pelo menu.
     bool handleEvent(const SDL_Event& event) {
         switch (event.type) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -74,8 +75,10 @@ public:
         }
     }
 
+    // Posiciona a barra, monta o canvas e desenha. Entrega ao host os pedidos enfileirados (cliques em itens e botoes).
     bool draw(SDL_Renderer* renderer, SDL_Window* window, float barHeight, std::vector<Request>& requests) {
       theme_ = sui::Theme{};   // cores da paleta em uso (Configuracoes > Appearance)
+        refreshStyle();
         requests.insert(requests.end(), queue_.begin(), queue_.end());
         queue_.clear();
         if (!renderer || !window) return false;
@@ -111,12 +114,18 @@ public:
   [[nodiscard]] sui::Box popupBox() const { return toBox(bar_.PopupRect()); }
 
 private:
+    // Cores da barra e da lista: da paleta em uso, refeitas a cada quadro (trocar o tema repinta o menu).
     struct Style {
-        SU::Vec4 bar = sui::Srgb(0.055f, 0.075f, 0.11f);
-        SU::Vec4 headerOpen = sui::Srgb(0.16f, 0.2f, 0.28f);
-        SU::Vec4 popup = sui::Srgb(0.07f, 0.09f, 0.12f);
-        SU::Vec4 highlight = sui::Srgb(0.12f, 0.3f, 0.6f);
+        SU::Vec4 bar, headerOpen, popup, highlight;
     };
+
+    void refreshStyle() {
+        const editor::theme_colors::Colors t = editor::theme_colors::Active();
+        style_.bar = sui::PaletteColor(t.panel);
+        style_.headerOpen = sui::PaletteColor(t.headerDragging);
+        style_.popup = sui::PaletteColor(t.surface);
+        style_.highlight = sui::PaletteColor(t.rowSel);
+    }
 
     struct Button {
         sui::Box box;
@@ -135,6 +144,7 @@ private:
         return {rect.position.x, rect.position.y, rect.size.x, rect.size.y};
     }
 
+    // Clique esquerdo: botao da barra enfileira o comando; senao repassa ao MenuBar (abre/fecha menus).
     bool onPress(std::uint8_t button, float x, float y) {
         if (button != SDL_BUTTON_LEFT) return false;
         if (const Button* hit = buttonAt(x, y)) {
@@ -148,6 +158,7 @@ private:
         return events.handled;
     }
 
+    // Soltar o botao esquerdo: so conta se a barra capturou o clique; pode ativar o item sob o mouse.
     bool onRelease(std::uint8_t button, float x, float y) {
         if (button != SDL_BUTTON_LEFT || !pointerCaptured_) return false;
         pointerCaptured_ = false;
@@ -161,6 +172,7 @@ private:
         return events.handled;
     }
 
+    // Alt ativa a barra; com ela ativa, setas/Home/End/Enter/Esc navegam. Alt nunca e consumido.
     bool onKey(SDL_Keycode key, bool repeat) {
         if (key == SDLK_LALT || key == SDLK_RALT) {
             if (!repeat) {
@@ -179,6 +191,7 @@ private:
         return events.handled;
     }
 
+    // Tecla do SDL -> tecla de navegacao do MenuBar (nullopt se nao for de menu).
     static std::optional<SW::MenuKey> menuKeyOf(SDL_Keycode key) {
         switch (key) {
             case SDLK_UP: return SW::MenuKey::Up;
@@ -194,6 +207,7 @@ private:
         }
     }
 
+    // Item ativado vira Request na fila; menu fechado desativa a navegacao por teclado.
     void applyEvents(const SW::MenuBarEvents& events) {
         if (events.activated) {
             const Request request = requestAt(events.menuIndex, events.itemIndex);
@@ -202,6 +216,7 @@ private:
         if (events.closed) barActive_ = false;
     }
 
+    // Monta o desenho: fundo da barra, titulos, botoes e, se aberta, a lista do menu (borda, destaque, texto e atalho a direita).
     void buildCanvas(float windowWidth, float lineHeight) {
         canvas_.clear();
         canvas_.addSolid(0.0f, 0.0f, windowWidth, barHeight_, style_.bar, 0.1f);
@@ -253,6 +268,7 @@ private:
         }
     }
 
+    // Posiciona e desenha os botoes de comando (Play etc) ao lado do centro da barra e guarda as caixas para o clique.
     void addButtons(float windowWidth, float lineHeight) {
         buttons_.clear();
         float x = windowWidth * 0.5f - kButtonsShift;

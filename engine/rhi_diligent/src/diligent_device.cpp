@@ -279,7 +279,9 @@ public:
     graveyard_.resize(keep);
   }
   // Finaliza o quadro: chama present() e desativa a acumulacao.
-  void endFrame() override { present(); frameActive_ = false; }
+  // Antes de apresentar, envia os comandos pendentes do contexto imediato (copias de buffer, destroys adiados).
+  // Sem isso o Diligent acusa TOOL-E150 em todo quadro: o antigo WaitForIdle de destroy() fazia esse Flush por acaso.
+  void endFrame() override { ctx->Flush(); present(); frameActive_ = false; }
 
   // Buffer criado fora (LightPrism): o handle guarda uma referencia a mais; destruir o handle nao apaga o buffer original.
   BufferId importBuffer(void* native) override {

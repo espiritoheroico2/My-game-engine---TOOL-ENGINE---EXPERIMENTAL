@@ -18,6 +18,7 @@
 //   draw:        desenha grupos, controles, campo em edicao e listas abertas, recortados na parte visivel da janela.
 //   handleEvent: roteia clique, arrasto, teclas e texto.
 
+#include "theme_colors.hpp"
 #include "SpriteUi/Elements/Button.hpp"
 #include "SpriteUi/Elements/Checkbox.hpp"
 #include "SpriteUi/Elements/Dropdown.hpp"
@@ -38,6 +39,7 @@
 #include "text_edit_keys.hpp"
 #include "slider_value_edit.hpp"
 #include "sui_panel.hpp"
+#include "ui_scrollbar.hpp"
 #include "ui_style.hpp"
 
 #include <SDL3/SDL.h>
@@ -175,6 +177,7 @@ struct Metrics {
     static constexpr float kZPopupText = 0.97f;
 };
 
+// Painel do Inspector: a cada quadro monta a lista de controles (prepare), desenha grupos/controles/popups (draw) e roteia mouse, teclas e texto (handleEvent). So muda os dados do objeto por acao do usuario.
 class InspectorPanel {
   public:
     InspectorPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : canvas_{text}, overlay_{text}, sdl_{sdl}, chrome_{text, sdl} {
@@ -252,21 +255,33 @@ class InspectorPanel {
     }
     [[nodiscard]] float scrollY() const { return scrollY_; }
 
-    // Barra de rolagem no canto direito do corpo, so quando o conteudo nao cabe. Coordenadas locais do canvas.
+    // Barra de rolagem unica do editor (ui_scrollbar.hpp), no canto direito do corpo; some quando o conteudo cabe.
+    // Coordenadas locais do canvas.
     void addScrollbar() {
-        const float trackH = visible_.h;
-        if (trackH <= 0.f || contentH_ <= trackH + 0.5f) return;
-        const float maxScroll = contentH_ - trackH;
-        const float thumbH = std::max(Metrics::kRowH * 0.75f, trackH * trackH / contentH_);
         const float top = visible_.y - origin_.y;
-        const float thumbY = top + (trackH - thumbH) * (scrollY_ / maxScroll);
-        canvas_.addSolid(width_ - 6.f, thumbY, 4.f, thumbH, theme_.textDim, Metrics::kZField);
+        bar_.layout({width_ - ui_scrollbar::kWidth - 1.f, top, ui_scrollbar::kWidth, visible_.h}, contentH_, visible_.h);
+        for (const ui_scrollbar::Quad& q : bar_.quads(palette::active(), scrollY_)) {
+            if (q.rect.w > 0.f && q.rect.h > 0.f) canvas_.addSolid(q.rect.x, q.rect.y, q.rect.w, q.rect.h, sui::PaletteColor(q.color), Metrics::kZField);
+        }
+    }
+
+    // Recalcula as cores a partir da paleta em uso (trocar o tema repinta no quadro seguinte).
+    void refreshColors() {
+      const editor::theme_colors::Colors t = editor::theme_colors::Active();
+      headerColor_ = sui::PaletteColor(t.headerActive);
+      headingColor_ = sui::PaletteColor(t.heading);
+      fieldColor_ = sui::PaletteColor(t.field);
+      fieldFocusColor_ = sui::PaletteColor(t.fieldFocus);
+      fieldDisabled_ = sui::PaletteColor(palette::mixRgb(t.panel, t.field, 0.5f));
+      selectionColor_ = sui::PaletteColor(t.selection);
+      swatchBorder_ = sui::PaletteColor(t.border);
     }
 
     // Desenha o bloco. origin = canto superior esquerdo do bloco na tela; visible = area de recorte (corpo da moldura)
     // (o bloco e cortado por esse retangulo).
     bool draw(SDL_Renderer* renderer, sui::Box origin, sui::Box visible, bool shown) {
       theme_ = sui::Theme{};   // cores da paleta em uso (Configuracoes > Appearance)
+      refreshColors();
         origin_ = origin;
         visible_ = visible;
         shown_ = shown && visible.w > 0.f && visible.h > 0.f;   // sem objeto, o proprio bloco mostra o aviso
@@ -313,9 +328,21 @@ class InspectorPanel {
         return false;
     }
 
+    // Roteia o evento: moldura, barra de rolagem, ponteiro nos controles, teclas e texto do campo em edicao. true = consumiu.
     bool handleEvent(const SDL_Event& e) {
         if (chrome_.handleEvent(e)) return true;
         if (!shown_) return false;
+        // Barra de rolagem: o arraste do polegar segue com o mouse fora do corpo.
+        if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT &&
+            bar_.pointerDown(e.button.x - origin_.x, e.button.y - origin_.y, scrollY_)) {
+            clampScroll();
+            return true;
+        }
+        if (e.type == SDL_EVENT_MOUSE_MOTION) {
+            if (bar_.pointerMove(e.motion.x - origin_.x, e.motion.y - origin_.y, scrollY_)) clampScroll();
+            if (bar_.dragging()) return true;
+        }
+        if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == SDL_BUTTON_LEFT && bar_.pointerUp()) return true;
         switch (e.type) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (e.button.button != SDL_BUTTON_LEFT) return false;
@@ -350,9 +377,12 @@ class InspectorPanel {
 
   private:
     // ------------------------------------------------------------------ tipos
+    // Tipo de controle desenhado numa linha do inspetor.
     enum class Kind : std::uint8_t { Header, Slider, Check, Drop, Swatch, Num, Text, Button, Cell };
+    // Tipo do campo de texto em edicao (nenhum, numero ou texto livre).
     enum class FieldKind : std::uint8_t { None, Number, Text };
 
+    // Controle do quadro: tipo, chave unica, caixa (coordenadas locais) e estado; a lista e refeita a cada prepare.
     struct Control {
         Kind kind = Kind::Button;
         std::uint32_t key = 0;
@@ -382,10 +412,12 @@ class InspectorPanel {
 
     static SU::Rect rect(float x, float y, float w, float h) { return {{x, y}, {w, h}}; }
 
+    // Ponto dentro do retangulo.
     static bool contains(const SU::Rect& r, SU::Vec2 p) {
         return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y && p.y < r.position.y + r.size.y;
     }
 
+    // Registra um controle do quadro e devolve a referencia para o chamador preencher.
     Control& add(Kind kind, const SU::Rect& box, std::uint32_t key) {
         Control c;
         c.kind = kind;
@@ -396,6 +428,7 @@ class InspectorPanel {
         return controls_.back();
     }
 
+    // Rotulo da linha, a esquerda dos controles.
     void label(float y, const char* text) {
         canvas_.addText(innerX_, y + 5.f, text, Metrics::kFont, theme_.text, labelW_ - 6.f);
     }
@@ -422,6 +455,7 @@ class InspectorPanel {
         return true;
     }
 
+    // Fecha o grupo: guarda a moldura de fundo da secao e afasta a proxima.
     void endSection() {
         frames_.push_back(rect(Metrics::kPad, groupTop_, width_ - 2.f * Metrics::kPad, y_ - groupTop_ + Metrics::kGap));
         y_ += Metrics::kGap * 2.f;
@@ -505,6 +539,7 @@ class InspectorPanel {
         nextRow();
     }
 
+    // Caixa de marcar ligada direto a um bool (grava ao clicar).
     void checkField(const char* text, bool* target, bool enabled = true) {
         check(text, *target, [target](bool on) { *target = on; }, enabled);
     }
@@ -577,6 +612,7 @@ class InspectorPanel {
         });
     }
 
+    // Cor do eixo: X vermelho, Y verde, Z azul.
     [[nodiscard]] SU::Vec4 axisColor(char axis) const {
         if (axis == 'X') return sui::Srgb(0.95f, 0.38f, 0.38f);
         if (axis == 'Y') return sui::Srgb(0.50f, 0.85f, 0.45f);
@@ -609,6 +645,7 @@ class InspectorPanel {
         nextRow();
     }
 
+    // Secao Transform (posicao, rotacao, escala).
     void transform() {
         Transform& t = *ctx_.transform;
         if (!beginSection(im::Section::Transform, T("Transform"))) return;
@@ -618,6 +655,7 @@ class InspectorPanel {
         endSection();
     }
 
+    // Secao Mesh Renderer: forma/modelo, material, textura, emissao, neblina, sombras e materiais por parte.
     void mesh() {
         MeshRenderer& m = *ctx_.mesh;
         if (!beginSection(im::Section::MeshRenderer, T("Mesh Renderer"))) return;
@@ -674,6 +712,7 @@ class InspectorPanel {
         }
     }
 
+    // Material trocado da parte `part`, ou nullptr se nao ha.
     [[nodiscard]] PartOverride* findOverride(int part) const {
         if (!ctx_.overrides) return nullptr;
         for (PartOverride& it : ctx_.overrides->items) {
@@ -682,6 +721,7 @@ class InspectorPanel {
         return nullptr;
     }
 
+    // Linha de textura de uma parte do modelo (lista das imagens do projeto).
     void partTextureRow(int part, char* texture) {
         std::vector<std::string> options{T("(none)")};
         std::size_t selected = 0;
@@ -698,6 +738,7 @@ class InspectorPanel {
         });
     }
 
+    // Secao Light source (tipo, cor, intensidade, alcance, sombra).
     void light() {
         LightComp& lc = *ctx_.light;
         if (!beginSection(im::Section::Light, T("Light source"))) return;
@@ -717,6 +758,7 @@ class InspectorPanel {
         endSection();
     }
 
+    // Secao Global Light (sol): cor, intensidade, direcao, ambiente e ciclo dinamico.
     void global() {
         GlobalLight& g = *ctx_.global;
         if (!beginSection(im::Section::GlobalLight, T("Global Light (sun)"))) return;
@@ -733,6 +775,7 @@ class InspectorPanel {
         endSection();
     }
 
+    // Secao Camera: campo de visao, planos, 2D, principal/split screen, audio e pos-processamento.
     void camera() {
         CameraComp& c = *ctx_.camera;
         if (!beginSection(im::Section::Camera, T("Camera"))) return;
@@ -902,6 +945,7 @@ class InspectorPanel {
         return expanders_.IsOpen(s);
     }
 
+    // Fecha um subgrupo: guarda a moldura dele (da posicao `top` ate o Y atual).
     void endSub(float top) {
         frames_.push_back(rect(innerX_ - 4.f, top, width_ - innerX_ - Metrics::kPad + 8.f, y_ - top));
     }
@@ -1122,6 +1166,7 @@ class InspectorPanel {
             slider(T("Height"), &it.h, {0.f, 1.f});
             swatch(T("Color"), it.color);
             slider(T("Color opacity"), &it.color[3], {0.f, 1.f});
+            if (it.kind == 1 || it.kind == 2) slider(T("Corner radius"), &it.radius, {0.f, 200.f});   // painel e botao
             slider(T("Font scale"), &it.fontScale, {0.5f, 4.f});
             y_ += Metrics::kGap;   // respiro entre elementos
         }
@@ -1355,6 +1400,7 @@ class InspectorPanel {
         nextRow();
     }
 
+    // Secao Audio Source: arquivo, volume, loop, 3D, distancias e botoes de ouvir/parar.
     void audio() {
         AudioSource& a = *ctx_.audio;
         if (!beginSection(im::Section::Audio, T("Audio Source"))) return;
@@ -1446,6 +1492,7 @@ class InspectorPanel {
         items.insert(items.end(), built.begin(), built.end());
     }
 
+    // Retangulo do bloco (local) -> coordenadas da tela.
     [[nodiscard]] SU::Rect toScreen(const SU::Rect& r) const {
         return rect(r.position.x + origin_.x, r.position.y + origin_.y, r.size.x, r.size.y);
     }
@@ -1480,6 +1527,7 @@ class InspectorPanel {
         popup_.open(key, rgb, rect(x, sw.position.y + sw.size.y + 4.f, Metrics::kPopupW, Metrics::kPopupH));
     }
 
+    // Caixa da amostra de cor com essa chave (para ancorar o popup de cor).
     [[nodiscard]] SU::Rect swatchBox(std::uint32_t key) const {
         for (const Control& c : controls_) {
             if (c.key == key) return c.box;
@@ -1487,11 +1535,13 @@ class InspectorPanel {
         return rect(ctrlX_, Metrics::kPad, Metrics::kSwatchW, Metrics::kRowH);
     }
 
+    // Fecha o popup de cor e todas as listas abertas.
     void closePopups() {
         popup_.close();
         for (auto& [k, dd] : drops_) (void)dd.control.Close();
     }
 
+    // Visual do popup de cor a partir das cores do painel.
     [[nodiscard]] color_popup::Look popupLook() const {
         color_popup::Look look;
         look.frame = frameStyle_;
@@ -1533,6 +1583,7 @@ class InspectorPanel {
         return routePointer(phase, p, window);
     }
 
+    // Roteia o ponteiro (mover/apertar/soltar): fecha campo em edicao se clicou fora, trata popup de cor, listas abertas e depois cada tipo de controle.
     bool routePointer(Elm::PointerPhase phase, SU::Vec2 p, SDL_Window* window) {
         // Clique fora do campo em edicao (que nao seja o HEX, tratado no seletor) encerra a edicao.
         if (phase == Elm::PointerPhase::Down && field_kind_ != FieldKind::None && !contains(field_box_, p)) {
@@ -1625,6 +1676,7 @@ class InspectorPanel {
         return ev.pressStarted || ev.clicked;
     }
 
+    // Aplica o ponteiro a uma lista (dropdown): abrir, escolher uma opcao ou fechar.
     void applyDrop(Control& c, Elm::PointerPhase phase, SU::Vec2 p) {
         Elm::Dropdown& dd = drops_[c.key];
         const SU::Rect window{{0.f, visible_.y - origin_.y}, {width_, visible_.h}};
@@ -1643,6 +1695,7 @@ class InspectorPanel {
         if (ev.valueChanged && c.setIndex) c.setIndex(dd.control.selectedIndex);
     }
 
+    // Monta o evento de ponteiro relativo a caixa do controle.
     [[nodiscard]] Elm::PointerEvent event(Elm::PointerPhase phase, SU::Vec2 p, const SU::Rect& box) const {
         return Elm::PointerEvent{phase, p, 0u, contains(box, p)};
     }
@@ -1678,6 +1731,7 @@ class InspectorPanel {
         if (window) SDL_StartTextInput(window);
     }
 
+    // Encerra a edicao do campo de texto (sem aplicar) e desliga a entrada de texto do SDL.
     void endEdit(SDL_Window* window = nullptr) {
         if (field_kind_ == FieldKind::None) return;
         field_.SetFocus(false);
@@ -1699,6 +1753,7 @@ class InspectorPanel {
         if (out != edit_value_ && edit_set_f_) edit_set_f_(out);
     }
 
+    // Aplica o texto digitado: numero valido vira o valor do controle; texto livre grava no buffer.
     void commitField() {
         if (field_slider_) return;   // digitar so muda o texto; o valor entra em commitSliderField
         const std::string text = field_.Edit().Text();
@@ -1710,6 +1765,7 @@ class InspectorPanel {
         }
     }
 
+    // Teclas no campo em edicao: Esc cancela, Enter confirma; as demais edicoes (setas, apagar, atalhos) vao para text_keys::ApplyEditKey.
     void keyInField(SDL_Keycode key, SDL_Keymod mod, SDL_WindowID windowId) {
         SDL_Window* window = SDL_GetWindowFromID(windowId);
         if (key == SDLK_ESCAPE) {
@@ -1734,8 +1790,10 @@ class InspectorPanel {
     Hooks hooks_;
     float width_ = 0.f, y_ = 0.f, labelW_ = 0.f, innerX_ = 0.f, ctrlX_ = 0.f, ctrlW_ = 0.f, groupTop_ = 0.f;
     static constexpr float kWheelStep = 40.f;   // pixels por giro da roda
+    ui_scrollbar::Scrollbar bar_;
     float scrollY_ = 0.f;     // quanto o conteudo subiu (>= 0)
     float contentH_ = 0.f;    // altura total do conteudo medida no ultimo layout (sem a rolagem)
+    // Prende a rolagem entre 0 e o que sobra do conteudo alem da area visivel.
     void clampScroll() {
         const float maxScroll = std::max(0.f, contentH_ - visible_.h);
         scrollY_ = std::clamp(scrollY_, 0.f, maxScroll);
@@ -1790,13 +1848,8 @@ class InspectorPanel {
 
     color_popup::ColorPopup popup_{canvas_, overlay_};
 
-    SU::Vec4 headerColor_ = sui::Srgb(0.10f, 0.13f, 0.18f, 1.f);
-    SU::Vec4 headingColor_ = sui::Srgb(0.45f, 0.72f, 0.96f);
-    SU::Vec4 fieldColor_ = sui::Srgb(0.08f, 0.10f, 0.14f, 1.f);
-    SU::Vec4 fieldFocusColor_ = sui::Srgb(0.12f, 0.15f, 0.20f, 1.f);
-    SU::Vec4 fieldDisabled_ = sui::Srgb(0.09f, 0.09f, 0.10f, 1.f);
-    SU::Vec4 selectionColor_ = sui::Srgb(0.15f, 0.22f, 0.37f, 0.6f);
-    SU::Vec4 swatchBorder_ = sui::Srgb(0.32f, 0.36f, 0.42f, 1.f);
+    // Cores derivadas da paleta em uso, refeitas a cada quadro em draw(). warnColor_ e okColor_ ficam fixos (semantica).
+    SU::Vec4 headerColor_, headingColor_, fieldColor_, fieldFocusColor_, fieldDisabled_, selectionColor_, swatchBorder_;
     SU::Vec4 warnColor_ = sui::Srgb(1.f, 0.6f, 0.3f, 1.f);
     SU::Vec4 okColor_ = sui::Srgb(0.6f, 0.9f, 0.6f, 1.f);
 

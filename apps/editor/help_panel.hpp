@@ -1,15 +1,17 @@
 #pragma once
 
 // Janela Help com SpriteUI.
-// Assunto, busca e blocos do texto: help_model.hpp. Aqui: geometria, desenho e cliques. A janela fica no centro,
-// no mesmo SDL_Renderer das outras janelas SpriteUI.
+// Assunto, busca e blocos do texto: help_model.hpp. Aqui: geometria, desenho e cliques. A janela usa a moldura
+// padrao do editor (framed::Chrome: titulo, "?", X, grip e dock) e desenha no mesmo SDL_Renderer das outras.
 //
 // Teclado: com o foco na busca, o painel recebe as teclas e o editor nao as recebe (W/E/R e Delete nao agem).
 // Esc tira o foco da busca. Fora da busca, as teclas seguem para o editor.
 
+#include "framed_window.hpp"
 #include "help_model.hpp"
 #include "i18n.hpp"
 #include "sui_panel.hpp"
+#include "theme_colors.hpp"
 #include "ui_scrollbar.hpp"
 
 #include <SDL3/SDL.h>
@@ -30,13 +32,8 @@ namespace Edit = ToolEngine::SpriteUi::Widgets;
 using sui::Box;
 
 // Medidas (px). Tamanhos fixos, como no Profiler SpriteUI.
-inline constexpr float kMaxWidth = 820.f;
-inline constexpr float kMaxHeight = 520.f;
-inline constexpr float kMinWidth = 320.f;
-inline constexpr float kMinHeight = 200.f;
-inline constexpr float kMargin = 24.f;
-inline constexpr float kTitleH = 36.f;
-inline constexpr float kCloseSize = 26.f;
+inline constexpr float kStartWidth = 820.f;    // tamanho da moldura na primeira abertura
+inline constexpr float kStartHeight = 520.f;
 inline constexpr float kPad = sui::kPanelPadding;
 inline constexpr float kGap = 8.f;
 inline constexpr float kListW = 230.f;
@@ -48,7 +45,7 @@ inline constexpr float kGroupH = 26.f;
 inline constexpr float kFont = 12.f;
 inline constexpr float kSmallFont = 12.f;
 inline constexpr float kCodeFont = 13.f;
-inline constexpr float kTitleFont = 12.f;
+inline constexpr float kTitleFont = 12.f;   // titulo do assunto no corpo
 inline constexpr float kHeadingFont = 16.f;
 inline constexpr float kCodePad = 6.f;
 inline constexpr float kCodeInset = 8.f;
@@ -60,23 +57,31 @@ inline constexpr float kWheelStep = 40.f;
 
 // Cores que a janela Help usa alem das do sui::Theme.
 struct Colors {
-  SU::Vec4 selection = sui::Srgb(0.15f, 0.22f, 0.37f, 0.85f);
-  SU::Vec4 heading = sui::Srgb(0.55f, 0.8f, 1.f);
-  SU::Vec4 codeBackground = sui::Srgb(0.08f, 0.09f, 0.11f);
-  SU::Vec4 codeText = sui::Srgb(0.75f, 0.95f, 0.75f);
-  SU::Vec4 button = sui::Srgb(0.2f, 0.22f, 0.27f);
-  SU::Vec4 field = sui::Srgb(0.165f, 0.165f, 0.176f);
-  SU::Vec4 fieldFocus = sui::Srgb(0.2f, 0.2f, 0.24f);
-  SU::Vec4 caret = sui::Srgb(0.93f, 0.93f, 0.95f);
-  SU::Vec4 scroll = sui::Srgb(0.45f, 0.48f, 0.55f, 0.75f);
+  SU::Vec4 selection, heading, codeBackground, codeText, button, field, fieldFocus, caret, scroll;
+  Colors() {   // da paleta em uso (theme_colors.hpp); refeito a cada quadro em draw()
+    const editor::theme_colors::Colors t = editor::theme_colors::Active();
+    selection = sui::PaletteColor(editor::theme_colors::WithAlpha(t.selection, 0.85f));
+    heading = sui::PaletteColor(t.heading);
+    codeBackground = sui::PaletteColor(t.field);
+    codeText = sui::PaletteColor(t.text);
+    button = sui::PaletteColor(t.btn);
+    field = sui::PaletteColor(t.field);
+    fieldFocus = sui::PaletteColor(t.fieldFocus);
+    caret = sui::PaletteColor(t.caret);
+    scroll = sui::PaletteColor(t.scroll);
+  }
 };
 
+// Janela Help: lista de assuntos a esquerda (com busca), texto do assunto a direita e botoes para copiar codigo. Reconstroi o desenho so quando algo muda (dirty_).
 class HelpPanel {
  public:
   HelpPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
-      : text_{text}, sdl_{sdl}, chrome_{text}, list_{text}, body_{text}, hint_{text} {}
+      : text_{text}, sdl_{sdl}, frame_{text, sdl}, list_{text}, body_{text}, hint_{text} {}
   HelpPanel(const HelpPanel&) = delete;
   HelpPanel& operator=(const HelpPanel&) = delete;
+
+  // Moldura padrao (titulo, "?", X, grip, dock). O host registra no dock e le consumeClose()/consumeHelp().
+  framed::Chrome& chrome() { return frame_; }
 
   // Assunto novo (icone "?" ou F1): a janela fica no lugar e o texto volta ao topo.
   void openTopic(const std::string& id) {
@@ -88,11 +93,12 @@ class HelpPanel {
   // Chamar para cada evento do SDL. Retorna true quando o evento e da janela.
   // `open` = ed.showHelp: o X fecha a janela.
   bool handleEvent(const SDL_Event& e, SDL_Window* window, bool& open) {
-    if (!open) {
+    if (!open || !frame_.visible()) {
       setSearchFocus(false, window);
       open_ = false;
       return false;
     }
+    if (frame_.handleEvent(e)) return true;   // X, "?" e minimizar da moldura
     switch (e.type) {
       case SDL_EVENT_TEXT_INPUT:
         if (!model_.SearchFocused()) return false;
@@ -110,7 +116,7 @@ class HelpPanel {
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (e.button.button != SDL_BUTTON_LEFT || !panel_.contains(e.button.x, e.button.y)) return false;
         if (listBar_.pointerDown(e.button.x, e.button.y, listScroll_) || bodyBar_.pointerDown(e.button.x, e.button.y, bodyScroll_)) return true;
-        click(e.button.x, e.button.y, open, window);
+        click(e.button.x, e.button.y, window);
         return true;
       case SDL_EVENT_MOUSE_MOTION:
         listBar_.pointerMove(e.motion.x, e.motion.y, listScroll_);
@@ -133,19 +139,26 @@ class HelpPanel {
     }
   }
 
+  // true se o mouse esta sobre a caixa de busca (o host troca o cursor para texto).
   [[nodiscard]] bool wantsTextCursor(float x, float y) const {
     return open_ && searchBox_.contains(x, y);
   }
 
-  // Desenha a janela quando `open`. Retorna false so em falha do SDL.
-  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool& open, const std::string& language) {
+  // Desenha a moldura e o corpo quando `open` (e visivel no dock). Retorna false so em falha do SDL.
+  bool draw(SDL_Renderer* renderer, SDL_Window* window, bool open, const std::string& language) {
     theme_ = sui::Theme{};   // cores da paleta em uso (Configuracoes > Appearance)
+    colors_ = Colors{};
+    if (const unsigned long long sig = editor::theme_colors::Signature(); sig != themeSig_) {   // tema novo: refaz o desenho guardado
+      themeSig_ = sig;
+      dirty_ = true;
+    }
     if (model_.Language() != language) {
       model_.SetLanguage(language);
       dirty_ = true;
     }
     open_ = open;
     if (!open) {
+      frame_.hide();
       setSearchFocus(false, window);
       return true;
     }
@@ -153,7 +166,10 @@ class HelpPanel {
     int ww = 0, wh = 0;
     if (!SDL_GetWindowSize(window, &ww, &wh)) return false;
     if (ww <= 0 || wh <= 0) return true;   // janela minimizada: nada a desenhar
-    if (updateGeometry(ww, wh)) dirty_ = true;
+    const Box body = frame_.prepare(static_cast<float>(ww), static_cast<float>(wh), kStartWidth, kStartHeight);
+    if (!frame_.draw(renderer, T("Help"))) return false;
+    if (body.w <= 0.f || body.h <= 0.f) return true;   // minimizada: so o cabecalho
+    if (updateGeometry(body)) dirty_ = true;
     if (dirty_) rebuild();
     listScroll_ = std::clamp(listScroll_, 0.f, listMax_);
     bodyScroll_ = std::clamp(bodyScroll_, 0.f, bodyMax_);
@@ -161,15 +177,18 @@ class HelpPanel {
   }
 
  private:
+  // Linha da lista de assuntos.
   struct Row {
     Box box;               // em coordenadas do conteudo da lista (antes da rolagem)
     std::size_t topic;     // indice em helpTopics()
   };
+  // Botao "copiar" de um bloco de codigo no texto.
   struct CopyButton {
     Box box;               // em coordenadas do conteudo do texto (antes da rolagem)
     std::string code;      // texto copiado para a area de transferencia
   };
 
+  // Estilo do campo de busca a partir das cores do tema.
   [[nodiscard]] Edit::TextFieldStyle searchStyle() const {
     Edit::TextFieldStyle style;
     style.background = colors_.field;
@@ -183,34 +202,27 @@ class HelpPanel {
     return style;
   }
 
-  // Calcula as caixas da janela para o tamanho da janela do editor. Retorna true se mudou.
-  bool updateGeometry(int windowW, int windowH) {
-    if (windowW == windowW_ && windowH == windowH_) return false;
-    windowW_ = windowW;
-    windowH_ = windowH;
-    const float ww = static_cast<float>(windowW), wh = static_cast<float>(windowH);
-    const float w = std::max(kMinWidth, std::min(kMaxWidth, ww - 2.f * kMargin));
-    const float h = std::max(kMinHeight, std::min(kMaxHeight, wh - 2.f * kMargin));
-    panel_ = {(ww - w) * 0.5f, (wh - h) * 0.5f, w, h};
-    const float top = panel_.y + kTitleH + kPad;
-    const float contentH = std::max(0.f, panel_.h - kTitleH - 2.f * kPad);
+  // Calcula as caixas internas para o corpo da moldura neste quadro. Retorna true se mudou.
+  bool updateGeometry(const Box& body) {
+    if (body.x == panel_.x && body.y == panel_.y && body.w == panel_.w && body.h == panel_.h) return false;
+    panel_ = body;
+    const float top = panel_.y + kPad;
+    const float contentH = std::max(0.f, panel_.h - 2.f * kPad);
     const float left = panel_.x + kPad;
-    searchBox_ = {left, top, kListW, kSearchH};
-    listBox_ = {left, top + kSearchH + kPad, kListW, std::max(0.f, contentH - kSearchH - kPad)};
-    bodyBox_ = {left + kListW + kPad, top, std::max(0.f, panel_.w - kListW - 3.f * kPad), contentH};
-    closeBox_ = {panel_.x + panel_.w - kCloseSize - kPad * 0.5f, panel_.y + (kTitleH - kCloseSize) * 0.5f, kCloseSize, kCloseSize};
+    const float listW = std::min(kListW, std::max(0.f, panel_.w * 0.4f));
+    searchBox_ = {left, top, listW, kSearchH};
+    listBox_ = {left, top + kSearchH + kPad, listW, std::max(0.f, contentH - kSearchH - kPad)};
+    bodyBox_ = {left + listW + kPad, top, std::max(0.f, panel_.w - listW - 3.f * kPad), contentH};
     return true;
   }
 
   // Monta o texto de todas as partes. So roda quando algo mudou (busca, assunto, idioma ou tamanho).
   void rebuild() {
-    chrome_.clear();
     list_.clear();
     body_.clear();
     hint_.clear();
     rows_.clear();
     copyButtons_.clear();
-    buildChrome();
     buildList();
     buildBody();
     buildHint();
@@ -219,15 +231,7 @@ class HelpPanel {
     dirty_ = false;
   }
 
-  void buildChrome() {
-    const float lh = chrome_.lineHeight(kTitleFont);
-    chrome_.addText(kPad, (kTitleH - lh) * 0.5f, T("Help"), kTitleFont, theme_.text, panel_.w - 2.f * kPad - kCloseSize);
-    chrome_.addSolid(0.f, kTitleH - 1.f, panel_.w, 1.f, theme_.divider, 0.2f);
-    const float closeX = closeBox_.x - panel_.x, closeY = closeBox_.y - panel_.y;
-    const ST::TextLayoutResult x = chrome_.layout("X", kTitleFont);
-    chrome_.addText(closeX + (kCloseSize - x.size.x) * 0.5f, closeY + (kCloseSize - x.lineHeight) * 0.5f, "X", kTitleFont, theme_.text, kCloseSize);
-  }
-
+  // Lista de assuntos filtrada pela busca, com titulo de grupo quando o grupo muda; guarda a caixa de cada linha para o clique.
   void buildList() {
     const float lh = list_.lineHeight(kFont);
     float y = 0.f;
@@ -246,6 +250,7 @@ class HelpPanel {
     listContentH_ = y;
   }
 
+  // Titulo de grupo na lista; devolve o Y logo abaixo dele.
   float addGroupHeading(float y, const char* label) {
     const float lh = list_.lineHeight(kSmallFont);
     list_.addText(0.f, y + (kGroupH - lh) * 0.5f, label, kSmallFont, theme_.textDim, listBox_.w);
@@ -253,6 +258,7 @@ class HelpPanel {
     return y + kGroupH;
   }
 
+  // Titulo do assunto atual e seus blocos (titulos, paragrafos, codigo...); guarda a altura total para a rolagem.
   void buildBody() {
     const float width = std::max(0.f, bodyBox_.w - 2.f * kPad);
     float y = kPad;
@@ -265,6 +271,7 @@ class HelpPanel {
     bodyContentH_ = y + kPad;
   }
 
+  // Desenha um bloco do texto (titulo, paragrafo ou codigo com botao de copiar) e devolve o Y seguinte.
   float addBlock(const Block& block, float x, float y, float width) {
     switch (block.kind) {
       case BlockKind::Heading: {
@@ -311,6 +318,7 @@ class HelpPanel {
     return y + kButtonH + kGap;
   }
 
+  // Texto "search..." mostrado no campo de busca vazio.
   void buildHint() {
     const float lh = hint_.lineHeight(kFont);
     hint_.addText(0.f, (kSearchH - lh) * 0.5f, T("search..."), kFont, theme_.textDim, searchBox_.w - 2.f * kFieldPad);
@@ -322,8 +330,6 @@ class HelpPanel {
     std::vector<SR::ClipRectGPU> clips{clipOf(panel_), clipOf(listBox_), clipOf(bodyBox_)};
     const SU::UIHandle owner = sui::handleFor(0);
     std::uint64_t paint = 1;
-    items.push_back(sui::Canvas::solidItem(panel_.x, panel_.y, panel_.w, panel_.h, theme_.panel, 0.f, owner, 0u, paint++));
-    chrome_.appendItems(items, panel_.x, panel_.y, 0.f, panel_.y, panel_.y + panel_.h, owner, 0u, paint);
     list_.appendItems(items, listBox_.x, listBox_.y, listScroll_, listBox_.y, listBox_.y + listBox_.h, owner, 1u, paint);
     appendBar(items, listBar_, listBox_, listContentH_, listScroll_, 1u, owner, paint);
     body_.appendItems(items, bodyBox_.x, bodyBox_.y, bodyScroll_, bodyBox_.y, bodyBox_.y + bodyBox_.h, owner, 2u, paint);
@@ -361,6 +367,7 @@ class HelpPanel {
 
   static SR::ClipRectGPU clipOf(const Box& b) { return {b.x, b.y, b.x + b.w, b.y + b.h}; }
 
+  // Roda do mouse: rola a lista ou o texto, conforme o que esta sob o ponteiro.
   void wheel(float x, float y, float amount) {
     if (listBox_.contains(x, y)) {
       listScroll_ = std::clamp(listScroll_ - amount * kWheelStep, 0.f, listMax_);
@@ -369,12 +376,8 @@ class HelpPanel {
     }
   }
 
-  void click(float x, float y, bool& open, SDL_Window* window) {
-    if (closeBox_.contains(x, y)) {
-      open = false;
-      setSearchFocus(false, window);
-      return;
-    }
+  // Clique esquerdo no corpo: caixa de busca ganha foco, linha da lista abre o assunto, botao de copiar manda o codigo para a area de transferencia.
+  void click(float x, float y, SDL_Window* window) {
     if (searchBox_.contains(x, y)) {
       setSearchFocus(true, window);
       model_.Search().PointerDown({x - searchBox_.x, y - searchBox_.y}, {searchBox_.w, searchBox_.h},
@@ -396,6 +399,7 @@ class HelpPanel {
     }
   }
 
+  // Abre o assunto escolhido e volta o texto ao topo.
   void selectTopic(std::size_t topic) {
     model_.SelectTopic(topic);
     bodyScroll_ = 0.f;
@@ -414,6 +418,7 @@ class HelpPanel {
     }
   }
 
+  // Arrasto do mouse na busca: move o cursor/selecao do campo.
   void moveSearchCaret(float x, float y) {
     const SU::Vec2 local{x - searchBox_.x, y - searchBox_.y};
     Edit::TextField& field = model_.Search();
@@ -421,6 +426,7 @@ class HelpPanel {
     field.PointerMove(local, {searchBox_.w, searchBox_.h}, layout, searchStyle());
   }
 
+  // Teclas na busca: Esc tira o foco, Ctrl+A/V, setas e demais edicoes sao repassadas ao modelo.
   void keyInSearch(SDL_Keycode key, SDL_Keymod mod, SDL_Window* window) {
     const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
     const bool ctrl = (mod & SDL_KMOD_CTRL) != 0;
@@ -451,7 +457,7 @@ class HelpPanel {
 
   const sui::TextAtlasSet& text_;
   sui::SpriteUiSdlRenderer& sdl_;
-  sui::Canvas chrome_;
+  framed::Chrome frame_;
   sui::Canvas list_;
   sui::Canvas body_;
   sui::Canvas hint_;
@@ -463,10 +469,10 @@ class HelpPanel {
   SR::FramePacket packet_;
   std::uint64_t frameId_ = 0;
   bool dirty_ = true;
+  unsigned long long themeSig_ = 0;   // assinatura da paleta do ultimo quadro
   bool open_ = false;
 
-  int windowW_ = -1, windowH_ = -1;
-  Box panel_, searchBox_, listBox_, bodyBox_, closeBox_;
+  Box panel_, searchBox_, listBox_, bodyBox_;
   std::vector<Row> rows_;
   std::vector<CopyButton> copyButtons_;
   float listContentH_ = 0.f, bodyContentH_ = 0.f;

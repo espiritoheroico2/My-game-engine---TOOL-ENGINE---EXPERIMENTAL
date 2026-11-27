@@ -3,14 +3,16 @@
 // Host do docking das janelas SpriteUI (main.cpp). O modelo e as regras estao em dock_layout.hpp. Aqui ficam:
 //  - o registro das janelas acopláveis (o host fala com cada uma por funcoes);
 //  - o layout padrao, montado quando o dock esta vazio;
-//  - o arraste do grip: o DockDragController decide Dock, Tab ou Float ao soltar;
-//  - a faixa de abas e as guias de encaixe, desenhadas por cima de tudo (overlay).
+//  - o arraste do grip: o DockDragController so detecta o arraste; ao soltar, o host decide (dropAt). Soltar no titulo,
+//    na barra de abas ou no centro de uma janela a junta como aba; nas bordas nada acontece; fora das janelas, flutua;
+//  - a faixa de abas e a guia de encaixe, desenhadas por cima de tudo (overlay).
 // Quando o grip e pressionado, o host consome o clique: a janela nao inicia o proprio arraste. Assim a janela
 // flutuante so muda de lugar ao soltar (floatAt), e a acoplada continua no dock ate o encaixe.
 //
 // Ordem por quadro (main.cpp): beginFrame, desenho das janelas com visible(), overlay() por ultimo.
 // Eventos do ponteiro: onEvent antes das janelas; quando devolve true, a janela nao recebe o evento.
 
+#include "theme_colors.hpp"
 #include "dock_layout.hpp"
 #include "resize_hover.hpp"
 #include "spriteui_host.hpp"
@@ -43,7 +45,7 @@ namespace view = editor::view;
 inline view::Pixel px(SU::Vec2 v) { return view::Pixel{v.x, v.y}; }
 
 // Janelas SpriteUI acopláveis. Os ids sao estaveis: o modelo de dock os guarda.
-enum class Kind : std::uint32_t { Hierarchy, Scene, Game, Scenes, Assets, Console, Profiler, Inspector, Settings, Coding, Narrative };
+enum class Kind : std::uint32_t { Hierarchy, Scene, Game, Scenes, Assets, Console, Profiler, Inspector, Settings, Coding, Narrative, InputMap, Export, Help, TestMap };
 inline SU::UIHandle idOf(Kind k) { return SU::UIHandle{0xE0000010u + static_cast<std::uint32_t>(k), 1u}; }
 
 inline constexpr float kStripFont = 12.f;
@@ -132,6 +134,7 @@ struct Window {
   bool wasOpen = false;                                       // estava aberta no quadro anterior (host)
 };
 
+// Dono do docking: registra as janelas, monta/restaura o layout, trata arraste/redimensionamento/abas e desenha o overlay por cima de tudo.
 class Host {
  public:
   Host(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {}
@@ -172,6 +175,7 @@ class Host {
   // Janela solta (fora do dock). A ordem de desenho usa isso: acopladas primeiro, soltas por ultimo.
   [[nodiscard]] bool floating(SU::UIHandle id) const { return !model_.contains(id); }
 
+  // Desenha a janela? Aberta e (flutuante ou aba ativa da folha).
   [[nodiscard]] bool visible(SU::UIHandle id, bool open) const {
     if (!open) return false;
     return !model_.contains(id) || model_.active(id);
@@ -215,6 +219,7 @@ class Host {
   struct TabCells {
     float x0 = 0.f, x1 = 0.f;
     std::vector<float> w;   // largura de cada aba
+    // Posicao X onde comeca a aba i (soma das larguras anteriores).
     [[nodiscard]] float x(std::size_t i) const {
       float v = x0;
       for (std::size_t k = 0; k < i && k < w.size(); ++k) v += w[k];
@@ -230,6 +235,7 @@ class Host {
       return w.empty() ? 0 : w.size() - 1;
     }
   };
+  // Calcula a faixa de abas da folha (limites e largura de cada uma); nullopt se a folha tem so uma janela.
   [[nodiscard]] std::optional<TabCells> tabCells(const SW::DockLeafRect& leaf) const {
     const std::vector<SU::UIHandle> tabs = model_.tabsOf(leaf.leaf);
     if (tabs.size() < 2) return std::nullopt;
@@ -249,6 +255,11 @@ class Host {
   // Desenhado depois de todas as janelas. False so em falha do SDL.
   bool overlay(SDL_Renderer* renderer) {
     view::ShapeList shapes;
+    // Cores da barra de abas: da paleta em uso (trocar o tema repinta as abas no proximo quadro).
+    const editor::theme_colors::Colors pal = editor::theme_colors::Active();
+    auto col = [](const editor::palette::Rgb& x, float alpha = 1.f) { return view::rgbaF(x.r, x.g, x.b, alpha); };
+    const view::Color stripFill = col(pal.headerActive), tabOn = col(editor::palette::mixRgb(pal.surface, pal.text, 0.12f)),
+                      tabOff = col(pal.headerInactive), accent = col(pal.accent), textC = col(pal.text), dimC = col(pal.textDim);
     for (const SW::DockLeafRect& leaf : model_.leaves()) {
       const std::optional<TabCells> c = tabCells(leaf);
       if (!c) continue;
@@ -256,31 +267,31 @@ class Host {
       const float y = leaf.bounds.position.y;
       // Limpa o nome da janela ativa na barra e pinta as abas no lugar dele.
       shapes.rectFilled({leaf.bounds.position.x, y}, {leaf.bounds.position.x + leaf.bounds.size.x - kCloseReserve, y + kHeaderH},
-                        view::Rgba(31, 41, 59));
+                        stripFill);
       // O grip do cabecalho da janela ativa deixa de valer aqui: o desenho dele e apagado e cada aba tem o seu.
       for (const Window& w : windows_) {
         if (!(w.id == leaf.leaf) || !w.grip) continue;
         const SU::Rect g = w.grip();
-        if (g.size.x > 0.f) shapes.rectFilled(px(g.position), px({g.position.x + g.size.x, g.position.y + g.size.y}), view::Rgba(31, 41, 59));
+        if (g.size.x > 0.f) shapes.rectFilled(px(g.position), px({g.position.x + g.size.x, g.position.y + g.size.y}), stripFill);
       }
       // "?" da janela ativa: a barra cobre o do cabecalho, entao ele e redesenhado no mesmo lugar (o clique chega a moldura).
       const SU::Rect hr = helpRectOf(leaf.bounds);
       const view::Pixel hc{hr.position.x + hr.size.x * 0.5f, hr.position.y + hr.size.y * 0.5f};
-      shapes.circleFilled(hc, hr.size.x * 0.5f, view::Rgba(64, 102, 178));
-      shapes.textMiddle(hc, "?", kStripFont, view::Rgba(233, 234, 238), true);
+      shapes.circleFilled(hc, hr.size.x * 0.5f, accent);
+      shapes.textMiddle(hc, "?", kStripFont, textC, true);
       for (std::size_t i = 0; i < tabs.size(); ++i) {
         const float x = c->x(i);
         const float tw = c->w[i];
         const bool on = tabs[i] == leaf.leaf;
         shapes.rectFilled({x, y}, {x + tw - 1.f, y + kHeaderH},
-                          on ? view::Rgba(52, 68, 96) : view::Rgba(24, 31, 46));
-        if (on) shapes.rectFilled({x, y + kHeaderH - 2.f}, {x + tw - 1.f, y + kHeaderH}, view::Rgba(74, 130, 200));
+                          on ? tabOn : tabOff);
+        if (on) shapes.rectFilled({x, y + kHeaderH - 2.f}, {x + tw - 1.f, y + kHeaderH}, accent);
         // Grip da aba: seis pontos (duas colunas, tres linhas), com folga de kTabPadX da borda da aba.
         const float gx = x + kTabPadX, gy = y + (kHeaderH - 12.f) * 0.5f;
         for (int col = 0; col < 2; ++col) {
           for (int row = 0; row < 3; ++row) {
             const float dx = gx + static_cast<float>(col) * 4.f, dy = gy + static_cast<float>(row) * 4.f;
-            shapes.rectFilled({dx, dy}, {dx + 2.f, dy + 2.f}, view::Rgba(120, 132, 150));
+            shapes.rectFilled({dx, dy}, {dx + 2.f, dy + 2.f}, dimC);
           }
         }
         // Nome alinhado a esquerda, depois do grip, e X na faixa da direita; os dois no centro vertical da aba.
@@ -289,24 +300,20 @@ class Host {
         const float nameX = x + kTabPadX + kTabGripW;
         const float nameW = std::max(0.f, tw - kTabOverhead);
         const std::string name = fitText(titleOf(tabs[i]), nameW, [this](const std::string& t) { return painter_.measure(t, kStripFont); });
-        if (!name.empty()) shapes.textMiddle({nameX, midY}, name, kStripFont, view::Rgba(233, 234, 238), false, nameW);
-        shapes.textMiddle({x + tw - kTabPadX - kTabX * 0.5f, midY}, "X", kStripFont, view::Rgba(170, 178, 194), true, kTabX);
+        if (!name.empty()) shapes.textMiddle({nameX, midY}, name, kStripFont, textC, false, nameW);
+        shapes.textMiddle({x + tw - kTabPadX - kTabX * 0.5f, midY}, "X", kStripFont, dimC, true, kTabX);
       }
     }
     if (drag_.IsDragging()) {
-      for (const SW::DockLeafRect& leaf : model_.leaves()) {
-        if (!inside(leaf.bounds, pointer_)) continue;
-        const SW::DockSlot slot = SW::ComputeDropSlot(leaf.bounds, pointer_, cfg_.edgeFraction);
-        const SU::Rect hl = guideRect(leaf.bounds, slot);
-        if (hl.size.x > 0.f && hl.size.y > 0.f) {
-          shapes.rectFilled(px(hl.position), px({hl.position.x + hl.size.x, hl.position.y + hl.size.y}),
-                            view::Rgba(74, 130, 200, 110));
-        }
-        break;
+      // So o encaixe em aba tem guia: titulo/barra de abas ou centro da janela. Nas bordas nada e desenhado.
+      const Drop d = dropAt(pointer_, activeWin_);
+      if (d.tab && d.zone.size.x > 0.f && d.zone.size.y > 0.f) {
+        shapes.rectFilled(px(d.zone.position), px({d.zone.position.x + d.zone.size.x, d.zone.position.y + d.zone.size.y}),
+                          col(pal.accent, 110.f / 255.f));
       }
       // Contorno da janela que se move: segue o ponteiro, com o mesmo ponto de pegada do grip.
       const SU::Vec2 a{pointer_.x - grabOffset_.x, pointer_.y - grabOffset_.y};
-      shapes.rectFilled(px(a), px({a.x + grabSize_.x, a.y + grabSize_.y}), view::Rgba(74, 130, 200, 40));
+      shapes.rectFilled(px(a), px({a.x + grabSize_.x, a.y + grabSize_.y}), col(pal.accent, 40.f / 255.f));
     }
     addResizeHighlight(shapes);
     if (shapes.shapes().empty()) return true;
@@ -342,6 +349,7 @@ class Host {
   }
 
  private:
+  // Janela registrada com esse id, ou nullptr.
   Window* find(SU::UIHandle id) {
     for (Window& w : windows_) {
       if (w.id == id) return &w;
@@ -349,6 +357,7 @@ class Host {
     return nullptr;
   }
 
+  // Titulo (ja traduzido) da janela, ou vazio se nao registrada.
   std::string titleOf(SU::UIHandle id) const {
     for (const Window& w : windows_) {
       if (w.id == id) return w.title ? w.title() : std::string{};
@@ -383,30 +392,50 @@ class Host {
   // Janela desenhada neste quadro (esta no dock como aba ativa, ou flutua). Grip de aba inativa nao e clicavel.
   [[nodiscard]] bool visibleNow(const Window& w) const { return !model_.contains(w.id) || model_.active(w.id); }
 
+  // Ponto dentro do retangulo (borda direita/inferior exclusiva).
   static bool inside(SU::Rect r, SU::Vec2 p) {
     return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y && p.y < r.position.y + r.size.y;
   }
 
-  // Retangulo de uma zona de encaixe dentro da folha (borda = um quarto da folha; centro = miolo).
-  static SU::Rect guideRect(SU::Rect leaf, SW::DockSlot slot) {
-    const SU::Vec2 p = leaf.position;
-    const SU::Vec2 s = leaf.size;
-    switch (slot) {
-      case SW::DockSlot::Left: return {p, {s.x * 0.25f, s.y}};
-      case SW::DockSlot::Right: return {{p.x + s.x * 0.75f, p.y}, {s.x * 0.25f, s.y}};
-      case SW::DockSlot::Top: return {p, {s.x, s.y * 0.25f}};
-      case SW::DockSlot::Bottom: return {{p.x, p.y + s.y * 0.75f}, {s.x, s.y * 0.25f}};
-      case SW::DockSlot::Center: return {{p.x + s.x * 0.25f, p.y + s.y * 0.25f}, {s.x * 0.5f, s.y * 0.5f}};
-      default: return {};
+  // Alvo do encaixe sob o ponto. So ha um jeito de juntar janelas: soltar no titulo/barra de abas da janela (faixa do
+  // cabecalho) ou no centro dela (miolo, metade da largura e da altura). As bordas nao dividem o dock: nao tem alvo.
+  struct Drop {
+    bool overLeaf = false;   // o ponto esta sobre uma janela acoplada (visivel, sem janela solta por cima)
+    bool tab = false;        // ... e numa zona que junta em aba (titulo, barra de abas ou centro)
+    SU::UIHandle leaf{};     // folha alvo (janela visivel dela)
+    SU::Rect zone{};         // zona do encaixe (para o destaque)
+  };
+  // Descobre o alvo de encaixe sob o ponteiro durante o arraste (nada se uma janela solta cobre o ponto).
+  [[nodiscard]] Drop dropAt(SU::Vec2 p, SU::UIHandle dragged) {
+    Drop d;
+    if (floatingAt(p, dragged)) return d;   // janela solta por cima: o dock por baixo nao e alvo
+    for (const SW::DockLeafRect& leaf : model_.leaves()) {
+      if (!inside(leaf.bounds, p)) continue;
+      d.overLeaf = true;
+      d.leaf = leaf.leaf;
+      const SU::Vec2 s = leaf.bounds.size, o = leaf.bounds.position;
+      const SU::Rect header{o, {s.x, std::min(kHeaderH, s.y)}};
+      const SU::Rect center{{o.x + s.x * 0.25f, o.y + s.y * 0.25f}, {s.x * 0.5f, s.y * 0.5f}};
+      if (inside(header, p)) {
+        d.tab = true;
+        d.zone = header;
+      } else if (inside(center, p)) {
+        d.tab = true;
+        d.zone = center;
+      }
+      break;
     }
+    return d;
   }
 
   // Ha uma janela solta (flutuante, desenhada) sob o ponto? Ela fica por cima do dock: a faixa de abas e as divisorias
   // que estao por baixo dela nao recebem o clique. Sem isto, uma janela solta sobre a faixa de abas nao podia ser
   // arrastada de volta (o clique pegava a aba de baixo) e, sem arraste, nao havia como acopla-la de novo.
-  [[nodiscard]] bool floatingAt(SU::Vec2 p) {
+  // `except`: janela ignorada (a que esta sendo arrastada nao cobre o proprio alvo).
+  [[nodiscard]] bool floatingAt(SU::Vec2 p, SU::UIHandle except = {}) {
     for (Window* wp : hitOrder()) {
       const Window& w = *wp;
+      if (w.id == except) continue;
       if (!w.open() || !visibleNow(w) || model_.contains(w.id)) continue;
       const std::optional<SU::Rect> f = w.frame();
       if (f && inside(*f, p)) return true;
@@ -525,18 +554,26 @@ class Host {
     }
     if (!drag_.IsPressed()) return false;
     const bool wasDragging = drag_.IsDragging();
-    const SW::DockDropResult r = model_.release(drag_, p);   // encerra o gesto
+    (void)model_.release(drag_, p);   // encerra o gesto; a decisao e do host (dropAt): so titulo/abas/centro juntam
     if (!wasDragging) return false;
     Window* w = find(activeWin_);
     if (!w) return true;
     const SU::Vec2 at{p.x - grabOffset_.x, p.y - grabOffset_.y};
-    if (r.action == SW::DockAction::Float) {
-      if (model_.contains(w->id)) model_.remove(w->id);
-      w->floatAt(at);
-    } else if (r.action == SW::DockAction::Dock || r.action == SW::DockAction::Tab) {
-      if (r.targetLeaf == w->id) return true;               // soltou sobre si mesma: nada muda
+    const Drop d = dropAt(p, w->id);
+    if (d.tab) {
+      const std::vector<SU::UIHandle> mine = model_.tabsOf(d.leaf);
+      if (d.leaf == w->id || std::find(mine.begin(), mine.end(), w->id) != mine.end()) return true;   // soltou no proprio grupo
+      SW::DockDropResult r;
+      r.action = SW::DockAction::Tab;
+      r.targetLeaf = d.leaf;
       if (model_.contains(w->id)) model_.remove(w->id);     // sai da folha antiga antes de entrar na nova
       if (!model_.apply(w->id, r)) w->floatAt(at);          // alvo sumiu: a janela fica solta
+    } else if (d.overLeaf) {
+      // Borda de uma janela: nao divide o dock e nao junta. A acoplada continua onde estava; a solta muda de lugar.
+      if (!model_.contains(w->id)) w->floatAt(at);
+    } else {
+      if (model_.contains(w->id)) model_.remove(w->id);     // fora de qualquer janela: flutua no ponto
+      w->floatAt(at);
     }
     return true;
   }
@@ -614,7 +651,9 @@ class Host {
   // Destaque: a borda sob o mouse (ou a que esta sendo redimensionada) e a divisoria sob o mouse (ou a movida)
   // ficam com uma faixa mais grossa e brilhante.
   void addResizeHighlight(view::ShapeList& shapes) {
-    const view::Color bright = view::Rgba(120, 170, 235, 235);
+    const editor::theme_colors::Colors pal = editor::theme_colors::Active();
+    const editor::palette::Rgb hi = editor::palette::mixRgb(pal.accent, pal.text, 0.3f);
+    const view::Color bright = view::rgbaF(hi.r, hi.g, hi.b, 235.f / 255.f);
     if (resizing_) {
       if (Window* w = find(resizeWin_)) {
         if (const std::optional<SU::Rect> f = w->frame()) {
@@ -682,6 +721,7 @@ class Host {
     model_.apply(idOf(w), drop);
   }
 
+  // Esse id pertence a uma janela registrada? (usado ao restaurar um layout salvo).
   bool isRegistered(SU::UIHandle id) const {
     for (const Window& w : windows_) {
       if (w.id == id) return true;
@@ -690,7 +730,6 @@ class Host {
   }
 
   dock_layout::Model model_;
-  SW::DockInteractionConfig cfg_{};
   SW::DockDragController drag_{};
   SU::UIHandle activeWin_{};
   SU::UIHandle lastActive_{};   // ultimo grupo tocado: janela nova entra nele

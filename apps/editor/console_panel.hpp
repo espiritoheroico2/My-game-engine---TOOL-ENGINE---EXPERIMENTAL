@@ -20,6 +20,7 @@
 #include "text_atlas_set.hpp"
 #include "console_model.hpp"
 #include "ui_scrollbar.hpp"
+#include "theme_colors.hpp"
 #include "i18n.hpp"
 #include "spriteui_host.hpp"
 
@@ -51,6 +52,7 @@ namespace cm = editor::console_model;
 namespace SW = ToolEngine::SpriteUi::Widgets;
 namespace wf = editor::window_frame;
 
+// Medidas fixas da janela (alturas, margens, fontes) em pixels logicos.
 struct Theme {
   static constexpr float kPad = sui::kPanelPadding;
   static constexpr float kRowH = 30.f;            // barra de botoes, barra de filtros e linha de comando
@@ -70,28 +72,40 @@ struct Theme {
 };
 
 
+// Cor sRGB comum -> linear pre-multiplicado do renderizador SpriteUI.
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
 }
 
+// Cores do painel: derivadas da paleta em uso (theme_colors.hpp) e refeitas a cada quadro (refreshColors),
+// entao trocar o tema em Configuracoes > Appearance repinta o Console. Avisos e erros do log ficam fixos
+// (amarelo e vermelho de severidade, lidos sobre qualquer fundo).
+inline SU::Vec4 FromRgb(const editor::palette::Rgb& c) { return Srgb(c.r, c.g, c.b, c.a); }
+
+// Cores da paleta em uso (theme_colors.hpp), refeitas a cada quadro.
 struct Colors {
-  SU::Vec4 panel = Srgb(0.055f, 0.075f, 0.11f, 0.97f);
-  SU::Vec4 text = Srgb(0.91f, 0.918f, 0.933f);
-  SU::Vec4 textDim = Srgb(0.56f, 0.565f, 0.60f);
-  SU::Vec4 title = Srgb(0.45f, 0.72f, 0.96f);
-  SU::Vec4 btn = Srgb(0.13f, 0.16f, 0.21f);
-  SU::Vec4 btnHover = Srgb(0.19f, 0.23f, 0.30f);
-  SU::Vec4 btnPressed = Srgb(0.09f, 0.11f, 0.15f);
-  SU::Vec4 btnOn = Srgb(0.12f, 0.31f, 0.52f);       // Auto-scroll ligado
-  SU::Vec4 field = Srgb(0.08f, 0.10f, 0.14f);
-  SU::Vec4 fieldFocus = Srgb(0.10f, 0.13f, 0.19f);
-  SU::Vec4 selection = Srgb(0.15f, 0.22f, 0.37f, 0.75f);
-  SU::Vec4 caret = Srgb(0.91f, 0.918f, 0.933f);
-  SU::Vec4 rowHover = Srgb(0.12f, 0.15f, 0.20f);
-  SU::Vec4 infoText = Srgb(0.91f, 0.918f, 0.933f);
+  SU::Vec4 panel, text, textDim, title, btn, btnHover, btnPressed, btnOn, field, fieldFocus, selection, caret, rowHover, infoText;
   SU::Vec4 warnText = Srgb(1.f, 0.85f, 0.3f);
   SU::Vec4 errorText = Srgb(1.f, 0.4f, 0.4f);
-  SU::Vec4 scroll = Srgb(0.45f, 0.48f, 0.55f, 0.75f);
+  SU::Vec4 scroll;
+  Colors() {
+    const editor::theme_colors::Colors t = editor::theme_colors::Active();
+    panel = FromRgb(editor::theme_colors::WithAlpha(t.panel, 0.97f));
+    text = FromRgb(t.text);
+    textDim = FromRgb(t.textDim);
+    title = FromRgb(t.heading);
+    btn = FromRgb(t.btn);
+    btnHover = FromRgb(t.btnHover);
+    btnPressed = FromRgb(t.btnPressed);
+    btnOn = FromRgb(t.btnOn);
+    field = FromRgb(t.field);
+    fieldFocus = FromRgb(t.fieldFocus);
+    selection = FromRgb(t.selection);
+    caret = FromRgb(t.caret);
+    rowHover = FromRgb(t.rowHover);
+    infoText = FromRgb(t.text);
+    scroll = FromRgb(t.scroll);
+  }
 };
 
 enum class HAlign : std::uint8_t { Left, Center, Right };
@@ -100,6 +114,7 @@ enum class Focus : std::uint8_t { None, Filter, Command };
 // Alvo de clique: botoes, chips de nivel, campos e linhas da lista.
 enum class Target : std::uint8_t { None, Clear, Check, Copy, Follow, Level, Filter, Command, Run, Row };
 
+// O que esta sob o mouse: tipo de controle e indice (grupo de nivel ou linha da lista).
 struct Hit {
   Target target = Target::None;
   int index = -1;   // Level: grupo; Row: linha da lista
@@ -124,19 +139,14 @@ struct Requests {
   std::string select;          // nome entre colchetes da linha clicada (vazio = nada)
 };
 
+// Janela Console: lista rolavel de logs com filtro de texto, chips de nivel (Info/Warnings/Errors), seguir fim, limpar, selecao/copia e linha de comando. Desenho em cache, refeito so quando algo muda.
 class ConsolePanel {
  public:
   // O atlas e o renderizador SDL sao do editor (mesmos do resto das janelas SpriteUI). O atlas sobe uma vez, na main.
   ConsolePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : text_{text}, sdl_{sdl} {
     panel_ = tree_.Create({}, panelStyle());
     // Moldura: mesmas cores do painel (fundo navy) e aba de 30 px.
-    frameColors_.body = colors_.panel;
-    frameColors_.border = Srgb(0.160f, 0.220f, 0.330f);
-    frameColors_.borderDragging = Srgb(0.420f, 0.600f, 0.980f);
-    frameColors_.headerActive = Srgb(0.120f, 0.160f, 0.230f);
-    frameColors_.headerInactive = Srgb(0.090f, 0.120f, 0.180f);
-    frameColors_.headerDragging = Srgb(0.160f, 0.210f, 0.300f);
-    frameColors_.glyph = Srgb(0.910f, 0.918f, 0.933f);
+    refreshColors();
   }
   ConsolePanel(const ConsolePanel&) = delete;
   ConsolePanel& operator=(const ConsolePanel&) = delete;
@@ -148,6 +158,7 @@ class ConsolePanel {
   [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
   // Moldura de posicao e tamanho: o host do dock a usa para redimensionar pelas bordas.
   window_frame::Frame* frameState() { return &frame_; }
+  // Tira a janela do dock e a coloca flutuando no ponto dado.
   void floatAt(SU::Vec2 at) {
     dock_.reset();
     frame_.undock(at);
@@ -193,6 +204,7 @@ class ConsolePanel {
     }
   }
 
+  // true se o mouse esta sobre o filtro ou a linha de comando (cursor de texto).
   [[nodiscard]] bool wantsTextCursor(float x, float y) const {
     if (frame_.dragging()) return false;
     if (draggingSelection_) return true;
@@ -215,6 +227,7 @@ class ConsolePanel {
     }
     window_ = window;
 
+    refreshColors();   // paleta em uso neste quadro (trocar o tema repinta o Console)
     frame_.placeIn(static_cast<float>(winW), static_cast<float>(winH), dock_);
     const SU::Rect content = frame_.content();
     layoutPanel(sui::Box{content.position.x, content.position.y, content.size.x, content.size.y});
@@ -244,6 +257,7 @@ class ConsolePanel {
   }
 
  private:
+  // Controle desenhado (botao, chip, campo) com sua caixa em coordenadas do painel.
   struct Box {
     Target target = Target::None;
     int index = -1;
@@ -261,10 +275,12 @@ class ConsolePanel {
     ST::TextLayoutResult text;
   };
 
+  // Retangulo simples em pixels.
   struct Bounds {
     float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
   };
 
+  // Estilo de layout da raiz do painel (coluna; tamanho definido depois por setSize).
   static SU::FlexItem panelStyle() {
     SU::FlexItem panel;
     panel.width = {SU::SizeMode::Fixed, 1.f};
@@ -284,6 +300,7 @@ class ConsolePanel {
     return ev != wf::Event::None;
   }
 
+  // Clique esquerdo: guarda o alvo pressionado (a acao so ocorre ao soltar) e inicia foco/selecao de texto ou arraste de rolagem.
   void onMouseDown(const SDL_Event& e) {
     if (e.button.button != SDL_BUTTON_LEFT) return;
     pressed_ = Hit{};
@@ -310,6 +327,7 @@ class ConsolePanel {
     draggingSelection_ = false;
   }
 
+  // Move o cursor do campo focado (filtro ou comando) para o ponto do mouse; extend mantem a selecao.
   void moveCaretFromPointer(float x, float y, bool extend) {
     const Target target = focus_ == Focus::Filter ? Target::Filter : focus_ == Focus::Command ? Target::Command : Target::None;
     const auto box = std::find_if(boxes_.begin(), boxes_.end(), [target](const Box& b) { return b.target == target; });
@@ -327,6 +345,7 @@ class ConsolePanel {
     line.moveCaretTo(ST::FindInsertionOffset(layout, {localX, localY}), extend);
   }
 
+  // Insere texto digitado no campo focado (filtro ou comando).
   void insertText(const char* utf8) {
     const std::string s(utf8);
     if (focus_ == Focus::Filter) {
@@ -401,6 +420,7 @@ class ConsolePanel {
     line.insert(text.substr(0, text.find('\n')));
   }
 
+  // Executa a acao do controle clicado (limpar, seguir, nivel, copiar, rodar comando...) e preenche os pedidos ao host.
   void applyClick(const Hit& h, const cm::LogEntries& entries, Requests& out) {
     switch (h.target) {
       case Target::Clear:
@@ -446,6 +466,7 @@ class ConsolePanel {
     }
   }
 
+  // Cancela clique, arraste e selecao em andamento (ex.: janela perdeu o foco).
   void resetInteraction() {
     bar_.pointerUp();
     pressed_ = Hit{};
@@ -459,10 +480,12 @@ class ConsolePanel {
     return x >= panelBounds_.x && y >= panelBounds_.y && x < panelBounds_.x + panelBounds_.w && y < panelBounds_.y + panelBounds_.h;
   }
 
+  // Ponto (x, y) dentro do retangulo (bx, by, bw, bh).
   bool inside(float bx, float by, float bw, float bh, float x, float y) const {
     return x >= bx && y >= by && x < bx + bw && y < by + bh;
   }
 
+  // Controle sob o ponto: primeiro os botoes, depois a lista.
   Hit hitTest(float x, float y) const {
     for (const Box& b : boxes_) {
       if (inside(panelBounds_.x + b.x, panelBounds_.y + b.y, b.w, b.h, x, y)) return Hit{b.target, b.index};
@@ -476,11 +499,30 @@ class ConsolePanel {
     return Hit{};
   }
 
+  // Ponto dentro da area visivel da lista de logs.
   bool inList(float x, float y) const {
     return inside(listX(), panelBounds_.y + listTop_, listW(), viewportH_, x, y);
   }
 
   // ---------- Geometria ----------
+  // Refaz cores do conteudo e da moldura a partir da paleta em uso.
+  void refreshColors() {
+    colors_ = Colors{};
+    const unsigned long long sig = editor::theme_colors::Signature();
+    if (sig != themeSig_) {   // tema novo: a lista guarda a cor do texto de cada linha, refaz
+      themeSig_ = sig;
+      dirty_ = true;
+    }
+    const editor::theme_colors::Colors t = editor::theme_colors::Active();
+    frameColors_.body = colors_.panel;
+    frameColors_.border = FromRgb(t.border);
+    frameColors_.borderDragging = FromRgb(t.borderDragging);
+    frameColors_.headerActive = FromRgb(t.headerActive);
+    frameColors_.headerInactive = FromRgb(t.headerInactive);
+    frameColors_.headerDragging = FromRgb(t.headerDragging);
+    frameColors_.glyph = FromRgb(t.text);
+  }
+  // Aplica o retangulo dado ao painel e recalcula as medidas derivadas.
   void layoutPanel(sui::Box bounds) {
     panelW_ = std::max(1.f, bounds.w);
     panelH_ = std::max(1.f, bounds.h);
@@ -496,6 +538,7 @@ class ConsolePanel {
   float listX() const { return panelBounds_.x + Theme::kPad * 0.5f; }
   float listW() const { return std::max(40.f, panelW_ - Theme::kPad - Theme::kScrollLane); }
 
+  // Define largura e altura (px) de um no da arvore de layout.
   void setSize(SU::UIHandle handle, float width, float height) {
     auto* el = tree_.Get(handle);
     if (!el) return;
@@ -505,6 +548,7 @@ class ConsolePanel {
     tree_.SetStyle(handle, style);
   }
 
+  // Recalcula a rolagem maxima; com "seguir" ligado cola no fim da lista.
   void updateScroll() {
     maxScroll_ = std::max(0.f, contentH_ - viewportH_);
     if (model_.follow()) scroll_ = maxScroll_;
@@ -572,6 +616,7 @@ class ConsolePanel {
     items_.insert(items_.end(), glyphs.begin(), glyphs.end());
   }
 
+  // Acrescenta um retangulo de cor (ignora tamanho vazio) com o recorte dado.
   void addSolid(float x, float y, float w, float h, SU::Vec4 color, float z, std::uint32_t clip) {
     if (w <= 0.f || h <= 0.f) return;
     SR::UIRenderItem item;
@@ -586,6 +631,7 @@ class ConsolePanel {
     items_.push_back(item);
   }
 
+  // Registra uma area de recorte e devolve o indice dela.
   std::uint32_t addClip(float x, float y, float w, float h) {
     clips_.push_back({x, y, x + w, y + h});
     return static_cast<std::uint32_t>(clips_.size() - 1);
@@ -607,6 +653,7 @@ class ConsolePanel {
     return x + w + Theme::kBtnGap;
   }
 
+  // Monta a barra do topo: titulo, botoes (limpar, seguir...) e o campo de filtro.
   void buildChrome(const Source& src) {
     boxes_.clear();
     const float pad = Theme::kPad;
@@ -628,6 +675,7 @@ class ConsolePanel {
     buildCommandRow();
   }
 
+  // Monta os chips de nivel (Info/Warnings/Errors) com a contagem de cada um.
   void buildFilterRow(const cm::LogEntries& entries) {
     const float pad = Theme::kPad;
     const float chipY = Theme::kRowH + (Theme::kRowH - Theme::kBtnH) * 0.5f;
@@ -651,6 +699,7 @@ class ConsolePanel {
             std::max(40.f, panelW_ - pad - x), Theme::kFieldH);
   }
 
+  // Monta a linha de comando no rodape: campo e botao Run.
   void buildCommandRow() {
     const float pad = Theme::kPad;
     const float rowY = panelH_ - Theme::kRowH;
@@ -671,6 +720,7 @@ class ConsolePanel {
     return colors_.infoText;
   }
 
+  // Mede e quebra o texto das entradas visiveis e guarda a posicao de cada linha; so roda quando o log, o filtro ou a largura mudam.
   void rebuildList(const cm::LogEntries& entries, std::uint64_t serial, float width) {
     entries_.clear();
     const std::vector<std::size_t> visible = model_.visibleIndices(entries);
@@ -710,7 +760,7 @@ class ConsolePanel {
     const SU::Rect grip = frame_.gripRect();
     // "?" (circulo com o simbolo) logo depois do grip; o nome vem depois dele, em negrito (duas passadas, 0,7 px).
     const SU::Rect help = frame_.helpRect();
-    auto helpItems = window_help_icon::BuildCircleItems(panel_, help, SU::Vec4{0.250f, 0.400f, 0.700f, 1.f}, -1.9f, paint_);
+    auto helpItems = window_help_icon::BuildCircleItems(panel_, help, FromRgb(editor::theme_colors::Active().accent), -1.9f, paint_);
     items_.insert(items_.end(), helpItems.begin(), helpItems.end());
     addText(help.position.x + help.size.x * 0.5f, help.position.y + help.size.y * 0.5f, "?", Theme::kFont, colors_.text, help.size.x, 0.96f,
             frameClip, HAlign::Center);
@@ -750,6 +800,7 @@ class ConsolePanel {
     addList(src, hover);
   }
 
+  // Desenha um controle com fundo conforme hover/pressionado e o texto dele.
   void addBox(const Box& b, const Hit& hover, bool down, std::uint32_t clip) {
     const bool hot = hover.target == b.target && hover.index == b.index;
     const bool pressed = hot && down;
@@ -758,6 +809,7 @@ class ConsolePanel {
     addText(x + b.w * 0.5f, y + b.h * 0.5f, b.label, Theme::kFont, b.textColor, b.w, 0.3f, clip, HAlign::Center);
   }
 
+  // Cor de fundo do controle conforme estado (pressionado, ligado, hover).
   SU::Vec4 backgroundOf(const Box& b, bool hot, bool pressed) const {
     if (pressed) return colors_.btnPressed;
     if (b.target == Target::Follow && b.on) return colors_.btnOn;
@@ -798,6 +850,7 @@ class ConsolePanel {
     if (focused) addSolid(innerX + caretX - shift, y + 4.f, 1.f, b.h - 8.f, colors_.caret, 0.4f, clip);
   }
 
+  // Desenha as linhas visiveis da lista, com selecao e rolagem.
   void addList(const Source& src, const Hit& hover) {
     const float lx = listX(), ly = panelBounds_.y + listTop_;
     const float lw = listW();
@@ -820,6 +873,7 @@ class ConsolePanel {
     addScrollThumb(lx, ly, lw);
   }
 
+  // A linha aparece dentro da area visivel da lista? (evita desenhar o que esta fora).
   bool rowVisible(const Entry& e) const {
     const float top = e.y - scroll_;
     return top + e.h >= 0.f && top <= viewportH_;
@@ -863,6 +917,7 @@ class ConsolePanel {
   std::uint64_t builtSerial_ = ~0ull;
   float builtWidth_ = -1.f;
   bool dirty_ = true;
+  unsigned long long themeSig_ = 0;   // assinatura da paleta do ultimo quadro
 
   // Janela e interacao
   Bounds panelBounds_{};

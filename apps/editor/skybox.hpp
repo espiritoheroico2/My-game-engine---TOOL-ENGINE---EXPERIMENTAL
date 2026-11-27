@@ -23,18 +23,22 @@
 
 namespace editor {
 
+// Nomes dos 6 lados do cubo, na ordem usada em face[] e SkyTextures.
 inline constexpr std::array<const char*, 6> kSkyFaceNames = {"+X (right)", "-X (left)", "+Y (top)", "-Y (bottom)", "+Z (front)", "-Z (back)"};
 
+// Configuracao do skybox da cena (fundo em cubo). Salva/carregada em project.hpp.
 struct SkyboxSettings {
   bool enabled = false;                       // cenas antigas ficam sem skybox; cena nova liga (ver createDefaultContent)
   char face[6][160] = {};                     // imagem de cada lado (caminho em Assets); vazio = cor solida
-  float solid[3] = {0.25f, 0.40f, 0.60f};     // cor dos lados sem imagem
+  float solid[4] = {0.25f, 0.40f, 0.60f, 1.f};   // cor dos lados sem imagem (RGBA; alfa 1 = opaco)
 };
 
 // Imagens dos 6 lados ja carregadas (nullptr = usa a cor solida). Ordem igual a kSkyFaceNames.
 using SkyTextures = std::array<const tool::Texture*, 6>;
 
+// Detalhes internos do skybox (nao usar fora deste arquivo).
 namespace skydetail {
+// Cor RGB simples em float.
 struct Rgb { float r, g, b; };
 
 // Lado do cubo de uma direcao (unitaria) e coordenadas (s, t) ja divididas pelo eixo dominante, em [-1, 1].

@@ -154,7 +154,7 @@ inline void drawCanvas(Editor& ed, CanvasComp& cv, tool::canvas::Rect r, bool in
     switch (static_cast<UiKind>(it.kind)) {
       case UiKind::Text: out.text(a, txt, fs, col); break;
       case UiKind::Panel:
-        out.rectFilled(a, b, col, 4.f);
+        canvas_paint::drawBox(out, a, b, col, view::Rgba(0, 0, 0, 0), it.radius * k, false);
         if (!txt.empty()) label(view::Rgba(255, 255, 255));
         break;
       case UiKind::Bar: {
@@ -172,8 +172,12 @@ inline void drawCanvas(Editor& ed, CanvasComp& cv, tool::canvas::Rect r, bool in
         const bool hov = interactive && hoverIdx == k2, down = interactive && pressedIdx == k2;
         const float m = down ? 0.7f : hov ? 1.15f : 1.f;
         const float tint[4] = {std::min(1.f, it.color[0] * m), std::min(1.f, it.color[1] * m), std::min(1.f, it.color[2] * m), it.color[3]};
-        out.rectFilled(a, b, canvas_paint::shapeColor(tint), 6.f);
-        outlineRect(out, a, b, view::Rgba(255, 255, 255, 160));
+        if (it.radius > 0.f) {   // borda arredondada junto com o fundo
+          canvas_paint::drawBox(out, a, b, canvas_paint::shapeColor(tint), view::Rgba(255, 255, 255, 160), it.radius * k, true);
+        } else {
+          out.rectFilled(a, b, canvas_paint::shapeColor(tint), 0.f);
+          outlineRect(out, a, b, view::Rgba(255, 255, 255, 160));
+        }
         label(view::Rgba(0, 0, 0));
         break;
       }

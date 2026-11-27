@@ -1,6 +1,6 @@
 #pragma once
 
-// Janela "Input Map" em SpriteUI.
+// Janela "Input Map" em SpriteUI, na moldura padrao do editor (framed::Chrome: titulo, "?", X, grip e dock).
 // Dados e regras: input_map.hpp (o mapa salvo em Project/input_map.json). Aqui: desenho, cliques, digitacao e a
 // captura "Listen" (proxima tecla, botao ou movimento do analogico vira a vinculacao).
 //
@@ -11,9 +11,12 @@
 //  - A janela rola com a roda do mouse.
 
 #include "editor_state.hpp"
+#include "framed_window.hpp"
 #include "i18n.hpp"
 #include "input_map.hpp"
 #include "sui_panel.hpp"
+#include "theme_colors.hpp"
+#include "ui_scrollbar.hpp"
 #include "spriteui_host.hpp"
 
 #include <SDL3/SDL.h>
@@ -33,14 +36,9 @@ namespace SR = ToolEngine::SpriteUi::Rendering;
 
 inline constexpr float kWidth = 980.f;
 inline constexpr float kHeight = 620.f;
-inline constexpr float kMargin = 24.f;
-inline constexpr float kTitleH = 36.f;
-inline constexpr float kCloseSize = 26.f;
-inline constexpr float kCloseInset = 6.f;
 inline constexpr float kPad = 14.f;
 inline constexpr float kFont = 13.f;
 inline constexpr float kSmall = 12.f;
-inline constexpr float kTitleFont = 18.f;
 inline constexpr float kRowH = 26.f;
 inline constexpr float kGap = 6.f;
 inline constexpr float kScrollStep = 40.f;
@@ -51,17 +49,22 @@ inline constexpr float kColAction = 150.f, kColType = 60.f, kColKey = 250.f, kCo
 // Teclas que nao viram vinculo quando capturadas: Esc cancela, Backspace/Delete limpam.
 inline constexpr int kScanEscape = 41, kScanBackspace = 42, kScanDelete = 76;
 
+// Da paleta em uso (theme_colors.hpp), refeito a cada quadro em draw(). ok (verde de "ligado") fica fixo.
 struct Colors {
-  SU::Vec4 field = sui::Srgb(0.165f, 0.165f, 0.176f);
-  SU::Vec4 fieldFocus = sui::Srgb(0.196f, 0.196f, 0.216f);
-  SU::Vec4 listen = sui::Srgb(0.200f, 0.345f, 0.588f);
-  SU::Vec4 button = sui::Srgb(0.200f, 0.345f, 0.588f);
-  SU::Vec4 danger = sui::Srgb(0.45f, 0.20f, 0.20f);
-  SU::Vec4 row = sui::Srgb(0.150f, 0.150f, 0.160f);
-  SU::Vec4 rowAlt = sui::Srgb(0.130f, 0.130f, 0.140f);
+  SU::Vec4 field, fieldFocus, listen, button, danger, row, rowAlt, idle, accent;
   SU::Vec4 ok = sui::Srgb(0.30f, 1.00f, 0.40f);
-  SU::Vec4 idle = sui::Srgb(0.50f, 0.50f, 0.50f);
-  SU::Vec4 accent = sui::Srgb(0.45f, 0.70f, 1.00f);
+  Colors() {
+    const editor::theme_colors::Colors t = editor::theme_colors::Active();
+    field = sui::PaletteColor(t.field);
+    fieldFocus = sui::PaletteColor(t.fieldFocus);
+    listen = sui::PaletteColor(t.btnOn);
+    button = sui::PaletteColor(t.btnOn);
+    danger = sui::PaletteColor(palette::mixRgb(t.surface, t.error, 0.6f));
+    row = sui::PaletteColor(t.surface);
+    rowAlt = sui::PaletteColor(t.field);
+    idle = sui::PaletteColor(t.textDim);
+    accent = sui::PaletteColor(t.heading);
+  }
 };
 
 // Alvo da captura "Listen" (qual campo da linha recebe a proxima tecla, botao ou analogico).
@@ -76,29 +79,48 @@ enum class Hit : std::uint8_t {
   RowPadButton, RowPadButtonClear, RowPadAxis, RowInvert, RowStick, RowDelete, AddButton, AddAxis
 };
 
+// Area clicavel desenhada no corpo (coordenadas do corpo, sem rolagem) e o que ela faz; scheme/row dizem qual controle e qual linha.
 struct HitBox {
   float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
   Hit kind = Hit::AddController;
   int scheme = -1, row = -1;
 };
 
+// Janela Input Map: edita os esquemas de controle (teclado/gamepad) e as linhas acao -> tecla/botao/eixo. Captura a proxima tecla ou botao quando uma celula esta em modo "listen".
 class Panel {
  public:
-  Panel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : sdl_{sdl}, title_{text}, body_{text} {}
+  Panel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : sdl_{sdl}, body_{text}, chrome_{text, sdl} {}
   Panel(const Panel&) = delete;
   Panel& operator=(const Panel&) = delete;
 
+  // Moldura padrao (titulo, "?", X, grip, dock). O host registra no dock e le consumeClose()/consumeHelp().
+  framed::Chrome& chrome() { return chrome_; }
+
   // Eventos do SDL (ver main.cpp). Devolve true quando a janela usou o evento.
   bool handleEvent(const SDL_Event& e, Editor& ed) {
-    if (!ed.showInputMap) return false;
+    if (!ed.showInputMap || !chrome_.visible()) return false;
+    if (chrome_.handleEvent(e)) {   // X, "?" e minimizar da moldura
+      focus_ = {};
+      listen_ = {};
+      return true;
+    }
     switch (e.type) {
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (e.button.button != SDL_BUTTON_LEFT || !contains(e.button.x, e.button.y)) return false;
+        if (bar_.pointerDown(e.button.x, e.button.y, scroll_)) {   // barra de rolagem unica: arrasta ou pagina
+          scroll_ = ui_scrollbar::clampScroll(scroll_, contentH_, viewH_);
+          return true;
+        }
         press(e.button.x, e.button.y, ed);
         return true;
+      case SDL_EVENT_MOUSE_MOTION:
+        if (bar_.pointerMove(e.motion.x, e.motion.y, scroll_)) scroll_ = ui_scrollbar::clampScroll(scroll_, contentH_, viewH_);
+        return bar_.dragging();   // o arraste segue com o mouse fora da janela
+      case SDL_EVENT_MOUSE_BUTTON_UP:
+        return e.button.button == SDL_BUTTON_LEFT && bar_.pointerUp();
       case SDL_EVENT_MOUSE_WHEEL:
         if (!contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
-        scroll_ -= e.wheel.y * kScrollStep;
+        scroll_ = ui_scrollbar::clampScroll(scroll_ - e.wheel.y * kScrollStep, contentH_, viewH_);
         return true;
       case SDL_EVENT_TEXT_INPUT:
         if (focus_.kind == Text::None || !e.text.text) return false;
@@ -111,13 +133,16 @@ class Panel {
     }
   }
 
-  // Desenha a janela quando aberta. Retorna false so em falha do SDL.
-  bool draw(SDL_Renderer* renderer, SDL_Window* window, Editor& ed) {
-    if (!ed.showInputMap) {
+  // Desenha a moldura e o corpo quando aberta e visivel (`shown`: a aba ativa do dock, ou flutuante). Retorna false so em falha do SDL.
+  bool draw(SDL_Renderer* renderer, SDL_Window* window, Editor& ed, bool shown) {
+    if (!ed.showInputMap || !shown) {
+      chrome_.hide();
       if (textOn_) stopText(window);
       return true;
     }
     if (!renderer || !window) return false;
+    theme_ = sui::Theme{};   // paleta em uso neste quadro (trocar o tema repinta a janela)
+    colors_ = Colors{};
     int ww = 0, wh = 0;
     if (!SDL_GetWindowSize(window, &ww, &wh)) return false;
     if (ww <= 0 || wh <= 0) return true;   // janela minimizada
@@ -131,12 +156,15 @@ class Panel {
     }
     capture(ed);
 
-    panel_.w = std::min(kWidth, static_cast<float>(ww) - 2.f * kMargin);
-    panel_.h = std::min(kHeight, static_cast<float>(wh) - 2.f * kMargin);
-    panel_.x = (static_cast<float>(ww) - panel_.w) * 0.5f;
-    panel_.y = (static_cast<float>(wh) - panel_.h) * 0.5f;
+    const sui::Box body = chrome_.prepare(static_cast<float>(ww), static_cast<float>(wh), kWidth, kHeight);
+    if (!chrome_.draw(renderer, T("Input Map"))) return false;
+    if (body.w <= 0.f || body.h <= 0.f) {   // minimizada: so o cabecalho
+      panel_ = {};
+      return true;
+    }
+    panel_ = body;
     bodyW_ = panel_.w - 2.f * kPad;
-    viewH_ = panel_.h - kTitleH;
+    viewH_ = panel_.h;
 
     rebuild(ed);
     scroll_ = std::clamp(scroll_, 0.f, std::max(0.f, contentH_ - viewH_));
@@ -149,10 +177,12 @@ class Panel {
   }
 
  private:
+  // Campo de texto em edicao (qual tipo, esquema e linha).
   struct Focus {
     Text kind = Text::None;
     int scheme = -1, row = -1;
   };
+  // Celula esperando a proxima tecla/botao/eixo para virar vinculo.
   struct Listen {
     Target kind = Target::None;
     int scheme = -1, row = -1;
@@ -168,14 +198,8 @@ class Panel {
   // ---------- Eventos ----------
   void press(float x, float y, Editor& ed) {
     const float lx = x - panel_.x, ly = y - panel_.y;
-    if (inside(lx, ly, panel_.w - kCloseSize - kCloseInset, (kTitleH - kCloseSize) * 0.5f, kCloseSize, kCloseSize)) {
-      ed.showInputMap = false;
-      focus_ = {};
-      listen_ = {};
-      return;
-    }
     listen_ = {};   // qualquer clique cancela a captura
-    const float bx = lx, by = ly - kTitleH + scroll_;
+    const float bx = lx, by = ly + scroll_;
     const HitBox* hit = nullptr;
     for (const HitBox& h : hits_) if (inside(bx, by, h.x, h.y, h.w, h.h)) hit = &h;   // o ultimo desenhado vence
     if (!hit) {
@@ -185,6 +209,7 @@ class Panel {
     dispatch(*hit, ed);
   }
 
+  // Executa a acao do HitBox clicado: adicionar/apagar esquema ou linha, ciclar controle e eixo, ou entrar em foco/captura.
   void dispatch(const HitBox& h, Editor& ed) {
     auto& schemes = ed.inputMap.schemes;
     const int si = h.scheme, ri = h.row;
@@ -273,6 +298,7 @@ class Panel {
     }
   }
 
+  // Tecla com a janela aberta: em captura, Esc cancela e Backspace/Delete limpam o vinculo; em texto, edita/encerra o campo.
   bool keyDown(SDL_Scancode sc, Editor& ed) {
     const int code = static_cast<int>(sc);
     if (listen_.kind != Target::None) {
@@ -367,6 +393,7 @@ class Panel {
     else SDL_StopTextInput(win);
     textOn_ = want;
   }
+  // Encerra a edicao de texto e desliga a entrada de texto do SDL.
   void stopText(SDL_Window* win) {
     focus_ = {};
     syncTextInput(win);
@@ -376,17 +403,9 @@ class Panel {
   // Monta o conteudo do corpo (coordenadas do corpo, sem rolagem) e a lista de cliques.
   void rebuild(Editor& ed) {
     body_.clear();
-    title_.clear();
     hits_.clear();
     const float x0 = kPad;
     float y = 0.f;
-
-    // Titulo (fica fixo, fora da rolagem).
-    const float titleLh = title_.lineHeight(kTitleFont);
-    title_.addText(kPad, (kTitleH - titleLh) * 0.5f, T("Input Map"), kTitleFont, theme_.text, bodyW_ - kCloseSize);
-    title_.addSolid(0.f, kTitleH - 1.f, panel_.w, 1.f, theme_.divider, 0.2f);
-    const auto xl = title_.layout("X", kTitleFont);
-    title_.addText(panel_.w - kCloseSize - kCloseInset + (kCloseSize - xl.size.x) * 0.5f, (kTitleH - xl.lineHeight) * 0.5f, "X", kTitleFont, theme_.text, kCloseSize);
 
     const float lh = body_.lineHeight(kFont);
     y += kPad;
@@ -514,15 +533,18 @@ class Panel {
     hits_.push_back({x, y, w, kRowH - 2.f, kind, s, r});
   }
 
+  // Monta o pacote (corpo com rolagem e barra) e desenha no SDL. A moldura ja foi desenhada por chrome_.
   bool drawPacket(SDL_Renderer* renderer) {
     std::vector<SR::UIRenderItem> items;
-    const std::vector<SR::ClipRectGPU> clips{{panel_.x, panel_.y, panel_.x + panel_.w, panel_.y + panel_.h},
-                                             {panel_.x, panel_.y + kTitleH, panel_.x + panel_.w, panel_.y + panel_.h}};
+    const std::vector<SR::ClipRectGPU> clips{{panel_.x, panel_.y, panel_.x + panel_.w, panel_.y + panel_.h}};
     const SU::UIHandle owner = sui::handleFor(0);
     std::uint64_t paint = 1;
-    items.push_back(sui::Canvas::solidItem(panel_.x, panel_.y, panel_.w, panel_.h, theme_.panel, 0.f, owner, 0u, paint++));
-    title_.appendItems(items, panel_.x, panel_.y, 0.f, panel_.y, panel_.y + panel_.h, owner, 0u, paint);
-    body_.appendItems(items, panel_.x, panel_.y + kTitleH, scroll_, panel_.y + kTitleH, panel_.y + panel_.h, owner, 1u, paint);
+    body_.appendItems(items, panel_.x, panel_.y, scroll_, panel_.y, panel_.y + panel_.h, owner, 0u, paint);
+    // Barra de rolagem unica do editor (ui_scrollbar.hpp).
+    bar_.layout({panel_.x + panel_.w - ui_scrollbar::kWidth - 2.f, panel_.y, ui_scrollbar::kWidth, viewH_}, contentH_, viewH_);
+    for (const ui_scrollbar::Quad& q : bar_.quads(palette::active(), scroll_)) {
+      if (q.rect.w > 0.f && q.rect.h > 0.f) items.push_back(sui::Canvas::solidItem(q.rect.x, q.rect.y, q.rect.w, q.rect.h, sui::PaletteColor(q.color), 0.8f, owner, 0u, paint++));
+    }
     packet_ = extractor_.Build(++frameId_, items, nullptr, clips);
     if (!SR::IsFramePacketValid(packet_)) return true;
     return sdl_.draw(renderer, packet_);
@@ -531,8 +553,8 @@ class Panel {
   sui::Theme theme_;
   Colors colors_;
   sui::SpriteUiSdlRenderer& sdl_;
-  sui::Canvas title_;
   sui::Canvas body_;
+  framed::Chrome chrome_;
   SR::RenderExtractor extractor_;
   SR::FramePacket packet_;
   std::uint64_t frameId_ = 0;
@@ -540,6 +562,7 @@ class Panel {
   sui::Box panel_;
   float bodyW_ = 0.f, viewH_ = 0.f, contentH_ = 0.f;
   float scroll_ = 0.f;
+  ui_scrollbar::Scrollbar bar_;
   std::vector<HitBox> hits_;
 
   Focus focus_;

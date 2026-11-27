@@ -8,6 +8,7 @@
 // Esta view so desenha e reporta cliques. Quem grava o projeto e o laço do host (Action::Save), para o modelo continuar
 // testavel sem janela.
 #include "window_palette.hpp"
+#include "theme_colors.hpp"
 #include "editor_info_model.hpp"
 #include "i18n.hpp"
 #include "spriteui_host.hpp"
@@ -42,6 +43,7 @@ using editor::info::Key;
 using Model = editor::info::Model;
 
 // Medidas. A altura do painel e fixa (calculada abaixo): o layout nao mede o conteudo.
+// Medidas fixas da janela Editor info (margens, alturas e fontes em pixels).
 struct Theme {
   static constexpr float kPanelWidth = 680.f;
   static constexpr float kPadding = 24.f;
@@ -80,25 +82,33 @@ inline const char* FieldLabel(Field f) {
   return "";
 }
 
+// Cor sRGB comum -> linear pre-multiplicado do renderizador SpriteUI.
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
 }
 
-// Cores do tema escuro: mesmas da tela de inicio.
+// Cores da paleta em uso (theme_colors.hpp), refeitas a cada quadro em Frame(). warning e ok ficam fixos (estado).
+// Cores da janela vindas da paleta em uso (theme_colors.hpp), refeitas a cada quadro.
 struct Colors {
-  SU::Vec4 panel = Srgb(0.125f, 0.125f, 0.137f);
-  SU::Vec4 field = Srgb(0.165f, 0.165f, 0.176f);
-  SU::Vec4 fieldFocus = Srgb(0.196f, 0.196f, 0.216f);
-  SU::Vec4 button = Srgb(0.200f, 0.345f, 0.588f);
-  SU::Vec4 buttonHover = Srgb(0.263f, 0.420f, 0.690f);
-  SU::Vec4 text = Srgb(0.910f, 0.918f, 0.933f);
-  SU::Vec4 textDim = Srgb(0.560f, 0.565f, 0.600f);
-  SU::Vec4 selection = Srgb(0.245f, 0.420f, 0.690f, 0.75f);
-  SU::Vec4 caret = Srgb(0.930f, 0.930f, 0.950f);
+  SU::Vec4 panel, field, fieldFocus, button, buttonHover, text, textDim, selection, caret;
   SU::Vec4 warning = Srgb(1.000f, 0.800f, 0.300f);
   SU::Vec4 ok = Srgb(0.400f, 0.900f, 0.500f);
+  Colors() {
+    const editor::theme_colors::Colors t = editor::theme_colors::Active();
+    auto c = [](const editor::palette::Rgb& x) { return Srgb(x.r, x.g, x.b, x.a); };
+    panel = c(t.panel);
+    field = c(t.field);
+    fieldFocus = c(t.fieldFocus);
+    button = c(t.btnOn);
+    buttonHover = c(editor::palette::mixRgb(t.btnOn, t.accent, 0.5f));
+    text = c(t.text);
+    textDim = c(t.textDim);
+    selection = c(t.selection);
+    caret = c(t.caret);
+  }
 };
 
+// Entrada do quadro (ponteiro e foco da janela), ja lida do SDL pelo host.
 // Entrada do quadro (ponteiro e foco da janela), ja lida do SDL pelo host.
 struct FrameInput {
   float pointerX = 0.f, pointerY = 0.f;
@@ -110,6 +120,7 @@ struct FrameInput {
 };
 
 // Texto ja medido, com o layout para caret e selecao.
+// Texto ja medido (glifos e layout) com a fatia do atlas do tamanho usado.
 struct Shaped {
   std::string utf8;
   std::vector<ST::GlyphInstance> glyphs;
@@ -117,8 +128,10 @@ struct Shaped {
   std::uint32_t slice = 1u;   // textureSlice do atlas deste tamanho
 };
 
+// Janela Editor info (SpriteUI): campos de nome/versao/descricao etc. e botao Salvar. So desenha e reporta Actions; o estado fica no Model.
 class View {
  public:
+  // O que o host deve fazer depois do quadro.
   enum class Action { None, Save, Close };
 
   View(Model& model, const sui::TextAtlasSet& text) : model_{model}, text_{text} { buildTree(); }
@@ -126,6 +139,7 @@ class View {
   // Calcula um quadro e retorna o pacote para desenhar. `actions` recebe o que foi clicado neste quadro.
   SR::FramePacket Frame(float windowWidth, float windowHeight, const FrameInput& in, std::vector<Action>& actions) {
     metrics_.cornerRadius = editor::ui_style::windowRadius();
+    colors_ = Colors{};   // paleta em uso neste quadro (trocar o tema repinta a janela)
     actions.clear();
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
 
@@ -200,12 +214,14 @@ class View {
   [[nodiscard]] SU::Rect rectOf(SU::UIHandle handle) const { return nodeRect(handle); }
 
  private:
+  // Ponto dentro do retangulo (borda direita/inferior exclusiva).
   static bool inside(SU::Rect r, SU::Vec2 p) {
     return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y &&
            p.y < r.position.y + r.size.y;
   }
 
   // Moldura: X fecha (Action::Close); pressionar o grip inicia o arraste da janela. So o grip arrasta.
+  // Botoes da moldura (X, "?", minimizar) quando o ponteiro foi pressionado.
   void handleFrameInput(const FrameInput& in, std::vector<Action>& actions) {
     const SU::Vec2 p{in.pointerX, in.pointerY};
     if (dragging_) {
@@ -229,6 +245,7 @@ class View {
   }
 
   // ---------- Arvore de layout ----------
+  // Cria a arvore de layout uma vez: um rotulo e um campo por Field, botao Salvar e linhas de status.
   void buildTree() {
     // Visual da moldura: cantos arredondados, aba de 30 px, borda azul ao arrastar.
     metrics_.headerHeight = 30.f;
@@ -262,6 +279,7 @@ class View {
   }
 
   // Filhos de altura fixa nao encolhem (shrink = 0): sem isso o flex os reduz a zero dentro da coluna.
+  // Rotulo de altura fixa (nao encolhe dentro da coluna).
   static SU::FlexItem labelStyle(float height) {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Percent, 1.f};
@@ -269,6 +287,7 @@ class View {
     s.shrink = 0.f;
     return s;
   }
+  // Campo de texto de altura fixa que ocupa toda a largura.
   static SU::FlexItem fieldStyle() {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Percent, 1.f};
@@ -276,6 +295,7 @@ class View {
     s.shrink = 0.f;
     return s;
   }
+  // Botao com largura fixa e altura padrao.
   static SU::FlexItem buttonStyle(float width) {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Fixed, width};
@@ -283,6 +303,7 @@ class View {
     s.shrink = 0.f;
     return s;
   }
+  // Linha de altura fixa que ocupa toda a largura.
   static SU::FlexItem rowStyle(float height) {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Percent, 1.f};
@@ -293,6 +314,7 @@ class View {
     return s;
   }
 
+  // Ajusta a largura do painel (a altura e fixa, ver Theme::kPanelHeight).
   void setPanelWidth(float width) {
     auto* el = tree_.Get(panelHandle_);
     if (!el) return;
@@ -302,6 +324,7 @@ class View {
   }
 
   // ---------- Texto ----------
+  // Mede e posiciona o texto no tamanho de fonte da interface.
   Shaped shape(const std::string& utf8, float size) const {
     Shaped s;
     s.utf8 = utf8;
@@ -317,6 +340,7 @@ class View {
   }
 
   // ---------- Visuais, clique e foco ----------
+  // Cor de cada campo (foco) e do botao Salvar (hover).
   void applyVisuals() {
     for (std::size_t i = 0; i < kFieldCount; ++i) {
       SU::ElementVisual v;
@@ -331,6 +355,7 @@ class View {
     bridge_.SetVisual(save_, button);
   }
 
+  // Clique: foca o campo e posiciona o cursor onde clicou, ou pede Save.
   void handleClick(const SU::Input::UIEvent& event, std::vector<Action>& actions) {
     for (std::size_t i = 0; i < kFieldCount; ++i) {
       if (event.target != fields_[i]) continue;
@@ -362,12 +387,14 @@ class View {
     scroll = std::clamp(scroll, 0.f, maxScroll);
   }
 
+  // Retangulo calculado de um no do layout (vazio se nao existe).
   SU::Rect nodeRect(SU::UIHandle handle) const {
     const auto* el = tree_.Get(handle);
     return el ? el->node.rect : SU::Rect{};
   }
 
   // Desenho que a SpriteUI nao cria sozinha: texto, selecao, caret, status e faltantes. Usa o no como dono.
+  // Desenha por cima da arvore: moldura, textos, selecao e cursor dos campos, status e faltantes.
   void addDecorations(std::vector<SR::UIRenderItem>& out, std::vector<SR::ClipRectGPU>& clips) {
     std::uint64_t paint = 1000;
     std::uint32_t clipNow = SR::NoClipIndex;

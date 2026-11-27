@@ -23,6 +23,7 @@ inline constexpr float kWidth = 8.f;           // largura do trilho (e da zona d
 inline constexpr float kMinThumb = 24.f;       // menor comprimento do polegar
 inline constexpr float kPageFraction = 0.9f;   // clique no trilho rola 90% da altura visivel
 
+// Retangulo em pixels (x, y = canto superior esquerdo), proprio deste modulo para nao depender do SpriteUI.
 struct Rect {
   float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
   [[nodiscard]] bool contains(float px, float py) const { return px >= x && py >= y && px < x + w && py < y + h; }
@@ -34,6 +35,7 @@ struct Rect {
 // A barra aparece so quando o conteudo nao cabe.
 [[nodiscard]] inline bool needed(float contentH, float viewH) { return viewH > 0.f && contentH > viewH + 0.5f; }
 
+// Prende a rolagem em [0, maxScroll]; valor nao finito (NaN/inf) vira 0.
 [[nodiscard]] inline float clampScroll(float scroll, float contentH, float viewH) {
   if (!std::isfinite(scroll)) return 0.f;
   return std::clamp(scroll, 0.f, maxScroll(contentH, viewH));
@@ -54,6 +56,7 @@ struct Rect {
   return track.y + (mx > 0.f ? clampScroll(scroll, contentH, viewH) / mx * room : 0.f);
 }
 
+// Retangulo completo do polegar (mesma largura do trilho) para a rolagem atual.
 [[nodiscard]] inline Rect thumbRect(const Rect& track, float contentH, float viewH, float scroll) {
   return Rect{track.x, thumbTop(track, contentH, viewH, scroll), track.w, thumbLength(track.h, contentH, viewH)};
 }
@@ -87,6 +90,7 @@ struct Quad {
   palette::Rgb color;
 };
 
+// Estado da barra de rolagem vertical (posicao, arraste, hover). Logica pura: o painel so desenha o resultado e repassa o mouse.
 class Scrollbar {
  public:
   // Posiciona a barra (a cada quadro). Se o conteudo cabe, ela some e solta qualquer arraste.

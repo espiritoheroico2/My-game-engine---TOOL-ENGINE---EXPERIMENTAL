@@ -7,15 +7,17 @@
 
 namespace {
 
-int gFailures = 0;
-int gChecks = 0;
+int gFailures = 0;  // Quantidade de verificacoes que falharam.
+int gChecks = 0;  // Quantidade de verificacoes feitas.
 
+// Imprime ok/FALHOU para a verificacao e conta as falhas.
 void Check(bool ok, const char* what) {
   ++gChecks;
   std::printf("%s: %s\n", ok ? "ok" : "FALHOU", what);
   if (!ok) ++gFailures;
 }
 
+// Evento sintetico de botao esquerdo do mouse (apertar ou soltar) na posicao dada.
 SDL_Event Button(bool down, float x, float y) {
   SDL_Event e{};
   e.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
@@ -25,6 +27,7 @@ SDL_Event Button(bool down, float x, float y) {
   return e;
 }
 
+// Evento sintetico de movimento do mouse; `held` simula o botao esquerdo apertado.
 SDL_Event Motion(float x, float y, bool held) {
   SDL_Event e{};
   e.type = SDL_EVENT_MOUSE_MOTION;
@@ -36,6 +39,7 @@ SDL_Event Motion(float x, float y, bool held) {
 
 }  // namespace
 
+// Roda os testes do host do dock: arraste do grip (flutuar), redimensionar pela borda duas vezes e geometria das abas.
 int main() {
   namespace dh = editor::dock_host;
   namespace SU = ToolEngine::SpriteUi;
@@ -152,6 +156,16 @@ int main() {
     reg(wc, dh::Kind::Assets, "Assets");
     h2.beginFrame(area, kWinW, kWinH);
     h2.beginFrame(area, kWinW, kWinH);
+    constexpr float kHeaderHalf = dh::kHeaderH * 0.5f;
+    // Arrasta uma janela solta pelo grip ate (x, y) e solta la.
+    auto dragTo = [&](W& win, float x, float y) {
+      const SU::Rect g = win.frame.gripRect();
+      const float gx = g.position.x + g.size.x * 0.5f, gy = g.position.y + g.size.y * 0.5f;
+      (void)h2.onEvent(Button(true, gx, gy));
+      (void)h2.onEvent(Motion(x, y, true));
+      (void)h2.onEvent(Button(false, x, y));
+      h2.beginFrame(area, kWinW, kWinH);
+    };
     const SU::UIHandle idA = dh::idOf(dh::Kind::Hierarchy), idB = dh::idOf(dh::Kind::Console), idC = dh::idOf(dh::Kind::Assets);
     Check(h2.model().tabsOf(idA).size() == 3, "tres janelas abertas viram abas de uma folha");
     const auto leaves0 = h2.model().leaves();
@@ -192,7 +206,7 @@ int main() {
       Check(h2.model().contains(idA) && h2.model().contains(idC), "as outras abas continuam no dock");
     }
     {
-      // Solta numa borda da folha: divide o dock.
+      // Solta numa borda da janela: nao divide o dock nem junta (so titulo, barra de abas e centro juntam).
       const auto cells = h2.tabCells(h2.model().leaves().front());
       const SU::Rect leaf = h2.model().leaves().front().bounds;
       const SU::UIHandle lastTabId = h2.model().tabsOf(idA).back();
@@ -210,7 +224,50 @@ int main() {
       (void)h2.onEvent(Motion(ex, ey, true));
       (void)h2.onEvent(Button(false, ex, ey));
       h2.beginFrame(area, kWinW, kWinH);
-      Check(h2.model().contains(lastTabId) && h2.model().leaves().size() == 2, "janela solta, solta na borda, divide o dock");
+      Check(!h2.model().contains(lastTabId) && h2.floating(lastTabId), "janela solta, solta na borda de outra, continua solta");
+      Check(h2.model().leaves().size() == 1 && h2.model().tabsOf(idA).size() == 2, "borda nao divide o dock nem junta");
+
+      // Solta no titulo (cabecalho) da janela acoplada: entra como aba.
+      W& fw = lastTabId == idC ? wc : wb;
+      const SU::Rect lf2 = h2.model().leaves().front().bounds;
+      dragTo(fw, lf2.position.x + lf2.size.x * 0.9f, lf2.position.y + kHeaderHalf);
+      Check(h2.model().contains(lastTabId) && h2.model().tabsOf(idA).size() == 3, "janela solta, solta no titulo de outra, vira aba");
+    }
+    {
+      // Aba acoplada solta na borda do proprio grupo: nada muda (nao divide).
+      const auto cells = h2.tabCells(h2.model().leaves().front());
+      const SU::Rect lf = h2.model().leaves().front().bounds;
+      const float tx = cells->x(1) + dh::kTabGripW * 0.5f, ty = lf.position.y + kHeaderHalf;
+      (void)h2.onEvent(Button(true, tx, ty));
+      (void)h2.onEvent(Motion(lf.position.x + 6.f, lf.position.y + lf.size.y * 0.5f, true));
+      (void)h2.onEvent(Button(false, lf.position.x + 6.f, lf.position.y + lf.size.y * 0.5f));
+      h2.beginFrame(area, kWinW, kWinH);
+      Check(h2.model().leaves().size() == 1 && h2.model().tabsOf(idA).size() == 3, "aba acoplada solta na borda: nada muda");
+    }
+    {
+      // A barra de abas continua trocando a aba ativa pelo clique no nome.
+      const auto cells = h2.tabCells(h2.model().leaves().front());
+      const SU::Rect lf = h2.model().leaves().front().bounds;
+      const std::vector<SU::UIHandle> tabs = h2.model().tabsOf(idA);
+      const float tx = cells->x(0) + dh::kTabPadX + dh::kTabGripW + 4.f, ty = lf.position.y + kHeaderHalf;
+      (void)h2.onEvent(Button(true, tx, ty));
+      (void)h2.onEvent(Button(false, tx, ty));
+      Check(h2.model().active(tabs[0]), "clicar no nome da primeira aba a ativa");
+    }
+    {
+      // Janela solta no centro de uma janela acoplada com abas: junta ao grupo (sem a regra das bordas).
+      const SU::Rect lf = h2.model().leaves().front().bounds;
+      const SU::UIHandle lastTabId = h2.model().tabsOf(idA).back();
+      // Solta de novo a ultima aba, longe, e devolve no centro.
+      const auto cells = h2.tabCells(h2.model().leaves().front());
+      const float tx = cells->x(2) + dh::kTabGripW * 0.5f, ty = lf.position.y + kHeaderHalf;
+      (void)h2.onEvent(Button(true, tx, ty));
+      (void)h2.onEvent(Motion(tx + 40.f, 850.f, true));
+      (void)h2.onEvent(Button(false, tx + 40.f, 850.f));
+      h2.beginFrame(area, kWinW, kWinH);
+      Check(h2.floating(lastTabId), "aba arrastada para fora flutua de novo");
+      dragTo(lastTabId == idC ? wc : (lastTabId == idB ? wb : wa), lf.position.x + lf.size.x * 0.5f, lf.position.y + lf.size.y * 0.5f);
+      Check(h2.model().contains(lastTabId) && h2.model().tabsOf(idA).size() == 3, "solta no centro: volta ao grupo como aba");
     }
   }
 

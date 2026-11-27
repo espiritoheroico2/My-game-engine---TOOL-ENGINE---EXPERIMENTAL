@@ -10,6 +10,7 @@
 #include "window_palette.hpp"
 #include "i18n.hpp"
 #include "scenes_model.hpp"
+#include "ui_scrollbar.hpp"
 #include "spriteui_host.hpp"
 #include "window_frame.hpp"
 #include "window_help_icon.hpp"
@@ -47,6 +48,7 @@ using editor::scenes_model::Model;
 using editor::scenes_model::NameMode;
 
 // Medidas. A altura do painel e fixa: o layout nao mede o conteudo.
+// Medidas fixas da janela Scenes (margens, alturas de linha e botao, limites de linhas e assets).
 struct Theme {
   static constexpr float kPanelWidth = 680.f;
   static constexpr float kPadding = 24.f;
@@ -54,8 +56,10 @@ struct Theme {
   static constexpr float kLabelHeight = 18.f;
   static constexpr float kFieldHeight = 30.f;
   static constexpr float kButtonHeight = 34.f;
-  static constexpr float kButtonWidth = 150.f;
+  static constexpr float kButtonWidth = 92.f;     // largura minima dos botoes da barra (esticam para encher a linha)
   static constexpr float kButtonMaxWidth = 220.f;   // teto ao esticar um botao sozinho na linha
+  static constexpr float kEditButtonWidth = 96.f;   // Confirmar e Cancelar, ao lado do campo de nome
+  static constexpr float kAssignWidth = 120.f;      // Assign asset, na linha do titulo dos assets
   static constexpr float kRowHeight = 26.f;
   static constexpr std::size_t kMaxRows = 6;      // cenas visiveis (o resto rola depois)
   static constexpr std::size_t kMaxAssets = 4;    // assets visiveis
@@ -68,17 +72,18 @@ struct Theme {
   static constexpr float kGripWidth = 14.f;   // mesmo valor de UIWindowComponent::gripWidth
   static constexpr float kHelpSize = 18.f;    // diametro do "?"
   static constexpr float kHelpGap = 4.f;      // entre grip, "?" e titulo
-  // Filhos do painel: rotulo, 3 linhas de botoes (topo, acoes, confirmar), campo de nome, lista de cenas,
-  // rotulo de assets, assets e status. 17 filhos, 16 espacos.
-  static constexpr std::size_t kChildren = 1 + 3 + 1 + kMaxRows + 1 + kMaxAssets + 1;
+  // Filhos do painel: rotulo, barra de botoes, linha do campo de nome (com Confirmar e Cancelar), status, lista de
+  // cenas, linha do titulo dos assets (com Assign) e os assets.
+  static constexpr std::size_t kChildren = 6 + kMaxAssets;
   static constexpr float kPanelHeight =
-      2.f * kPadding + 3.f * kLabelHeight + 3.f * kButtonHeight + kFieldHeight +
+      2.f * kPadding + 2.f * kLabelHeight + 3.f * kButtonHeight +
       static_cast<float>(kMaxRows + kMaxAssets) * kRowHeight + static_cast<float>(kChildren - 1) * kGap;
 };
 
 using Colors = editor::file_panel_colors::Colors;
 inline Colors PaletteColors() { return editor::file_panel_colors::FromPalette(); }
 
+// Cor sRGB comum -> linear pre-multiplicado do renderizador SpriteUI.
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
 }
@@ -104,13 +109,16 @@ struct Shaped {
   std::uint32_t slice = 1u;   // slice do atlas do tamanho (TextAtlasSet)
 };
 
+// Janela Scenes (SpriteUI): lista de cenas, criar/renomear/apagar, assets da cena e status. So desenha e reporta Actions; o estado fica no Model.
 class View {
  public:
+  // O que o host deve fazer depois do quadro (salvar, abrir, apagar, ajuda, fechar...).
   enum class Action { None, Save, Reload, Open, Delete, Confirm, Assign, RemoveAsset, Help, Close };
 
   View(Model& model, const sui::TextAtlasSet& text) : model_{model}, text_{text} { buildTree(); }
 
   // Calcula um quadro e devolve o pacote para desenhar. `actions` recebe o que foi clicado neste quadro.
+  // Calcula um quadro (layout, cliques, hover, rolagem) e devolve o pacote de desenho. `actions` recebe o que foi clicado.
   SR::FramePacket Frame(float windowWidth, float windowHeight, const FrameInput& in, std::vector<Action>& actions) {
     frame_.refreshStyle();
     actions.clear();
@@ -133,28 +141,54 @@ class View {
 
     const SU::Rect content = frame_.content();
     content_ = content;
+    rows_ = SM::Rows(model_.scenes, model_.current);
     scroll_ = std::clamp(scroll_, 0.f, std::max(0.f, naturalH_ - content.size.y));
-    setPanelSize(content.size.x);   // altura natural: as linhas de botoes quebram conforme a largura; o excesso rola
+    listScroll_ = ui_scrollbar::clampScroll(listScroll_, listContentH(), listViewH());
+    if (enterPending_) {   // Enter no campo de nome: mesmas regras do botao Confirmar
+      enterPending_ = false;
+      confirm(actions);
+    }
+    // Barras de rolagem (ui_scrollbar.hpp): a do painel e a da lista de cenas. Usam o trilho do quadro anterior; o clique
+    // no polegar ou no trilho nao chega aos botoes de baixo, e o arraste segue com o mouse fora da janela.
+    bool barUse = bar_.dragging() || listBar_.dragging();
+    if (in.pointerPressed && listBar_.pointerDown(in.pointerX, in.pointerY, listScroll_)) barUse = true;
+    else if (in.pointerPressed && bar_.pointerDown(in.pointerX, in.pointerY, scroll_)) barUse = true;
+    if (bar_.dragging() && !in.pointerDown && !in.pointerPressed) bar_.pointerUp();
+    else bar_.pointerMove(in.pointerX, in.pointerY, scroll_);   // arrasta, ou so atualiza o hover
+    if (listBar_.dragging() && !in.pointerDown && !in.pointerPressed) listBar_.pointerUp();
+    else listBar_.pointerMove(in.pointerX, in.pointerY, listScroll_);
+    scroll_ = std::clamp(scroll_, 0.f, std::max(0.f, naturalH_ - content.size.y));
+    listScroll_ = ui_scrollbar::clampScroll(listScroll_, listContentH(), listViewH());
+    setPanelSize(content.size.x);   // altura natural: a barra de botoes quebra conforme a largura; o excesso rola
     tree_.Layout({{content.position.x, content.position.y - scroll_}, content.size});
     naturalH_ = rectOf(panelHandle_).size.y;
+    bar_.layout({content.position.x + content.size.x - ui_scrollbar::kWidth, content.position.y, ui_scrollbar::kWidth, content.size.y},
+                naturalH_, content.size.y);
+    const SU::Rect lr = nodeRect(listBox_);
+    listBar_.layout({lr.position.x + lr.size.x - ui_scrollbar::kWidth, lr.position.y, ui_scrollbar::kWidth, lr.size.y},
+                    listContentH(), listViewH());
+    listFirst_ = static_cast<std::size_t>(std::lround(listScroll_ / Theme::kRowHeight));
 
-    rows_ = SM::Rows(model_.scenes, model_.current);
     applyVisuals();
     auto scene = bridge_.Extract(tree_);
     SU::Input::UIInputSnapshot input;
     input.pointerPositionLogical = {in.pointerX, in.pointerY};
     input.pointerDeltaLogical = {in.pointerX - lastX_, in.pointerY - lastY_};
-    input.primaryDown = in.pointerDown;
-    input.primaryPressed = in.pointerPressed;
-    input.primaryReleased = in.pointerReleased;
+    input.primaryDown = in.pointerDown && !barUse;
+    input.primaryPressed = in.pointerPressed && !barUse;
+    input.primaryReleased = in.pointerReleased && !barUse;
     input.windowFocused = in.windowFocused;
     input.frameId = in.frameId;
     lastX_ = in.pointerX;
     lastY_ = in.pointerY;
 
     const auto events = router_.Process(input, scene.hitTargets);
+    // O Click sobe pelos pais (bubbling): cada clique chega aqui uma vez para o elemento tocado e de novo para a linha, a
+    // lista e o painel. So o primeiro vale; os de cima tirariam o foco do campo de nome logo apos o clique que o abriu.
     for (const auto& event : events) {
-      if (event.type == SU::Input::UIEventType::Click) handleClick(event, actions);
+      if (event.type != SU::Input::UIEventType::Click) continue;
+      handleClick(event, actions);
+      break;
     }
     hovered_ = router_.GetState().hoveredEntity;
 
@@ -180,6 +214,8 @@ class View {
     std::uint64_t paint = 1000;
     addFrame(extra, paint);
     addContent(extra, paint);
+    addScrollbar(extra, paint, bar_, scroll_);
+    addScrollbar(extra, paint, listBar_, listScroll_);
     scene.renderItems.insert(scene.renderItems.end(), extra.begin(), extra.end());
     return extractor_.Build(in.frameId, scene.renderItems, nullptr, clips);
   }
@@ -189,9 +225,30 @@ class View {
     if (!model_.nameFocus || model_.mode == NameMode::None) return;
     model_.name += utf8;
   }
+  // Apaga o ultimo caractere (UTF-8) do nome, se o campo esta focado.
   void Backspace() {
     if (!model_.nameFocus || model_.mode == NameMode::None) return;
     SM::PopUtf8(model_.name);
+  }
+
+  // Enter no campo de nome: confirma criar ou renomear no proximo quadro (a acao Confirm sai em Frame).
+  void PressEnter() {
+    if (model_.mode == NameMode::New || model_.mode == NameMode::Rename) enterPending_ = true;
+  }
+  // Esc: cancela criar, renomear ou apagar. Devolve true se havia algo a cancelar.
+  bool PressEscape() {
+    if (model_.mode == NameMode::None) return false;
+    SM::FinishName(model_);
+    model_.status.clear();
+    return true;
+  }
+  // Roda do mouse em (x, y): rola a lista de cenas quando o ponteiro esta sobre ela, senao o painel.
+  void wheelAt(float x, float y, float dy) {
+    if (listBar_.visible() && inside(nodeRect(listBox_), {x, y})) {
+      listScroll_ = ui_scrollbar::clampScroll(listScroll_ + dy * (Theme::kRowHeight / 40.f), listContentH(), listViewH());
+      return;
+    }
+    scrollBy(dy);
   }
 
   // Estado para testes e para o host.
@@ -213,6 +270,9 @@ class View {
   [[nodiscard]] bool minimized() const { return frame_.minimized(); }
   [[nodiscard]] const SW::WindowFrameMetrics& frameMetrics() const { return frame_.metrics(); }
   [[nodiscard]] SU::UIHandle rowHandle(std::size_t i) const { return rows_h_[i]; }
+  [[nodiscard]] SU::UIHandle listHandle() const { return listBox_; }
+  [[nodiscard]] std::size_t firstVisibleRow() const { return listFirst_; }   // indice (na lista ordenada) da primeira linha visivel
+  [[nodiscard]] float listScroll() const { return listScroll_; }
   [[nodiscard]] SU::UIHandle assetRemoveHandle(std::size_t i) const { return assetRemove_[i]; }
   [[nodiscard]] SU::UIHandle saveHandle() const { return save_; }
   [[nodiscard]] SU::UIHandle newHandle() const { return new_; }
@@ -235,6 +295,7 @@ class View {
   void scrollBy(float dy) { scroll_ = std::clamp(scroll_ + dy, 0.f, std::max(0.f, naturalH_ - content_.size.y)); }
 
  private:
+  // Ponto dentro do retangulo (borda direita/inferior exclusiva).
   static bool inside(SU::Rect r, SU::Vec2 p) {
     return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y &&
            p.y < r.position.y + r.size.y;
@@ -264,7 +325,9 @@ class View {
   }
 
   // ---------- Arvore de layout ----------
+  // Cria a arvore de layout uma vez: rotulos, botoes, campo de nome, linhas da lista e assets.
   void buildTree() {
+    SU::UIHandle toolbar{}, editRow{}, assetsHead{};
     applyPalette();   // a arvore usa as cores do tema ja aqui (antes, o conteudo saia com a cor padrao: cinza)
 
     SU::FlexItem panel;
@@ -277,30 +340,53 @@ class View {
     panelHandle_ = tree_.Create({}, panel);
 
     label_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
-    const auto topRow = tree_.Create(panelHandle_, wrapRowStyle());
-    save_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
-    new_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
-    reload_ = tree_.Create(topRow, buttonStyle(Theme::kButtonWidth));
-    for (std::size_t i = 0; i < Theme::kMaxRows; ++i) rows_h_[i] = tree_.Create(panelHandle_, labelStyle(Theme::kRowHeight));
+    // Barra de botoes: uma linha, todos com a mesma altura (quebra de linha so quando a janela estreita).
+    toolbar = tree_.Create(panelHandle_, wrapRowStyle());
+    new_ = tree_.Create(toolbar, buttonStyle(Theme::kButtonWidth));
+    open_ = tree_.Create(toolbar, buttonStyle(Theme::kButtonWidth));
+    rename_ = tree_.Create(toolbar, buttonStyle(Theme::kButtonWidth));
+    delete_ = tree_.Create(toolbar, buttonStyle(Theme::kButtonWidth));
+    save_ = tree_.Create(toolbar, buttonStyle(Theme::kButtonWidth));
+    reload_ = tree_.Create(toolbar, buttonStyle(Theme::kButtonWidth));
 
-    const auto actionRow = tree_.Create(panelHandle_, wrapRowStyle());
-    open_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
-    rename_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
-    delete_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
-    assign_ = tree_.Create(actionRow, buttonStyle(Theme::kButtonWidth));
+    // Campo de nome com Confirmar e Cancelar na mesma linha.
+    editRow = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    nameField_ = tree_.Create(editRow, assetNameStyle(Theme::kButtonHeight));
+    confirm_ = tree_.Create(editRow, fixedButtonStyle(Theme::kEditButtonWidth));
+    cancel_ = tree_.Create(editRow, fixedButtonStyle(Theme::kEditButtonWidth));
+    status_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
 
-    nameField_ = tree_.Create(panelHandle_, labelStyle(Theme::kFieldHeight));
-    const auto confirmRow = tree_.Create(panelHandle_, wrapRowStyle());
-    confirm_ = tree_.Create(confirmRow, buttonStyle(Theme::kButtonWidth));
-    cancel_ = tree_.Create(confirmRow, buttonStyle(Theme::kButtonWidth));
+    // Lista de cenas: altura fixa (kMaxRows linhas); o excesso rola pela barra da lista.
+    SU::FlexItem listStyle = rowStyle(static_cast<float>(Theme::kMaxRows) * Theme::kRowHeight);
+    listStyle.direction = SU::LayoutDirection::Column;
+    listStyle.gap = 0.f;   // linhas coladas: o espaco entre elas e a propria altura fixa
+    listBox_ = tree_.Create(panelHandle_, listStyle);
+    for (std::size_t i = 0; i < Theme::kMaxRows; ++i) rows_h_[i] = tree_.Create(listBox_, labelStyle(Theme::kRowHeight));
 
-    assetsLabel_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
+    assetsHead = tree_.Create(panelHandle_, rowStyle(Theme::kButtonHeight));
+    assetsLabel_ = tree_.Create(assetsHead, assetNameStyle(Theme::kButtonHeight));
+    assign_ = tree_.Create(assetsHead, fixedButtonStyle(Theme::kAssignWidth));
     for (std::size_t i = 0; i < Theme::kMaxAssets; ++i) {
       assetRow_[i] = tree_.Create(panelHandle_, rowStyle(Theme::kRowHeight));
-      assetName_[i] = tree_.Create(assetRow_[i], assetNameStyle());
+      assetName_[i] = tree_.Create(assetRow_[i], assetNameStyle(Theme::kRowHeight));
       assetRemove_[i] = tree_.Create(assetRow_[i], assetRemoveStyle());
     }
-    status_ = tree_.Create(panelHandle_, labelStyle(Theme::kLabelHeight));
+
+    // Linhas e caixas que so agrupam: nao recebem clique (o clique vai ao botao, ao campo ou a linha da lista).
+    for (const SU::UIHandle group : {toolbar, editRow, listBox_, assetsHead}) {
+      SU::ElementVisual v;
+      v.interactable = false;
+      v.clipOverflow = false;
+      v.zOrder = -0.5f;
+      bridge_.SetVisual(group, v);
+    }
+    for (std::size_t i = 0; i < Theme::kMaxAssets; ++i) {
+      SU::ElementVisual v;
+      v.interactable = false;
+      v.clipOverflow = false;
+      v.zOrder = -0.5f;
+      bridge_.SetVisual(assetRow_[i], v);
+    }
 
     SU::ElementVisual panelVisual;
     panelVisual.tintPremultipliedLinear = panelColor_;
@@ -318,6 +404,7 @@ class View {
     s.shrink = 0.f;
     return s;
   }
+  // Estilo de botao com largura fixa e altura padrao.
   static SU::FlexItem buttonStyle(float width) {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Fixed, width};
@@ -327,14 +414,24 @@ class View {
     s.shrink = 0.f;
     return s;
   }
-  static SU::FlexItem assetNameStyle() {
+  // Botao de largura fixa (nao estica), mesma altura dos outros botoes.
+  static SU::FlexItem fixedButtonStyle(float width) {
     SU::FlexItem s;
-    s.width = {SU::SizeMode::Fixed, 0.f};           // ocupa o espaco que sobra ao lado do botao de remover
-    s.grow = 1.f;
-    s.height = {SU::SizeMode::Fixed, Theme::kRowHeight};
+    s.width = {SU::SizeMode::Fixed, width};
+    s.height = {SU::SizeMode::Fixed, Theme::kButtonHeight};
     s.shrink = 0.f;
     return s;
   }
+  // Campo que ocupa o espaco que sobra ao lado dos botoes da mesma linha (nome do asset, campo de nome, titulo).
+  static SU::FlexItem assetNameStyle(float height) {
+    SU::FlexItem s;
+    s.width = {SU::SizeMode::Fixed, 0.f};
+    s.grow = 1.f;
+    s.height = {SU::SizeMode::Fixed, height};
+    s.shrink = 0.f;
+    return s;
+  }
+  // Botao de remover asset (largura fixa).
   static SU::FlexItem assetRemoveStyle() {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Fixed, Theme::kRemoveWidth};
@@ -342,6 +439,7 @@ class View {
     s.shrink = 0.f;
     return s;
   }
+  // Linha de altura fixa que ocupa toda a largura.
   static SU::FlexItem rowStyle(float height) {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Percent, 1.f};
@@ -349,6 +447,7 @@ class View {
     s.shrink = 0.f;
     s.direction = SU::LayoutDirection::Row;
     s.alignItems = SU::AlignItems::Stretch;
+    s.gap = Theme::kGap;
     return s;
   }
 
@@ -365,6 +464,7 @@ class View {
     return s;
   }
 
+  // Ajusta a largura do painel (altura do conteudo vem do layout).
   void setPanelSize(float width) {
     auto* el = tree_.Get(panelHandle_);
     if (!el) return;
@@ -375,6 +475,7 @@ class View {
   }
 
   // ---------- Texto ----------
+  // Mede e posiciona o texto (glifos, caret) no tamanho de fonte da interface.
   Shaped shape(const std::string& utf8, float size) const {
     Shaped s;
     s.utf8 = utf8;
@@ -390,6 +491,22 @@ class View {
     return s;
   }
 
+  // Corta o texto com "..." no fim para caber em `maxWidth` (nunca invade o que vem depois).
+  Shaped shapeFit(const std::string& utf8, float size, float maxWidth) const {
+    Shaped s = shape(utf8, size);
+    if (maxWidth <= 0.f || s.layout.size.x <= maxWidth) return s;
+    std::string cut = utf8;
+    while (!cut.empty()) {
+      SM::PopUtf8(cut);
+      s = shape(cut + "...", size);
+      if (s.layout.size.x <= maxWidth) return s;
+    }
+    return shape("...", size);
+  }
+  // Altura do conteudo da lista (todas as cenas) e da area visivel (kMaxRows linhas), para a barra da lista.
+  float listContentH() const { return static_cast<float>(rows_.size()) * Theme::kRowHeight; }
+  static float listViewH() { return static_cast<float>(Theme::kMaxRows) * Theme::kRowHeight; }
+
   // ---------- Visuais, clique e foco ----------
   // Botao: cor normal, de hover ou apagada; so clica quando habilitado (interactable).
   void paintButton(SU::UIHandle h, bool enabled, SU::Vec4 base) {
@@ -404,6 +521,7 @@ class View {
     enabled_.push_back({h, enabled});
   }
 
+  // Botao habilitado neste quadro? (calculado em applyVisuals)
   bool isEnabled(SU::UIHandle h) const {
     for (const auto& [handle, on] : enabled_) {
       if (handle == h) return on;
@@ -411,25 +529,30 @@ class View {
     return false;
   }
 
+  // Habilita/desabilita botoes conforme selecao, cena atual e modo (criar/renomear/apagar) e pinta cada elemento.
   void applyVisuals() {
     enabled_.clear();
     const SM::Actions acts = SM::ActionsFor(model_.selected, model_.current);
     const bool confirming = model_.mode != NameMode::None;
     for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
-      const bool has = i < rows_.size();
+      const std::size_t ri = listFirst_ + i;
+      const bool has = ri < rows_.size();
       SU::ElementVisual v;
       v.interactable = has;
       v.clipOverflow = false;
       v.zOrder = 0.f;
-      v.tintPremultipliedLinear = has && rows_[i].name == model_.selected ? colors_.rowSelected : colors_.field;
+      // Selecionada: destaque da selecao; passar o mouse: tom de campo em foco; resto: campo.
+      v.tintPremultipliedLinear = has && rows_[ri].name == model_.selected ? colors_.rowSelected
+                                  : has && hovered_ == rows_h_[i]          ? colors_.fieldFocus
+                                                                           : colors_.field;
       bridge_.SetVisual(rows_h_[i], v);
     }
-    paintButton(save_, true, colors_.button);
     paintButton(new_, !confirming, colors_.button);
-    paintButton(reload_, true, colors_.button);
     paintButton(open_, acts.open && !confirming, colors_.button);
     paintButton(rename_, acts.rename && !confirming, colors_.button);
     paintButton(delete_, acts.remove && !confirming, colors_.buttonDanger);
+    paintButton(save_, true, colors_.button);
+    paintButton(reload_, true, colors_.button);
     paintButton(assign_, !confirming, colors_.button);
     paintButton(confirm_, confirming, model_.mode == NameMode::Delete ? colors_.buttonDanger : colors_.button);
     paintButton(cancel_, confirming, colors_.button);
@@ -451,18 +574,21 @@ class View {
     }
   }
 
+  // Clique em um elemento: foca o nome, escolhe linha da lista, remove asset ou dispara o botao correspondente (Action).
   void handleClick(const SU::Input::UIEvent& event, std::vector<Action>& actions) {
     if (event.target == nameField_) {   // so foca quando ha criar ou renomear em curso
       model_.nameFocus = model_.mode == NameMode::New || model_.mode == NameMode::Rename;
       return;
     }
-    model_.nameFocus = false;   // qualquer outro clique tira o foco do campo
+    // Outro clique tira o foco do campo, mas com criar/renomear em curso o campo continua aberto: o foco volta ao clicar nele.
+    model_.nameFocus = false;
 
     for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
       if (event.target != rows_h_[i]) continue;
-      if (i < rows_.size()) model_.selected = rows_[i].name;
+      const std::size_t ri = listFirst_ + i;
+      if (ri < rows_.size() && model_.mode == NameMode::None) model_.selected = rows_[ri].name;   // com criar/renomear/apagar em curso a selecao fica
       // Duplo clique abre a cena (mesmas regras do botao Open: nunca a atual, nunca com confirmacao em curso).
-      if (i < rows_.size() && doubleClick_ && model_.mode == NameMode::None && SM::ActionsFor(model_.selected, model_.current).open) {
+      if (ri < rows_.size() && doubleClick_ && model_.mode == NameMode::None && SM::ActionsFor(model_.selected, model_.current).open) {
         actions.push_back(Action::Open);
       }
       return;
@@ -537,12 +663,14 @@ class View {
     const std::string problem = SM::NameProblem(model_.name, taken);
     if (!problem.empty()) {
       model_.status = problem;
+      model_.nameFocus = true;   // o campo continua em edicao: corrige o nome sem clicar de novo
       return;
     }
     model_.status.clear();
     actions.push_back(Action::Confirm);
   }
 
+  // Retangulo calculado de um no do layout (vazio se nao existe).
   SU::Rect nodeRect(SU::UIHandle handle) const {
     const auto* el = tree_.Get(handle);
     return el ? el->node.rect : SU::Rect{};
@@ -609,6 +737,25 @@ class View {
   }
 
   // Conteudo: textos, botoes, campo de nome e assets. Usa o no de cada elemento como dono.
+  // Barra de rolagem unica do editor: so aparece quando o conteudo passa da janela.
+  // Desenha uma barra de rolagem (a do painel ou a da lista) com o deslocamento dela.
+  void addScrollbar(std::vector<SR::UIRenderItem>& out, std::uint64_t& paint, const ui_scrollbar::Scrollbar& bar, float scroll) {
+    for (const ui_scrollbar::Quad& q : bar.quads(palette::active(), scroll)) {
+      if (q.rect.w <= 0.f || q.rect.h <= 0.f) continue;
+      SR::UIRenderItem item;
+      item.handle = panelHandle_;
+      item.layout.resolvedPosition = {q.rect.x, q.rect.y};
+      item.layout.resolvedSize = {q.rect.w, q.rect.h};
+      item.tintPremultipliedLinear = Srgb(q.color.r, q.color.g, q.color.b, q.color.a);
+      item.textureSlice = SR::WhiteTextureSlice;
+      item.clipIndex = SR::NoClipIndex;
+      item.zOrder = 0.7f;
+      item.paintOrder = paint++;
+      out.push_back(item);
+    }
+  }
+
+  // Gera os itens de desenho do conteudo: textos, botoes, campo de nome com cursor e lista de assets.
   void addContent(std::vector<SR::UIRenderItem>& out, std::uint64_t& paint) {
     auto solid = [&](SU::UIHandle owner, SU::Rect r, SU::Vec4 color, float z) {
       SR::UIRenderItem item;
@@ -631,28 +778,28 @@ class View {
       paint += items.size() + 1;
       out.insert(out.end(), items.begin(), items.end());
     };
-    // Texto centralizado no botao; apagado quando o botao esta desabilitado.
+    // Texto centralizado no botao (cortado com "..." se nao cabe); apagado quando o botao esta desabilitado.
     auto button = [&](SU::UIHandle h, const std::string& label) {
-      const Shaped s = shape(label, Theme::kFontSize);
       const SU::Rect r = nodeRect(h);
+      const Shaped s = shapeFit(label, Theme::kFontSize, r.size.x - 2.f * Theme::kGap);
       text(h, s, {r.position.x + (r.size.x - s.layout.size.x) * 0.5f, r.position.y + (r.size.y - s.layout.lineHeight) * 0.5f},
            isEnabled(h) ? colors_.text : colors_.textDim, 0.9f);
     };
-    // Texto alinhado a esquerda, centrado na altura da linha.
-    auto line = [&](SU::UIHandle h, const std::string& label, SU::Vec4 color, float size = Theme::kLabelSize) {
-      const Shaped s = shape(label, size);
+    // Texto alinhado a esquerda, centrado na altura da linha, cortado com "..." antes de `reserve` px do fim.
+    auto line = [&](SU::UIHandle h, const std::string& label, SU::Vec4 color, float size = Theme::kLabelSize, float reserve = 0.f) {
       const SU::Rect r = nodeRect(h);
+      const Shaped s = shapeFit(label, size, r.size.x - 2.f * Theme::kFieldInset - reserve);
       text(h, s, {r.position.x + Theme::kFieldInset, r.position.y + (r.size.y - s.layout.lineHeight) * 0.5f}, color, 0.9f);
     };
 
     line(label_, T("Current scene: ") + (model_.current.empty() ? T("(none)") : model_.current), colors_.textDim);
 
-    button(save_, T("Save scene"));
     button(new_, T("New scene..."));
-    button(reload_, T("Reload list"));
     button(open_, T("Open"));
     button(rename_, T("Rename..."));
     button(delete_, T("Delete"));
+    button(save_, T("Save scene"));
+    button(reload_, T("Reload list"));
     button(assign_, T("Assign asset"));
     button(confirm_, model_.mode == NameMode::New      ? T("Create scene")
                      : model_.mode == NameMode::Rename ? T("Rename scene")
@@ -660,24 +807,29 @@ class View {
                                                        : T("Confirm"));
     button(cancel_, T("Cancel"));
 
-    // Lista de cenas: nome e "(open)" na cena atual; a selecionada fica destacada.
-    for (std::size_t i = 0; i < rows_.size(); ++i) {
-      line(rows_h_[i], rows_[i].current ? rows_[i].name + T(" (open)") : rows_[i].name, colors_.text, Theme::kLabelSize + 1.f);
+    // Lista de cenas: nome e "(open)" na cena atual (em cor de destaque); o texto nunca passa da barra da lista.
+    const float barReserve = listBar_.visible() ? ui_scrollbar::kWidth + 4.f : 0.f;
+    for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
+      const std::size_t ri = listFirst_ + i;
+      if (ri >= rows_.size()) break;
+      line(rows_h_[i], rows_[ri].current ? rows_[ri].name + T(" (open)") : rows_[ri].name,
+           rows_[ri].current ? colors_.help : colors_.text, Theme::kLabelSize + 1.f, barReserve);
     }
 
     // Campo de nome: placeholder quando vazio, caret quando focado. Em apagar, mostra a pergunta (sem edicao).
     const SU::Rect fr = nodeRect(nameField_);
     if (model_.mode == NameMode::Delete) {
-      const Shaped q = shape(T("Delete '") + model_.selected + T("'? This cannot be undone."), Theme::kFontSize);
+      const Shaped q = shapeFit(T("Delete '") + model_.selected + T("'? This cannot be undone."), Theme::kFontSize,
+                                fr.size.x - 2.f * Theme::kFieldInset);
       text(nameField_, q, {fr.position.x + Theme::kFieldInset, fr.position.y + (fr.size.y - q.layout.lineHeight) * 0.5f},
            colors_.warning, 0.9f);
     } else {
       const bool placeholder = model_.name.empty();
       const std::string shown = placeholder ? (model_.mode == NameMode::None ? T("Click New scene... or Rename...") : T("Scene name"))
                                             : model_.name;
-      const Shaped fs = shape(shown, Theme::kFontSize);
+      const Shaped fs = shapeFit(shown, Theme::kFontSize, fr.size.x - 2.f * Theme::kFieldInset - 4.f);
       const SU::Vec2 origin{fr.position.x + Theme::kFieldInset, fr.position.y + (fr.size.y - fs.layout.lineHeight) * 0.5f};
-      if (model_.nameFocus) {
+      if (model_.nameFocus && fs.utf8 == shown) {   // sem caret quando o texto foi cortado com "..."
         const std::uint32_t offset = placeholder ? 0u : static_cast<std::uint32_t>(model_.name.size());
         const SU::Rect caret = ST::GetCaretRect(fs.layout, offset);
         solid(nameField_, {{origin.x + caret.position.x, origin.y}, {1.5f, fs.layout.lineHeight}}, colors_.caret, 0.6f);
@@ -689,7 +841,7 @@ class View {
     line(assetsLabel_, T("Assets in this scene") + (model_.assets.empty() ? T(" (none)") : std::string{}), colors_.textDim);
     for (std::size_t i = 0; i < model_.assets.size(); ++i) {
       const SU::Rect r = nodeRect(assetName_[i]);
-      const Shaped name = shape(model_.assets[i], Theme::kLabelSize);
+      const Shaped name = shapeFit(model_.assets[i], Theme::kLabelSize, r.size.x - 2.f * Theme::kFieldInset - 70.f);
       text(assetName_[i], name, {r.position.x + Theme::kFieldInset, r.position.y + (r.size.y - name.layout.lineHeight) * 0.5f},
            colors_.text, 0.9f);
       if (i < model_.assetMissing.size() && model_.assetMissing[i]) {
@@ -716,6 +868,12 @@ class View {
 
   SU::UIHandle panelHandle_{}, label_{}, save_{}, new_{}, reload_{}, open_{}, rename_{}, delete_{}, assign_{};
   SU::Rect content_{};        // area visivel do conteudo (abaixo do cabecalho)
+  ui_scrollbar::Scrollbar bar_;
+  ui_scrollbar::Scrollbar listBar_;   // barra da lista de cenas (mais de kMaxRows cenas)
+  SU::UIHandle listBox_{};
+  float listScroll_ = 0.f;            // deslocamento da lista em pixels (linhas inteiras no desenho)
+  std::size_t listFirst_ = 0;         // primeira cena visivel
+  bool enterPending_ = false;         // Enter apertado: confirma o nome no proximo quadro
   float scroll_ = 0.f;        // deslocamento vertical do painel (roda do mouse)
   float naturalH_ = 0.f;      // altura natural do painel no ultimo quadro
   SU::UIHandle nameField_{}, confirm_{}, cancel_{}, assetsLabel_{}, status_{};

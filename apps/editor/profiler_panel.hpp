@@ -17,10 +17,12 @@
 //
 // A roda sobre o conteudo rola a lista.
 #include "window_palette.hpp"
+#include "theme_colors.hpp"
 #include "i18n.hpp"
 #include "profiler.hpp"
 #include "profiler_export.hpp"
 #include "profiler_model.hpp"
+#include "ui_scrollbar.hpp"
 #include "spriteui_host.hpp"
 
 #include "SpriteUi/Layout/LayoutBridge.hpp"
@@ -61,6 +63,7 @@ namespace pm = editor::profiler_model;
 namespace SW = ToolEngine::SpriteUi::Widgets;
 namespace wf = editor::window_frame;
 
+// Medidas fixas da janela (alturas, larguras, fontes e margens, em pixels logicos).
 struct Theme {
   static constexpr float kToolbarH = 30.f;        // barra do topo: botao Exportar e status
   static constexpr float kBtnH = 24.f;
@@ -82,26 +85,34 @@ struct Theme {
   static constexpr float kWheelStep = 48.f;       // px por passo da roda do mouse
 };
 
+// Cor sRGB comum -> formato linear pre-multiplicado que o renderizador SpriteUI espera.
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
 }
 
-// Cores do tema escuro (mesmos valores do painel de diagnostico do SpriteUI).
+inline SU::Vec4 FromRgb(const editor::palette::Rgb& c) { return Srgb(c.r, c.g, c.b, c.a); }
+
+// Cores da paleta em uso (theme_colors.hpp), refeitas a cada quadro em draw(). graphB (laranja da CPU) fica fixo:
+// e a segunda serie do grafico e precisa contrastar com a primeira em qualquer tema.
 struct Colors {
-  SU::Vec4 panel = Srgb(0.055f, 0.075f, 0.11f, 0.97f);
-  SU::Vec4 text = Srgb(0.91f, 0.918f, 0.933f);
-  SU::Vec4 textDim = Srgb(0.56f, 0.565f, 0.60f);
-  SU::Vec4 heading = Srgb(0.45f, 0.72f, 0.96f);
-  SU::Vec4 divider = Srgb(0.20f, 0.24f, 0.30f);
-  SU::Vec4 track = Srgb(0.16f, 0.18f, 0.22f);
-  SU::Vec4 barFill = Srgb(0.20f, 0.52f, 0.86f);
-  SU::Vec4 graphBg = Srgb(0.08f, 0.10f, 0.14f);
-  SU::Vec4 graphA = Srgb(0.30f, 0.70f, 0.98f);    // grafico 0: tempo de quadro
+  SU::Vec4 panel, text, textDim, heading, divider, track, barFill, graphBg, graphA, scroll, btn, btnPressed, btnDisabled;
   SU::Vec4 graphB = Srgb(0.95f, 0.62f, 0.25f);    // grafico 1: trabalho da CPU
-  SU::Vec4 scroll = Srgb(0.45f, 0.48f, 0.55f, 0.75f);
-  SU::Vec4 btn = Srgb(0.13f, 0.16f, 0.21f);
-  SU::Vec4 btnPressed = Srgb(0.09f, 0.11f, 0.15f);
-  SU::Vec4 btnDisabled = Srgb(0.10f, 0.12f, 0.15f);
+  Colors() {
+    const editor::theme_colors::Colors t = editor::theme_colors::Active();
+    panel = FromRgb(editor::theme_colors::WithAlpha(t.panel, 0.97f));
+    text = FromRgb(t.text);
+    textDim = FromRgb(t.textDim);
+    heading = FromRgb(t.heading);
+    divider = FromRgb(t.border);
+    track = FromRgb(t.btn);
+    barFill = FromRgb(t.accent);
+    graphBg = FromRgb(t.field);
+    graphA = FromRgb(t.accent);                   // grafico 0: tempo de quadro
+    scroll = FromRgb(t.scroll);
+    btn = FromRgb(t.btn);
+    btnPressed = FromRgb(t.btnPressed);
+    btnDisabled = FromRgb(palette::mixRgb(t.panel, t.surface, 0.5f));
+  }
 };
 
 // Um retangulo ou um texto ja medido, em coordenadas locais da lista (sem rolagem).
@@ -115,6 +126,7 @@ struct Prim {
   std::uint32_t slice = 1u; // Text: textureSlice do atlas do tamanho do texto
 };
 
+// Janela Profiler: mostra as metricas do modelo (tempo de quadro, CPU/GPU, memoria...) em lista rolavel com barras e graficos, e exporta uma amostra para .md. So reconstroi o conteudo a cada refresh().
 class ProfilerPanel {
  public:
   // `sdl` e o renderizador compartilhado das janelas SpriteUI (o atlas ja foi enviado por quem o criou).
@@ -138,6 +150,7 @@ class ProfilerPanel {
   bool exporting() const { return exporting_; }
   const std::string& exportStatus() const { return exportStatus_; }
 
+  // Inicia a coleta de 5 amostras para o arquivo de exportacao (ignora se ja coletando).
   void beginExport(double nowSec) {
     if (exporting_) return;
     exportSamples_.clear();
@@ -147,6 +160,7 @@ class ProfilerPanel {
     exportStatus_ = "Collecting Profiler data (0/5)";
   }
 
+  // Chamada todo quadro: quando a proxima amostra vence, captura; ao completar as 5, grava o arquivo.
   void tickExport(double nowSec) {
     if (!exporting_ || !exportSchedule_.due(nowSec)) return;
     exportSamples_.push_back(profiler_export::Capture(model_, nowSec - exportStart_, latestRenderStats_));
@@ -165,30 +179,38 @@ class ProfilerPanel {
   [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
   // Moldura de posicao e tamanho: o host do dock a usa para redimensionar pelas bordas.
   window_frame::Frame* frameState() { return &frame_; }
+  // Tira a janela do dock e a coloca flutuando no ponto dado.
   void floatAt(SU::Vec2 at) {
     dock_.reset();
     frame_.undock(at);
   }
 
+  // Mouse na moldura, barra de rolagem, botao Exportar e roda sobre a lista. true = consumiu o evento.
   bool handleEvent(const SDL_Event& e, bool visible) {
     if (!visible) return false;
     switch (e.type) {
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (e.button.button != SDL_BUTTON_LEFT) return false;
         if (frameDown(e.button.x, e.button.y)) return true;
+        if (bar_.pointerDown(e.button.x, e.button.y, scroll_)) {
+          scroll_ = ui_scrollbar::clampScroll(scroll_, contentH_, viewportH_);
+          return true;
+        }
         if (!exporting_ && insideRect(exportBox_, e.button.x, e.button.y)) {
           exportPressed_ = true;
           return true;
         }
         return false;
       case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (e.button.button == SDL_BUTTON_LEFT && bar_.pointerUp()) return true;
         if (e.button.button == SDL_BUTTON_LEFT && exportPressed_) {
           exportPressed_ = false;
           if (insideRect(exportBox_, e.button.x, e.button.y)) exportRequested_ = true;
         }
         return false;
       case SDL_EVENT_MOUSE_MOTION:
-        return false;
+        if (bar_.pointerMove(e.motion.x, e.motion.y, scroll_)) scroll_ = ui_scrollbar::clampScroll(scroll_, contentH_, viewportH_);
+        return bar_.dragging();   // o arraste do polegar segue com o mouse fora do painel
       case SDL_EVENT_MOUSE_WHEEL:
         if (!contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
         scroll_ = std::clamp(scroll_ - e.wheel.y * Theme::kWheelStep, 0.f, maxScroll_);
@@ -210,6 +232,7 @@ class ProfilerPanel {
     helpRequested_ = false;
     return v;
   }
+  // Le e zera o pedido de exportacao (botao Exportar clicado).
   bool consumeExportRequest() {
     const bool v = exportRequested_;
     exportRequested_ = false;
@@ -219,6 +242,11 @@ class ProfilerPanel {
   // Desenha a janela: moldura, barra do topo e a lista (rolagem). Retorna false so em falha do SDL.
   bool draw(SDL_Renderer* renderer, SDL_Window* window) {
     if (!renderer || !window) return false;
+    if (const unsigned long long sig = editor::theme_colors::Signature(); sig != themeSig_) {   // tema novo: cores e conteudo guardado
+      themeSig_ = sig;
+      colors_ = Colors{};
+      if (contentWidth_ > 0.f) rebuild();
+    }
     int winW = 0, winH = 0;
     SDL_GetWindowSize(window, &winW, &winH);
     if (winW <= 0 || winH <= 0) {
@@ -283,6 +311,7 @@ class ProfilerPanel {
     return ev != wf::Event::None;
   }
 
+  // Ponto dentro do retangulo (borda direita/inferior exclusiva).
   static bool insideRect(SU::Rect r, float x, float y) {
     return x >= r.position.x && y >= r.position.y && x < r.position.x + r.size.x && y < r.position.y + r.size.y;
   }
@@ -315,7 +344,7 @@ class ProfilerPanel {
     // "?" (circulo) logo depois do grip; o nome em negrito (duas passadas, 0,7 px), como o Console.
     const SU::Rect title = frame_.titleRect();
     const SU::Rect help = frame_.helpRect();
-    auto helpItems = window_help_icon::BuildCircleItems(panel_, help, SU::Vec4{0.250f, 0.400f, 0.700f, 1.f}, -1.9f, paint);
+    auto helpItems = window_help_icon::BuildCircleItems(panel_, help, FromRgb(editor::palette::active().accent), -1.9f, paint);
     out.insert(out.end(), helpItems.begin(), helpItems.end());
     const float qW = layoutOf("?", Theme::kFont).size.x;
     textItem(out, paint, help.position.x + (help.size.x - qW) * 0.5f, help.position.y + help.size.y * 0.5f, "?", Theme::kFont,
@@ -377,6 +406,7 @@ class ProfilerPanel {
     builtWidth_ = Theme::kWidth;
   }
 
+  // Define largura e altura (px) de um no da arvore de layout.
   void setSize(SU::UIHandle handle, float width, float height) {
     auto* element = tree_.Get(handle);
     if (!element) return;
@@ -386,10 +416,12 @@ class ProfilerPanel {
     tree_.SetStyle(handle, style);
   }
 
+  // Ponto dentro da janela.
   bool contains(float x, float y) const {
     return x >= panelBounds_.x && y >= panelBounds_.y && x < panelBounds_.x + panelBounds_.w && y < panelBounds_.y + panelBounds_.h;
   }
 
+  // Retangulo calculado de um no do layout (vazio se o no nao existe).
   SU::Rect nodeRect(SU::UIHandle handle) const {
     const auto* el = tree_.Get(handle);
     return el ? el->node.rect : SU::Rect{};
@@ -449,6 +481,7 @@ class ProfilerPanel {
     return w;
   }
 
+  // Acrescenta um retangulo de cor a lista de primitivas (ignora tamanho vazio).
   void addSolid(float x, float y, float w, float h, SU::Vec4 color, float z) {
     if (w <= 0.f || h <= 0.f) return;
     Prim p;
@@ -464,6 +497,7 @@ class ProfilerPanel {
 
   float lineHeight(float size) const { return layoutOf("Ag", size).lineHeight; }
 
+  // Texto sem espacos nas pontas (vazio se so tinha espacos).
   static std::string trimmed(const char* s) {
     std::string out = s ? s : "";
     const auto first = out.find_first_not_of(' ');
@@ -609,14 +643,14 @@ class ProfilerPanel {
     }
   }
 
-  // Barra de rolagem: sempre no lugar, por quadro (depende do viewport e da rolagem).
+  // Barra de rolagem unica do editor (ui_scrollbar.hpp): sempre no lugar, por quadro.
   void appendFrameDecorations(std::vector<SR::UIRenderItem>& out, std::uint32_t listClip) {
-    if (contentH_ > viewportH_ + 0.5f && viewportH_ > 8.f) {
-      const SU::Rect list = nodeRect(list_);
-      const float trackH = std::max(1.f, viewportH_ - 8.f);
-      const float thumbH = std::min(trackH, std::max(24.f, trackH * viewportH_ / contentH_));
-      const float thumbY = list.position.y + 4.f + (maxScroll_ > 0.f ? (scroll_ / maxScroll_) * std::max(0.f, trackH - thumbH) : 0.f);
-      out.push_back(solidItem(list.position.x + list.size.x - Theme::kScrollW - 4.f, thumbY, Theme::kScrollW, thumbH, colors_.scroll, 0.4f, listClip, 990));
+    const SU::Rect list = nodeRect(list_);
+    bar_.layout({list.position.x + list.size.x - ui_scrollbar::kWidth - 1.f, list.position.y, ui_scrollbar::kWidth, viewportH_},
+                contentH_, viewportH_);
+    for (const ui_scrollbar::Quad& q : bar_.quads(palette::active(), scroll_)) {
+      if (q.rect.w <= 0.f || q.rect.h <= 0.f) continue;
+      out.push_back(solidItem(q.rect.x, q.rect.y, q.rect.w, q.rect.h, Srgb(q.color.r, q.color.g, q.color.b, q.color.a), 0.4f, listClip, 990));
     }
   }
 
@@ -636,6 +670,7 @@ class ProfilerPanel {
 
   const sui::TextAtlasSet& text_;
   Colors colors_;
+  unsigned long long themeSig_ = 0;   // assinatura da paleta do ultimo quadro
   pm::ProfilerModel model_;
   sui::SpriteUiSdlRenderer& sdl_;
 
@@ -649,6 +684,7 @@ class ProfilerPanel {
   std::vector<ST::TextLayoutResult> texts_;
 
   struct Bounds { float x = 0.f, y = 0.f, w = 0.f, h = 0.f; };
+  ui_scrollbar::Scrollbar bar_;
   float contentH_ = 0.f, viewportH_ = 0.f, maxScroll_ = 0.f, scroll_ = 0.f;
   float contentWidth_ = Theme::kWidth, builtWidth_ = Theme::kWidth;
   Bounds panelBounds_{};
@@ -671,6 +707,7 @@ class ProfilerPanel {
   tool::render::FrameRenderStats latestRenderStats_;
   std::string exportStatus_;
 
+  // Grava as amostras coletadas em ProfilerExport_<data>.md na pasta atual e atualiza o status (ou o erro).
   void saveExport() {
     namespace fs = std::filesystem;
     std::error_code ec;

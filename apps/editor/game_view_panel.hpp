@@ -15,6 +15,7 @@
 //   handleEvent: guarda o mouse e os cliques para o proximo draw (sem consumir nada).
 
 #include "window_palette.hpp"
+#include "theme_colors.hpp"
 #include "game_view_model.hpp"
 #include "i18n.hpp"
 #include "scene_view_model.hpp"
@@ -52,11 +53,24 @@ inline constexpr float kFont = 12.f;
 inline constexpr float kBtnH = 22.f;
 inline constexpr float kTitleFont = 12.f;   // titulo da janela (negrito por duas passadas)
 inline constexpr std::uint32_t kFirstCellSlot = 1;   // slot 0 e da Scene (SpriteUiSdlRenderer::setView)
-inline constexpr view::Color kPanelFill = view::Rgba(14, 19, 28, 250);
-inline constexpr view::Color kButtonFill = view::Rgba(33, 41, 54);
-inline constexpr view::Color kButtonOn = view::Rgba(51, 92, 133);
-inline constexpr view::Color kText = view::Rgba(233, 234, 238);
-inline constexpr view::Color kTextDim = view::Rgba(143, 144, 153);
+inline view::Color kPanelFill = view::Rgba(14, 19, 28, 250);
+inline view::Color kButtonFill = view::Rgba(33, 41, 54);
+inline view::Color kButtonOn = view::Rgba(51, 92, 133);
+inline view::Color kText = view::Rgba(233, 234, 238);
+inline view::Color kTextDim = view::Rgba(143, 144, 153);
+inline view::Color kAccent = view::Rgba(64, 102, 178);
+// Cores da paleta em uso (theme_colors.hpp), refeitas no inicio de draw(): trocar o tema repinta a janela.
+// kHighlight (amarelo de selecao) e as cores dos eixos do gizmo ficam fixos: sao identidade, nao tema.
+inline void refreshPalette() {
+  const editor::theme_colors::Colors t = editor::theme_colors::Active();
+  auto c = [](const editor::palette::Rgb& x) { return view::rgbaF(x.r, x.g, x.b, x.a); };
+  kPanelFill = c(editor::theme_colors::WithAlpha(t.panel, 250.f / 255.f));
+  kButtonFill = c(t.btn);
+  kButtonOn = c(t.btnOn);
+  kText = c(t.text);
+  kTextDim = c(t.textDim);
+  kAccent = c(t.accent);
+}
 
 // Botao da UI do jogo: retangulo na janela e a acao que ele dispara.
 struct UiHit {
@@ -74,6 +88,7 @@ struct Cell {
   std::vector<UiHit> hits;
 };
 
+// Dados do quadro que o host passa ao painel (nada e guardado entre quadros).
 struct Values {
   bool shown = false;
   bool player = false;      // --player: janela cheia, sem barra
@@ -83,12 +98,14 @@ struct Values {
   std::vector<Cell> cells;
 };
 
+// Pedidos que o painel devolve ao host (Play/Pause/Step, acoes da UI do jogo, fechar, ajuda).
 struct Requests {
   bool playToggle = false, pauseToggle = false, stepOnce = false;
   std::vector<std::string> uiActions;   // cliques nos botoes da UI do jogo (so durante o Play)
   bool close = false, help = false;     // X e "?" da moldura (o host fecha ou abre a Help)
 };
 
+// Janela Game: moldura SpriteUI, barra Play/Pause/Step e uma celula por camera principal. Eventos de mouse entram numa fila e sao processados no draw, com os retangulos atuais.
 class GamePanel {
 public:
   GamePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {
@@ -144,6 +161,7 @@ public:
 
   // Desenha a moldura (fora do --player) e o corpo na area `rect_`. Os cliques de UI saem em `out`.
   bool draw(SDL_Renderer* renderer, const Values& v, Requests& out) {
+    refreshPalette();
     out.close = closeRequested_;
     out.help = helpRequested_;
     closeRequested_ = helpRequested_ = false;
@@ -200,6 +218,7 @@ public:
   [[nodiscard]] int pressedHit(std::size_t cell) const { return pressed_ && pressed_->first == cell ? static_cast<int>(pressed_->second) : -1; }
 
 private:
+  // Evento de mouse enfileirado (movimento, apertar, soltar) com a posicao em pixels.
   struct In {
     enum class Kind : std::uint8_t { Move, Down, Up };
     Kind kind = Kind::Move;
@@ -207,6 +226,7 @@ private:
     float x = 0.f, y = 0.f;
   };
 
+  // Trata um evento da fila: movimento atualiza o hover; apertar/soltar acionam botoes da barra e da UI do jogo.
   void process(const In& ev, const Values& v, Requests& out) {
     const vm::Pixel p{ev.x, ev.y};
     mouse_ = p;
@@ -254,6 +274,7 @@ private:
     return std::nullopt;
   }
 
+  // Atualiza qual elemento da UI do jogo esta sob o mouse (so durante o Play).
   void updateHover(const Values& v, vm::Pixel p) {
     hoverCell_ = static_cast<std::size_t>(-1);
     hoverIndex_ = -1;
@@ -288,6 +309,7 @@ private:
 
   // Barra: Play/Stop, Pause/Resume, Step (com o jogo pausado) e o texto das cameras.
   enum class Btn : std::uint8_t { PlayStop, Pause, Step };
+  // Botao da barra: caixa na tela e qual acao ele dispara.
   struct Button {
     sui::Box box;
     Btn id;
@@ -307,7 +329,7 @@ private:
     const ToolEngine::SpriteUi::Rect grip = frame_.gripRect();
     const ToolEngine::SpriteUi::Rect help = frame_.helpRect();
     const editor::scene_view_model::Pixel hc{help.position.x + help.size.x * 0.5f, help.position.y + help.size.y * 0.5f};
-    out.circleFilled(hc, help.size.x * 0.5f, view::Rgba(64, 102, 178));
+    out.circleFilled(hc, help.size.x * 0.5f, kAccent);
     out.text({hc.x, hc.y - kFont * 0.62f}, "?", kFont, kText, true);
     const float tx = frame_.titleTextX();
     const float ty = head.position.y + (head.size.y - kTitleFont) * 0.5f;
@@ -322,6 +344,7 @@ private:
     }
   }
 
+  // Monta a barra: Play/Stop, Pause/Resume (so jogando), Step (so pausado) e o texto das cameras.
   void buildToolbar(const Values& v, const sui::Box& bar, view::ShapeList& out) {
     buttons_.clear();
     float x = bar.x + kPad;
@@ -333,6 +356,7 @@ private:
     out.text({x, bar.y + (bar.h - kFont) * 0.5f}, v.cameraLabel, kFont, kTextDim);
   }
 
+  // Desenha um botao com largura do texto, registra a caixa para o clique e avanca o cursor.
   void addButton(view::ShapeList& out, float& cursor, float y, const std::string& label, Btn id, bool active) {
     const float w = painter_.measure(label, kFont) + 18.f;
     const sui::Box b{cursor, y, w, kBtnH};

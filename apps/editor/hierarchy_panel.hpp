@@ -22,8 +22,10 @@
 // travada, o cadeado fica laranja.
 
 #include "window_palette.hpp"
+#include "theme_colors.hpp"
 #include "console_model.hpp"   // LineEdit: o campo de renomear usa o mesmo editor de linha do Console
 #include "hierarchy_model.hpp"
+#include "ui_scrollbar.hpp"
 #include "i18n.hpp"
 #include "image_io.hpp"
 #include "sui_panel.hpp"
@@ -61,6 +63,7 @@ namespace wf = editor::window_frame;
 // Acoes que o painel pede ao Editor. Algumas usam id (o objeto), outras parent (novo pai), kind (menu Create) ou text.
 enum class Act : std::uint8_t { Select, Activate, Reparent, Detach, ToggleHidden, ToggleLocked, Rename, Duplicate, Delete, Create };
 
+// Pedido da janela ao Editor (selecionar, renomear, apagar, criar...); o main.cpp aplica.
 struct Action {
     Act act;
     hm::Id id;
@@ -71,6 +74,7 @@ struct Action {
     Action(Act a, hm::Id i = hm::NoId, hm::Id p = hm::NoId, int k = 0, std::string t = {})
         : act{a}, id{i}, parent{p}, kind{k}, text{std::move(t)} {}
 };
+// Fila de pedidos entregue ao host a cada quadro.
 using Requests = std::vector<Action>;
 
 // O que a janela mostra: a lista de objetos deste quadro e a selecao do Editor.
@@ -84,16 +88,19 @@ inline constexpr const char* kCreateLabels[] = {"Empty object", "Cube", "Sphere"
                                                 "Main Camera (Principal)", "Global Light", "Point Light", "Audio Source", "Canvas"};
 inline constexpr int kCreateCount = static_cast<int>(sizeof(kCreateLabels) / sizeof(kCreateLabels[0]));   // a lista e a unica fonte
 
+// Medidas fixas da janela (alturas de linha, recuos, fontes e camadas Z dos menus).
 struct Metrics {
     static constexpr float kToolbarH = 30.f;
     static constexpr float kToolbarBtnH = 22.f;
     static constexpr float kToolbarBtnFont = 11.f;
-    static constexpr float kRowH = 22.f;
+    static constexpr float kRowH = 22.f;          // linha dos menus (Create e contexto)
+    static constexpr float kListRowH = 28.f;      // linha da lista de objetos (era 22: maior para ler melhor)
+    static constexpr float kListFont = 15.f;      // texto da lista de objetos (era 12)
     static constexpr float kIndent = 14.f;        // recuo por nivel da arvore
     static constexpr float kPad = sui::kPanelPadding;
-    static constexpr float kExpander = 10.f;      // area do sinal + / -
-    static constexpr float kIcon = 10.f;
-    static constexpr float kToggle = 16.f;        // olho V (visivel) e cadeado L (travado), em px
+    static constexpr float kExpander = 12.f;      // area do sinal + / -
+    static constexpr float kIcon = 12.f;
+    static constexpr float kToggle = 18.f;        // olho V (visivel) e cadeado L (travado), em px
     static constexpr float kToggleGap = 4.f;
     static constexpr float kScrollLane = 10.f;    // faixa da barra de rolagem a direita
     static constexpr float kBtnPad = 10.f;
@@ -109,23 +116,30 @@ struct Metrics {
     static constexpr std::uint64_t kDoubleClickMs = 400;
 };
 
+// Cores da lista: da paleta em uso (theme_colors.hpp), refeitas a cada quadro em draw(). Ficam fixos: dropOn (verde de
+// alvo de soltar), lockOn (ambar do cadeado) e as cores de icone por tipo (identidade do tipo, lida em qualquer tema).
 struct Colors {
-    SU::Vec4 rowSel = sui::Srgb(0.12f, 0.31f, 0.52f, 0.9f);
-    SU::Vec4 rowHover = sui::Srgb(0.12f, 0.15f, 0.20f);
+    SU::Vec4 rowSel, rowHover, btn, toggleOn, toggleOff, scroll, menu, field, caret;
     SU::Vec4 dropOn = sui::Srgb(0.20f, 0.45f, 0.30f);
-    SU::Vec4 btn = sui::Srgb(0.13f, 0.16f, 0.21f);
-    SU::Vec4 toggleOn = sui::Srgb(0.80f, 0.82f, 0.86f);
-    SU::Vec4 toggleOff = sui::Srgb(0.22f, 0.24f, 0.29f);
     SU::Vec4 lockOn = sui::Srgb(0.95f, 0.70f, 0.30f);
-    SU::Vec4 scroll = sui::Srgb(0.45f, 0.48f, 0.55f, 0.75f);
-    SU::Vec4 menu = sui::Srgb(0.09f, 0.11f, 0.15f);
-    SU::Vec4 field = sui::Srgb(0.08f, 0.10f, 0.14f);
-    SU::Vec4 caret = sui::Srgb(0.91f, 0.918f, 0.933f);
+    Colors() {
+        const editor::theme_colors::Colors t = editor::theme_colors::Active();
+        rowSel = sui::PaletteColor(t.rowSel);
+        rowHover = sui::PaletteColor(t.rowHover);
+        btn = sui::PaletteColor(t.btn);
+        toggleOn = sui::PaletteColor(t.text);
+        toggleOff = sui::PaletteColor(t.border);
+        scroll = sui::PaletteColor(t.scroll);
+        menu = sui::PaletteColor(t.surface);
+        field = sui::PaletteColor(t.field);
+        caret = sui::PaletteColor(t.caret);
+    }
     // Cor do icone por tipo, na ordem de hm::Kind.
     SU::Vec4 kinds[6] = {sui::Srgb(0.62f, 0.68f, 0.78f), sui::Srgb(0.42f, 0.85f, 0.52f), sui::Srgb(1.f, 0.85f, 0.35f),
                          sui::Srgb(0.85f, 0.55f, 0.95f), sui::Srgb(1.f, 0.6f, 0.3f), sui::Srgb(0.35f, 0.95f, 0.7f)};
 };
 
+// Botoes da barra do topo.
 enum class Button : std::uint8_t { None, Create, Duplicate, Delete };
 
 // Atlas de icones: celulas de kIconCell px, lado a lado. A ordem e a do IconCell.
@@ -136,6 +150,7 @@ enum IconCell : int { kDotCell, kEyeCell, kLockCell, kSquareCell, kTriangleCell,
 inline constexpr const char* kEyePath = "assets/icons/eye.png";
 inline constexpr const char* kLockPath = "assets/icons/lock.png";
 
+// Janela Hierarchy: arvore de objetos da cena com selecao, arrastar para reparentar, renomear, olho/cadeado, menu "+ Create" e menu de contexto. Mostra so as linhas visiveis.
 class HierarchyPanel {
  public:
     HierarchyPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
@@ -182,7 +197,7 @@ class HierarchyPanel {
                 return onUp(e.button.x, e.button.y);
             case SDL_EVENT_MOUSE_WHEEL:
                 if (!contains(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
-                scrollBy(-e.wheel.y * Metrics::kRowH * Metrics::kWheelRows);
+                scrollBy(-e.wheel.y * Metrics::kListRowH * Metrics::kWheelRows);
                 return true;
             case SDL_EVENT_KEY_DOWN:
                 return onKey(e.key.key, static_cast<SDL_Keymod>(e.key.mod));
@@ -202,6 +217,7 @@ class HierarchyPanel {
     [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
     // Moldura de posicao e tamanho: o host do dock a usa para redimensionar pelas bordas.
     window_frame::Frame* frameState() { return &frame_; }
+    // Tira a janela do dock e a coloca flutuando no ponto dado.
     void floatAt(SU::Vec2 at) {
         dock_.reset();
         frame_.undock(at);
@@ -210,6 +226,7 @@ class HierarchyPanel {
     // Desenha a janela (moldura SpriteUI, barra, lista e menu). Os pedidos saem em `out`.
     bool draw(SDL_Renderer* renderer, SDL_Window* window, bool visible, Source src, Requests& out) {
       theme_ = sui::Theme{};   // cores da paleta em uso (Configuracoes > Appearance)
+      colors_ = Colors{};
         const float textScale = editor::ui_style::textScale();
         toolbar_.setFontScale(textScale);
         list_.setFontScale(textScale);
@@ -260,6 +277,7 @@ class HierarchyPanel {
         return sdl_.draw(renderer, packet_);
     }
 
+    // true se o mouse esta sobre o campo de renomear (cursor de texto).
     [[nodiscard]] bool wantsTextCursor(float x, float y) const {
         return visible_ && renaming_ &&
                (renameDragging_ || renameField().contains(x - rect_.x, y - rect_.y));
@@ -270,12 +288,14 @@ class HierarchyPanel {
     [[nodiscard]] sui::Box listBox() const {
         return {0.f, Metrics::kToolbarH, rect_.w - Metrics::kScrollLane, rect_.h - Metrics::kToolbarH};
     }
+    // Y da linha na janela, ja descontada a rolagem.
     [[nodiscard]] float rowTop(std::size_t row) const {
-        return Metrics::kToolbarH + static_cast<float>(row) * Metrics::kRowH - scrollY_;
+        return Metrics::kToolbarH + static_cast<float>(row) * Metrics::kListRowH - scrollY_;
     }
-    [[nodiscard]] float contentH() const { return static_cast<float>(model_.RowCount()) * Metrics::kRowH; }
+    [[nodiscard]] float contentH() const { return static_cast<float>(model_.RowCount()) * Metrics::kListRowH; }
     [[nodiscard]] float maxScroll() const { return std::max(0.f, contentH() - listBox().h); }
     void clampScroll() { scrollY_ = std::clamp(scrollY_, 0.f, maxScroll()); }
+    // Rola a lista e prende a rolagem nos limites.
     void scrollBy(float dy) {
         scrollY_ += dy;
         clampScroll();
@@ -287,10 +307,11 @@ class HierarchyPanel {
         const float lx = x - rect_.x;
         const float ly = y - rect_.y;
         if (!listBox().contains(lx, ly)) return npos;
-        const std::size_t row = static_cast<std::size_t>((ly - Metrics::kToolbarH + scrollY_) / Metrics::kRowH);
+        const std::size_t row = static_cast<std::size_t>((ly - Metrics::kToolbarH + scrollY_) / Metrics::kListRowH);
         return row < model_.RowCount() ? row : npos;
     }
 
+    // Botao da barra sob o ponto (None se nenhum).
     [[nodiscard]] Button buttonAt(float x, float y) const {
         if (!contains(x, y)) return Button::None;
         const float lx = x - rect_.x;
@@ -299,6 +320,7 @@ class HierarchyPanel {
         return Button::None;
     }
 
+    // Indice do item do menu Create sob o ponto, ou -1.
     [[nodiscard]] int menuItemAt(float x, float y) const {
         if (!menuOpen_) return -1;
         const sui::Box menu = menuBox();
@@ -309,6 +331,7 @@ class HierarchyPanel {
         return index < kCreateCount ? index : -1;
     }
 
+    // Indice do item do menu de contexto sob o ponto, ou -1.
     [[nodiscard]] int contextItemAt(float x, float y) const {
         if (!contextOpen_) return -1;
         const sui::Box menu = contextMenuBox();
@@ -319,6 +342,7 @@ class HierarchyPanel {
         return index < kContextCount ? index : -1;
     }
 
+    // Caixa do menu Create, presa dentro da janela.
     [[nodiscard]] sui::Box menuBox() const {
         const float h = std::min(Metrics::kRowH * kCreateCount + 8.f, std::max(0.f, rect_.h - Metrics::kToolbarH - 8.f));
         const float w = std::min(Metrics::kMenuW, std::max(120.f, rect_.w - Metrics::kPad));
@@ -326,6 +350,7 @@ class HierarchyPanel {
                 Metrics::kToolbarH, w, h};
     }
 
+    // Caixa do menu de contexto (clique direito), presa dentro da janela.
     [[nodiscard]] sui::Box contextMenuBox() const {
         const float h = Metrics::kRowH * kContextCount;
         return {std::clamp(contextX_, 0.f, std::max(0.f, rect_.w - Metrics::kContextMenuW)),
@@ -349,12 +374,13 @@ class HierarchyPanel {
         (void)model_.Select(scenePick);
     }
 
+    // Rola a lista ate a linha do objeto selecionado aparecer.
     void ensureSelectedVisible() {
         const hm::Id id = model_.Selected();
         for (std::size_t row = 0; row < model_.RowCount(); ++row) {
             if (model_.IdOfRow(row) != id) continue;
-            const float top = static_cast<float>(row) * Metrics::kRowH;
-            const float bottom = top + Metrics::kRowH;
+            const float top = static_cast<float>(row) * Metrics::kListRowH;
+            const float bottom = top + Metrics::kListRowH;
             if (top < scrollY_) scrollY_ = top;
             if (bottom > scrollY_ + listBox().h) scrollY_ = bottom - listBox().h;
             clampScroll();
@@ -362,6 +388,7 @@ class HierarchyPanel {
         }
     }
 
+    // Converte o resultado do modelo (selecao mudou, duplo clique, reparent...) em pedidos para o Editor.
     void applyOutcome(const hm::Outcome& out) {
         if (out.selectionChanged) pending_.push_back(Action{Act::Select, model_.Selected()});
         if (out.activate != hm::NoId) pending_.push_back(Action{Act::Activate, out.activate});
@@ -378,6 +405,10 @@ class HierarchyPanel {
         }
         focused_ = true;
         if (renaming_ && !renameField().contains(x - rect_.x, y - rect_.y)) commitRename();
+        if (bar_.pointerDown(x - rect_.x, y - rect_.y, scrollY_)) {   // barra de rolagem unica: polegar arrasta, trilho pagina
+            clampScroll();
+            return true;
+        }
         if (renaming_) {
             moveRenameCaret(x, y);
             renameDragging_ = true;
@@ -429,6 +460,7 @@ class HierarchyPanel {
         return true;
     }
 
+    // Clique direito: seleciona a linha e abre o menu de contexto; fora da janela so tira o foco.
     bool onRightDown(float x, float y) {
         if (!contains(x, y)) {
             focused_ = false;
@@ -452,6 +484,7 @@ class HierarchyPanel {
         return true;
     }
 
+    // Executa o item do menu de contexto no objeto alvo (ativar, renomear, duplicar, apagar, ocultar, travar).
     void applyContextAction(int item) {
         if (contextTarget_ == hm::NoId) return;
         switch (item) {
@@ -465,7 +498,10 @@ class HierarchyPanel {
         }
     }
 
+    // Mouse movendo: arrasto da barra de rolagem, selecao de texto da renomeacao e hover/arraste de linhas.
     bool onMotion(float x, float y) {
+        if (bar_.pointerMove(x - rect_.x, y - rect_.y, scrollY_)) clampScroll();
+        if (bar_.dragging()) return true;   // o arraste segue com o mouse fora da lista
         if (renameDragging_ && renaming_) {
             moveRenameCaret(x, y);
             return true;
@@ -478,7 +514,9 @@ class HierarchyPanel {
         return dragging || contains(x, y);
     }
 
+    // Soltar o botao: encerra arrasto (barra, selecao de texto ou linha) e aplica o resultado.
     bool onUp(float x, float y) {
+        if (bar_.pointerUp()) return true;
         if (renameDragging_) {
             renameDragging_ = false;
             return true;
@@ -507,15 +545,17 @@ class HierarchyPanel {
         targets.push_back({sui::handleFor(0), {{0.f, Metrics::kToolbarH}, {list.w, list.h}}, "hier-entity"});
         const auto range = visibleRange();
         for (std::size_t row = range.first; row < range.first + range.count; ++row) {
-            targets.push_back({sui::handleFor(static_cast<std::uint32_t>(row + 1)), {{0.f, rowTop(row)}, {list.w, Metrics::kRowH}}, "hier-entity"});
+            targets.push_back({sui::handleFor(static_cast<std::uint32_t>(row + 1)), {{0.f, rowTop(row)}, {list.w, Metrics::kListRowH}}, "hier-entity"});
         }
         return targets;
     }
 
+    // Faixa de linhas realmente visiveis (so essas sao montadas).
     [[nodiscard]] hm::RowRange visibleRange() const {
-        return hm::VisibleRange(model_.RowCount(), scrollY_, Metrics::kRowH, listBox().h);
+        return hm::VisibleRange(model_.RowCount(), scrollY_, Metrics::kListRowH, listBox().h);
     }
 
+    // Teclas: durante renomear vao para o campo; senao setas/Enter navegam a arvore, F2 renomeia e Esc cancela arrasto e menus.
     bool onKey(SDL_Keycode key, SDL_Keymod mod) {
         if (renaming_) {
             renameKey(key, mod);
@@ -541,6 +581,7 @@ class HierarchyPanel {
         }
     }
 
+    // Navegacao da arvore por teclado (setas, Home/End...) mantendo a selecao visivel.
     bool navigate(Dd::TreeKey key) {
         applyOutcome(model_.Key(key));
         ensureSelectedVisible();
@@ -558,12 +599,14 @@ class HierarchyPanel {
         if (window_) SDL_StartTextInput(window_);
     }
 
+    // Confirma a renomeacao (se o nome nao ficou vazio) e sai do modo.
     void commitRename() {
         if (!renaming_) return;
         if (!rename_.empty()) pending_.push_back(Action{Act::Rename, renameId_, hm::NoId, 0, rename_.text()});
         stopRename();
     }
 
+    // Sai do modo de renomear sem aplicar.
     void stopRename() {
         renaming_ = false;
         renameDragging_ = false;
@@ -571,6 +614,7 @@ class HierarchyPanel {
         if (window_) SDL_StopTextInput(window_);
     }
 
+    // Teclas no campo de renomear: Ctrl+A/C/V/X, setas, Enter confirma, Esc cancela.
     void renameKey(SDL_Keycode key, SDL_Keymod mod) {
         const bool extend = (mod & SDL_KMOD_SHIFT) != 0;
         if ((mod & SDL_KMOD_CTRL) != 0) {
@@ -610,9 +654,10 @@ class HierarchyPanel {
         }
     }
 
+    // Move o cursor/selecao do campo de renomear para o ponto do mouse.
     void moveRenameCaret(float x, float y) {
         const sui::Box field = renameField();
-        const ST::TextLayoutResult layout = list_.layout(rename_.text(), Metrics::kFont);
+        const ST::TextLayoutResult layout = list_.layout(rename_.text(), Metrics::kListFont);
         const std::size_t caret = ST::FindInsertionOffset(layout, {std::max(0.f, x - rect_.x - field.x),
                                                                   std::max(0.f, y - rect_.y - field.y)});
         rename_.moveCaretTo(caret, renameDragging_);
@@ -623,9 +668,10 @@ class HierarchyPanel {
         const std::size_t row = findRow(renameId_);
         if (row == npos) return {};
         const float x = static_cast<float>(model_.DepthOfRow(row)) * Metrics::kIndent + Metrics::kPad + labelOffset();
-        return {x, rowTop(row) + 2.f, listBox().w - x - Metrics::kToggle * 2.f - Metrics::kPad * 2.f, Metrics::kRowH - 4.f};
+        return {x, rowTop(row) + 2.f, listBox().w - x - Metrics::kToggle * 2.f - Metrics::kPad * 2.f, Metrics::kListRowH - 4.f};
     }
 
+    // Linha do objeto com esse id (npos se nao aparece).
     [[nodiscard]] std::size_t findRow(hm::Id id) const {
         for (std::size_t row = 0; row < model_.RowCount(); ++row) if (model_.IdOfRow(row) == id) return row;
         return npos;
@@ -650,6 +696,7 @@ class HierarchyPanel {
         iconsReady_ = sdl_.uploadIcons(renderer, kAtlasW, kIconCell, atlas.data());
     }
 
+    // A textura serve de atlas de icones? Quadrada e multipla do tamanho da celula.
     static bool squareMultiple(const tool::Texture& t) {
         return t.w == t.h && t.w % static_cast<std::uint32_t>(kIconCell) == 0;
     }
@@ -786,7 +833,7 @@ class HierarchyPanel {
         // "?" (circulo) logo depois do grip; o nome em negrito (duas passadas, 0,7 px).
         const SU::Rect title = frame_.titleRect();
         const SU::Rect help = frame_.helpRect();
-        auto helpItems = window_help_icon::BuildCircleItems(owner, help, SU::Vec4{0.250f, 0.400f, 0.700f, 1.f}, -1.9f, paint);
+        auto helpItems = window_help_icon::BuildCircleItems(owner, help, sui::PaletteColor(palette::active().accent), -1.9f, paint);
         out.insert(out.end(), helpItems.begin(), helpItems.end());
         const float size = Metrics::kFont + 1.f;
         const float titleX = frame_.titleTextX();
@@ -811,6 +858,7 @@ class HierarchyPanel {
         }
     }
 
+    // Monta a barra do topo (botoes Create/Duplicate/Delete) e guarda as caixas para clique.
     void buildToolbar() {
         toolbar_.clear();
         buttons_.clear();
@@ -820,6 +868,7 @@ class HierarchyPanel {
         (void)addButton(Button::Delete, T("Delete"), x);
     }
 
+    // Desenha um botao da barra e devolve o X do proximo.
     float addButton(Button which, const char* label, float x) {
         const float w = toolbar_.layout(label, Metrics::kSmallFont).size.x + 2.f * Metrics::kBtnPad;
         const float h = Metrics::kToolbarBtnH;
@@ -831,6 +880,7 @@ class HierarchyPanel {
         return x + w + Metrics::kBtnGap;
     }
 
+    // Monta so as linhas visiveis da arvore e a barra de rolagem.
     void buildList() {
         list_.clear();
         icons_.clear();
@@ -840,6 +890,7 @@ class HierarchyPanel {
         addScrollThumb(list);
     }
 
+    // Desenha uma linha: expansor +/-, icone do tipo, nome, olho e cadeado, com selecao/hover/alvo de soltar.
     void addRow(std::size_t row, const sui::Box& list) {
         const float y = rowTop(row);
         const hm::Id id = model_.IdOfRow(row);
@@ -847,26 +898,26 @@ class HierarchyPanel {
         if (!item) return;
         const bool selected = id == model_.Selected();
         const float rowX = static_cast<float>(model_.DepthOfRow(row)) * Metrics::kIndent;
-        if (selected) list_.addSolid(0.f, y, list.w, Metrics::kRowH, colors_.rowSel, 0.15f);
-        else if (row == hoverRow_) list_.addSolid(0.f, y, list.w, Metrics::kRowH, colors_.rowHover, 0.15f);
+        if (selected) list_.addSolid(0.f, y, list.w, Metrics::kListRowH, colors_.rowSel, 0.15f);
+        else if (row == hoverRow_) list_.addSolid(0.f, y, list.w, Metrics::kListRowH, colors_.rowHover, 0.15f);
         if (drag_.Phase() == Dd::DragPhase::Dragging && drag_.HoveredTarget() && drag_.HoveredTarget()->index == row + 1) {
-            list_.addSolid(0.f, y, list.w, Metrics::kRowH, colors_.dropOn, 0.16f);
+            list_.addSolid(0.f, y, list.w, Metrics::kListRowH, colors_.dropOn, 0.16f);
         }
-        const float textY = y + (Metrics::kRowH - list_.lineHeight(Metrics::kFont)) * 0.5f;
+        const float textY = y + (Metrics::kListRowH - list_.lineHeight(Metrics::kListFont)) * 0.5f;
         const float expanderX = rowX + Metrics::kPad;
         if (model_.RowHasChildren(row)) {
-            list_.addText(expanderX, textY, model_.RowExpanded(row) ? "-" : "+", Metrics::kFont, theme_.text, Metrics::kExpander);
+            list_.addText(expanderX, textY, model_.RowExpanded(row) ? "-" : "+", Metrics::kListFont, theme_.text, Metrics::kExpander);
         }
         const float iconX = expanderX + Metrics::kExpander + 4.f;
-        const float iconY = y + (Metrics::kRowH - Metrics::kIcon) * 0.5f;
+        const float iconY = y + (Metrics::kListRowH - Metrics::kIcon) * 0.5f;
         addKindIcon(iconX, iconY, item->kind);
         const float labelX = iconX + Metrics::kIcon + 6.f;
         const float lockX = list.w - Metrics::kToggle - Metrics::kPad;
         const float labelW = lockX - Metrics::kToggleGap - Metrics::kToggle - Metrics::kPad - labelX;
         const bool editing = renaming_ && id == renameId_;
-        if (!editing) list_.addText(labelX, textY, item->label, Metrics::kFont, item->hidden ? theme_.textDim : theme_.text, labelW);
+        if (!editing) list_.addText(labelX, textY, item->label, Metrics::kListFont, item->hidden ? theme_.textDim : theme_.text, labelW);
         if (editing) addRenameText(labelX, y);
-        const float toggleY = y + (Metrics::kRowH - Metrics::kToggle) * 0.5f;
+        const float toggleY = y + (Metrics::kListRowH - Metrics::kToggle) * 0.5f;
         const float eyeX = lockX - Metrics::kToggle - Metrics::kToggleGap;
         addIcon(eyeX, toggleY, Metrics::kToggle, kEyeCell, item->hidden ? colors_.toggleOff : colors_.toggleOn);
         addIcon(lockX, toggleY, Metrics::kToggle, kLockCell, item->locked ? colors_.lockOn : colors_.toggleOff);
@@ -876,9 +927,9 @@ class HierarchyPanel {
     void addRenameText(float labelX, float y) {
         const sui::Box field = renameField();
         list_.addSolid(field.x, field.y, field.w, field.h, colors_.field, 0.3f);
-        const float textY = y + (Metrics::kRowH - list_.lineHeight(Metrics::kFont)) * 0.5f;
+        const float textY = y + (Metrics::kListRowH - list_.lineHeight(Metrics::kListFont)) * 0.5f;
         const std::string& text = rename_.text();
-        const ST::TextLayoutResult layout = list_.layout(text, Metrics::kFont);
+        const ST::TextLayoutResult layout = list_.layout(text, Metrics::kListFont);
         if (rename_.hasSelection()) {
             const auto [begin, end] = rename_.selectionRange();
             const float firstX = ST::GetCaretRect(layout, static_cast<std::uint32_t>(begin)).position.x;
@@ -886,16 +937,17 @@ class HierarchyPanel {
             list_.addSolid(labelX + std::min(firstX, lastX), textY, std::abs(lastX - firstX), layout.lineHeight, colors_.rowSel,
                            0.4f);
         }
-        list_.addText(labelX, textY, text, Metrics::kFont, theme_.text, field.w);
+        list_.addText(labelX, textY, text, Metrics::kListFont, theme_.text, field.w);
         const float caretX = labelX + ST::GetCaretRect(layout, static_cast<std::uint32_t>(rename_.caret())).position.x;
-        list_.addSolid(caretX, y + 4.f, 1.f, Metrics::kRowH - 8.f, colors_.caret, 0.4f);
+        list_.addSolid(caretX, y + 4.f, 1.f, Metrics::kListRowH - 8.f, colors_.caret, 0.4f);
     }
 
+    // Barra de rolagem unica do editor (ui_scrollbar.hpp), na faixa reservada a direita da lista.
     void addScrollThumb(const sui::Box& list) {
-        if (contentH() <= list.h) return;
-        const float thumbH = std::max(20.f, list.h * list.h / contentH());
-        const float thumbY = list.y + (list.h - thumbH) * (scrollY_ / maxScroll());
-        list_.addSolid(list.w + 3.f, thumbY, 4.f, thumbH, colors_.scroll, 0.5f);
+        bar_.layout({list.w + 1.f, list.y, ui_scrollbar::kWidth, list.h}, contentH(), list.h);
+        for (const ui_scrollbar::Quad& q : bar_.quads(palette::active(), scrollY_)) {
+            if (q.rect.w > 0.f && q.rect.h > 0.f) list_.addSolid(q.rect.x, q.rect.y, q.rect.w, q.rect.h, sui::PaletteColor(q.color), 0.5f);
+        }
     }
 
     // Menu "+ Create": so existe com o botao aberto. Fica acima da lista (canvas proprio).
@@ -960,6 +1012,7 @@ class HierarchyPanel {
     bool visible_ = false;
     SDL_Window* window_ = nullptr;
     float scrollY_ = 0.f;
+    ui_scrollbar::Scrollbar bar_;
     std::size_t hoverRow_ = npos;
     std::vector<std::pair<sui::Box, Button>> buttons_;
     float createX_ = 0.f;
@@ -979,6 +1032,7 @@ class HierarchyPanel {
     std::uint64_t lastClickMs_ = 0;
     Requests pending_;
 
+    // Pedido de desenho de um icone do atlas (posicao, celula e cor), desenhado depois como sprite.
     struct IconDraw {
         float x, y, size;   // canto superior esquerdo, em coordenadas locais do canvas da lista
         IconCell cell;

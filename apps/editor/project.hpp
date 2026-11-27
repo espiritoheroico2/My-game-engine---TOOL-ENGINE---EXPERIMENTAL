@@ -31,13 +31,16 @@ namespace editor {
 
 namespace fs = std::filesystem;
 
+// Extensao do arquivo em minusculas (".GLB" vira ".glb") para comparar tipos.
 inline std::string lowerExt(const fs::path& p) {
   std::string e = p.extension().string();
   std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return e;
 }
 
+// Tipo de um item da aba Assets, decidido so pela extensao/nome.
 enum class AssetKind { Folder, Model, Audio, Scene, Image, Text, Other };
+// Classifica um caminho em AssetKind; ".scene.json" e testado antes de ".json" para nao virar Text.
 inline AssetKind kindOf(const fs::path& p, bool isDir) {
   if (isDir) return AssetKind::Folder;
   const std::string e = lowerExt(p);
@@ -56,12 +59,14 @@ inline bool safeName(const std::string& n) {
   return n.back() != ' ' && n.back() != '.';
 }
 
+// Pastas do projeto aberto (Assets/ e Scenes/) e resolucao segura de caminhos relativos.
 class Project {
 public:
   fs::path root = "Project";
   fs::path assetsDir() const { return root / "Assets"; }
   fs::path scenesDir() const { return root / "Scenes"; }
 
+  // Cria Assets/Scripts e Scenes se ainda nao existirem (erros ignorados: criar de novo e inofensivo).
   void ensure() const {
     std::error_code ec;
     fs::create_directories(assetsDir() / "Scripts", ec);
@@ -70,10 +75,12 @@ public:
   // Caminho relativo ao projeto ("Assets/x.glb") -> caminho real. Retorna vazio se tentar escapar da pasta,
   // por ".." ou por link simbolico apontando para fora (F-12). Ver project_paths.hpp (inclui a limitacao TOCTOU).
   fs::path resolve(const std::string& rel) const { return projpath::resolveInside(root, rel); }
+  // Caminho absoluto -> relativo ao projeto, com "/" (formato guardado nas cenas).
   std::string relative(const fs::path& p) const {
     std::error_code ec;
     return fs::relative(p, root, ec).generic_string();
   }
+  // Nomes das cenas (arquivos *.scene.json em Scenes/, sem a extensao), em ordem alfabetica.
   std::vector<std::string> listScenes() const {
     std::vector<std::string> out; std::error_code ec;
     if (!fs::exists(scenesDir(), ec)) return out;
@@ -172,6 +179,7 @@ public:
     lm->nodeMeshes[node] = std::move(m);
     return raw;
   }
+  // Som decodificado (WAV/MP3), com cache; falha tambem fica em cache e e registrada no log.
   tool::SoundPtr sound(const std::string& rel) {
     if (auto it = sounds_.find(rel); it != sounds_.end()) return it->second;
     if (failed_.count(rel)) return nullptr;
@@ -188,6 +196,7 @@ public:
     sounds_.erase(rel); failed_.erase(rel); tint_.erase(rel);
     textures_.erase(rel); failedTex_.erase(rel);
   }
+  // Esvazia todos os caches, avisando o renderizador de GPU de cada malha que some.
   void clear() { for (auto& [k, m] : models_) forget(*m); models_.clear(); sounds_.clear(); failed_.clear(); tint_.clear(); textures_.clear(); failedTex_.clear(); }
 
   // Textura de albedo (PNG, JPG, BMP, TGA) do projeto. Falha fica em cache para nao repetir a cada quadro.
@@ -213,6 +222,7 @@ private:
     for (auto& [k, v] : m.nodeMeshes) onMeshForget(v.get());
     for (auto& p : m.data.parts) onMeshForget(&p.mesh);
   }
+  // Guarda a falha no cache (nao tenta de novo a cada quadro) e escreve no log.
   void fail(const std::string& rel, const std::string& why) { failed_.insert(rel); tool::logError("could not load '" + rel + "': " + why); }
   const Project* proj_;
   std::map<std::string, std::unique_ptr<LoadedModel>> models_;
@@ -245,6 +255,7 @@ struct PhysicsSettings {
   float simRadius = 0.f;       // raio em volta da camera: corpos dinamicos fora dele nao sao simulados (0 = todos)
 };
 
+// Dados da cena fora das entidades: nome, divisao de tela, skybox, assets, render, fisica, narrativa e script.
 struct SceneFile {
   std::string name = "Main";
   bool splitVertical = true;
@@ -257,11 +268,13 @@ struct SceneFile {
   std::string script;    // codigo da cena (.js) que chama o Narrative Controller
 };
 
+// Fisica da cena -> JSON (par de loadPhysicsSettings).
 inline tool::Json savePhysicsSettings(const PhysicsSettings& p) {
   tool::Json o = tool::Json::object();
   o.set("enabled", p.enabled); o.set("gravity", ser::vec(p.gravity, 3)); o.set("solverIterations", p.solverIterations); o.set("stepHz", p.stepHz); o.set("drawColliders", p.drawColliders); o.set("simRadius", p.simRadius);
   return o;
 }
+// JSON -> fisica da cena; valores presos em faixas seguras (arquivo editado a mao nao quebra a simulacao).
 inline PhysicsSettings loadPhysicsSettings(const tool::Json& o) {
   PhysicsSettings p; p.enabled = ser::flag(o, "enabled", true); ser::readVec(o["gravity"], p.gravity, 3);
   for (float& g : p.gravity) g = std::clamp(g, -1000.f, 1000.f);
@@ -292,6 +305,7 @@ inline tool::Json saveLightingSettings(const tool::LightingSettings& s) {
   o.set("ambientIntensity", static_cast<double>(s.ambientIntensity)); o.set("preExposure", static_cast<double>(s.preExposure));
   return o;
 }
+// JSON -> Light Prism; cada valor preso a uma faixa segura e com padrao quando a chave falta.
 inline tool::LightingSettings loadLightingSettings(const tool::Json& o) {
   tool::LightingSettings s;
   s.tier = std::clamp(static_cast<int>(ser::num(o, "tier", 2.f)), 0, 3);
@@ -331,6 +345,7 @@ inline tool::LightingSettings loadLightingSettings(const tool::Json& o) {
   return s;
 }
 
+// Render da cena (iluminacao, pos-processamento, culling, distancia) -> JSON.
 inline tool::Json saveRenderSettings(const RenderSettings& r) {
   tool::Json o = tool::Json::object();
   o.set("lighting", saveLightingSettings(r.lighting)); o.set("post", ser::postFx(r.post));
@@ -354,10 +369,12 @@ inline RenderSettings loadRenderSettings(const tool::Json& o) {
   return r;
 }
 
+// Grava texto (cria as pastas se faltar); true se escreveu sem erro.
 inline bool writeTextFile(const fs::path& p, const std::string& text) {
   std::error_code ec; fs::create_directories(p.parent_path(), ec);
   std::ofstream f(p, std::ios::binary | std::ios::trunc); f << text; return static_cast<bool>(f);
 }
+// Le um arquivo de texto inteiro; recusa arquivos acima de maxBytes (padrao 8 MB). true se leu.
 inline bool readTextFile(const fs::path& p, std::string& out, size_t maxBytes = 8u << 20) {
   std::error_code ec; const auto sz = fs::file_size(p, ec);
   if (ec || sz > maxBytes) return false;
@@ -365,21 +382,24 @@ inline bool readTextFile(const fs::path& p, std::string& out, size_t maxBytes = 
   std::stringstream ss; ss << f.rdbuf(); out = ss.str(); return true;
 }
 
+// Skybox -> JSON (image0..5 e solid0..3, onde solid3 e o alfa).
 inline tool::Json saveSkybox(const SkyboxSettings& s) {
   tool::Json o = tool::Json::object();
   o.set("enabled", s.enabled);
   for (int i = 0; i < 6; ++i) o.set("image" + std::to_string(i), std::string(s.face[i]));
-  for (int i = 0; i < 3; ++i) o.set("solid" + std::to_string(i), static_cast<double>(s.solid[i]));
+  for (int i = 0; i < 4; ++i) o.set("solid" + std::to_string(i), static_cast<double>(s.solid[i]));   // solid3 = alfa
   return o;
 }
+// JSON -> skybox; chaves ausentes (cenas antigas) mantem os valores padrao.
 inline SkyboxSettings loadSkybox(const tool::Json& o) {
   SkyboxSettings s;
   s.enabled = ser::flag(o, "enabled", false);
   for (int i = 0; i < 6; ++i) { const std::string k = "image" + std::to_string(i); ser::copyStr(s.face[i], sizeof s.face[i], o[k.c_str()].asString()); } // cenas antigas (faces procedurais) ficam sem imagem
-  for (int i = 0; i < 3; ++i) { const std::string k = "solid" + std::to_string(i); s.solid[i] = std::clamp(ser::num(o, k.c_str(), s.solid[i]), 0.f, 1.f); }
+  for (int i = 0; i < 4; ++i) { const std::string k = "solid" + std::to_string(i); s.solid[i] = std::clamp(ser::num(o, k.c_str(), s.solid[i]), 0.f, 1.f); }
   return s;
 }
 
+// Grava a cena em Scenes/<nome>.scene.json (versao 1): configuracoes + todas as entidades.
 inline bool saveSceneFile(const Project& proj, tool::Scene& sc, const SceneFile& info) {
   tool::Json j = tool::Json::object(), as = tool::Json::array();
   j.set("version", 1); j.set("name", info.name); j.set("splitVertical", info.splitVertical); j.set("splitFill", info.splitFill);
@@ -399,6 +419,7 @@ inline void clearScene(tool::Scene& sc) {
   sc.flushPool();
 }
 
+// Carrega uma cena: limpa a atual, le configuracoes e recria as entidades. false e *err se o arquivo for invalido.
 inline bool loadSceneFile(const Project& proj, tool::Scene& sc, const std::string& name, SceneFile& info, std::string* err = nullptr) {
   std::string text;
   if (!readTextFile(proj.scenePath(name), text)) { if (err) *err = "cannot read scene '" + name + "'"; return false; }

@@ -1,14 +1,17 @@
 #pragma once
 
 // Janela "Export game" em SpriteUI.
-// Caixa centralizada com titulo e X, lista de plataformas (as indisponiveis ficam apagadas e nao clicam), a pasta de
+// Moldura padrao do editor (framed::Chrome: titulo, "?", X, grip e dock) com o corpo rolavel por dentro: lista de plataformas (as indisponiveis ficam apagadas e nao clicam), a pasta de
 // saida, os campos faltantes do Editor info, o botao "Export game" e o resultado. A exportacao em si fica em runExport
 // (mesmos passos de antes: para a cena se estiver tocando, salva a cena, grava o projeto e chama xp::exportGame).
 #include "editor_state.hpp"
+#include "framed_window.hpp"
 #include "export.hpp"
 #include "i18n.hpp"
 #include "project_settings.hpp"
 #include "sui_panel.hpp"
+#include "theme_colors.hpp"
+#include "ui_scrollbar.hpp"
 #include "spriteui_host.hpp"
 
 #include <SDL3/SDL.h>
@@ -30,6 +33,7 @@ inline std::string editorExeName() {
 #endif
 }
 
+// Pasta do executavel do editor (base do SDL); se nao houver, a pasta atual. De la saem o motor e a pasta Export/.
 inline fs::path editorFolder() {
   const char* base = SDL_GetBasePath();
   return base ? fs::path(base) : fs::current_path();
@@ -51,10 +55,8 @@ struct Outcome {
 };
 
 inline constexpr float kWidth = 540.f;
-inline constexpr float kMargin = 24.f;
-inline constexpr float kTitleH = 36.f;
-inline constexpr float kCloseSize = 26.f;
-inline constexpr float kCloseInset = 6.f;
+inline constexpr float kStartContentH = 460.f;   // altura do corpo antes da primeira montagem
+inline constexpr float kScrollStep = 40.f;
 inline constexpr float kPad = 16.f;
 inline constexpr float kGap = 8.f;
 inline constexpr float kFont = 14.f;
@@ -63,13 +65,18 @@ inline constexpr float kRowH = 26.f;
 inline constexpr float kButtonH = 32.f;
 inline constexpr float kRowInset = 10.f;
 
+// Da paleta em uso (theme_colors.hpp), refeito em draw(). warning e ok (amarelo e verde de estado) ficam fixos.
 struct Colors {
-  SU::Vec4 row = sui::Srgb(0.20f, 0.22f, 0.27f);
-  SU::Vec4 rowSelected = sui::Srgb(0.16f, 0.36f, 0.62f);
-  SU::Vec4 button = sui::Srgb(0.12f, 0.42f, 0.72f);
-  SU::Vec4 buttonOff = sui::Srgb(0.22f, 0.23f, 0.26f);
+  SU::Vec4 row, rowSelected, button, buttonOff;
   SU::Vec4 warning = sui::Srgb(1.f, 0.8f, 0.3f);
   SU::Vec4 ok = sui::Srgb(0.4f, 0.9f, 0.5f);
+  Colors() {
+    const editor::theme_colors::Colors t = editor::theme_colors::Active();
+    row = sui::PaletteColor(t.surface);
+    rowSelected = sui::PaletteColor(t.rowSel);
+    button = sui::PaletteColor(t.btnOn);
+    buttonOff = sui::PaletteColor(t.btn);
+  }
 };
 
 // Runs the export with the current settings. Stops the play first, as the scene is saved as it is.
@@ -88,11 +95,15 @@ inline Outcome runExport(Editor& ed) {
   return out;
 }
 
+// Janela "Export game": escolhe a plataforma, mostra campos faltantes e o botao de exportar. Desenha com SpriteUI e so reconstroi quando algo visivel muda.
 class Panel {
  public:
-  Panel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : sdl_{sdl}, canvas_{text} {}
+  Panel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : sdl_{sdl}, canvas_{text}, chrome_{text, sdl} {}
   Panel(const Panel&) = delete;
   Panel& operator=(const Panel&) = delete;
+
+  // Moldura padrao (titulo, "?", X, grip, dock). O host registra no dock e le consumeClose()/consumeHelp().
+  framed::Chrome& chrome() { return chrome_; }
 
   // Resultado da ultima exportacao (o host chama depois de runExport).
   void setResult(const Outcome& out) {
@@ -102,54 +113,72 @@ class Panel {
 
   // Eventos do SDL. `open` = janela aberta; `platform` = indice escolhido (muda ao clicar).
   Action handleEvent(const SDL_Event& e, bool& open, int& platform) {
-    if (!open) return Action::None;
+    if (!open || !chrome_.visible()) return Action::None;
+    if (chrome_.handleEvent(e)) return Action::Consumed;   // X, "?" e minimizar da moldura
     switch (e.type) {
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        if (e.button.button != SDL_BUTTON_LEFT || !contains(e.button.x, e.button.y)) return Action::None;
-        return press(e.button.x, e.button.y, open, platform);
+        if (e.button.button != SDL_BUTTON_LEFT || !body_.contains(e.button.x, e.button.y)) return Action::None;
+        if (bar_.pointerDown(e.button.x, e.button.y, scroll_)) {   // barra de rolagem unica: arrasta ou pagina
+          scroll_ = ui_scrollbar::clampScroll(scroll_, contentH_, body_.h);
+          return Action::Consumed;
+        }
+        return press(e.button.x, e.button.y, platform);
+      case SDL_EVENT_MOUSE_MOTION:
+        if (bar_.pointerMove(e.motion.x, e.motion.y, scroll_)) scroll_ = ui_scrollbar::clampScroll(scroll_, contentH_, body_.h);
+        return bar_.dragging() ? Action::Consumed : Action::None;
+      case SDL_EVENT_MOUSE_BUTTON_UP:
+        return e.button.button == SDL_BUTTON_LEFT && bar_.pointerUp() ? Action::Consumed : Action::None;
       case SDL_EVENT_MOUSE_WHEEL:
-        return contains(e.wheel.mouse_x, e.wheel.mouse_y) ? Action::Consumed : Action::None;
+        if (!body_.contains(e.wheel.mouse_x, e.wheel.mouse_y)) return Action::None;
+        scroll_ = ui_scrollbar::clampScroll(scroll_ - e.wheel.y * kScrollStep, contentH_, body_.h);
+        return Action::Consumed;
       default:
         return Action::None;
     }
   }
 
-  // Desenha a janela quando `open`. `missing` = campos obrigatorios que faltam. Retorna false so em falha do SDL.
+  // Desenha a moldura e o corpo quando `open`. `missing` = campos obrigatorios que faltam. Retorna false so em falha do SDL.
   bool draw(SDL_Renderer* renderer, SDL_Window* window, bool open, int platform, const std::vector<std::string>& missing,
             const std::string& language) {
-    if (!open) return true;
+    if (!open) {
+      chrome_.hide();
+      return true;
+    }
     if (!renderer || !window) return false;
     int ww = 0, wh = 0;
     if (!SDL_GetWindowSize(window, &ww, &wh)) return false;
     if (ww <= 0 || wh <= 0) return true;   // janela minimizada
-    const float w = std::min(kWidth, static_cast<float>(ww) - 2.f * kMargin);
-    std::string key = std::to_string(platform) + "|" + language + "|" + std::to_string(w) + "|" + result_ + (resultOk_ ? "1" : "0");
+    const sui::Box body = chrome_.prepare(static_cast<float>(ww), static_cast<float>(wh), kWidth, framed::frameHeightFor(contentH_ > 0.f ? contentH_ : kStartContentH));
+    if (!chrome_.draw(renderer, T("Export game"))) return false;
+    if (body.w <= 0.f || body.h <= 0.f) {   // minimizada: so o cabecalho
+      body_ = {};
+      return true;
+    }
+    body_ = body;
+    theme_ = sui::Theme{};   // paleta em uso (Configuracoes > Appearance)
+    colors_ = Colors{};
+    const float w = body.w;
+    std::string key = std::to_string(editor::theme_colors::Signature()) + "#" + std::to_string(platform) + "|" + language + "|" + std::to_string(w) + "|" + result_ + (resultOk_ ? "1" : "0");
     for (const std::string& m : missing) key += "|" + m;
     if (!built_ || key != builtKey_) rebuild(platform, missing, language, w, key);
-    panel_ = {(static_cast<float>(ww) - w) * 0.5f, (static_cast<float>(wh) - contentH_) * 0.5f, w, contentH_};
+    scroll_ = ui_scrollbar::clampScroll(scroll_, contentH_, body_.h);
     return drawPacket(renderer);
   }
 
  private:
+  // Linha de plataforma: posicao Y, altura e se esta disponivel (clicavel).
   struct Row {
     float y = 0.f, h = kRowH;
     bool enabled = false;
   };
 
-  [[nodiscard]] bool contains(float x, float y) const {
-    return x >= panel_.x && y >= panel_.y && x < panel_.x + panel_.w && y < panel_.y + panel_.h;
-  }
-
   [[nodiscard]] static bool inside(float x, float y, float left, float top, float w, float h) {
     return x >= left && y >= top && x < left + w && y < top + h;
   }
 
-  Action press(float x, float y, bool& open, int& platform) {
-    const float lx = x - panel_.x, ly = y - panel_.y;
-    if (inside(lx, ly, panel_.w - kCloseSize - kCloseInset, (kTitleH - kCloseSize) * 0.5f, kCloseSize, kCloseSize)) {
-      open = false;
-      return Action::Consumed;
-    }
+  // Clique esquerdo no corpo: escolhe plataforma ou pede exportar. Clique em area vazia e consumido.
+  Action press(float x, float y, int& platform) {
+    const float lx = x - body_.x, ly = y - body_.y + scroll_;
     for (std::size_t i = 0; i < rows_.size(); ++i) {
       const Row& r = rows_[i];
       if (!r.enabled || !inside(lx, ly, kPad, r.y, width_, r.h)) continue;
@@ -162,20 +191,14 @@ class Panel {
     return Action::Consumed;
   }
 
-  // Monta o texto e a posicao dos controles. Roda so quando algo que aparece muda (plataforma, idioma, faltantes, resultado).
+  // Monta o texto e a posicao dos controles (coordenadas do corpo, sem rolagem). Roda so quando algo que aparece muda (plataforma, idioma, faltantes, resultado).
   void rebuild(int platform, const std::vector<std::string>& missing, const std::string& language, float panelW, const std::string& key) {
     canvas_.clear();
     built_ = true;
     builtKey_ = key;
     width_ = panelW - 2.f * kPad;
     const float width = width_;
-    const float titleLh = canvas_.lineHeight(kTitleFont);
-    canvas_.addText(kPad, (kTitleH - titleLh) * 0.5f, T("Export game"), kTitleFont, theme_.text, width - kCloseSize);
-    canvas_.addSolid(0.f, kTitleH - 1.f, panelW, 1.f, theme_.divider, 0.2f);
-    const ST::TextLayoutResult x = canvas_.layout("X", kTitleFont);
-    canvas_.addText(panelW - kCloseSize - kCloseInset + (kCloseSize - x.size.x) * 0.5f, (kTitleH - x.lineHeight) * 0.5f, "X", kTitleFont, theme_.text, kCloseSize);
-
-    float y = kTitleH + kPad;
+    float y = kPad;
     const float lh = canvas_.lineHeight(kFont);
     canvas_.addText(kPad, y, T("Target platform"), kFont, theme_.textDim, width);
     y += lh + kGap;
@@ -237,13 +260,18 @@ class Panel {
     (void)language;   // o texto muda com o idioma: a chave do cache ja inclui o idioma
   }
 
+  // Monta os itens de desenho (canvas em cache e barra de rolagem) e envia ao renderizador SpriteUI. Retorna false so se o SDL falhar.
   bool drawPacket(SDL_Renderer* renderer) {
     std::vector<SR::UIRenderItem> items;
-    const std::vector<SR::ClipRectGPU> clips{{panel_.x, panel_.y, panel_.x + panel_.w, panel_.y + panel_.h}};
+    const std::vector<SR::ClipRectGPU> clips{{body_.x, body_.y, body_.x + body_.w, body_.y + body_.h}};
     const SU::UIHandle owner = sui::handleFor(0);
     std::uint64_t paint = 1;
-    items.push_back(sui::Canvas::solidItem(panel_.x, panel_.y, panel_.w, panel_.h, theme_.panel, 0.f, owner, 0u, paint++));
-    canvas_.appendItems(items, panel_.x, panel_.y, 0.f, panel_.y, panel_.y + panel_.h, owner, 0u, paint);
+    canvas_.appendItems(items, body_.x, body_.y, scroll_, body_.y, body_.y + body_.h, owner, 0u, paint);
+    // Barra de rolagem unica do editor (ui_scrollbar.hpp): so aparece quando o conteudo passa do corpo.
+    bar_.layout({body_.x + body_.w - ui_scrollbar::kWidth - 2.f, body_.y, ui_scrollbar::kWidth, body_.h}, contentH_, body_.h);
+    for (const ui_scrollbar::Quad& q : bar_.quads(palette::active(), scroll_)) {
+      if (q.rect.w > 0.f && q.rect.h > 0.f) items.push_back(sui::Canvas::solidItem(q.rect.x, q.rect.y, q.rect.w, q.rect.h, sui::PaletteColor(q.color), 0.8f, owner, 0u, paint++));
+    }
     packet_ = extractor_.Build(++frameId_, items, nullptr, clips);
     if (!SR::IsFramePacketValid(packet_)) return true;
     return sdl_.draw(renderer, packet_);
@@ -261,7 +289,10 @@ class Panel {
   SU::Vec2 button_{};
   bool buttonEnabled_ = false;
   float width_ = 0.f;
-  sui::Box panel_;
+  framed::Chrome chrome_;
+  sui::Box body_;   // corpo da moldura neste quadro (vazio: escondida ou minimizada)
+  ui_scrollbar::Scrollbar bar_;
+  float scroll_ = 0.f;
   float contentH_ = 0.f;
   bool built_ = false;
   std::string builtKey_;

@@ -19,6 +19,7 @@
 #include "i18n.hpp"
 #include "color_popup.hpp"
 #include "framed_window.hpp"
+#include "free_values.hpp"
 #include "inspector_model.hpp"
 #include "settings_bridge.hpp"
 #include "settings_changes.hpp"
@@ -27,6 +28,7 @@
 #include "pointer_capture.hpp"
 #include "settings_model.hpp"
 #include "sui_panel.hpp"
+#include "theme_colors.hpp"
 #include "ui_style.hpp"
 
 #include "SpriteUi/Core/DrawOrder.hpp"
@@ -36,7 +38,7 @@
 #include "SpriteUi/Elements/RadioButton.hpp"
 #include "SpriteUi/Elements/Slider.hpp"
 #include "SpriteUi/Elements/TabBar.hpp"
-#include "SpriteUi/Widgets/ScrollBar.hpp"
+#include "ui_scrollbar.hpp"
 #include "SpriteUi/Widgets/TextEdit.hpp"
 
 #include <SDL3/SDL.h>
@@ -102,6 +104,7 @@ struct Values {
     std::string gpuStatsLine;
 };
 
+// Medidas fixas da janela (alturas de linha, margens, larguras dos controles, camadas Z).
 struct Metrics {
     static constexpr float kStripH = 0.f;   // faixa de abas removida: o conteudo comeca no topo do painel
     static constexpr float kHeaderH = 36.f;   // cabecalho de cada secao (recolhivel)
@@ -132,6 +135,7 @@ inline constexpr std::uint32_t kWindowClip = 0u;
 inline constexpr std::uint32_t kContentClip = 1u;
 inline constexpr std::uint32_t kStripClip = 2u;
 
+// Janela Configuracoes: faixa de abas rolavel, secoes que abrem/fecham (APIs graficas, qualidade, GPU, aparencia e formularios genericos), combos, sliders, campos e popup de cor. Altera so os pedidos (pending_); o host aplica.
 class SettingsPanel {
  public:
     SettingsPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
@@ -141,7 +145,10 @@ class SettingsPanel {
         fixed_[kFixedButtonRadius].field = sc::Field::ButtonRadius;
         fixed_[kFixedWindowRadius].field = sc::Field::WindowRadius;
         fixed_[kFixedTextScale].field = sc::Field::TextScale;
-        colorPopup_.onChange([this](const float rgb[3]) { customPicked(rgb); });
+        colorPopup_.onChange([this](const float rgb[3]) {
+            if (colorPopup_.key() == kFormColorKey) formColorPicked();
+            else customPicked(rgb);
+        });
     }
     SettingsPanel(const SettingsPanel&) = delete;
     // Moldura SpriteUI (titulo, X, "?", grip e acoplamento). O corpo e desenhado pelo painel, abaixo do cabecalho.
@@ -171,8 +178,8 @@ class SettingsPanel {
                 if (colorPopup_.editingHex()) return colorPopup_.keyDown(e.key.key, static_cast<SDL_Keymod>(e.key.mod), window_);
                 return textKey(e.key.key);
             case SDL_EVENT_MOUSE_BUTTON_UP:
-                if (bar_.Dragging()) {
-                    bar_.PointerUp();
+                if (sbar_.pointerUp()) {   // soltou o polegar da barra de rolagem
+                    (void)capture_.up();
                     return true;
                 }
                 if (e.button.button != SDL_BUTTON_LEFT) return inside(e.button.x, e.button.y);
@@ -190,7 +197,15 @@ class SettingsPanel {
                 }
                 return pointer(Elm::PointerPhase::Up, e.button.x, e.button.y);
             case SDL_EVENT_MOUSE_MOTION:
-                if (bar_.Dragging()) return dragScrollbar(e.motion.x, e.motion.y);
+                if (sbar_.dragging()) {
+                    if ((e.motion.state & SDL_BUTTON_LMASK) == 0) {   // soltura perdida: encerra o arraste
+                        (void)sbar_.pointerUp();
+                        capture_.reset();
+                        return true;
+                    }
+                    return dragScrollbar(e.motion.x, e.motion.y);
+                }
+                (void)sbar_.pointerMove(e.motion.x - rect_.x, e.motion.y - rect_.y, scroll_.scrollOffset.y);   // so hover
                 // Sem o botao esquerdo, nao existe arrasto: se a captura estava aberta, solta os controles.
                 if (capture_.move((e.motion.state & SDL_BUTTON_LMASK) != 0)) {
                     releasePointer(e.motion.x, e.motion.y);
@@ -264,6 +279,7 @@ class SettingsPanel {
  private:
     static constexpr std::size_t npos = static_cast<std::size_t>(-1);
 
+    // Controle de +/- para um valor inteiro (limites e caixas dos botoes).
     struct Stepper {
         sc::Field field;
         sui::Box minus;
@@ -273,6 +289,7 @@ class SettingsPanel {
         int maxValue;
     };
 
+    // Par combo + campo de configuracao que ele altera.
     struct DropdownSlot {
         Elm::Dropdown* dd;
         sc::Field field;
@@ -306,6 +323,7 @@ class SettingsPanel {
         return 2.f * tabs_.stripPadding + tabsW;
     }
 
+    // Prende a rolagem horizontal da faixa de abas nos limites.
     void clampStrip() {
         const float maxX = stripMaxScroll();
         tabs_.scrollX = std::clamp(tabs_.scrollX, 0.f, maxX);
@@ -328,6 +346,7 @@ class SettingsPanel {
         clampStrip();
     }
 
+    // Desenha a faixa de abas.
     void appendTabs(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint) {
         append(items, paint, Elm::BuildTabBarItems(tabs_, tabStyle_, kStripClip, 0.2f, paint), kStripClip);
     }
@@ -340,15 +359,14 @@ class SettingsPanel {
         scroll_.viewportSize = {rect_.w, viewH};
         scroll_.contentSize = {rect_.w, contentH_};
         scroll_.ClampScroll();
-        bar_.SetTrack(rectOf(rect_.w - Metrics::kScrollW, Metrics::kStripH, Metrics::kScrollW, viewH));
+        sbar_.layout({rect_.w - ui_scrollbar::kWidth, Metrics::kStripH, ui_scrollbar::kWidth, viewH}, contentH_, viewH);
     }
 
+    // Barra de rolagem unica do editor (ui_scrollbar.hpp).
     void drawScrollbar() {
-        if (!bar_.HasOverflow(scroll_)) return;
-        const SU::Rect track = bar_.Track();
-        canvas_.addSolid(track.position.x, track.position.y, track.size.x, track.size.y, trackColor_, 0.2f);
-        const SU::Rect thumb = bar_.ThumbRect(scroll_);
-        canvas_.addSolid(thumb.position.x, thumb.position.y, thumb.size.x, thumb.size.y, thumbColor_, 0.25f);
+        for (const ui_scrollbar::Quad& q : sbar_.quads(palette::active(), scroll_.scrollOffset.y)) {
+            if (q.rect.w > 0.f && q.rect.h > 0.f) canvas_.addSolid(q.rect.x, q.rect.y, q.rect.w, q.rect.h, sui::PaletteColor(q.color), 0.25f);
+        }
     }
 
     // ---------- Layout da aba Graficos (coordenadas da janela, ja com a rolagem) ----------
@@ -364,6 +382,7 @@ class SettingsPanel {
         for (auto& row : paletteRows_) row = sui::Box{};   // linhas de tema so existem com a secao aberta
         for (auto& row : themeRows_) row = sui::Box{};
         baseBtns_.fill(sui::Box{});
+        colorGroups_.clear();   // refeitos por layoutForm a cada passada
         tokenPrev_ = tokenNext_ = sui::Box{};
         appearanceOpen_ = false;
         float y = top;
@@ -387,6 +406,7 @@ class SettingsPanel {
         contentH_ = (y - top) + 2.f * Metrics::kPad;
     }
 
+    // Cabecalho de uma secao (clicavel; realca no hover).
     void drawHeader(std::size_t i, float y, float w) {
         const bool hot = headers_[i].contains(hover_.x, hover_.y);
         canvas_.addSolid(Metrics::kPad, y, w, Metrics::kHeaderH, hot ? theme_.accent : theme_.surface, 0.2f,
@@ -445,7 +465,8 @@ class SettingsPanel {
         y = styleRow(kFixedWindowRadius, v.windowRadius, "Window corner radius", y, 0.f, sm::kWindowRadiusMax, 1.f, true,
                      std::to_string(static_cast<int>(v.windowRadius + 0.5f)) + " px");
         y = styleRow(kFixedTextScale, v.textScale, "Interface text size", y, sm::kTextScaleMin, sm::kTextScaleMax, 0.05f, false,
-                     std::to_string(static_cast<int>(v.textScale * 100.f + 0.5f)) + "%");
+                     std::to_string(static_cast<int>(v.textScale * 100.f + 0.5f)) + "%", editor::free_values::kTextScaleTypedMin,
+                     editor::free_values::kTextScaleTypedMax);
         return y;
     }
 
@@ -507,7 +528,7 @@ class SettingsPanel {
 
     // Um slider com rotulo e valor na linha de Appearance (slot fixo k). A faixa fica em `s.slider.border`.
     float styleRow(std::size_t k, float value, const char* label, float y, float lo, float hi, float step, bool integer,
-                   const std::string& shown) {
+                   const std::string& shown, float typedLo = 0.f, float typedHi = 0.f) {
         FormSlot& s = fixed_[k];
         canvas_.addText(Metrics::kPad, y + 5.f, std::string(T(label)), Metrics::kFont, theme_.text, labelW_ - 8.f);
         s.slider.range = Elm::SliderRange{lo, hi, step, integer};
@@ -517,6 +538,9 @@ class SettingsPanel {
         s.hi = hi;
         s.step = step;
         s.isInt = integer;
+        s.typedLo = typedLo;   // numero digitado: faixa propria (maior que a do slider) quando typedHi > typedLo
+        s.typedHi = typedHi;
+        s.modelValue = value;
         layoutValueBox(s, kFixedSection, k, y, shown);
         return y + Metrics::kRowH + Metrics::kGap;
     }
@@ -542,6 +566,7 @@ class SettingsPanel {
         canvas_.addSolid(cx, y + 4.f, 1.5f, Metrics::kRowH - 8.f, theme_.text, 0.25f);
     }
 
+    // Itens de desenho dos sliders da secao Aparencia.
     void appendAppearance(std::vector<SR::UIRenderItem>& items, std::uint64_t& paint) {
         constexpr float z = Metrics::kControlZ;
         append(items, paint, Elm::BuildSliderItems(fixed_[kFixedButtonRadius].slider, sliderStyle_, z, paint), kContentClip);
@@ -564,8 +589,10 @@ class SettingsPanel {
         theme_ = sui::Theme{};
         panelColor_ = theme_.panel;
         headingColor_ = theme_.scroll;
+        btnColor_ = sui::PaletteColor(editor::theme_colors::Active().btn);
     }
 
+    // Posiciona a secao de API grafica (radios das APIs compiladas); devolve o Y seguinte.
     float layoutApis(const Values& v, float y) {
         heading(y, T("Graphics API"));
         y += Metrics::kHeadingH;
@@ -574,6 +601,7 @@ class SettingsPanel {
         return y + radioH + 6.f;
     }
 
+    // Posiciona a secao de qualidade (resolucao, upscale, anti-aliasing...); devolve o Y seguinte.
     float layoutQuality(const Values& v, float y) {
         heading(y, T("Quality"));
         y += Metrics::kHeadingH;
@@ -609,6 +637,7 @@ class SettingsPanel {
         return y;
     }
 
+    // Posiciona a secao de detalhes de GPU (sombras, etc); devolve o Y seguinte.
     float layoutGpu(const Values& v, float y) {
         heading(y, T("GPU details"));
         y += Metrics::kHeadingH;
@@ -631,10 +660,12 @@ class SettingsPanel {
 
     [[nodiscard]] float textWidth() const { return rect_.w - 2.f * Metrics::kPad; }
 
+    // Linha com rotulo a esquerda e combo a direita.
     void controlRow(Elm::Dropdown& dd, float y, const char* label) {
         dd.border = rectOf(Metrics::kPad + labelW_, y, controlW_, Metrics::kRowH);
         text(Metrics::kPad, y + 6.f, label, Metrics::kFont, labelW_ - 6.f);
     }
+    // Linha com rotulo a esquerda e caixa de marcar a direita.
     void checkRow(Elm::Checkbox& cb, float y, const char* label) {
         cb.border = rectOf(Metrics::kPad + labelW_, y, controlW_, Metrics::kRowH);
         text(Metrics::kPad, y + 6.f, label, Metrics::kFont, labelW_ - 6.f);
@@ -656,20 +687,24 @@ class SettingsPanel {
         text(s.plus.x + 8.f, s.plus.y + 6.f, "+", Metrics::kFont, 12.f);
     }
 
+    // Quantas APIs graficas estao compiladas neste build.
     static int builtApis(const Values& v) {
         int n = 0;
         for (bool built : v.apiBuilt) n += built ? 1 : 0;
         return n;
     }
 
+    // Titulo de secao dentro do conteudo.
     void heading(float y, const char* title) {
         canvas_.addText(Metrics::kPad, y + 4.f, title, Metrics::kFont + 1.f, headingColor_, textWidth());
     }
 
+    // Texto simples no canvas (ignora texto vazio).
     void text(float x, float y, const std::string& s, float size, float maxW) {
         if (!s.empty()) canvas_.addText(x, y, s, size, theme_.text, maxW);
     }
 
+    // Retangulo a partir de x, y, largura e altura.
     [[nodiscard]] static SU::Rect rectOf(float x, float y, float w, float h) {
         return {{x, y}, {w, h}};
     }
@@ -686,6 +721,7 @@ class SettingsPanel {
         dropdownValue(shadowQuality_);
     }
 
+    // Texto da opcao escolhida dentro da caixa do combo.
     void dropdownValue(const Elm::Dropdown& dd) {
         const std::size_t sel = dd.control.selectedIndex;
         if (sel >= dd.control.options.size()) return;
@@ -709,6 +745,7 @@ class SettingsPanel {
         });
     }
 
+    // Textos da lista aberta do combo (so quando aberto).
     void popupTexts(const Elm::Dropdown& dd) {
         if (!dd.control.open) return;
         for (std::size_t i = 0; i < dd.control.options.size(); ++i) {
@@ -718,13 +755,16 @@ class SettingsPanel {
         }
     }
 
+    // Os 5 combos fixos da janela (somente leitura).
     [[nodiscard]] std::array<const Elm::Dropdown*, 5> allDropdowns() const {
         return {&resolution_, &upscale_, &aa_, &fps_, &shadowQuality_};
     }
+    // Os 5 combos fixos da janela (editaveis).
     [[nodiscard]] std::array<Elm::Dropdown*, 5> allDropdownsMutable() {
         return {&resolution_, &upscale_, &aa_, &fps_, &shadowQuality_};
     }
 
+    // Posiciona a lista aberta de cada combo dentro da janela.
     void layoutDropdowns() {
         for (Elm::Dropdown* dd : allDropdownsMutable()) dd->Layout(windowRect());
         forEachFormSlot([&](FormSlot& s) {
@@ -745,6 +785,7 @@ class SettingsPanel {
         clampStrip();
     }
 
+    // Copia os valores atuais do Editor para os controles (API, resolucao, upscale, sombras...).
     void syncElements(const Values& v) {
         sb::SyncApiRadio(apis_, v.apiBuilt, v.api);
         sb::SyncDropdown(resolution_, resolutionOptions(), v.resMode);
@@ -761,6 +802,7 @@ class SettingsPanel {
         scaleEnabled_ = v.resMode == 0;   // a escala so vale com a resolucao de janela
     }
 
+    // Opcoes do combo de resolucao do jogo.
     static std::vector<std::string> resolutionOptions() {
         return {T("Match window size (x render scale)"), "640 x 360", "1280 x 720 (HD)", "1920 x 1080 (Full HD)",
                 "2560 x 1440 (QHD)", T("Custom")};
@@ -785,26 +827,99 @@ class SettingsPanel {
         bool isInt = false;
         sc::Field field = sc::Field::Form;      // Slider: pedido. Form (linha generica) usa id; os demais sao campos fixos
         int index = 0;                          // Slider de campo fixo: canal (cor personalizada: 0, 1 ou 2)
+        bool hidden = false;                    // Slider de um grupo de cor: nao desenha nem recebe ponteiro (o seletor de cor o substitui)
+        float typedLo = 0.f, typedHi = 0.f;     // Slider de tamanho de fonte: faixa do numero digitado (typedHi > typedLo = livre)
+        float modelValue = 0.f;                 // Slider livre: valor real do modelo (o slider so mostra ate o fim da faixa)
     };
 
-    // Linhas de uma secao, depois do conteudo fixo. Devolve o y final.
+    // Grupo de cor (linhas R, G, B e, se houver, A seguidas): um seletor de cor no lugar dos sliders.
+    struct ColorGroup {
+        std::size_t section = 0, first = 0, count = 0;   // secao, primeira linha e numero de canais (3 ou 4)
+        int ids[4] = {0, 0, 0, 0};                        // id de cada canal (pedido Field::Form)
+        float rgba[4] = {0.f, 0.f, 0.f, 1.f};             // valor do modelo neste quadro
+        SU::Rect box;                                     // amostra clicavel (janela)
+        bool enabled = true;
+    };
+
+    // Linhas de uma secao, depois do conteudo fixo. Devolve o y final. Tres ou quatro linhas seguidas "(R) (G) (B) [(A)]"
+    // viram uma so linha com o seletor de cor compartilhado (color_popup.hpp).
     float layoutForm(std::size_t i, const settings_form::Rows& rows, float y) {
         syncFormPool(i, rows);
         for (std::size_t k = 0; k < rows.size(); ++k) {
-            // RGB fields remain individually editable, but the group also gets a clear visual color preview.
-            if (k + 2 < rows.size() && rows[k].kind == settings_form::RowKind::Slider &&
-                rows[k + 1].kind == settings_form::RowKind::Slider && rows[k + 2].kind == settings_form::RowKind::Slider &&
-                rows[k].label.find(" (R)") != std::string::npos && rows[k + 1].label.find(" (G)") != std::string::npos &&
-                rows[k + 2].label.find(" (B)") != std::string::npos) {
-                const float r = std::clamp(rows[k].value, 0.f, 1.f);
-                const float g = std::clamp(rows[k + 1].value, 0.f, 1.f);
-                const float b = std::clamp(rows[k + 2].value, 0.f, 1.f);
-                canvas_.addSolid(rect_.w - Metrics::kPad - 30.f, y + 3.f, 26.f, 26.f, SU::Vec4{r, g, b, 1.f}, 0.24f,
-                                 editor::ui_style::buttonRadius());
+            const std::size_t n = colorGroupSize(rows, k);
+            if (n != 0) {
+                y = layoutColorGroup(i, k, n, rows, y);
+                k += n - 1;
+                continue;
             }
             y = layoutFormRow(i, k, rows[k], y);
         }
         return y;
+    }
+
+    // Quantas linhas (3 ou 4) formam um grupo de cor a partir de k, ou 0 se k nao abre um grupo.
+    [[nodiscard]] static std::size_t colorGroupSize(const settings_form::Rows& rows, std::size_t k) {
+        using settings_form::RowKind;
+        auto has = [&](std::size_t j, const char* tag) {
+            return j < rows.size() && rows[j].kind == RowKind::Slider && rows[j].label.find(tag) != std::string::npos;
+        };
+        if (!has(k, " (R)") || !has(k + 1, " (G)") || !has(k + 2, " (B)")) return 0;
+        return has(k + 3, " (A)") ? 4 : 3;
+    }
+
+    // Linha de cor: rotulo, amostra com o hex (e o alfa) e clique para abrir o seletor. Os sliders do grupo ficam ocultos.
+    float layoutColorGroup(std::size_t i, std::size_t k, std::size_t n, const settings_form::Rows& rows, float y) {
+        ColorGroup g;
+        g.section = i;
+        g.first = k;
+        g.count = n;
+        g.enabled = rows[k].enabled;
+        for (std::size_t j = 0; j < n; ++j) {
+            FormSlot& s = slotFor(i, k + j, settings_form::RowKind::Slider);
+            s.hidden = true;
+            s.id = rows[k + j].id;
+            s.box = SU::Rect{};
+            s.slider.border = SU::Rect{};
+            g.ids[j] = rows[k + j].id;
+            g.rgba[j] = std::clamp(rows[k + j].value, 0.f, 1.f);
+        }
+        const bool live = colorPopup_.isOpen() && colorPopup_.key() == kFormColorKey && activeGroup_.section == i && activeGroup_.first == k;
+        const float* c = live ? formRgba_ : g.rgba;
+        std::string label = rows[k].label;
+        label.erase(label.find(" (R)"), 4);
+        const SU::Vec4 ink = g.enabled ? theme_.text : theme_.textDim;
+        g.box = rectOf(Metrics::kPad + labelW_, y, controlW_, Metrics::kRowH);
+        canvas_.addText(Metrics::kPad, y + 5.f, label, Metrics::kFont, ink, labelW_ - 8.f);
+        const bool hot = g.enabled && contains(g.box, hover_);
+        canvas_.addSolid(g.box.position.x, y, g.box.size.x, g.box.size.y, hot ? theme_.accent : btnColor_, 0.2f, editor::ui_style::buttonRadius());
+        canvas_.addSolid(g.box.position.x + 6.f, y + 5.f, 26.f, Metrics::kRowH - 10.f, SU::Vec4{c[0], c[1], c[2], n == 4 ? c[3] : 1.f}, 0.24f);
+        std::string text = im::HexText(c);
+        if (n == 4) text += "   A " + std::to_string(static_cast<int>(c[3] * 100.f + 0.5f)) + "%";
+        canvas_.addText(g.box.position.x + 40.f, y + 5.f, text, Metrics::kFont, ink, g.box.size.x - 46.f);
+        colorGroups_.push_back(g);
+        return y + Metrics::kRowH + Metrics::kGap;
+    }
+
+    // Clique na amostra de um grupo de cor (secao aberta): abre o seletor ali. Devolve true se abriu.
+    bool colorGroupPointer(const SU::Vec2& p) {
+        for (const ColorGroup& g : colorGroups_) {
+            if (!g.enabled || !open_[g.section] || !contains(g.box, p)) continue;
+            activeGroup_ = g;
+            for (int j = 0; j < 4; ++j) formRgba_[j] = g.rgba[j];
+            const float total = Metrics::kColorPopupH + color_popup::ColorPopup::kExtraH;
+            float y = g.box.position.y + g.box.size.y + 4.f;
+            if (y + total > rect_.h) y = std::max(0.f, g.box.position.y - total - 4.f);
+            const float x = std::min(g.box.position.x, std::max(0.f, rect_.w - Metrics::kColorPopupW - 2.f));
+            colorPopup_.open(kFormColorKey, formRgba_, SU::Rect{{x, y}, {Metrics::kColorPopupW, Metrics::kColorPopupH}},
+                             g.count == 4 ? &formRgba_[3] : nullptr);
+            return true;
+        }
+        return false;
+    }
+
+    // O seletor mudou a cor de um grupo: um pedido por canal (R, G, B e o alfa quando o grupo o tem).
+    void formColorPicked() {
+        for (std::size_t j = 0; j < activeGroup_.count; ++j) pending_.push_back(formChange(activeGroup_.ids[j], formRgba_[j], false, 0, ""));
     }
 
     // Pool da secao: recriado quando o numero de linhas muda (o foco do texto dessa secao se perde).
@@ -827,6 +942,7 @@ class SettingsPanel {
         return *p;
     }
 
+    // Posiciona uma linha generica do formulario (slider, combo, campo, cor...) e devolve o Y seguinte.
     float layoutFormRow(std::size_t i, std::size_t k, const settings_form::Row& row, float y) {
         using settings_form::RowKind;
         FormSlot& s = slotFor(i, k, row.kind);
@@ -872,6 +988,7 @@ class SettingsPanel {
             }
             case RowKind::Slider: {
                 const bool asInt = row.isInt;
+                s.hidden = false;
                 s.slider.range = Elm::SliderRange{row.lo, row.hi, asInt ? 1.f : 0.f, asInt};
                 s.slider.SetValue(settings_form::ClampSliderValue(row.value, row.lo, row.hi, asInt));
                 s.slider.states.disabled = !row.enabled;
@@ -941,6 +1058,17 @@ class SettingsPanel {
     // Digitar o valor de um slider: o texto vira o valor do Slider (mesmos limites e passo do arraste) e so grava
     // quando o valor muda. Texto invalido nao muda nada.
     void commitSliderEdit(FormSlot& s) {
+        if (s.typedHi > s.typedLo) {   // tamanho de fonte: o numero digitado vale alem da faixa do slider (prendido por seguranca)
+            float typedFree = 0.f;
+            if (slider_edit::ParseTypedNumber(s.edit.Text(), typedFree)) {
+                typedFree = std::clamp(typedFree, s.typedLo, s.typedHi);
+                if (std::fabs(typedFree - s.modelValue) > 1e-4f) {
+                    s.slider.SetValue(std::clamp(typedFree, s.lo, s.hi));
+                    pending_.push_back(sc::Change{s.field, s.index, typedFree, false});
+                }
+            }
+            return;
+        }
         const float typed = slider_edit::CommitSliderText(s.edit.Text(), s.slider.Value(), s.lo, s.hi, s.step, s.isInt);
         if (s.slider.SetValue(typed)) sliderChanged(s);
     }
@@ -955,16 +1083,18 @@ class SettingsPanel {
     void openCustomPicker() {
         for (std::size_t ch = 0; ch < 3; ++ch) customRgb_[ch] = customModel_[ch];
         float y = customSwatch_.position.y + customSwatch_.size.y + 4.f;
-        if (y + Metrics::kColorPopupH > rect_.h) y = std::max(0.f, customSwatch_.position.y - Metrics::kColorPopupH - 4.f);
+        const float total = Metrics::kColorPopupH + color_popup::ColorPopup::kExtraH;
+        if (y + total > rect_.h) y = std::max(0.f, customSwatch_.position.y - total - 4.f);
         const float x = std::min(customSwatch_.position.x, std::max(0.f, rect_.w - Metrics::kColorPopupW - 2.f));
         colorPopup_.open(0u, customRgb_, SU::Rect{{x, y}, {Metrics::kColorPopupW, Metrics::kColorPopupH}});
     }
 
+    // Visual do popup de cor a partir das cores da janela.
     [[nodiscard]] color_popup::Look colorLook() const {
         color_popup::Look look;
         look.frame.cornerRadius = editor::ui_style::windowRadius();
         look.frame.background = panelColor_;
-        look.frame.border = sui::Srgb(0.32f, 0.36f, 0.42f, 1.f);
+        look.frame.border = theme_.divider;
         look.field = btnColor_;
         look.fieldFocus = theme_.surface;
         look.text = theme_.text;
@@ -990,6 +1120,11 @@ class SettingsPanel {
         if (isFocused(i, k)) return;
         commitText();
         s.known = Elm::SliderValueText(s.slider);
+        if (s.typedHi > s.typedLo) {   // livre: o texto de partida e o valor real do modelo, mesmo alem do fim do slider
+            char buf[32];
+            std::snprintf(buf, sizeof buf, "%.2f", static_cast<double>(s.modelValue));
+            s.known = buf;
+        }
         s.edit = W::TextEditState(s.known);
         focusText(i, k, s);
     }
@@ -997,6 +1132,7 @@ class SettingsPanel {
     // Ponteiro de um slider (linha generica ou fixo): Down na caixa do valor abre a digitacao; o arraste de sempre
     // continua na faixa. Devolve true se o slider consumiu o evento.
     bool sliderPointer(std::size_t i, std::size_t k, FormSlot& s, Elm::PointerPhase phase, const SU::Vec2& p) {
+        if (s.hidden) return false;   // slider de grupo de cor: quem responde e o seletor
         if (phase == Elm::PointerPhase::Down && !s.slider.states.disabled && contains(s.box, p)) {
             focusSlider(i, k, s);
             return true;
@@ -1069,6 +1205,7 @@ class SettingsPanel {
         return sc::Change{sc::Field::Form, index, value, on, id, std::move(text)};
     }
 
+    // Percorre todas as linhas genericas (de todas as secoes) chamando f.
     template <class F>
     void forEachFormSlot(F&& f) {
         for (auto& pool : formPool_) {
@@ -1076,6 +1213,7 @@ class SettingsPanel {
         }
     }
 
+    // Algum combo fixo esta aberto?
     [[nodiscard]] bool graphicsDropdownOpen() const {
         for (const Elm::Dropdown* dd : allDropdowns()) {
             if (dd->control.open) return true;
@@ -1083,6 +1221,7 @@ class SettingsPanel {
         return false;
     }
 
+    // Combo aberto de alguma linha generica, ou nullptr.
     [[nodiscard]] FormSlot* openFormDropdown() {
         for (std::size_t i = 0; i < sm::kTabCount; ++i) {
             if (!open_[i]) continue;
@@ -1121,6 +1260,7 @@ class SettingsPanel {
         return used;
     }
 
+    // Trata o ponteiro numa linha generica conforme o tipo (slider, combo, campo, cor...); true se consumiu.
     bool formSlotPointer(std::size_t i, std::size_t k, FormSlot& s, Elm::PointerPhase phase, const SU::Vec2& p) {
         using settings_form::RowKind;
         switch (s.kind) {
@@ -1167,6 +1307,7 @@ class SettingsPanel {
                 FormSlot& s = *sp;
                 switch (s.kind) {
                     case RowKind::Slider:
+                        if (s.hidden) break;
                         append(items, paint, Elm::BuildSliderItems(s.slider, sliderStyle_, z, paint), kContentClip);
                         break;
                     case RowKind::Check:
@@ -1246,6 +1387,7 @@ class SettingsPanel {
         return visible_ && sui::Box{0.f, 0.f, rect_.w, rect_.h}.contains(x - rect_.x, y - rect_.y);
     }
 
+    // Entrada unica do ponteiro (mover/apertar/soltar): fecha menus, trata abas, secoes, barra de rolagem e conteudo. true = consumiu.
     bool pointer(Elm::PointerPhase phase, float x, float y) {
         if (phase == Elm::PointerPhase::Move) hover_ = {x - rect_.x, y - rect_.y};   // hover: cabecalhos, combos, opcoes
         if (!inside(x, y)) {
@@ -1268,6 +1410,7 @@ class SettingsPanel {
             openCustomPicker();
             return true;
         }
+        if (phase == Elm::PointerPhase::Down && colorGroupPointer(p)) return true;   // amostra de cor das linhas (Sol, Ceu...)
         if (phase == Elm::PointerPhase::Up && sectionPointer(p)) return true;
         if (phase == Elm::PointerPhase::Up && paletteRowPointer(p)) return true;
         if (appearanceSliderPointer(phase, p)) return true;
@@ -1289,6 +1432,7 @@ class SettingsPanel {
         if (open_[kGraphicsTab]) contentPointer(Elm::PointerPhase::Up, p);
     }
 
+    // Clique no cabecalho de secao: abre ou fecha.
     bool sectionPointer(const SU::Vec2& p) {
         for (std::size_t i = 0; i < sm::kTabCount; ++i) {
             if (headers_[i].contains(p.x, p.y)) {
@@ -1300,6 +1444,7 @@ class SettingsPanel {
         return false;
     }
 
+    // Clique numa linha da paleta de cores: pede a troca de tema.
     bool paletteRowPointer(const SU::Vec2& p) {
         for (std::size_t k = 0; k <= editor::palette::kCustomIndex; ++k) {
             if (paletteRows_[k].contains(p.x, p.y)) {
@@ -1327,6 +1472,7 @@ class SettingsPanel {
         return false;
     }
 
+    // Setas e abas da faixa: rola a faixa ou escolhe a aba.
     bool stripPointer(Elm::PointerPhase phase, const SU::Vec2& p) {
         if (phase == Elm::PointerPhase::Up && p.x < Metrics::kStripArrowW) {
             tabs_.scrollX -= 3.f * (tabs_.tabWidth + tabs_.tabGap);
@@ -1353,21 +1499,25 @@ class SettingsPanel {
             clampStrip();
             return true;
         }
-        (void)bar_.Wheel(delta, scroll_);
+        scroll_.scrollOffset.y += delta;
+        scroll_.ClampScroll();
         return true;
     }
 
+    // Clique na barra de rolagem do conteudo.
     bool scrollbarPointer(const SU::Vec2& p) {
-        if (!bar_.HasOverflow(scroll_) || p.x < bar_.Track().position.x) return false;
-        (void)bar_.PointerDown(p, scroll_);
+        if (!sbar_.pointerDown(p.x, p.y, scroll_.scrollOffset.y)) return false;
+        scroll_.ClampScroll();
         return true;
     }
 
+    // Arraste do polegar da barra de rolagem (continua mesmo com o mouse fora).
     bool dragScrollbar(float x, float y) {
-        (void)bar_.PointerMove(SU::Vec2{x - rect_.x, y - rect_.y}, scroll_);
+        if (sbar_.pointerMove(x - rect_.x, y - rect_.y, scroll_.scrollOffset.y)) scroll_.ClampScroll();
         return true;
     }
 
+    // Ponteiro no conteudo: com combo aberto so ele recebe; senao radios, checkboxes, steppers e linhas genericas.
     void contentPointer(Elm::PointerPhase phase, const SU::Vec2& p) {
         // Combo aberto: a lista cobre os controles de baixo, entao so ele recebe o ponteiro.
         for (const DropdownSlot& slot : dropdownSlots()) {
@@ -1407,26 +1557,31 @@ class SettingsPanel {
         return ev;
     }
 
+    // Aplica o evento do combo e, se o valor mudou, enfileira o pedido.
     void applyDropdown(Elm::Dropdown& dd, Elm::PointerPhase phase, const SU::Vec2& p, sc::Field field) {
         const Elm::DropdownEvents ev = dropdownEvents(dd, phase, p);
         if (ev.opened) closeOthers(&dd);
         if (ev.valueChanged) pending_.push_back({field, static_cast<int>(dd.control.selectedIndex), 0.f, false});
     }
 
+    // Aplica o evento da caixa de marcar e enfileira o pedido se mudou.
     void applyCheck(Elm::Checkbox& cb, Elm::PointerPhase phase, const SU::Vec2& p, sc::Field field) {
         const Elm::CheckboxEvents ev = cb.OnPointer(event(phase, p, cb.border));
         if (ev.valueChanged) pending_.push_back({field, 0, 0.f, cb.checked});
     }
 
+    // Ponto dentro do retangulo.
     [[nodiscard]] static bool contains(const SU::Rect& box, const SU::Vec2& p) {
         return p.x >= box.position.x && p.x < box.position.x + box.size.x && p.y >= box.position.y &&
                p.y < box.position.y + box.size.y;
     }
 
+    // Monta o evento de ponteiro relativo a caixa do controle.
     [[nodiscard]] static Elm::PointerEvent event(Elm::PointerPhase phase, const SU::Vec2& p, const SU::Rect& box) {
         return Elm::PointerEvent{phase, p, 0u, contains(box, p)};
     }
 
+    // Clique em - ou + de algum stepper.
     bool stepperClick(const SU::Vec2& p) {
         for (Stepper& s : steps_) {
             if (sui::Box{s.minus.x, s.minus.y, s.minus.w, s.minus.h}.contains(p.x, p.y)) return step(s, -Metrics::kCustomStep);
@@ -1435,12 +1590,14 @@ class SettingsPanel {
         return false;
     }
 
+    // Soma delta ao valor (preso nos limites) e enfileira o pedido se mudou.
     bool step(const Stepper& s, int delta) {
         const int next = std::clamp(s.value + delta, s.minValue, s.maxValue);
         if (next != s.value) pending_.push_back({s.field, next, 0.f, false});
         return true;
     }
 
+    // Fecha todos os combos exceto `keep` (so um aberto por vez).
     void closeOthers(const Elm::Dropdown* keep) {
         for (const DropdownSlot& slot : dropdownSlots()) {
             if (slot.dd != keep) slot.dd->control.Close();
@@ -1450,6 +1607,7 @@ class SettingsPanel {
         });
     }
 
+    // Lista dos 5 combos fixos com o campo que cada um altera.
     [[nodiscard]] std::array<DropdownSlot, 5> dropdownSlots() {
         return {{{&resolution_, sc::Field::ResMode},
                  {&upscale_, sc::Field::Upscale},
@@ -1473,11 +1631,9 @@ class SettingsPanel {
     }();
     std::array<sui::Box, sm::kTabCount> headers_{};                      // cabecalhos (coordenadas locais)
     std::array<sui::Box, editor::palette::kCount + 1> paletteRows_{};        // linhas de tema (coordenadas locais)
-    SU::Vec4 panelColor_ = sui::Srgb(0.055f, 0.075f, 0.11f, 0.97f);
-    SU::Vec4 headingColor_ = sui::Srgb(0.45f, 0.72f, 0.96f);
-    SU::Vec4 btnColor_ = sui::Srgb(0.13f, 0.16f, 0.21f);
-    SU::Vec4 trackColor_ = sui::Srgb(0.09f, 0.11f, 0.15f);
-    SU::Vec4 thumbColor_ = sui::Srgb(0.30f, 0.40f, 0.55f);
+    SU::Vec4 panelColor_ = sui::PaletteColor(palette::active().panel);
+    SU::Vec4 headingColor_ = sui::PaletteColor(palette::active().scroll);
+    SU::Vec4 btnColor_ = sui::PaletteColor(editor::theme_colors::Active().btn);
     SR::RenderExtractor extractor_;
     SR::FramePacket packet_;
     std::uint64_t frameId_ = 0;
@@ -1496,6 +1652,11 @@ class SettingsPanel {
     SU::Rect customSwatch_{};
     float customModel_[3] = {0.f, 0.f, 0.f};
     float customRgb_[3] = {0.f, 0.f, 0.f};
+    // Cores das linhas genericas (Sol, Ceu, Ambiente...): grupos do quadro, o grupo aberto no seletor e a copia editada (RGBA).
+    static constexpr std::uint32_t kFormColorKey = 1u;
+    std::vector<ColorGroup> colorGroups_;
+    ColorGroup activeGroup_;
+    float formRgba_[4] = {0.f, 0.f, 0.f, 1.f};
     color_popup::ColorPopup colorPopup_{canvas_, overlay_};
     std::array<std::vector<std::unique_ptr<FormSlot>>, sm::kTabCount> formPool_{};   // controles das linhas, por secao
     std::size_t focusSection_ = npos;   // campo de texto com foco (secao e linha); npos = nenhum
@@ -1503,7 +1664,7 @@ class SettingsPanel {
     SDL_Window* window_ = nullptr;      // janela do ultimo clique: liga e desliga o texto do SDL
 
     W::UIScrollViewComponent scroll_;
-    W::ScrollBarControl bar_;
+    ui_scrollbar::Scrollbar sbar_;
 
     Elm::TabBar tabs_;
     Elm::RadioGroup apis_;

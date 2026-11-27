@@ -18,6 +18,7 @@
 //   draw:        trata a fila (botoes, gizmo, menu), monta as formas e desenha: imagem, sobreposicoes, barras e menu.
 
 #include "window_palette.hpp"
+#include "theme_colors.hpp"
 #include "i18n.hpp"
 #include "scene_transform_menu.hpp"
 #include "canvas_edit.hpp"
@@ -73,12 +74,32 @@ inline constexpr float kClickSlop = 4.f;   // botao direito sem arrastar (px): a
 inline constexpr std::uint32_t kSceneSlot = 0;   // slot de textura da cena (SpriteUiSdlRenderer::setView)
 
 // Cores em RGBA 0..255.
-inline constexpr view::Color kPanelFill = view::Rgba(14, 19, 28, 250);
-inline constexpr view::Color kPanelEdge = view::Rgba(51, 61, 77);
-inline constexpr view::Color kButtonFill = view::Rgba(33, 41, 54);
-inline constexpr view::Color kButtonOn = view::Rgba(51, 92, 133);
-inline constexpr view::Color kText = view::Rgba(233, 234, 238);
-inline constexpr view::Color kTextDim = view::Rgba(143, 144, 153);
+inline view::Color kPanelFill = view::Rgba(14, 19, 28, 250);
+inline view::Color kPanelEdge = view::Rgba(51, 61, 77);
+inline view::Color kButtonFill = view::Rgba(33, 41, 54);
+inline view::Color kButtonOn = view::Rgba(51, 92, 133);
+inline view::Color kText = view::Rgba(233, 234, 238);
+inline view::Color kTextDim = view::Rgba(143, 144, 153);
+inline view::Color kAccent = view::Rgba(64, 102, 178);
+inline view::Color kField = view::Rgba(20, 24, 32);
+inline view::Color kMenuFill = view::Rgba(12, 16, 24, 250);
+inline view::Color kFloatFill = view::Rgba(14, 19, 28, 230);
+// Cores da paleta em uso (theme_colors.hpp), refeitas no inicio de draw(): trocar o tema repinta a janela.
+// kHighlight (amarelo de selecao) e as cores dos eixos do gizmo ficam fixos: sao identidade, nao tema.
+inline void refreshPalette() {
+  const editor::theme_colors::Colors t = editor::theme_colors::Active();
+  auto c = [](const editor::palette::Rgb& x) { return view::rgbaF(x.r, x.g, x.b, x.a); };
+  kPanelFill = c(editor::theme_colors::WithAlpha(t.panel, 250.f / 255.f));
+  kPanelEdge = c(t.border);
+  kButtonFill = c(t.btn);
+  kButtonOn = c(t.btnOn);
+  kText = c(t.text);
+  kTextDim = c(t.textDim);
+  kAccent = c(t.accent);
+  kField = c(t.field);
+  kMenuFill = c(editor::theme_colors::WithAlpha(t.surface, 250.f / 255.f));
+  kFloatFill = c(editor::theme_colors::WithAlpha(t.panel, 230.f / 255.f));
+}
 inline constexpr view::Color kHighlight = view::Rgba(255, 235, 90);
 
 // O que o Editor sabe de um objeto sob o mouse. O painel so guarda o id e devolve nos pedidos.
@@ -165,6 +186,7 @@ struct Requests {
   std::optional<CanvasDrag> canvasDrag;
   // Pontos de divisao do canvas: colocar (Add), arrastar (Move) ou apagar (Remove). Fracao do canvas, 0..1.
   enum class DivisionOp : std::uint8_t { Add, Move, Remove };
+  // Pedido de edicao de ponto de divisao do canvas (id do canvas, operacao, indice e posicao em fracao).
   struct DivisionEdit {
     std::uint64_t id = 0;
     DivisionOp op = DivisionOp::Add;
@@ -174,6 +196,7 @@ struct Requests {
   std::optional<DivisionEdit> division;
   // Linhas entre pontos: escolher um ponto no modo Linha (Pick), apagar a linha selecionada (Remove).
   enum class LineOp : std::uint8_t { Pick, Remove };
+  // Pedido de edicao de linha entre pontos de divisao (id do canvas, operacao e indice).
   struct LineEdit {
     std::uint64_t id = 0;
     LineOp op = LineOp::Pick;
@@ -190,6 +213,7 @@ struct Requests {
 // Retangulo da imagem (sem a barra) em coordenadas da janela.
 inline sui::Box imageArea(sui::Box rect) { return {rect.x, rect.y + kToolbarH, rect.w, std::max(0.f, rect.h - kToolbarH)}; }
 
+// Janela Scene: moldura SpriteUI com barra (Play/Pause/Step, grade, gizmos, modos, snap), imagem da cena 3D, gizmo de mover/girar/escalar, menu de contexto e edicao de canvas. Eventos entram numa fila e sao processados no draw.
 class ScenePanel {
 public:
   ScenePanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl) : painter_{text}, sdl_{sdl} {
@@ -228,11 +252,13 @@ public:
   [[nodiscard]] SU::Rect gripRect() const { return frame_.gripRect(); }
   // Moldura de posicao e tamanho: o host do dock a usa para redimensionar pelas bordas.
   window_frame::Frame* frameState() { return &frame_; }
+  // Tira a janela do dock e a coloca flutuando no ponto dado.
   void floatAt(SU::Vec2 at) {
     dock_.reset();
     frame_.undock(at);
   }
 
+  // Posiciona a moldura (flutuante ou no dock) e devolve a area de conteudo; vazia se minimizada.
   sui::Box prepare(float winW, float winH) {
     frame_.placeIn(winW, winH, dock_, std::max(320.f, winW * 0.6f), std::max(240.f, winH * 0.6f));
     const SU::Rect c = frame_.content();
@@ -242,6 +268,7 @@ public:
 
   // Desenha a moldura e o corpo. Os pedidos saem em `out`; X e "?" sao pedidos de janela (close, help).
   bool draw(SDL_Renderer* renderer, const Values& v, Requests& out) {
+    refreshPalette();
     visible_ = v.shown;
     out.close = closeRequested_;
     out.help = helpRequested_;
@@ -328,6 +355,7 @@ public:
   [[nodiscard]] bool dragging() const { return dragging_; }
 
 private:
+  // Evento de mouse/teclado enfileirado (movimento, apertar, soltar, Esc) com posicao.
   struct In {
     enum class Kind : std::uint8_t { Move, Down, Up, Escape };
     Kind kind = Kind::Move;
@@ -337,11 +365,13 @@ private:
 
   // Botoes da barra e da barra flutuante. O id diz o que o clique faz.
   enum class Btn : std::uint8_t { PlayStop, Pause, Step, Grid, Gizmos, Culled, PostFx, Mode0, Mode1, Mode2, Magnet, Space, SnapContact, EditCanvas, AddPoint, RemovePoint, AddLine, DottedLine, RemoveLine };
+  // Botao da barra: caixa, acao e se esta habilitado.
   struct Button {
     sui::Box box;
     Btn id;
     bool enabled;
   };
+  // Item do menu de contexto: acao e se vale para a selecao atual.
   struct CtxSlot {
     CtxAct act;
     bool valid;
@@ -402,7 +432,7 @@ private:
     const SU::Rect grip = frame_.gripRect();
     const SU::Rect help = frame_.helpRect();
     const vm::Pixel hc{help.position.x + help.size.x * 0.5f, help.position.y + help.size.y * 0.5f};
-    out.circleFilled(hc, help.size.x * 0.5f, view::Rgba(64, 102, 178));
+    out.circleFilled(hc, help.size.x * 0.5f, kAccent);
     out.text({hc.x, hc.y - kFont * 0.62f}, "?", kFont, kText, true);   // texto e ancorado no topo: sobe para centralizar
     const float tx = frame_.titleTextX();
     const float ty = head.position.y + (head.size.y - kTitleFont) * 0.5f;
@@ -417,6 +447,7 @@ private:
     }
   }
 
+  // Botao esquerdo apertado: menu de contexto aberto escolhe linha; senao botoes da barra, alca do gizmo, edicao de canvas ou selecao por clique.
   void onLeftDown(vm::Pixel p, const Values& v, const sui::Box& img, Requests& out) {
     if (ctx_.IsOpen()) {   // menu aberto: clique numa linha escolhe; fora dele, fecha e segue o clique
       const int row = rowAt(p);
@@ -574,6 +605,7 @@ private:
     }
   }
 
+  // Executa o botao da barra: preenche o pedido ao host (Play, Pause, modos, snap, espaco...).
   void press(Btn b, const Values& v, Requests& out) {
     switch (b) {
       case Btn::PlayStop: out.playToggle = true; break;
@@ -694,6 +726,7 @@ private:
 
   // ---------- Geometria ----------
   [[nodiscard]] static vm::Area areaOf(const sui::Box& img) { return {img.x, img.y, img.w, img.h}; }
+  // Gizmo do objeto selecionado: origem, comprimento dos eixos (pela distancia da camera) e eixos locais ou do mundo.
   [[nodiscard]] vm::Gizmo gizmoOf(const Values& v) const {
     vm::Gizmo g;
     g.origin = v.sel.worldPos;
@@ -703,6 +736,7 @@ private:
   }
   [[nodiscard]] static vm::Mode modeOf(const Values& v) { return static_cast<vm::Mode>(std::clamp(v.gizmoMode, 0, 2)); }
 
+  // Botao habilitado sob o ponto, se houver.
   [[nodiscard]] std::optional<Btn> buttonAt(vm::Pixel p) const {
     for (const Button& b : buttons_) {
       if (b.enabled && b.box.contains(p.x, p.y)) return b.id;
@@ -718,6 +752,7 @@ private:
     return -1;
   }
 
+  // Converte a posicao X do mouse no slider do snap no passo de grade pedido.
   void setSnapFromX(float x, Requests& out) {
     const float t = std::clamp((x - sliderBox_.x) / std::max(1.f, sliderBox_.w), 0.f, 1.f);
     out.snapStep = stm::snapStepFromSlider(t);
@@ -761,6 +796,7 @@ private:
     return vm::hitTest(proj, g, mode, mouse_);
   }
 
+  // Cor da alca do gizmo: realce se sob o mouse, senao vermelho/verde/azul por eixo.
   static view::Color handleColor(vm::Handle h, bool highlighted) {
     if (highlighted) return kHighlight;
     switch (h) {
@@ -796,6 +832,7 @@ private:
     cursor += w + 4.f;
   }
 
+  // Monta a barra fixa do topo (Play/Stop, Pause, Step, grade, gizmos, modos...).
   void buildToolbar(const Values& v, view::ShapeList& out) {
     buttons_.clear();
     float x = rect_.x + kPad;
@@ -815,6 +852,7 @@ private:
     out.text({x + 8.f, rect_.y + (kToolbarH - kFont) * 0.5f}, hint, kFont, kTextDim, false, std::max(0.f, rect_.x + rect_.w - kPad - x - 16.f));
   }
 
+  // Monta a barra flutuante sobre a imagem (arrastavel), se a imagem for grande o bastante.
   void buildFloatingBar(const Values& v, const sui::Box& img, view::ShapeList& out) {
     if (img.w < 120.f || img.h < 60.f) return;
     const float width = floatingBarWidth(v);
@@ -842,8 +880,8 @@ private:
     x += 4.f;
     sliderBox_ = {x, y + (kFloatH - 8.f) * 0.5f, kSliderW, 8.f};
     const float t = stm::sliderFromSnapStep(v.snapStep);
-    bar.rectFilled({sliderBox_.x, sliderBox_.y}, {sliderBox_.x + sliderBox_.w, sliderBox_.y + sliderBox_.h}, view::Rgba(20, 24, 32), 4.f);
-    bar.rectFilled({sliderBox_.x, sliderBox_.y}, {sliderBox_.x + sliderBox_.w * t, sliderBox_.y + sliderBox_.h}, view::Rgba(90, 150, 220), 4.f);
+    bar.rectFilled({sliderBox_.x, sliderBox_.y}, {sliderBox_.x + sliderBox_.w, sliderBox_.y + sliderBox_.h}, kField, 4.f);
+    bar.rectFilled({sliderBox_.x, sliderBox_.y}, {sliderBox_.x + sliderBox_.w * t, sliderBox_.y + sliderBox_.h}, kAccent, 4.f);
     char val[32];
     std::snprintf(val, sizeof val, "%.2f m", static_cast<double>(v.snapStep));
     const float valX = sliderBox_.x + sliderBox_.w + 6.f;
@@ -853,7 +891,7 @@ private:
     const float right = x - 4.f + 8.f;
     floatRect_ = {x0, y, right - x0, kFloatH};
     floatDragHandle_ = {x0 + 2.f, y + 3.f, 18.f, kFloatH - 6.f};
-    out.panel({x0, y}, {right, y + kFloatH}, 6.f, view::Rgba(14, 19, 28, 230), kPanelEdge);
+    out.panel({x0, y}, {right, y + kFloatH}, 6.f, kFloatFill, kPanelEdge);
     for (int i = 0; i < 3; ++i) {
       const float gx = floatDragHandle_.x + 5.f + static_cast<float>(i) * 4.f;
       bar.line({gx, y + 9.f}, {gx, y + 19.f}, 1.5f, kTextDim);
@@ -861,6 +899,7 @@ private:
     out.append(bar);
   }
 
+  // Largura total da barra flutuante, somando os botoes conforme o estado.
   float floatingBarWidth(const Values& v) const {
     float cursor = 26.f;
     const auto addWidth = [&](const std::string& label, float pad) {
@@ -896,7 +935,7 @@ private:
     for (const auto& it : items) h += it.kind == Wd::MenuItemKind::Separator ? kSepH : kRowH;
     const float x = std::max(img.x + 4.f, std::min(ctxPos_.x, img.x + img.w - kMenuW - 4.f));
     const float y = std::max(img.y + 4.f, std::min(ctxPos_.y, img.y + img.h - h - 4.f));
-    out.panel({x, y}, {x + kMenuW, y + h}, 4.f, view::Rgba(12, 16, 24, 250), kPanelEdge);
+    out.panel({x, y}, {x + kMenuW, y + h}, 4.f, kMenuFill, kPanelEdge);
     const std::size_t hi = ctx_.Highlighted(0);
     float row = y;
     for (std::size_t i = 0; i < items.size(); ++i) {
@@ -909,7 +948,7 @@ private:
       }
       const bool enabled = !it.disabled;
       if (i == hi && enabled) out.rectFilled({x + 2.f, row + 1.f}, {x + kMenuW - 2.f, row + kRowH - 1.f}, kButtonOn, 3.f);
-      out.text({x + 10.f, row + (kRowH - kFont) * 0.5f}, it.label, kFont, enabled ? kText : view::Rgba(120, 122, 130));
+      out.text({x + 10.f, row + (kRowH - kFont) * 0.5f}, it.label, kFont, enabled ? kText : kTextDim);
       if (!it.shortcut.empty()) {
         out.text({x + kMenuW - 10.f - painter_.measure(it.shortcut, kFont), row + (kRowH - kFont) * 0.5f}, it.shortcut, kFont, kTextDim);
       }

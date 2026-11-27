@@ -2,10 +2,13 @@
 // Nao abre janela: chama View::Frame com ponteiro sintetico. Fonte vem de EDITOR_FONT_PATH (CMake). Roda como
 // Editor.ScenesView.
 #include "scenes_model.hpp"
+#include "scenes_ops.hpp"
 #include "scenes_spriteui.hpp"
 #include "sui_panel.hpp"
 
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <vector>
 
 namespace {
@@ -66,6 +69,49 @@ bool Contains(const std::vector<Action>& a, Action what) {
     if (x == what) return true;
   }
   return false;
+}
+
+// Host de teste: aplica as acoes como o main.cpp (criar = arquivo novo e vira a cena atual; renomear e apagar usam
+// scenes_ops). Atualiza a lista a partir da pasta Scenes do projeto, como o refreshScenes do Editor.
+void ApplyActions(const std::vector<Action>& acts, SM::Model& m, const editor::Project& proj) {
+  for (Action a : acts) {
+    std::string err;
+    if (a == Action::Delete) {
+      if (m.selected != m.current) editor::scenes_ops::DeleteSceneFile(proj, m.selected, err);
+      m.status = err;
+      SM::FinishName(m);
+    } else if (a == Action::Confirm && m.mode == SM::NameMode::New) {
+      std::ofstream(proj.scenePath(m.name)) << "{}";
+      m.current = m.name;
+      m.selected = m.name;
+      SM::FinishName(m);
+    } else if (a == Action::Confirm && m.mode == SM::NameMode::Rename) {
+      if (editor::scenes_ops::RenameSceneFile(proj, m.selected, m.name, err)) {
+        if (m.current == m.selected) m.current = m.name;
+        m.selected = m.name;
+        SM::FinishName(m);
+      } else {
+        m.status = err;
+      }
+    }
+    m.scenes = proj.listScenes();
+  }
+}
+
+// Clique no elemento e aplica as acoes no host de teste.
+void ClickApply(View& view, SU::UIHandle h, std::uint64_t& id, SM::Model& m, const editor::Project& proj) {
+  ApplyActions(ClickOn(view, h, id), m, proj);
+}
+
+// Um quadro sem clique (ponteiro parado fora de tudo) que devolve as acoes; usado depois de Enter.
+std::vector<Action> IdleFrame(View& view, std::uint64_t& id) {
+  std::vector<Action> acts;
+  FrameInput in;
+  in.pointerX = 2.f;
+  in.pointerY = 2.f;
+  in.frameId = ++id;
+  (void)view.Frame(kW, kH, in, acts);
+  return acts;
 }
 
 }  // namespace
@@ -179,6 +225,111 @@ int main() {
   // 9. Clique fora de qualquer elemento (canto da janela, sem botao) nao gera acao.
   const auto outside = Click(view, 2.f, 2.f, id);
   Check(outside.empty(), "clique fora nao gera acao");
+
+  // 10. Fluxo completo com arquivos: criar, renomear (Enter e Esc), apagar, lista longa e layout.
+  {
+    namespace fs = std::filesystem;
+    editor::Project proj;
+    proj.root = fs::temp_directory_path() / "scenes_view_test_project";
+    std::error_code ec;
+    fs::remove_all(proj.root, ec);
+    proj.ensure();
+    std::ofstream(proj.scenePath("Main")) << "{}";
+    std::ofstream(proj.scenePath("Alpha")) << "{}";
+
+    SM::Model fm;
+    fm.scenes = proj.listScenes();
+    fm.current = "Main";
+    fm.selected = "Main";
+    View fv(fm, text);
+    std::uint64_t fid = 0;
+    (void)Run(fv, 2.f, 2.f, false, false, false, ++fid);
+
+    // Barra: botoes na mesma linha e mesma altura; linhas da lista com altura fixa, dentro da lista, abaixo da barra.
+    const SU::Rect rn = fv.rectOf(fv.newHandle()), rr = fv.rectOf(fv.renameHandle()), rd = fv.rectOf(fv.deleteHandle());
+    const SU::Rect rl = fv.rectOf(fv.reloadHandle());
+    Check(rn.size.y > 0.f && rn.size.y == rr.size.y && rr.size.y == rd.size.y && rd.size.y == rl.size.y,
+          "botoes da barra tem a mesma altura");
+    Check(rn.position.y == rr.position.y && rr.position.y == rd.position.y && rd.position.y == rl.position.y,
+          "New, Rename, Delete e Reload ficam na mesma linha");
+    const SU::Rect list = fv.rectOf(fv.listHandle());
+    const SU::Rect row0 = fv.rectOf(fv.rowHandle(0)), row1 = fv.rectOf(fv.rowHandle(1));
+    Check(row0.size.y == editor::scenesui::Theme::kRowHeight && row1.size.y == row0.size.y, "linhas da lista tem altura fixa");
+    Check(row1.position.y == row0.position.y + row0.size.y, "linhas da lista sao consecutivas");
+    Check(row0.position.y >= list.position.y && row1.position.y + row1.size.y <= list.position.y + list.size.y, "linhas dentro da lista");
+    Check(list.position.y >= rn.position.y + rn.size.y, "lista fica abaixo da barra de botoes (sem sobrepor)");
+
+    // Nova cena: abre o campo, digita, Enter cria o arquivo.
+    ClickApply(fv, fv.newHandle(), fid, fm, proj);
+    Check(fm.mode == SM::NameMode::New && fm.nameFocus, "New abre o campo de nome focado");
+    fv.TypeText("Level 1");
+    fv.PressEnter();
+    const auto createActs = IdleFrame(fv, fid);
+    Check(Contains(createActs, Action::Confirm), "Enter confirma a criacao (Confirm)");
+    ApplyActions(createActs, fm, proj);
+    Check(fs::exists(proj.scenePath("Level 1")), "criar gera o arquivo na pasta Scenes");
+    Check(fm.current == "Level 1" && fm.mode == SM::NameMode::None, "a cena nova vira a atual e o campo fecha");
+    Check(fm.scenes.size() == 3, "a lista tem a cena nova");
+
+    // Esc cancela criar sem criar nada.
+    ClickApply(fv, fv.newHandle(), fid, fm, proj);
+    fv.TypeText("Ghost");
+    Check(fv.PressEscape() && fm.mode == SM::NameMode::None && !fs::exists(proj.scenePath("Ghost")), "Esc cancela criar");
+
+    // Renomear Alpha -> Beta (botao Rename, nome pre-preenchido, Enter confirma).
+    (void)IdleFrame(fv, fid);
+    ClickOn(fv, fv.rowHandle(0), fid);   // ordem: Alpha, Level 1, Main
+    Check(fm.selected == "Alpha", "a linha 0 e Alpha e o clique seleciona");
+    ClickApply(fv, fv.renameHandle(), fid, fm, proj);
+    Check(fm.mode == SM::NameMode::Rename && fm.name == "Alpha", "Rename abre o campo com o nome atual");
+    for (int i = 0; i < 5; ++i) fv.Backspace();
+    fv.TypeText("Beta");
+    fv.PressEnter();
+    ApplyActions(IdleFrame(fv, fid), fm, proj);
+    Check(fs::exists(proj.scenePath("Beta")) && !fs::exists(proj.scenePath("Alpha")), "renomear troca o arquivo");
+    Check(fm.selected == "Beta" && fm.mode == SM::NameMode::None, "renomear fecha o campo e mantem a selecao");
+    // Esc cancela renomear sem mexer no arquivo.
+    ClickApply(fv, fv.renameHandle(), fid, fm, proj);
+    fv.TypeText("X");
+    fv.PressEscape();
+    Check(fs::exists(proj.scenePath("Beta")) && fm.mode == SM::NameMode::None, "Esc cancela renomear");
+    // Nome repetido: nao renomeia e mostra o problema; o campo continua em foco.
+    ClickApply(fv, fv.renameHandle(), fid, fm, proj);
+    for (int i = 0; i < 4; ++i) fv.Backspace();
+    fv.TypeText("Main");
+    ClickApply(fv, fv.confirmHandle(), fid, fm, proj);
+    Check(fs::exists(proj.scenePath("Beta")) && !fm.status.empty() && fm.nameFocus, "nome repetido nao renomeia e mantem o campo");
+    fv.PressEscape();
+
+    // Apagar: pergunta, confirma, arquivo some. A cena atual nao se apaga.
+    (void)IdleFrame(fv, fid);
+    ClickApply(fv, fv.deleteHandle(), fid, fm, proj);
+    Check(fm.mode == SM::NameMode::Delete && fs::exists(proj.scenePath("Beta")), "Delete so pergunta");
+    ClickApply(fv, fv.confirmHandle(), fid, fm, proj);
+    Check(!fs::exists(proj.scenePath("Beta")) && fm.mode == SM::NameMode::None, "confirmar apaga o arquivo");
+    Check(fm.scenes.size() == 2, "a lista perde a cena apagada");
+    fm.selected = fm.current;
+    (void)IdleFrame(fv, fid);
+    ClickApply(fv, fv.deleteHandle(), fid, fm, proj);
+    Check(fm.mode == SM::NameMode::None && fs::exists(proj.scenePath(fm.current)), "a cena atual nao se apaga");
+
+    // Lista longa: a roda mostra as cenas alem das 6 primeiras e o clique acerta a linha certa.
+    for (int i = 0; i < 12; ++i) {
+      char nm[16];
+      std::snprintf(nm, sizeof nm, "S%02d", i);
+      std::ofstream(proj.scenePath(nm)) << "{}";
+    }
+    fm.scenes = proj.listScenes();
+    (void)IdleFrame(fv, fid);
+    const SU::Rect lr = fv.rectOf(fv.listHandle());
+    fv.wheelAt(lr.position.x + 20.f, lr.position.y + 20.f, 40.f * 4.f);
+    (void)IdleFrame(fv, fid);
+    Check(fv.firstVisibleRow() > 0, "a roda rola a lista de cenas");
+    const auto rowsNow = SM::Rows(fm.scenes, fm.current);
+    ClickOn(fv, fv.rowHandle(0), fid);
+    Check(fm.selected == rowsNow[fv.firstVisibleRow()].name, "clicar na primeira linha visivel seleciona a cena certa");
+    fs::remove_all(proj.root, ec);
+  }
 
   std::printf("%s (%d falha(s))\n", gFailures == 0 ? "TODOS OS TESTES PASSARAM" : "HA FALHAS", gFailures);
   return gFailures == 0 ? 0 : 1;

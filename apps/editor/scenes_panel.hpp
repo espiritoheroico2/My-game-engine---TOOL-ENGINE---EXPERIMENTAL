@@ -56,18 +56,33 @@ class Panel {
       case SDL_EVENT_MOUSE_MOTION:
         x_ = e.motion.x;
         y_ = e.motion.y;
+        if (inside(x_, y_)) dirty_ = true;   // passar o mouse sobre botoes e linhas muda o realce
         return owned_;
       case SDL_EVENT_MOUSE_WHEEL:
         if (!inside(e.wheel.mouse_x, e.wheel.mouse_y)) return false;
-        view_.scrollBy(-e.wheel.y * 40.f);
+        view_.wheelAt(e.wheel.mouse_x, e.wheel.mouse_y, -e.wheel.y * 40.f);
+        dirty_ = true;
         return true;
       case SDL_EVENT_TEXT_INPUT:
         if (!model_.nameFocus || !e.text.text) return false;
         texts_.emplace_back(e.text.text);
+        dirty_ = true;
         return true;
       case SDL_EVENT_KEY_DOWN:
+        // Enter confirma e Esc cancela criar/renomear/apagar; Backspace apaga no campo de nome em foco.
+        if ((e.key.key == SDLK_RETURN || e.key.key == SDLK_KP_ENTER) && model_.nameFocus) {
+          view_.PressEnter();
+          dirty_ = true;
+          return true;
+        }
+        if (e.key.key == SDLK_ESCAPE && model_.mode != scenes_model::NameMode::None) {
+          view_.PressEscape();
+          dirty_ = true;
+          return true;
+        }
         if (e.key.key != SDLK_BACKSPACE || !model_.nameFocus) return false;
         ++backspaces_;
+        dirty_ = true;
         return true;
       default:
         return false;
@@ -101,7 +116,8 @@ class Panel {
     in.doubleClick = pressed_ && doubleClick_;
     in.frameId = ++frame_;
     // O clique muda o modelo depois do desenho: um quadro a mais mostra o resultado sem esperar outro evento.
-    needsFrame_ = pressed_ || released_;
+    needsFrame_ = pressed_ || released_ || dirty_;
+    dirty_ = false;
     pressed_ = false;
     if (!deferRelease) released_ = false;
 
@@ -125,7 +141,7 @@ class Panel {
   sui::SpriteUiSdlRenderer& sdl_;
   float x_ = 0.f, y_ = 0.f;
   bool pressed_ = false, released_ = false, down_ = false, owned_ = false;
-  bool doubleClick_ = false, needsFrame_ = false;
+  bool doubleClick_ = false, needsFrame_ = false, dirty_ = false;   // dirty_: texto, tecla, roda ou ponteiro mudou algo
   int backspaces_ = 0;
   bool textInputOn_ = false;   // estado atual de SDL_StartTextInput/SDL_StopTextInput da janela
   std::vector<std::string> texts_;

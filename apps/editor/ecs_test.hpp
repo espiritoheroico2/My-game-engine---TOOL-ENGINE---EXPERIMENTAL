@@ -66,8 +66,9 @@ inline void Editor::tickSpawners(float) {
       tr.scale[0] = tr.scale[1] = tr.scale[2] = sc;
       w.add<Transform>(s, tr);
       MeshRenderer mr; mr.shape = 1;
-      // O benchmark do ECS mede criacao, atualizacao e fisica; sombras sao um cenario separado.
-      mr.castShadow = false;
+      // As esferas projetam sombra (como em qualquer objeto da cena): o teste mede o custo real, com sombras ligadas.
+      // Para medir sem sombras, desmarque "Cast shadows" no MeshRenderer ou use a cena de --instances.
+      mr.castShadow = true;
       mr.color[0] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f; mr.color[1] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f; mr.color[2] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f;
       mr.roughness = 0.4f;
       w.add<MeshRenderer>(s, mr);

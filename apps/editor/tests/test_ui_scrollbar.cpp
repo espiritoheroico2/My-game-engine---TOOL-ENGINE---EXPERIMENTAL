@@ -4,14 +4,17 @@
 #include <cstdio>
 
 namespace {
-int gFailures = 0;
+int gFailures = 0;  // Quantidade de verificacoes que falharam.
+// Imprime ok/FALHOU para a verificacao e conta as falhas.
 void Check(bool ok, const char* what) {
   std::printf("%s: %s\n", ok ? "ok" : "FALHOU", what);
   if (!ok) ++gFailures;
 }
+// Igualdade de floats com tolerancia de 1e-3.
 bool Near(float a, float b) { return a > b - 1e-3f && a < b + 1e-3f; }
 }  // namespace
 
+// Roda os testes: geometria do polegar, arraste, clique no trilho (pagina), hover e barra oculta quando o conteudo cabe.
 int main() {
   namespace sb = editor::ui_scrollbar;
   const sb::Rect track{100.f, 10.f, sb::kWidth, 200.f};
@@ -59,6 +62,7 @@ int main() {
   bar.pointerUp();
 
   bar.layout(track, 400.f, 100.f);
+  bar.pointerMove(5.f, 5.f, scroll);
   (void)bar.visualChanged();
   bar.pointerMove(104.f, 50.f, scroll);
   Check(bar.hovered() && bar.visualChanged() && !bar.visualChanged(), "hover muda o visual uma vez");

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui_scrollbar.hpp"
 #include "file_panel_colors.hpp"
 #include "ui_style.hpp"
 
@@ -48,6 +49,7 @@ namespace SW = ToolEngine::SpriteUi::Widgets;
 namespace AM = editor::assets_model;
 
 // Medidas. A altura do painel e fixa: o layout nao mede o conteudo.
+// Medidas fixas da janela Assets (margens, alturas, tamanhos de icone e de fonte, em pixels).
 struct Theme {
   static constexpr float kPanelWidth = 760.f;
   static constexpr float kPadding = 16.f;
@@ -83,12 +85,14 @@ struct Theme {
 using Colors = editor::file_panel_colors::Colors;
 inline Colors PaletteColors() { return editor::file_panel_colors::FromPalette(); }
 
+// Cor sRGB comum -> linear pre-multiplicado do renderizador SpriteUI.
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
 }
 
 
 // Entrada do quadro (ponteiro, foco e relogio), ja lida do SDL pelo host.
+// Entrada do quadro (ponteiro, duplo clique e foco da janela), ja lida do SDL pelo host.
 struct FrameInput {
   float pointerX = 0.f, pointerY = 0.f;
   bool pointerDown = false;
@@ -100,6 +104,7 @@ struct FrameInput {
 };
 
 // Texto ja medido, com o layout para caret.
+// Texto ja medido (glifos e layout) com a fatia do atlas do tamanho usado.
 struct Shaped {
   std::string utf8;
   std::vector<ST::GlyphInstance> glyphs;
@@ -107,8 +112,10 @@ struct Shaped {
   std::uint32_t slice = 1u;   // slice do atlas do tamanho (TextAtlasSet)
 };
 
+// Janela Assets (SpriteUI): navegador de pastas com migalhas, filtro, lista/grade de icones, criar/renomear/apagar, importar e editor de texto simples. So desenha e reporta Actions; o estado fica no AM::State.
 class View {
  public:
+  // O que o host deve fazer depois do quadro (subir pasta, importar, abrir, instanciar, apagar, salvar texto...).
   enum class Action {
     None, Up, Crumb, Import, Open, Activate, Instantiate, Assign, Confirm, Delete, SaveText, CloseText, Help, Close
   };
@@ -135,6 +142,16 @@ class View {
       return extractor_.Build(in.frameId, items, nullptr, {});
     }
 
+    // Barra de rolagem unica (ui_scrollbar.hpp), em linhas. Usa o trilho do quadro anterior; o clique nela nao chega aos
+    // itens de baixo e o arraste segue com o mouse fora da janela (o painel guarda a captura).
+    bool barUse = bar_.dragging();
+    {
+      float rows = static_cast<float>(state_.scroll);
+      if (in.pointerPressed && bar_.pointerDown(in.pointerX, in.pointerY, rows)) barUse = true;
+      if (bar_.dragging() && !in.pointerDown && !in.pointerPressed) bar_.pointerUp();
+      else bar_.pointerMove(in.pointerX, in.pointerY, rows);
+      state_.scroll = static_cast<int>(std::lround(rows));
+    }
     prepareLists();
     applyGridStyles();
     const SU::Rect content = frame_.content();
@@ -146,9 +163,9 @@ class View {
     SU::Input::UIInputSnapshot input;
     input.pointerPositionLogical = {in.pointerX, in.pointerY};
     input.pointerDeltaLogical = {in.pointerX - lastX_, in.pointerY - lastY_};
-    input.primaryDown = in.pointerDown;
-    input.primaryPressed = in.pointerPressed;
-    input.primaryReleased = in.pointerReleased;
+    input.primaryDown = in.pointerDown && !barUse;
+    input.primaryPressed = in.pointerPressed && !barUse;
+    input.primaryReleased = in.pointerReleased && !barUse;
     input.windowFocused = in.windowFocused;
     input.frameId = in.frameId;
     lastX_ = in.pointerX;
@@ -186,6 +203,7 @@ class View {
     std::uint64_t paint = 1000;
     addFrame(extra, paint);
     addContent(extra, paint);
+    addScrollbar(extra, paint);
     scene.renderItems.insert(scene.renderItems.end(), extra.begin(), extra.end());
     return extractor_.Build(in.frameId, scene.renderItems, nullptr, clips);
   }
@@ -195,10 +213,12 @@ class View {
     AM::Type(state_, utf8);
     if (state_.textOpen) follow_ = true;
   }
+  // Apaga o ultimo caractere (UTF-8) do campo focado (filtro, nome ou texto aberto).
   void Backspace() {
     AM::Backspace(state_);
     if (state_.textOpen) follow_ = true;
   }
+  // Enter: confirma criar/renomear/apagar ou, no texto aberto, quebra a linha.
   void EnterKey() {
     if (state_.textOpen) {
       AM::Type(state_, "\n");
@@ -258,6 +278,7 @@ class View {
   static constexpr int kMaxRows = AM::kListRows;   // linhas montadas (a grade usa as 4 primeiras)
   static constexpr int kMaxCols = AM::kIconCols;
 
+  // Ponto dentro do retangulo (borda direita/inferior exclusiva).
   static bool inside(SU::Rect r, SU::Vec2 p) {
     return p.x >= r.position.x && p.x < r.position.x + r.size.x && p.y >= r.position.y &&
            p.y < r.position.y + r.size.y;
@@ -309,6 +330,7 @@ class View {
     return v < visible_.size() ? v : kNone;
   }
 
+  // Item selecionado da lista visivel, ou nullptr.
   const AM::Item* selectedItem() const {
     for (const AM::Item& it : state_.items) {
       if (it.rel == state_.selected) return &it;
@@ -390,6 +412,7 @@ class View {
     bridge_.SetVisual(panelHandle_, panelVisual);
   }
 
+  // Deixa o elemento sem clique e sem cor (so ocupa espaco no layout; o desenho e feito a mao).
   void makePassive(SU::UIHandle h) {
     SU::ElementVisual v;
     v.interactable = false;
@@ -407,6 +430,7 @@ class View {
     s.shrink = 0.f;
     return s;
   }
+  // Botao com largura fixa e altura padrao.
   static SU::FlexItem buttonStyle(float width) {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Fixed, width};
@@ -414,6 +438,7 @@ class View {
     s.shrink = 0.f;
     return s;
   }
+  // Campo de altura dada que ocupa toda a largura.
   static SU::FlexItem fieldStyle(float height) {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Percent, 1.f};
@@ -421,6 +446,7 @@ class View {
     s.shrink = 0.f;
     return s;
   }
+  // Campo de altura padrao com largura fixa.
   static SU::FlexItem fieldWidthStyle(float width) {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Fixed, width};
@@ -428,6 +454,7 @@ class View {
     s.shrink = 0.f;
     return s;
   }
+  // Area da lista/grade: ocupa a largura e a altura fixa da grade.
   static SU::FlexItem gridStyle() {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Percent, 1.f};
@@ -437,6 +464,7 @@ class View {
     s.alignItems = SU::AlignItems::Stretch;
     return s;
   }
+  // Linha de altura fixa que ocupa toda a largura.
   static SU::FlexItem rowStyle(float height) {
     SU::FlexItem s;
     s.width = {SU::SizeMode::Percent, 1.f};
@@ -480,6 +508,7 @@ class View {
     }
   }
 
+  // Ajusta a largura do painel (a altura e fixa, ver Theme::kPanelHeight).
   void setPanelWidth(float width) {
     auto* el = tree_.Get(panelHandle_);
     if (!el) return;
@@ -531,6 +560,7 @@ class View {
     enabled_.push_back({h, enabled});
   }
 
+  // Botao habilitado neste quadro? (calculado em applyVisuals)
   bool isEnabled(SU::UIHandle h) const {
     for (const auto& [handle, on] : enabled_) {
       if (handle == h) return on;
@@ -538,6 +568,7 @@ class View {
     return false;
   }
 
+  // Habilita/desabilita botoes conforme selecao, modo e texto aberto, e pinta cada elemento.
   void applyVisuals() {
     enabled_.clear();
     const bool text = state_.textOpen;
@@ -606,6 +637,7 @@ class View {
     bridge_.SetVisual(grid_, gridVisual);
   }
 
+  // Clique em um elemento: migalha, botao de acao, celula da grade (selecionar/duplo clique), foco dos campos etc.; vira Action para o host.
   void handleClick(const SU::Input::UIEvent& event, std::vector<Action>& actions) {
     if (event.target == filter_) {
       if (!state_.textOpen) {
@@ -727,6 +759,7 @@ class View {
     actions.push_back(Action::Confirm);
   }
 
+  // Retangulo calculado de um no do layout (vazio se nao existe).
   SU::Rect nodeRect(SU::UIHandle handle) const {
     const auto* el = tree_.Get(handle);
     return el ? el->node.rect : SU::Rect{};
@@ -793,6 +826,35 @@ class View {
   }
 
   // Conteudo: migalhas, barras, grade (icones ou lista ou texto aberto), campo de nome e status.
+  // Barra de rolagem unica do editor, na direita da grade; as unidades sao linhas (a roda tambem rola em linhas).
+  void addScrollbar(std::vector<SR::UIRenderItem>& out, std::uint64_t& paint) {
+    const SU::Rect grid = nodeRect(grid_);
+    float totalRows = 0.f, viewRows = 0.f;
+    if (state_.textOpen) {
+      totalRows = static_cast<float>(AM::TextLines(state_.text));
+      viewRows = static_cast<float>(Theme::kTextLines);
+    } else {
+      const int cols = AM::Cols(state_.iconView);
+      totalRows = static_cast<float>((visible_.size() + static_cast<std::size_t>(cols) - 1) / static_cast<std::size_t>(cols));
+      viewRows = static_cast<float>(state_.iconView ? AM::kIconRows : AM::kListRows);
+    }
+    bar_.layout({grid.position.x + grid.size.x - ui_scrollbar::kWidth, grid.position.y, ui_scrollbar::kWidth, grid.size.y}, totalRows, viewRows);
+    for (const ui_scrollbar::Quad& q : bar_.quads(palette::active(), static_cast<float>(state_.scroll))) {
+      if (q.rect.w <= 0.f || q.rect.h <= 0.f) continue;
+      SR::UIRenderItem item;
+      item.handle = grid_;
+      item.layout.resolvedPosition = {q.rect.x, q.rect.y};
+      item.layout.resolvedSize = {q.rect.w, q.rect.h};
+      item.tintPremultipliedLinear = Srgb(q.color.r, q.color.g, q.color.b, q.color.a);
+      item.textureSlice = SR::WhiteTextureSlice;
+      item.clipIndex = SR::NoClipIndex;
+      item.zOrder = 0.7f;
+      item.paintOrder = paint++;
+      out.push_back(item);
+    }
+  }
+
+  // Gera os itens de desenho do conteudo: botoes, filtro, grade de itens, campo de nome e status.
   void addContent(std::vector<SR::UIRenderItem>& out, std::uint64_t& paint) {
     auto solid = [&](SU::UIHandle owner, SU::Rect r, SU::Vec4 color, float z) {
       SR::UIRenderItem item;
@@ -938,6 +1000,7 @@ class View {
   }
 
   // Desenha o conteudo da grade: texto aberto, ou itens (icones ou lista), ou "pasta vazia".
+  // Desenha a area principal: texto aberto (com linhas e cursor), mensagem de vazio ou os itens em lista/grade de icones.
   template <typename SolidFn, typename TextFn>
   void drawGrid(SolidFn& solid, TextFn& text) {
     const SU::Rect grid = nodeRect(grid_);
@@ -1010,6 +1073,7 @@ class View {
   }
 
   // Icone do tipo: pasta (aba + corpo) ou bloco colorido com a sigla do tipo (3D, SND, SCN, IMG, TXT).
+  // Desenha o icone de um item: pasta amarela ou ficha do tipo de arquivo (com a etiqueta do tipo se withTag).
   template <typename SolidFn, typename TextFn>
   void drawIcon(SolidFn& solid, TextFn& text, SU::UIHandle owner, SU::Rect r, AssetKind kind, bool dir, bool withTag) {
     if (dir || kind == AssetKind::Folder) {
@@ -1036,6 +1100,7 @@ class View {
     }
   }
 
+  // Etiqueta curta do tipo de asset (mostrada no icone e na coluna de tipo).
   static const char* kindLabel(AssetKind k) {
     switch (k) {
       case AssetKind::Folder: return "Folder";
@@ -1059,6 +1124,7 @@ class View {
   SR::RenderExtractor extractor_;
 
   SU::UIHandle panelHandle_{}, up_{}, crumb_[Theme::kMaxCrumbs]{}, import_{}, newFolder_{}, newFile_{}, list_{}, icons_{};
+  ui_scrollbar::Scrollbar bar_;
   SU::UIHandle filter_{}, grid_{}, row_[kMaxRows]{}, cell_[kMaxRows][kMaxCols]{};
   SU::UIHandle open_{}, add_{}, assign_{}, rename_{}, delete_{}, nameField_{}, confirm_{}, cancel_{}, status_{};
   SU::UIHandle hovered_{}, lastCell_{};

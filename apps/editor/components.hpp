@@ -16,6 +16,7 @@
 #pragma once
 #include "canvas_division.hpp"
 #include "canvas_regions.hpp"
+#include "free_values.hpp"
 #include "ui_ids.hpp"
 #include "tool/audio/audio.hpp"
 #include "tool/canvas/canvas_layout.hpp"
@@ -36,11 +37,15 @@
 
 namespace editor {
 
+// Graus -> radianos.
 constexpr float kDeg2Rad = 3.14159265f / 180.f;
 
+// Nome do objeto na hierarquia (buffer fixo de 40 bytes).
 struct Name { char text[40] = "Object"; };
+// Posicao, rotacao (graus, X/Y/Z) e escala locais do objeto.
 struct Transform { float pos[3] = {0, 0, 0}, rot[3] = {0, 0, 0}, scale[3] = {1, 1, 1}; };
 
+// Aparencia 3D do objeto: forma ou modelo, cor/PBR, textura, emissao, sombras e neblina.
 struct MeshRenderer {
   int shape = 0;
   float color[3] = {0.8f, 0.3f, 0.2f};
@@ -59,18 +64,23 @@ struct MeshRenderer {
   float fogAmount = 1.f;
 };
 
+// Material trocado so em uma parte (indice) de um modelo importado.
 struct PartOverride {
   int part = 0;
   float color[3] = {0.8f, 0.8f, 0.8f};
   float roughness = 0.5f, metallic = 0.f;
   char texture[160] = "";
 };
+// Lista de PartOverride de um objeto.
 struct PartOverrides { std::vector<PartOverride> items; };
+// Pai na hierarquia (so existe se o objeto tem pai).
 struct Parent { tool::Entity e; };
+// Luz da cena; syncRot acompanha a rotacao do objeto e target e o nome do objeto mirado.
 struct LightComp { tool::Light light; bool syncRot = false; char target[40] = ""; };
 
+// Sol da cena (luz direcional + ambiente); com dynamic o sol gira com o tempo de jogo.
 struct GlobalLight {
-  float color[3] = {1.f, 0.95f, 0.85f};
+  float color[4] = {1.f, 0.95f, 0.85f, 1.f};   // RGBA: o quarto numero e o alfa (1 = opaco; dados antigos sem alfa carregam com 1)
   float intensity = 2.2f;
   float azimuth = 35.f, elevation = 55.f;
   float ambient[3] = {0.03f, 0.03f, 0.04f};
@@ -79,6 +89,7 @@ struct GlobalLight {
   bool castShadow = true;
 };
 
+// Camera do jogo: campo de visao, planos, modo 2D ortografico, audio (soundEar) e pos-processamento proprio.
 struct CameraComp {
   float fovDeg = 55.f, nearZ = 0.1f, farZ = 200.f;
   bool ortho2D = false;
@@ -88,11 +99,13 @@ struct CameraComp {
   tool::PostFx post;
 };
 
+// Script (.js) anexado ao objeto.
 struct ScriptComp {
   char path[160] = "";
   bool enabled = true;
 };
 
+// Corpo fisico: tipo de corpo e colisor, massa, atrito, amortecimento e gravidade propria opcional.
 struct PhysicsComp {
   int body = 1, collider = 0;
   float mass = 1.f, friction = 0.5f, bounciness = 0.f;
@@ -102,7 +115,9 @@ struct PhysicsComp {
   float gravity[3] = {0.f, -9.81f, 0.f};
 };
 
+// Tipos de "tool" (comportamento pronto) que um objeto pode ter.
 enum class ToolKind : int { Jump = 0, Move = 1, FollowTarget = 2, Spin = 3, OnCollision = 4, ScriptLib = 5, Count };
+// Uma tool configurada; a/b/c/d dependem do kind (valores numericos da tool).
 struct ToolItem {
   int kind = 0; bool enabled = true;
   char action[40] = "";
@@ -111,10 +126,14 @@ struct ToolItem {
   int player = 1;
   int mode = 0;
 };
+// Maximo de tools por objeto.
 constexpr int kMaxTools = 8;
+// Conjunto de ate kMaxTools tools do objeto.
 struct ToolsComp { int count = 0; ToolItem items[kMaxTools]; };
 
+// Tipos de elemento de UI do jogo.
 enum class UiKind : int { Text = 0, Panel, Button, Bar, Count };
+// Elemento de UI dentro de um canvas: posicao e tamanho em fracao do canvas, cor, texto e acao do botao.
 struct UiElem {
   char id[32] = "";   // id unico do elemento no jogo inteiro, gerado na criacao (ver ui_ids.hpp): "e" + base36
   int region = 0;     // regiao do canvas onde o elemento esta (calculada pelo editor, ver canvas_regions.hpp)
@@ -123,27 +142,35 @@ struct UiElem {
   char action[40] = "";
   float maxValue = 100.f;
   float fontScale = 1.f;
+  float radius = 0.f; // raio do canto em pixels de projeto (0 = quadrado); limitado a metade do menor lado ao desenhar
 };
+// Maximo de elementos de UI por canvas.
 constexpr int kMaxUi = 16;
+// Marca: objeto desativado (nao simula nem desenha).
 struct Inactive {};
+// Marca: objeto travado (nao pode ser selecionado/movido no editor).
 struct Locked {};
 
 constexpr int kChunkSize = 16;
 constexpr int kChunkBlocks = kChunkSize * kChunkSize * kChunkSize;
 constexpr int kBlockTypes = 8;
+// Pedaco 16x16x16 de blocos (voxels) com paleta de cores; revision sobe a cada edicao para refazer a malha.
 struct VoxelChunk {
   unsigned char blocks[kChunkBlocks] = {};
   float cell = 1.f;
   float palette[kBlockTypes][3] = {{0, 0, 0}, {0.45f, 0.72f, 0.30f}, {0.52f, 0.37f, 0.22f}, {0.52f, 0.53f, 0.55f},
                                    {0.86f, 0.80f, 0.55f}, {0.30f, 0.55f, 0.85f}, {0.80f, 0.25f, 0.22f}, {0.95f, 0.95f, 0.95f}};
-  unsigned revision = 1;
+  unsigned revision = 1;  // Contador de edicao: o renderizador compara para saber se refaz a malha.
+  // Indice linear de (x, y, z) em blocks[].
   static int index(int x, int y, int z) { return (y * kChunkSize + z) * kChunkSize + x; }
+  // Tipo do bloco em (x, y, z); fora do pedaco devolve 0 (ar).
   unsigned char at(int x, int y, int z) const { return (x < 0 || y < 0 || z < 0 || x >= kChunkSize || y >= kChunkSize || z >= kChunkSize) ? 0 : blocks[index(x, y, z)]; }
 };
 // Canvas: a UI de jogo. Fica sobre a camera escolhida (camera vazia = todas as Principais), com ancora e tamanho
 // (engine/canvas), e os elementos (texto, painel, botao, barra) em fracoes do proprio canvas. O cache guarda o
 // retangulo do quadro atual e so e refeito quando o layout ou a area da camera mudam.
 inline constexpr tool::canvas::Screen kDesignRef{1920.f, 1080.f};   // referencia dos layouts (pixels de projeto)
+// Canvas de UI do jogo: layout/estilo/cache, camera alvo, cores, pontos e linhas de divisao, regioes e ate kMaxUi elementos.
 struct CanvasComp {
   tool::canvas::Layout layout;
   tool::canvas::Style style;
@@ -171,6 +198,7 @@ inline CanvasComp FullCanvas() {
   return c;
 }
 
+// Gerador de objetos em massa (teste de carga): total, quantos por quadro, altura/area e semente do sorteio.
 struct SpawnerComp {
   long long total = 0, spawned = 0; int perFrame = 1;
   float height = 15.f, area = 20.f;
@@ -179,6 +207,7 @@ struct SpawnerComp {
   uint32_t seed = 2463534242u;
 };
 
+// Emissor de particulas: taxa, vida, velocidade, cores ao longo da vida, area de emissao, rota e redemoinho.
 struct ParticleComp {
   bool emitting = true, loop = true; int maxParticles = 200; float rate = 40.f, lifetime = 1.5f, speed = 3.f, spread = 25.f;
   float size = 0.12f, sizeEnd = 0.02f, gravityScale = 1.f, bounce = 0.f, floorY = -1000.f;
@@ -195,6 +224,7 @@ struct ParticleComp {
   float tornadoSpeed = 1.5f, tornadoRadius = 0.6f, tornadoHeight = 2.f;
 };
 
+// Fonte de som: arquivo, volume, loop, 3D (spatial) com distancias minima/maxima; voice e o som tocando agora.
 struct AudioSource {
   char clip[160] = "";
   float volume = 1.f;
@@ -203,22 +233,26 @@ struct AudioSource {
   tool::VoiceId voice{};
 };
 
+// Matriz local->mundo: T * Ry * Rx * Rz * S (rotacao em graus, ordem Y, X, Z).
 inline tool::Mat4 worldMatrix(const Transform& t) {
   return tool::Mat4::translation({t.pos[0], t.pos[1], t.pos[2]}) * tool::Mat4::rotationY(t.rot[1] * kDeg2Rad) * tool::Mat4::rotationX(t.rot[0] * kDeg2Rad) *
          tool::Mat4::rotationZ(t.rot[2] * kDeg2Rad) * tool::Mat4::scale({t.scale[0], t.scale[1], t.scale[2]});
 }
 
+// Direcao "para frente" (-Z) do objeto, sem escala nem posicao.
 inline tool::Vec3 forwardOf(const Transform& t) {
   Transform r = t; r.scale[0] = r.scale[1] = r.scale[2] = 1.f; r.pos[0] = r.pos[1] = r.pos[2] = 0.f;
   const tool::Vec4 f = worldMatrix(r).mul({0, 0, -1, 0});
   return tool::normalize({f.x, f.y, f.z});
 }
+// Direcao "para cima" (+Y) do objeto, sem escala nem posicao.
 inline tool::Vec3 upOf(const Transform& t) {
   Transform r = t; r.scale[0] = r.scale[1] = r.scale[2] = 1.f; r.pos[0] = r.pos[1] = r.pos[2] = 0.f;
   const tool::Vec4 f = worldMatrix(r).mul({0, 1, 0, 0});
   return tool::normalize({f.x, f.y, f.z});
 }
 
+// Monta a camera do motor a partir do Transform e do CameraComp.
 inline tool::Camera cameraOf(const Transform& t, const CameraComp& c) {
   tool::Camera cam;
   cam.eye = {t.pos[0], t.pos[1], t.pos[2]};
@@ -229,11 +263,13 @@ inline tool::Camera cameraOf(const Transform& t, const CameraComp& c) {
   return cam;
 }
 
+// Direcao da luz do sol (apontando para o chao) a partir de azimute e elevacao em graus.
 inline tool::Vec3 sunDirection(float azimuthDeg, float elevationDeg) {
   const float az = azimuthDeg * kDeg2Rad, el = elevationDeg * kDeg2Rad;
   return tool::normalize({-std::cos(el) * std::sin(az), -std::sin(el), -std::cos(el) * std::cos(az)});
 }
 
+// Luz direcional do sol; no modo dinamico o azimute gira e a elevacao oscila com runtimeDeg, e a intensidade cai perto do horizonte.
 inline tool::Light sunLight(const GlobalLight& g, float runtimeDeg) {
   tool::Light l; l.type = tool::LightType::Directional;
   const float az = g.azimuth + (g.dynamic ? runtimeDeg : 0.f);
@@ -249,15 +285,23 @@ inline tool::Light sunLight(const GlobalLight& g, float runtimeDeg) {
   return l;
 }
 
+// Ajudantes de serializacao JSON (ler com padrao/limite, gravar vetores).
 namespace ser {
 
+// float[n] -> array JSON.
 inline tool::Json vec(const float* v, int n) { tool::Json a = tool::Json::array(); for (int i = 0; i < n; ++i) a.push(static_cast<double>(v[i])); return a; }
+// Array JSON -> float[n]; so preenche os numeros que existem (o resto fica como estava).
 inline void readVec(const tool::Json& j, float* v, int n) { const auto& it = j.items(); for (int i = 0; i < n && static_cast<size_t>(i) < it.size(); ++i) v[i] = static_cast<float>(it[static_cast<size_t>(i)].asNumber(v[i])); }
+// Le uma cor RGBA (4 numeros): dados antigos so com RGB carregam com alfa 1.
+inline void readRgba(const tool::Json& j, float* rgba) { std::vector<double> d; for (const auto& it : j.items()) d.push_back(it.asNumber(0.0)); editor::free_values::ReadRgba(d.data(), d.size(), rgba); }
+// Numero da chave k, ou o padrao d se a chave nao existir.
 inline float num(const tool::Json& j, const char* k, float d) { return j.has(k) ? static_cast<float>(j[k].asNumber(d)) : d; }
 inline bool flag(const tool::Json& j, const char* k, bool d) { return j.has(k) ? j[k].asBool(d) : d; }
 inline void copyStr(char* dst, size_t cap, const std::string& s) { std::snprintf(dst, cap, "%s", s.c_str()); }
+// Numero da chave k preso em [lo, hi] (arquivos editados a mao).
 inline float clampNum(const tool::Json& j, const char* k, float d, float lo, float hi) { return std::clamp(num(j, k, d), lo, hi); }
 
+// Pos-processamento -> JSON.
 inline tool::Json postFx(const tool::PostFx& p) {
   tool::Json o = tool::Json::object();
   o.set("enabled", p.enabled); o.set("exposure", static_cast<double>(p.exposure)); o.set("contrast", static_cast<double>(p.contrast)); o.set("saturation", static_cast<double>(p.saturation));
@@ -265,6 +309,7 @@ inline tool::Json postFx(const tool::PostFx& p) {
   o.set("vignetteSize", static_cast<double>(p.vignetteSize)); o.set("sharpen", static_cast<double>(p.sharpen)); o.set("additive", p.additive);
   return o;
 }
+// JSON -> pos-processamento, com cada valor preso numa faixa segura.
 inline tool::PostFx readPostFx(const tool::Json& o) {
   tool::PostFx p;
   p.enabled = flag(o, "enabled", false); p.exposure = clampNum(o, "exposure", 0.f, -5.f, 5.f); p.contrast = clampNum(o, "contrast", 1.f, 0.2f, 3.f);
@@ -286,10 +331,12 @@ inline tool::Json itemsJson(const CanvasComp& c) {
     q.set("id", std::string(it.id)); q.set("region", static_cast<double>(it.region)); q.set("z", static_cast<double>(it.z));
     q.set("rect", ser::vec(&it.x, 4)); q.set("color", ser::vec(it.color, 4));
     q.set("max", static_cast<double>(it.maxValue)); q.set("font", static_cast<double>(it.fontScale));
+    q.set("radius", static_cast<double>(it.radius));
     arr.push(q);
   }
   return arr;
 }
+// Pontos de divisao do canvas -> JSON.
 inline tool::Json divisionsJson(const CanvasComp& c) {
   tool::Json arr = tool::Json::array();
   for (const canvas_division::Point& p : c.divisions) {
@@ -299,6 +346,7 @@ inline tool::Json divisionsJson(const CanvasComp& c) {
   }
   return arr;
 }
+// Linhas entre pontos de divisao -> JSON.
 inline tool::Json divisionLinesJson(const CanvasComp& c) {
   tool::Json arr = tool::Json::array();
   for (const canvas_division::Line& l : c.divisionLines) {
@@ -308,6 +356,7 @@ inline tool::Json divisionLinesJson(const CanvasComp& c) {
   }
   return arr;
 }
+// JSON -> linhas (maximo 128); ignora indices invalidos e linhas de um ponto nele mesmo.
 inline void readDivisionLines(const tool::Json& arr, CanvasComp& c) {
   const auto& it = arr.items();
   for (size_t i = 0; i < it.size() && c.divisionLines.size() < 128; ++i) {
@@ -318,6 +367,7 @@ inline void readDivisionLines(const tool::Json& arr, CanvasComp& c) {
     if (l.a < c.divisions.size() && l.b < c.divisions.size() && l.a != l.b) c.divisionLines.push_back(l);
   }
 }
+// JSON -> pontos de divisao (maximo 64), posicoes presas em [0, 1].
 inline void readDivisions(const tool::Json& arr, CanvasComp& c) {
   const auto& it = arr.items();
   for (size_t i = 0; i < it.size() && c.divisions.size() < 64; ++i) {
@@ -328,6 +378,7 @@ inline void readDivisions(const tool::Json& arr, CanvasComp& c) {
     c.divisions.push_back(p);
   }
 }
+// JSON -> elementos de UI (ate kMaxUi); gera id novo se faltar e limita posicao, tamanho e fonte.
 inline void readItems(const tool::Json& arr, CanvasComp& c) {
   for (const auto& q : arr.items()) {
     if (c.count >= kMaxUi || !q.isObject()) break;
@@ -341,6 +392,9 @@ inline void readItems(const tool::Json& arr, CanvasComp& c) {
     float r[4] = {it.x, it.y, it.w, it.h}; ser::readVec(q["rect"], r, 4);
     it.x = std::clamp(r[0], -2.f, 3.f); it.y = std::clamp(r[1], -2.f, 3.f); it.w = std::clamp(r[2], 0.f, 4.f); it.h = std::clamp(r[3], 0.f, 4.f);
     ser::readVec(q["color"], it.color, 4); it.maxValue = ser::clampNum(q, "max", 100.f, 0.0001f, 1e9f); it.fontScale = ser::clampNum(q, "font", 1.f, 0.3f, 8.f);
+    // Arquivo antigo sem o campo: mantem o visual de antes (Panel 4 px, Button 6 px, demais 0).
+    const float legacy = it.kind == static_cast<int>(UiKind::Panel) ? 4.f : it.kind == static_cast<int>(UiKind::Button) ? 6.f : 0.f;
+    it.radius = ser::clampNum(q, "radius", legacy, 0.f, 1e4f);
   }
 }
 
@@ -354,6 +408,7 @@ inline void stampNew(UiElem& e, const CanvasComp& c) {
   e.z = top + 1;
 }
 
+// Objeto -> JSON: nome, tags e cada componente que ele tem (um bloco por componente).
 inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
   using tool::Json;
   tool::World& w = sc.world();
@@ -387,7 +442,7 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     o.set("direction", ser::vec(&l.direction.x, 3)); o.set("castShadow", l.castShadow); o.set("syncRot", lc->syncRot); o.set("target", std::string(lc->target)); j.set("light", o);
   }
   if (auto* g = w.get<GlobalLight>(e)) {
-    Json o = Json::object(); o.set("color", ser::vec(g->color, 3)); o.set("intensity", static_cast<double>(g->intensity)); o.set("azimuth", static_cast<double>(g->azimuth));
+    Json o = Json::object(); o.set("color", ser::vec(g->color, 4)); o.set("intensity", static_cast<double>(g->intensity)); o.set("azimuth", static_cast<double>(g->azimuth));
     o.set("elevation", static_cast<double>(g->elevation)); o.set("ambient", ser::vec(g->ambient, 3)); o.set("dynamic", g->dynamic); o.set("speed", static_cast<double>(g->speed)); o.set("castShadow", g->castShadow); j.set("globalLight", o);
   }
   if (auto* c = w.get<CameraComp>(e)) {
@@ -460,6 +515,7 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
   return j;
 }
 
+// JSON -> objeto novo com os componentes do arquivo; o que falta usa o padrao. O pai e ligado depois, em loadAllEntities.
 inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
   tool::World& w = sc.world();
   tool::Entity e = w.create();
@@ -497,7 +553,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     w.add<LightComp>(e, lcomp);
   }
   if (j.has("globalLight")) {
-    GlobalLight g; const auto& o = j["globalLight"]; ser::readVec(o["color"], g.color, 3); g.intensity = ser::num(o, "intensity", g.intensity);
+    GlobalLight g; const auto& o = j["globalLight"]; ser::readRgba(o["color"], g.color); g.intensity = ser::num(o, "intensity", g.intensity);
     g.azimuth = ser::num(o, "azimuth", g.azimuth); g.elevation = ser::num(o, "elevation", g.elevation); ser::readVec(o["ambient"], g.ambient, 3);
     g.dynamic = ser::flag(o, "dynamic", false); g.speed = ser::num(o, "speed", g.speed); g.castShadow = ser::flag(o, "castShadow", true); w.add<GlobalLight>(e, g);
   }
@@ -596,6 +652,7 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
   return e;
 }
 
+// Todos os objetos -> array JSON; "parent" guarda a posicao do pai nesse array.
 inline tool::Json saveAllEntities(tool::Scene& sc) {
   tool::World& w = sc.world(); std::unordered_map<uint32_t, int> idx; int i = 0;
   w.eachEntity([&](tool::Entity e) { idx[e.index] = i++; });
@@ -608,6 +665,7 @@ inline tool::Json saveAllEntities(tool::Scene& sc) {
   return arr;
 }
 
+// Array JSON -> objetos (maximo 100000), depois liga os pais pelo indice (ignora indice invalido ou o proprio objeto).
 inline std::vector<tool::Entity> loadAllEntities(tool::Scene& sc, const tool::Json& arr) {
   std::vector<tool::Entity> out; size_t n = 0;
   for (auto& e : arr.items()) { if (++n > 100000) break; out.push_back(e.isObject() ? loadEntity(sc, e) : tool::Entity{}); }

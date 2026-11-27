@@ -1,8 +1,9 @@
 // coding_panel.hpp - Janela Coding, em SpriteUI.
 //
-// Duas partes: a lista dos codigos-fonte do projeto (esquerda, fonte fixa de 12) e o editor do codigo escolhido
-// (direita, multilinha, com numeros de linha). A barra do topo tem Save, o nome do arquivo, um slider do tamanho do
-// codigo e o botao que mostra ou oculta a lista.
+// Duas partes: a lista dos codigos-fonte do projeto (esquerda, texto de 16 por padrao, com slider e campo numerico no
+// topo) e o editor do codigo escolhido (direita, multilinha, com numeros de linha). A barra do topo tem Save, o nome do
+// arquivo, um slider com campo numerico do tamanho do codigo e o botao que mostra ou oculta a lista. O slider arrasta
+// numa faixa curta; o numero digitado vale de 4 a 200.
 //
 // A moldura vem de framed::Chrome (dock). O corpo e desenhado aqui com view::ShapeList e os itens do campo
 // (Elements::TextField). Eventos chegam por handleEvent. Clicar num codigo salva o que estava aberto e
@@ -10,12 +11,15 @@
 #pragma once
 
 #include "framed_window.hpp"
+#include "free_values.hpp"
 #include "i18n.hpp"
+#include "slider_value_edit.hpp"
 #include "script_check.hpp"
 #include "spriteui_host.hpp"
 #include "text_atlas_set.hpp"
 #include "view_painter.hpp"
 #include "view_shapes.hpp"
+#include "ui_scrollbar.hpp"
 #include "ui_style.hpp"
 
 #include "SpriteUi/Elements/ElementTree.hpp"
@@ -53,6 +57,7 @@ struct Ink {
   view::Color text, dim, field, list, rowHover, rowSel, button, buttonOn, border, error, warning, ok;
 };
 
+// Janela Coding: lista dos codigos-fonte do projeto + editor multilinha com numeros de linha, diagnosticos de scripts .tool.js e salvar (Ctrl+S).
 class Panel {
  public:
   static constexpr float kFont = 12.f;          // barra, nomes e lista: tamanho fixo
@@ -60,9 +65,14 @@ class Panel {
   static constexpr float kMaxCodeFont = 28.f;
   static constexpr float kPad = 8.f;
   static constexpr float kBar = 32.f;
-  static constexpr float kRow = 18.f;           // linha da lista
+  static constexpr float kRow = 18.f;           // altura minima da linha da lista
+  static constexpr float kMinListFont = 10.f;   // faixa do slider do tamanho do texto da lista (digitado vai de 4 a 200)
+  static constexpr float kMaxListFont = 32.f;
+  static constexpr float kDefaultListFont = 16.f;   // texto da lista maior que o antigo (12)
+  static constexpr float kListHeadH = 26.f;     // faixa do topo da lista com o slider do tamanho
+  static constexpr float kBoxW = 44.f;          // caixa numerica ao lado de cada slider
   static constexpr float kListW = 220.f;
-  static constexpr float kSliderW = 160.f;
+  static constexpr float kSliderW = 130.f;
   static constexpr float kThumb = 14.f;
   static constexpr std::size_t kMaxFiles = 5000;
 
@@ -85,6 +95,8 @@ class Panel {
     field_->Edit() = Wd::TextEditState(std::string(), true);   // o codigo tem quebras de linha
     slider_.range = {kMinCodeFont, kMaxCodeFont, 1.0f, true};
     slider_.SetValue(kMinCodeFont);
+    listSlider_.range = {kMinListFont, kMaxListFont, 1.0f, true};
+    listSlider_.SetValue(kDefaultListFont);
     paintList_.owner = sui::handleFor(0);
   }
   Panel(const Panel&) = delete;
@@ -94,10 +106,18 @@ class Panel {
   [[nodiscard]] const framed::Chrome& chrome() const { return chrome_; }
 
   [[nodiscard]] float fontSize() const { return codeFont_; }
+  // Tamanho do codigo: o slider arrasta de 12 a 28, mas o valor digitado vale de 4 a 200 (so prendido por seguranca).
   void setFontSize(float size) {
-    codeFont_ = std::clamp(size, kMinCodeFont, kMaxCodeFont);
+    codeFont_ = editor::free_values::ClampFontPx(size, kMinCodeFont);
     field_->fontSize = codeFont_;
-    slider_.SetValue(codeFont_);
+    slider_.SetValue(std::clamp(codeFont_, kMinCodeFont, kMaxCodeFont));
+  }
+
+  // Tamanho do texto da lista de arquivos (esquerda): mesma regra do codigo, faixa do slider de 10 a 32.
+  [[nodiscard]] float listFontSize() const { return listFont_; }
+  void setListFontSize(float size) {
+    listFont_ = editor::free_values::ClampFontPx(size, kDefaultListFont);
+    listSlider_.SetValue(std::clamp(listFont_, kMinListFont, kMaxListFont));
   }
 
   // Cursor de texto sobre a area de edicao (o cursor do sistema vira I-beam).
@@ -111,16 +131,18 @@ class Panel {
         if (e.button.button != SDL_BUTTON_LEFT) return false;
         return onPointerDown(e.button.x, e.button.y);
       case SDL_EVENT_MOUSE_BUTTON_UP:
-        if (sliding_) slide(Elm::PointerPhase::Up, e.button.x, e.button.y);
-        sliding_ = false;
+        if (sliding_ != 0) slide(sliding_, Elm::PointerPhase::Up, e.button.x, e.button.y);
+        sliding_ = 0;
         dragging_ = false;
         field_->PointerUp();
-        return false;
+        return bar_.pointerUp();   // soltou o polegar da barra da lista
       case SDL_EVENT_MOUSE_MOTION:
         px_ = e.motion.x;
         py_ = e.motion.y;
-        if (sliding_) {
-          slide(Elm::PointerPhase::Move, px_, py_);
+        if (bar_.pointerMove(px_, py_, listScroll_)) listScroll_ = ui_scrollbar::clampScroll(listScroll_, listContentH(), layout_.list.size.y);
+        if (bar_.dragging()) return true;   // o arraste segue com o mouse fora da lista
+        if (sliding_ != 0) {
+          slide(sliding_, Elm::PointerPhase::Move, px_, py_);
           return true;
         }
         if (dragging_ && focused_) {
@@ -130,7 +152,7 @@ class Panel {
         return false;
       case SDL_EVENT_MOUSE_WHEEL:
         if (layout_.listShown && inside(layout_.list, e.wheel.mouse_x, e.wheel.mouse_y)) {
-          listScroll_ = std::clamp(listScroll_ - e.wheel.y * kRow * 2.f, 0.f, maxListScroll());
+          listScroll_ = std::clamp(listScroll_ - e.wheel.y * rowH() * 2.f, 0.f, maxListScroll());
           return true;
         }
         if (inside(editorBox_, e.wheel.mouse_x, e.wheel.mouse_y)) {
@@ -139,10 +161,15 @@ class Panel {
         }
         return false;
       case SDL_EVENT_TEXT_INPUT:
+        if (sizeEdit_ != 0) {   // digitando no campo de tamanho: so numeros e separador
+          if (e.text.text) for (const char* c = e.text.text; *c; ++c) if ((*c >= '0' && *c <= '9') || *c == '.' || *c == ',') sizeText_.InsertText(std::string(1, *c));
+          return true;
+        }
         if (!focused_ || !e.text.text) return false;
         edit([&](Wd::TextEditState& s) { s.InsertText(e.text.text); });
         return true;
       case SDL_EVENT_KEY_DOWN:
+        if (sizeEdit_ != 0) return sizeKey(e.key.key);
         if (!focused_) return false;
         return onKey(e.key.key, e.key.mod);
       default:
@@ -200,13 +227,15 @@ class Panel {
   static constexpr std::uint32_t kClipList = 1u;
   static constexpr std::uint32_t kClipEditor = 2u;
 
+  // Arquivo de codigo listado: caminho relativo ao projeto e caminho absoluto.
   struct Entry {
     std::string rel;
     fs::path abs;
   };
 
+  // Retangulos de cada parte da janela, recalculados a cada quadro em layoutAll.
   struct Layout {
-    SU::Rect save, toggle, slider, list, pane, gutter, editor, diagnostics;
+    SU::Rect save, toggle, slider, sizeBox, list, listHead, listSlider, listBox, pane, gutter, editor, diagnostics;
     float sizeLabelX = 0.f;
     bool listShown = false;
   };
@@ -247,6 +276,7 @@ class Panel {
   }
   static SU::Rect rect(float x, float y, float w, float h) { return SU::Rect{{x, y}, {w, h}}; }
 
+  // Mede um texto simples (sem estilo) no tamanho dado.
   ST::TextLayoutResult layoutPlain(const std::string& utf8, float size) const {
     const ST::TruetypeAtlas& atlas = text_.atlasFor(size);
     ST::TextLayoutConfig cfg;
@@ -264,23 +294,34 @@ class Panel {
   }
   SU::Vec2 contentSize() const { return field_->ContentRect().size; }
 
+  // Numero de linhas do texto (conta os 
+  // ; texto vazio tem 1 linha).
   static std::size_t lineCount(const std::string& t) {
     return 1 + static_cast<std::size_t>(std::count(t.begin(), t.end(), '\n'));
   }
 
+  // Altura de uma linha da lista: acompanha o tamanho do texto (nunca menor que kRow).
+  float rowH() const { return std::max(kRow, editor::ui_style::uiFont(listFont_) * 1.5f); }
+
+  float listContentH() const { return static_cast<float>(files_.size()) * rowH(); }
+
+  // Rolagem maxima da lista de arquivos (0 se cabe).
   float maxListScroll() const {
-    return std::max(0.f, static_cast<float>(files_.size()) * kRow - layout_.list.size.y);
+    return std::max(0.f, static_cast<float>(files_.size()) * rowH() - layout_.list.size.y);
   }
 
   std::string toggleLabel() const { return std::string(listShown_ ? T("Hide list") : T("Show list")); }
+  std::string listLabel() const { return std::string(T("List size")); }
   std::string sizeLabel() const { return std::string(T("Code size")) + ": " + std::to_string(static_cast<int>(codeFont_)); }
 
+  // Divide a area da janela entre barra (Save, nome, slider de tamanho, mostrar lista), lista, editor e diagnosticos.
   void layoutAll(const sui::Box& b) {
     layout_ = Layout{};
     layout_.save = rect(b.x + kPad, b.y + 4.f, 56.f, kBar - 8.f);
     const float tw = textWidth(toggleLabel()) + 16.f;
     layout_.toggle = rect(b.x + b.w - kPad - tw, b.y + 4.f, tw, kBar - 8.f);
-    const float sliderRight = layout_.toggle.position.x - 12.f;
+    layout_.sizeBox = rect(layout_.toggle.position.x - 12.f - kBoxW, b.y + 5.f, kBoxW, kBar - 10.f);   // campo numerico do tamanho do codigo
+    const float sliderRight = layout_.sizeBox.position.x - 6.f;
     layout_.slider = rect(sliderRight - kSliderW, b.y + 8.f, kSliderW, kBar - 16.f);
     layout_.sizeLabelX = layout_.slider.position.x - 8.f - textWidth(sizeLabel());
     slider_.border = layout_.slider;
@@ -291,7 +332,13 @@ class Panel {
     float paneX = b.x;
     if (listShown_) {
       const float lw = std::min(kListW, b.w * 0.5f);
-      layout_.list = rect(b.x, top, lw, areaH);
+      const float headH = std::min(kListHeadH, areaH);   // faixa do slider do tamanho do texto da lista
+      layout_.listHead = rect(b.x, top, lw, headH);
+      layout_.list = rect(b.x, top + headH, lw, std::max(0.f, areaH - headH));
+      layout_.listBox = rect(b.x + lw - kPad - kBoxW, top + 3.f, kBoxW, std::max(0.f, headH - 6.f));
+      const float sx = b.x + kPad + textWidth(listLabel()) + 8.f;
+      layout_.listSlider = rect(sx, top + 6.f, std::max(20.f, layout_.listBox.position.x - 6.f - sx), std::max(0.f, headH - 12.f));
+      listSlider_.border = layout_.listSlider;
       paneX = b.x + lw + 1.f;
     }
     const float paneW = std::max(0.f, b.x + b.w - paneX);
@@ -307,6 +354,12 @@ class Panel {
     layout_.editor = rect(paneX + gutterW, top + 2.f, std::max(0.f, paneW - gutterW), std::max(0.f, editorH - 4.f));
     editorBox_ = layout_.editor;
     listScroll_ = std::clamp(listScroll_, 0.f, maxListScroll());
+    if (layout_.listShown) {
+      const SU::Rect l = layout_.list;
+      bar_.layout({l.position.x + l.size.x - ui_scrollbar::kWidth, l.position.y, ui_scrollbar::kWidth, l.size.y}, listContentH(), l.size.y);
+    } else {
+      bar_.layout({}, 0.f, 0.f);
+    }
     tree_.Arrange(root_, {{layout_.editor.position.x, layout_.editor.position.y},
                           {layout_.editor.size.x, layout_.editor.size.y}});
   }
@@ -317,6 +370,7 @@ class Panel {
     s.text({r.position.x + r.size.x * 0.5f, r.position.y + (r.size.y - editor::ui_style::uiFont(kFont)) * 0.5f - 1.f}, label, editor::ui_style::uiFont(kFont), ink_.text, true);
   }
 
+  // Desenha a barra do topo e o separador entre lista e editor.
   void buildBar(view::ShapeList& s, const sui::Box& b) {
     s.rectFilled({b.x, b.y}, {b.x + b.w, b.y + kBar}, ink_.list, 0.f);
     s.rectFilled({b.x, b.y + kBar - 1.f}, {b.x + b.w, b.y + kBar}, ink_.border, 0.f);
@@ -334,23 +388,54 @@ class Panel {
     s.text({nameX, b.y + (kBar - editor::ui_style::uiFont(kFont)) * 0.5f - 1.f}, name, editor::ui_style::uiFont(kFont), ink_.dim, false, nameW);
     s.text({layout_.sizeLabelX, b.y + (kBar - editor::ui_style::uiFont(kFont)) * 0.5f - 1.f}, sizeLabel(), editor::ui_style::uiFont(kFont), ink_.dim);
 
-    // Slider: trilha, parte preenchida e polegar (o valor vem de slider_).
-    const SU::Rect sl = layout_.slider;
+    drawSlider(s, layout_.slider, slider_);
+    drawSizeBox(s, layout_.sizeBox, 1, codeFont_);
+
+    if (layout_.listShown && layout_.listHead.size.y > 0.f) {   // faixa do topo da lista: rotulo, slider e campo do tamanho
+      const SU::Rect h = layout_.listHead;
+      s.rectFilled({h.position.x, h.position.y}, {h.position.x + h.size.x, h.position.y + h.size.y}, ink_.list, 0.f);
+      s.rectFilled({h.position.x, h.position.y + h.size.y - 1.f}, {h.position.x + h.size.x, h.position.y + h.size.y}, ink_.border, 0.f);
+      s.text({h.position.x + kPad, h.position.y + (h.size.y - editor::ui_style::uiFont(kFont)) * 0.5f - 1.f}, listLabel(),
+             editor::ui_style::uiFont(kFont), ink_.dim);
+      drawSlider(s, layout_.listSlider, listSlider_);
+      drawSizeBox(s, layout_.listBox, 2, listFont_);
+    }
+  }
+
+  // Slider: trilha, parte preenchida e polegar (o valor vem do proprio slider).
+  void drawSlider(view::ShapeList& s, const SU::Rect& sl, const Elm::Slider& slider) {
     const float trackY = sl.position.y + sl.size.y * 0.5f;
     const float x0 = sl.position.x + kThumb * 0.5f;
     const float x1 = sl.position.x + sl.size.x - kThumb * 0.5f;
-    const float tx = x0 + (x1 - x0) * slider_.Ratio();
+    const float tx = x0 + (x1 - x0) * slider.Ratio();
     s.rectFilled({x0, trackY - 2.f}, {x1, trackY + 2.f}, ink_.button, 2.f);
     s.rectFilled({x0, trackY - 2.f}, {tx, trackY + 2.f}, ink_.buttonOn, 2.f);
     s.rectFilled({tx - kThumb * 0.5f, trackY - kThumb * 0.5f}, {tx + kThumb * 0.5f, trackY + kThumb * 0.5f}, ink_.text,
                  kThumb * 0.5f);
   }
 
-  SU::Rect rowRect(std::size_t i) const {
-    const SU::Rect& l = layout_.list;
-    return rect(l.position.x, l.position.y + static_cast<float>(i) * kRow - listScroll_, l.size.x, kRow);
+  // Campo numerico ao lado de um slider (which: 1 = codigo, 2 = lista): mostra o valor ou o texto em edicao com caret.
+  void drawSizeBox(view::ShapeList& s, const SU::Rect& r, int which, float value) {
+    if (r.size.x <= 0.f || r.size.y <= 0.f) return;
+    const bool editing = sizeEdit_ == which;
+    const float fs = editor::ui_style::uiFont(kFont);
+    s.rectFilled({r.position.x, r.position.y}, {r.position.x + r.size.x, r.position.y + r.size.y}, editing ? ink_.field : ink_.button,
+                 editor::ui_style::buttonRadius());
+    const std::string shown = editing ? sizeText_.Text() : std::to_string(static_cast<int>(value + 0.5f));
+    s.text({r.position.x + 6.f, r.position.y + (r.size.y - fs) * 0.5f - 1.f}, shown, fs, ink_.text, false, r.size.x - 8.f);
+    if (editing) {
+      const float cx = r.position.x + 6.f + textWidth(shown.substr(0, sizeText_.Caret()), fs);
+      s.rectFilled({cx, r.position.y + 3.f}, {cx + 1.5f, r.position.y + r.size.y - 3.f}, ink_.text, 0.f);
+    }
   }
 
+  // Retangulo da linha i da lista, ja com a rolagem aplicada.
+  SU::Rect rowRect(std::size_t i) const {
+    const SU::Rect& l = layout_.list;
+    return rect(l.position.x, l.position.y + static_cast<float>(i) * rowH() - listScroll_, l.size.x, rowH());
+  }
+
+  // Desenha a lista de arquivos (ou a mensagem de vazio), destacando o aberto.
   void buildList(view::ShapeList& s) {
     if (!layout_.listShown) return;
     const SU::Rect l = layout_.list;
@@ -371,8 +456,14 @@ class Panel {
       } else if (hover) {
         s.rectFilled({r.position.x, r.position.y}, {r.position.x + r.size.x, r.position.y + r.size.y}, ink_.rowHover, 0.f);
       }
-      s.text({r.position.x + kPad, r.position.y + (kRow - editor::ui_style::uiFont(kFont)) * 0.5f - 1.f}, files_[i].rel, editor::ui_style::uiFont(kFont),
+      const float lf = editor::ui_style::uiFont(listFont_);
+      s.text({r.position.x + kPad, r.position.y + (r.size.y - lf) * 0.5f - 1.f}, files_[i].rel, lf,
              selected ? ink_.text : ink_.dim, false, maxW);
+    }
+    // Barra de rolagem unica do editor (ui_scrollbar.hpp).
+    for (const ui_scrollbar::Quad& q : bar_.quads(palette::active(), listScroll_)) {
+      if (q.rect.w <= 0.f || q.rect.h <= 0.f) continue;
+      s.rectFilled({q.rect.x, q.rect.y}, {q.rect.x + q.rect.w, q.rect.y + q.rect.h}, view::rgbaF(q.color.r, q.color.g, q.color.b, q.color.a), 0.f);
     }
   }
 
@@ -408,12 +499,14 @@ class Panel {
     drawDiagnostics(s);
   }
 
+  // Cor do numero da linha: vermelho se tem erro, amarelo se aviso, apagado se nada.
   view::Color issueColor(int line) const {
     for (const ScriptIssue& issue : issues_) if (issue.line == line)
       return issue.sev == tool::Severity::Error ? ink_.error : ink_.warning;
     return ink_.dim;
   }
 
+  // Painel de diagnosticos do script (erros e avisos com a linha); so para arquivos .tool.js.
   void drawDiagnostics(view::ShapeList& s) {
     if (!isToolScript() || layout_.diagnostics.size.y <= 0.f) return;
     const SU::Rect r = layout_.diagnostics;
@@ -454,18 +547,31 @@ class Panel {
   bool onPointerDown(float x, float y) {
     const SU::Rect body = rect(body_.x, body_.y, body_.w, body_.h);
     if (!inside(body, x, y)) {
+      commitSizeEdit();
       focus(false);
       return false;
     }
     if (inside(layout_.save, x, y)) { save(); return true; }
     if (inside(layout_.toggle, x, y)) { listShown_ = !listShown_; return true; }
+    if (sizeEdit_ != 0 && !inside(sizeEdit_ == 1 ? layout_.sizeBox : layout_.listBox, x, y)) commitSizeEdit();   // clicar fora confirma
+    if (inside(layout_.sizeBox, x, y)) { beginSizeEdit(1); return true; }
+    if (layout_.listShown && inside(layout_.listBox, x, y)) { beginSizeEdit(2); return true; }
     if (inside(layout_.slider, x, y)) {
-      sliding_ = true;
-      slide(Elm::PointerPhase::Down, x, y);
+      sliding_ = 1;
+      slide(1, Elm::PointerPhase::Down, x, y);
+      return true;
+    }
+    if (layout_.listShown && inside(layout_.listSlider, x, y)) {
+      sliding_ = 2;
+      slide(2, Elm::PointerPhase::Down, x, y);
+      return true;
+    }
+    if (layout_.listShown && bar_.pointerDown(x, y, listScroll_)) {   // barra de rolagem unica da lista
+      listScroll_ = ui_scrollbar::clampScroll(listScroll_, listContentH(), layout_.list.size.y);
       return true;
     }
     if (layout_.listShown && inside(layout_.list, x, y)) {
-      const float rel = (y - layout_.list.position.y + listScroll_) / kRow;
+      const float rel = (y - layout_.list.position.y + listScroll_) / rowH();
       if (rel >= 0.f && static_cast<std::size_t>(rel) < files_.size()) {
         open(static_cast<std::size_t>(rel));
         focus(true);
@@ -481,21 +587,72 @@ class Panel {
     return true;
   }
 
-  void slide(Elm::PointerPhase phase, float x, float y) {
+  // Arraste de um slider (which: 1 = tamanho do codigo, 2 = tamanho do texto da lista).
+  void slide(int which, Elm::PointerPhase phase, float x, float y) {
+    Elm::Slider& sl = which == 1 ? slider_ : listSlider_;
     Elm::PointerEvent ev;
     ev.phase = phase;
     ev.position = {x, y};
-    ev.inside = inside(layout_.slider, x, y);
-    const Elm::SliderEvents s = slider_.OnPointer(ev);
-    if (s.valueChanged) setFontSize(slider_.Value());
+    ev.inside = inside(which == 1 ? layout_.slider : layout_.listSlider, x, y);
+    const Elm::SliderEvents s = sl.OnPointer(ev);
+    if (s.valueChanged) {
+      if (which == 1) setFontSize(sl.Value());
+      else setListFontSize(sl.Value());
+    }
   }
 
+  // Abre a digitacao do campo numerico (which: 1 = codigo, 2 = lista), com o valor atual como texto de partida.
+  void beginSizeEdit(int which) {
+    if (sizeEdit_ == which) return;
+    if (sizeEdit_ != 0) commitSizeEdit();
+    focus(false);   // o editor de codigo larga o foco; o texto digitado vai para o campo
+    sizeEdit_ = which;
+    sizeText_ = Wd::TextEditState(std::to_string(static_cast<int>((which == 1 ? codeFont_ : listFont_) + 0.5f)));
+    sizeText_.MoveEnd();
+    if (window_) SDL_StartTextInput(window_);
+  }
+
+  // Confirma o numero digitado: texto invalido nao muda nada; valido vale de 4 a 200.
+  void commitSizeEdit() {
+    if (sizeEdit_ == 0) return;
+    float typed = 0.f;
+    if (slider_edit::ParseTypedNumber(sizeText_.Text(), typed)) {
+      if (sizeEdit_ == 1) setFontSize(typed);
+      else setListFontSize(typed);
+    }
+    endSizeEdit();
+  }
+
+  // Termina a digitacao do tamanho do codigo e desliga a entrada de texto do SDL.
+  void endSizeEdit() {
+    sizeEdit_ = 0;
+    if (window_) SDL_StopTextInput(window_);
+  }
+
+  // Tecla durante a digitacao do tamanho: Enter confirma, Esc cancela, o resto edita o texto. Sempre consome.
+  bool sizeKey(SDL_Keycode key) {
+    switch (key) {
+      case SDLK_RETURN: case SDLK_KP_ENTER: commitSizeEdit(); break;
+      case SDLK_ESCAPE: endSizeEdit(); break;
+      case SDLK_BACKSPACE: (void)sizeText_.Backspace(); break;
+      case SDLK_DELETE: (void)sizeText_.Delete(); break;
+      case SDLK_LEFT: sizeText_.MoveLeft(); break;
+      case SDLK_RIGHT: sizeText_.MoveRight(); break;
+      case SDLK_HOME: sizeText_.MoveHome(); break;
+      case SDLK_END: sizeText_.MoveEnd(); break;
+      default: break;
+    }
+    return true;
+  }
+
+  // Coloca o cursor do editor no ponto clicado (extend mantem a selecao).
   void placeCaretAt(float x, float y, bool extend) {
     const SU::Rect c = field_->ContentRect();
     const ST::TextLayoutResult layout = fieldLayout();
     field_->PointerDown({x - c.position.x, y - c.position.y}, c.size, layout, style_, extend);
   }
 
+  // Foco do editor; liga/desliga a entrada de texto do SDL.
   void focus(bool on) {
     if (on == focused_) return;
     focused_ = on;
@@ -538,6 +695,7 @@ class Panel {
     }
   }
 
+  // Seta para cima/baixo: move o cursor uma linha e mantem ele visivel.
   void moveVertical(int dir, bool shift) {
     const ST::TextLayoutResult layout = fieldLayout();
     if (dir < 0) field_->MoveUp(layout, shift); else field_->MoveDown(layout, shift);
@@ -545,6 +703,7 @@ class Panel {
   }
 
   // Aplica uma edicao do texto (sem mudar o caret por ela). Marca como alterado.
+  // Aplica uma alteracao ao texto do editor; se o texto mudou marca como editado, senao so mantem o cursor visivel.
   template <class F>
   void edit(F&& fn, bool changes = true) {
     const std::string before = field_->Edit().Text();
@@ -553,6 +712,7 @@ class Panel {
     else field_->KeepCaretVisible(fieldLayout(), contentSize(), style_);
   }
 
+  // Marca o arquivo como alterado e, se for script, agenda a nova checagem de diagnosticos.
   void edited() {
     dirty_ = true;
     if (isToolScript()) {
@@ -562,6 +722,7 @@ class Panel {
     field_->KeepCaretVisible(fieldLayout(), contentSize(), style_);
   }
 
+  // O arquivo aberto e um script de jogo (.tool.js)? So esses tem diagnosticos.
   bool isToolScript() const {
     if (current_ < 0 || static_cast<std::size_t>(current_) >= files_.size()) return false;
     const std::string& path = files_[static_cast<std::size_t>(current_)].rel;
@@ -570,12 +731,14 @@ class Panel {
     return path.size() >= suffixLength && path.compare(path.size() - suffixLength, suffixLength, suffix) == 0;
   }
 
+  // Roda a checagem do script depois de 0,4 s sem digitar (nao a cada tecla).
   void refreshScriptIssues(double now) {
     if (!issuesPending_ || current_ < 0 || static_cast<std::size_t>(current_) >= files_.size() || now - issuesChangedAt_ < 0.4) return;
     issues_ = checkScriptSource(field_->Edit().Text(), files_[static_cast<std::size_t>(current_)].rel);
     issuesPending_ = false;
   }
 
+  // Troca o texto do editor e poe o cursor na posicao dada.
   void setText(const std::string& text, std::size_t cursor) {
     field_->Edit() = Wd::TextEditState(text, true);
     field_->Edit().MoveCaretTo(cursor);
@@ -605,12 +768,14 @@ class Panel {
     std::sort(files_.begin(), files_.end(), [](const Entry& a, const Entry& b) { return a.rel < b.rel; });
   }
 
+  // Pastas ignoradas ao procurar codigo (ocultas, build, third_party, node_modules...).
   static bool skipDirectory(const std::string& name) {
     static const char* const kSkip[] = {".git", ".vs", ".vscode", "out", "build", "Build", "third_party", "node_modules"};
     if (!name.empty() && name[0] == '.') return true;
     return std::any_of(std::begin(kSkip), std::end(kSkip), [&](const char* s) { return name == s; });
   }
 
+  // Extensao (ou CMakeLists.txt) que conta como codigo-fonte para a lista.
   static bool isCodeFile(const fs::path& p) {
     if (p.filename() == "CMakeLists.txt") return true;
     static const char* const kExt[] = {".cpp", ".cc", ".cxx", ".c", ".hpp", ".hh", ".hxx", ".h", ".inl", ".cmake",
@@ -642,6 +807,7 @@ class Panel {
     if (isToolScript()) issues_ = checkScriptSource(text, files_[index].rel);
   }
 
+  // Grava o arquivo aberto (restaura CRLF se era o original) e limpa o marcador de alterado.
   void save() {
     if (current_ < 0) return;
     std::string out = field_->Edit().Text();
@@ -672,8 +838,10 @@ class Panel {
   SU::UIHandle root_{}, handle_{};
   Elm::TextField* field_ = nullptr;
   Elm::TextFieldStyle style_;
-  Elm::Slider slider_;
+  Elm::Slider slider_, listSlider_;
   Layout layout_;
+  int sizeEdit_ = 0;               // campo numerico em edicao: 0 = nenhum, 1 = codigo, 2 = lista
+  Wd::TextEditState sizeText_;     // texto do campo numerico em edicao
   SU::Rect editorBox_{};
   sui::Box body_{};
   view::ShapePainter paintBody_{text_};
@@ -694,9 +862,12 @@ class Panel {
   bool issuesPending_ = false;
   double issuesChangedAt_ = -10.0;
   std::vector<ScriptIssue> issues_;
-  bool focused_ = false, dragging_ = false, sliding_ = false, listShown_ = true;
+  bool focused_ = false, dragging_ = false, listShown_ = true;
+  int sliding_ = 0;   // slider em arraste: 0 = nenhum, 1 = codigo, 2 = lista
+  ui_scrollbar::Scrollbar bar_;
   float listScroll_ = 0.f;
   float codeFont_ = kMinCodeFont;
+  float listFont_ = kDefaultListFont;
   float px_ = 0.f, py_ = 0.f;
 };
 
