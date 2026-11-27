@@ -39,6 +39,7 @@ template <class T> ComponentId componentId() {
 class World {
 public:
   Entity create() {
+    touchStructure();
     Entity e = ids_.create();
     ensure(e.index);
     tags_[e.index] = {};
@@ -59,6 +60,7 @@ public:
     tags_[e.index] = {};
     dormant_[e.index] = 0;
     sim_[e.index] = 1;
+    touchStructure();
     return ids_.destroy(e);
   }
 
@@ -78,9 +80,22 @@ public:
     return alive(e) && st && st->has(e.index);
   }
 
+  // VERSAO DE COMPONENTE: todo acesso MUTAVEL (get/getByIndex nao-const, each/parallelEach/forEachDense/parallelEachDense, add, remove)
+  // incrementa a versao (epoch) do armazenamento de T. Quem so le deve usar o get const, eachRead ou denseView: nao incrementam.
+  // `epochOf<T>()` e O(1) e permite saber "algum T pode ter mudado desde que eu olhei" sem varrer a cena. A versao e conservadora
+  // (acesso mutavel que so leu tambem conta: custa uma revalidacao, nunca um resultado velho). Ponteiros mutaveis guardados e
+  // escritos depois NAO sao vistos: o verificador por valor do editor (verifyVersionsByValue) pega isso.
+  template <class T> u64 epochOf() const {
+    const auto* st = findStorage<T>();
+    return st ? st->epoch.load(std::memory_order_relaxed) : 0;
+  }
+
   template <class T> T* get(Entity e) {
     auto* st = findStorage<T>();
-    return (alive(e) && st) ? st->get(e.index) : nullptr;
+    if (!(alive(e) && st)) return nullptr;
+    T* p = st->get(e.index);
+    if (p) st->touch();
+    return p;
   }
 
   template <class T> const T* get(Entity e) const {
@@ -95,7 +110,9 @@ public:
   // Acesso direto por indice interno (para hot-loops validados previamente)
   template <class T> T* getByIndex(u32 index) {
     auto* st = findStorage<T>();
-    return st ? st->get(index) : nullptr;
+    T* p = st ? st->get(index) : nullptr;
+    if (p) st->touch();
+    return p;
   }
   template <class T> const T* getByIndex(u32 index) const {
     const auto* st = findStorage<T>();
@@ -127,6 +144,7 @@ public:
   template <class... Ts, class F> void each(F&& fn) {
     static_assert(sizeof...(Ts) > 0);
     if (((findStorage<Ts>() == nullptr) || ...)) return;
+    (findStorage<Ts>()->touch(), ...);   // acesso mutavel: sobe a versao de cada componente varrido
     ScratchLease L = lease();
     const auto& src = smallestIndices<Ts...>();
     L.v = src;
@@ -136,10 +154,24 @@ public:
     }
   }
 
+  // Igual a each, mas entrega referencias CONST e NAO sobe a versao (uso: render, assinaturas, qualquer leitura por quadro).
+  template <class... Ts, class F> void eachRead(F&& fn) {
+    static_assert(sizeof...(Ts) > 0);
+    if (((findStorage<Ts>() == nullptr) || ...)) return;
+    ScratchLease L = lease();
+    const auto& src = smallestIndices<Ts...>();
+    L.v = src;
+    for (u32 i : L.v) {
+      if (dormant_[i] || !ids_.aliveIndex(i) || !matchAll<Ts...>(i)) continue;
+      fn(Entity{i, ids_.generationOf(i)}, static_cast<const Ts&>(*findStorage<Ts>()->get(i))...);
+    }
+  }
+
   // Varre um componente T direto no vetor denso (memoria contigua, sem copia de indices e sem busca esparsa).
   template <class T, class F> void forEachDense(F&& fn) {
     auto* st = findStorage<T>();
     if (!st) return;
+    st->touch();
     const size_t n = st->data.size();
     for (size_t p = 0; p < n; ++p) {
       const u32 i = st->denseIdx[p];
@@ -152,6 +184,7 @@ public:
   template <class T, class F> void parallelEachDense(F&& fn, size_t grain = 512) {
     auto* st = findStorage<T>();
     if (!st || st->data.empty()) return;
+    st->touch();
     const size_t n = st->data.size();
     tool::parallelFor(n, grain, [&](size_t b, size_t e) {
       for (size_t p = b; p < e; ++p) {
@@ -168,6 +201,7 @@ public:
     if (((findStorage<Ts>() == nullptr) || ...)) return;
     const auto& idx = smallestIndices<Ts...>();
     if (idx.empty()) return;
+    (findStorage<Ts>()->touch(), ...);
     // Copia local apenas se houver risco de mutacao estrutural; para hot-loops paralelos, le direto de idx.
     tool::parallelFor(idx.size(), grain, [&](size_t b, size_t e) {
       for (size_t k = b; k < e; ++k) {
@@ -177,6 +211,19 @@ public:
       }
     });
   }
+
+  // Visao SOMENTE LEITURA do vetor denso de um componente (dados contiguos + indice da entidade de cada posicao).
+  // Serve para assinaturas/hash e para calculos em lote sem busca esparsa e sem marcar acesso mutavel. Invalida se o mundo mudar.
+  template <class T> struct DenseView { const T* data = nullptr; const u32* idx = nullptr; size_t n = 0; };
+  template <class T> DenseView<T> denseView() const {
+    const auto* st = findStorage<T>();
+    if (!st || st->data.empty()) return {};
+    return {st->data.data(), st->denseIdx.data(), st->data.size()};
+  }
+  // Consulta por indice interno (para laços densos): vivo, geracao atual e adormecido.
+  bool aliveIndex(u32 i) const { return ids_.aliveIndex(i); }
+  u32 generationAt(u32 i) const { return ids_.generationOf(i); }
+  bool dormantAt(u32 i) const { return i < dormant_.size() && dormant_[i] != 0; }
 
   template <class T> size_t storageCount() const {
     auto* st = findStorage<T>();
@@ -212,10 +259,10 @@ public:
 
   // --- suporte ao DeleteAndReuse ----------------------------------------------------
   void setDormant(Entity e, bool v) {
-    if (alive(e)) dormant_[e.index] = v ? 1 : 0;
+    if (alive(e)) { dormant_[e.index] = v ? 1 : 0; touchStructure(); }
   }
   bool isDormant(Entity e) const { return alive(e) && dormant_[e.index] != 0; }
-  Entity renew(Entity e) { return ids_.renew(e); }
+  Entity renew(Entity e) { touchStructure(); return ids_.renew(e); }
 
   void resetTo(Entity e, const std::vector<ComponentId>& keep, const TagMask& mask) {
     if (!alive(e)) return;
@@ -224,7 +271,11 @@ public:
     for (ComponentId id = 0; id < storages_.size(); ++id)
       if (storages_[id] && !keepScratch_[id]) storages_[id]->remove(e.index);
     tags_[e.index] = mask;
+    touchStructure();
   }
+
+  // Versao ESTRUTURAL: sobe em create, destroy, dormencia, renew e resetTo (muda quais entidades existem/participam).
+  u64 structuralEpoch() const { return structEpoch_.load(std::memory_order_relaxed); }
 
   size_t liveCount() const { return ids_.liveCount(); }
 
@@ -238,6 +289,10 @@ private:
     std::vector<u32> sparse; // indice da entidade -> posicao densa
     std::vector<u32> denseIdx;
     std::vector<T> data;
+    // Versao do componente (ver World::epochOf). Escrita sem RMW atomico: threads concorrentes podem perder um incremento, mas o
+    // valor sempre sobe em relacao ao que um leitor viu antes da escrita, que e o que importa.
+    std::atomic<u64> epoch{1};
+    void touch() { epoch.store(epoch.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed); }
 
     bool has(u32 i) const { return i < sparse.size() && sparse[i] != kInvalidIndex; }
     T* get(u32 i) { return has(i) ? &data[sparse[i]] : nullptr; }
@@ -246,6 +301,7 @@ private:
     const std::vector<u32>& indices() const { return denseIdx; }
 
     T& set(u32 i, T&& v) {
+      touch();
       if (i >= sparse.size()) sparse.resize(i + 1, kInvalidIndex);
       if (sparse[i] != kInvalidIndex) return data[sparse[i]] = std::move(v);
       sparse[i] = static_cast<u32>(data.size());
@@ -256,6 +312,7 @@ private:
 
     void remove(u32 i) override {
       if (!has(i)) return;
+      touch();
       const u32 pos = sparse[i];
       const u32 last = denseIdx.back();
       if (pos != denseIdx.size() - 1) {
@@ -315,6 +372,8 @@ private:
     return ScratchLease{*this, v};
   }
 
+  void touchStructure() { structEpoch_.store(structEpoch_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed); }
+  std::atomic<u64> structEpoch_{1};
   HandleAllocator ids_;
   std::vector<std::unique_ptr<IStorage>> storages_;
   std::vector<TagMask> tags_;

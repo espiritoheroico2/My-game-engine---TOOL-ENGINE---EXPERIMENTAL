@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "skybox.hpp"
+#include "tool/rhi/null_device.hpp"
 #include "image_io.hpp"
 #include "help_content.hpp"
 #include "script_complete.hpp"
@@ -131,6 +132,105 @@ inline int runSelfTest(const std::string& samplesDir) {
     ed.scene.world().destroy(caster);
     ed.scene.world().destroy(chunk);
   }
+  { // cache plano de worldMat e hash de casters: resultado igual ao calculo sem cache, e invalidacao correta
+    auto& w = ed.scene.world();
+    auto sameMat = [](const tool::Mat4& a, const tool::Mat4& b) {
+      for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) if (std::fabs(a.m[c][r] - b.m[c][r]) > 1e-5f) return false;
+      return true;
+    };
+    // Como o inicio de renderScene: novo carimbo de matrizes E hash de casters invalidado (o helper antes esquecia o segundo,
+    // entao o "novo quadro" devolvia o hash velho: era erro do teste, nao do casterHash).
+    auto cacheOn = [&]() { ed.casterHashFrameValid_ = false; ed.renderWorldMatCacheActive_ = true; ed.beginWorldMatFrame(); };
+    auto cacheOff = [&]() { ed.renderWorldMatCacheActive_ = false; };
+    // hierarquia de 3 niveis: avo -> pai -> filho
+    const tool::Entity ga = w.create(), pa = w.create(), ch = w.create();
+    Transform tga; tga.pos[0] = 3.f; tga.rot[1] = 30.f; tga.scale[0] = tga.scale[1] = tga.scale[2] = 2.f; w.add<Transform>(ga, tga);
+    Transform tpa; tpa.pos[1] = 1.f; tpa.rot[0] = 20.f; w.add<Transform>(pa, tpa); w.add<Parent>(pa, Parent{ga});
+    Transform tch; tch.pos[2] = -4.f; tch.rot[2] = 10.f; w.add<Transform>(ch, tch); w.add<Parent>(ch, Parent{pa});
+    cacheOff(); const tool::Mat4 plain0 = ed.worldMat(ch);
+    cacheOn();  const tool::Mat4 cached0 = ed.worldMat(ch);
+    const tool::Mat4 cachedAgain = ed.worldMat(ch);   // segundo acesso no mesmo quadro: vem do cache
+    check(sameMat(plain0, cached0) && sameMat(plain0, cachedAgain), "worldMat cache: 3-level hierarchy equals the uncached result");
+    w.get<Transform>(ga)->pos[0] = -9.f;   // move o avo; novo quadro de preparo
+    cacheOff(); const tool::Mat4 plain1 = ed.worldMat(ch);
+    cacheOn();  const tool::Mat4 cached1 = ed.worldMat(ch);
+    check(sameMat(plain1, cached1) && !sameMat(cached0, cached1), "worldMat cache: moving the grandparent invalidates the child on the next frame");
+    // indice reutilizado com nova geracao no mesmo quadro de preparo
+    const tool::Entity e1 = w.create();
+    Transform t1; t1.pos[0] = 5.f; w.add<Transform>(e1, t1);
+    cacheOn(); const tool::Mat4 m1 = ed.worldMat(e1);
+    w.destroy(e1);
+    const tool::Entity e2 = w.create();   // pode reaproveitar o indice de e1 com geracao nova
+    Transform t2; t2.pos[0] = -7.f; w.add<Transform>(e2, t2);
+    const tool::Mat4 m2 = ed.worldMat(e2);   // MESMO quadro: nao pode devolver a matriz de e1
+    cacheOff(); const tool::Mat4 m2plain = ed.worldMat(e2);
+    check(sameMat(m2, m2plain) && !sameMat(m1, m2), "worldMat cache: reused entity index with a new generation does not return the stale matrix");
+    // hash dos casters: estavel parado, muda ao mover um caster, e recalcula se a camera muda no mesmo quadro
+    const tool::Entity cst = w.create();
+    w.add<Transform>(cst, Transform{});
+    MeshRenderer cmr; cmr.shape = 0; cmr.castShadow = true; w.add<MeshRenderer>(cst, cmr);
+    tool::Camera camA; camA.eye = {0.f, 5.f, -10.f};
+    cacheOn(); const std::uint64_t h0 = ed.casterHash(camA); const std::uint64_t h0b = ed.casterHash(camA);
+    cacheOn(); const std::uint64_t h0c = ed.casterHash(camA);
+    check(h0 == h0b && h0 == h0c, "casterHash: stable while nothing moves (same frame and next frame)");
+    w.get<Transform>(cst)->pos[0] = 2.f;
+    cacheOn(); const std::uint64_t h1 = ed.casterHash(camA);
+    check(h1 != h0, "casterHash: moving one caster changes the hash");
+    tool::Camera camB = camA; camB.eye = {1.f, 5.f, -10.f};
+    const std::uint64_t h1cached = ed.casterHash(camA);
+    ed.casterHash(camB);   // camera diferente dentro da mesma vista: nao pode reaproveitar o valor de camA
+    check(h1cached == h1 && ed.casterHashCamEye_.x == 1.f, "casterHash: a different camera in the same frame recomputes instead of reusing the cache");
+    // Assinaturas por valor (sem API de escrita): parado = estavel e SEM recalcular as matrizes; escrita direta por ponteiro bruto e pega.
+    std::vector<tool::Light> noLights; tool::LightFrame lfEmpty;
+    cacheOn(); const std::uint64_t sunA = ed.shadowSignature(camA, 100, 100, noLights), ptA = ed.pointShadowSignature(camA, lfEmpty);
+    const std::uint32_t stampA = ed.renderWorldMatStamp_;
+    cacheOn(); const std::uint64_t sunB = ed.shadowSignature(camA, 100, 100, noLights), ptB = ed.pointShadowSignature(camA, lfEmpty);
+    check(sunA == sunB && ptA == ptB && stampA == ed.renderWorldMatStamp_, "signatures: nothing moved -> both signatures stable and world matrices reused across views/frames");
+    Transform* rawT = w.get<Transform>(cst); rawT->pos[1] += 0.25f;   // escrita direta, sem nenhuma API
+    cacheOn(); const std::uint64_t sunC = ed.shadowSignature(camA, 100, 100, noLights), ptC = ed.pointShadowSignature(camA, lfEmpty);
+    check(sunC != sunB && ptC != ptB && ed.renderWorldMatStamp_ != stampA, "signatures: moving ONE caster by a raw pointer changes sun and point signatures and rebuilds matrices");
+    { // versao por API: leitura (const/eachRead) nao sobe; acesso mutavel sobe; e escrita FORA da versao e pega pelo verificador por valor
+      const std::uint64_t e0 = w.epochOf<Transform>();
+      w.eachRead<Transform>([](tool::Entity, const Transform&) {});
+      const Transform* ro = std::as_const(w).get<Transform>(cst); (void)ro;
+      const bool readsKeepVersion = w.epochOf<Transform>() == e0;
+      Transform* kept = w.get<Transform>(cst);   // acesso mutavel: sobe a versao
+      const bool writeAccessBumps = w.epochOf<Transform>() > e0;
+      cacheOn(); (void)ed.verifyVersionsByValue();                       // amostra
+      const bool consistent = ed.verifyVersionsByValue();                // nada mudou: coerente
+      kept->pos[0] += 0.5f;                                              // escrita pelo ponteiro guardado, sem passar pela versao
+      const bool caught = !ed.verifyVersionsByValue();
+      check(readsKeepVersion && writeAccessBumps, "versions: reads (const get, eachRead) keep the component version; mutable access bumps it");
+      check(consistent && caught, "versions: a write through a kept pointer (outside the version API) is caught by the by-value verifier; untouched state stays consistent");
+      std::vector<tool::Light> nl; tool::LightFrame lfe;
+      cacheOn(); const std::uint64_t s1 = ed.shadowSignature(camA, 100, 100, nl), p1 = ed.pointShadowSignature(camA, lfe);
+      cacheOn(); const std::uint64_t s2 = ed.shadowSignature(camA, 100, 100, nl), p2 = ed.pointShadowSignature(camA, lfe);
+      check(s1 == s2 && p1 == p2, "versions: with no mutable access both signatures are O(1)-stable (no change -> same value)");
+      w.get<Transform>(cst)->pos[1] += 1.f;   // via API: as duas assinaturas mudam
+      cacheOn(); const std::uint64_t s3 = ed.shadowSignature(camA, 100, 100, nl), p3 = ed.pointShadowSignature(camA, lfe);
+      check(s3 != s2 && p3 != p2, "versions: moving a caster through the API changes the sun and point signatures");
+    }
+    w.get<Transform>(ga)->scale[0] = 3.f;   // pai antigo da hierarquia: o filho muda no mundo
+    cacheOn();
+    tool::Mat4 viaCache = ed.worldMat(ch); cacheOff(); tool::Mat4 viaPlain = ed.worldMat(ch);
+    check(sameMat(viaCache, viaPlain), "world matrices: 3-level child equals the uncached result after a grandparent change");
+    // filho direto de uma raiz: o pre-calculo em paralelo e identico, bit a bit, ao calculo sob demanda
+    cacheOn(); const tool::Mat4 pre = ed.worldMat(pa); cacheOff(); const tool::Mat4 lazy = ed.worldMat(pa);
+    check(std::memcmp(&pre, &lazy, sizeof pre) == 0, "world matrices: parallel precompute of a root's direct child is bit-identical to the lazy result");
+    // todos os niveis sao pre-calculados e worldMat() e so-leitura com o cache ativo: o vetor nao muda de tamanho nem de conteudo
+    cacheOn();
+    const std::size_t sizeBefore = ed.renderWorldMatCache_.size();
+    const tool::Mat4 gChild = ed.worldMat(ch), gPar = ed.worldMat(pa), gGrand = ed.worldMat(ga);   // 3 niveis
+    const tool::Entity lateE = w.create(); w.add<Transform>(lateE, Transform{});                      // criada depois do carimbo: miss sem gravar
+    const tool::Mat4 gLate = ed.worldMat(lateE);
+    bool sameAfter = ed.renderWorldMatCache_.size() == sizeBefore;
+    cacheOff();
+    check(sameAfter && sameMat(gChild, ed.worldMat(ch)) && sameMat(gPar, ed.worldMat(pa)) && sameMat(gGrand, ed.worldMat(ga)) && sameMat(gLate, ed.worldMat(lateE)),
+          "world matrices: read-only with the cache active (no resize), 3 levels precomputed, late entity computed without writing");
+    w.destroy(lateE);
+    cacheOff();
+    w.destroy(cst); w.destroy(ch); w.destroy(pa); w.destroy(ga); w.destroy(e2);
+  }
 
   // --- cameras: Principal e split screen
   check(ed.principalCameras().size() == 1, "default scene has exactly one Principal camera");
@@ -159,6 +259,45 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(loaded && tx.w == 256 && tx.h == 256 && tx.valid() && tx.id > 0, "texture: PNG de exemplo carrega como RGBA8 (256x256)");
     tool::u8 t0[4]; tx.texel(0.01f, 0.01f, t0);   // canto superior esquerdo do primeiro quadrado laranja
     check(t0[0] > t0[2], "texture: origem do UV no canto superior esquerdo (texel laranja)");
+  }
+  { // recarga de textura: a textura antiga e entregue para ser liberada na GPU (antes ficava orfa ate o fim da execucao)
+    std::error_code ec; fs::create_directories(tmp / "Assets", ec);
+    fs::copy_file(fs::path(samplesDir) / "textura_xadrez.png", tmp / "Assets" / "tx_reload.png", fs::copy_options::overwrite_existing, ec);
+    std::vector<tool::u64> forgotten;
+    ed.lib.onTextureForget = [&](tool::u64 id) { forgotten.push_back(id); };
+    const tool::Texture* t1 = ed.lib.texture("Assets/tx_reload.png");
+    const tool::u64 oldId = t1 ? t1->id : 0;
+    ed.lib.invalidate("Assets/tx_reload.png");
+    check(oldId != 0 && forgotten.size() == 1 && forgotten[0] == oldId, "texture reload: old GPU texture id is released on invalidate");
+    const tool::Texture* t2 = ed.lib.texture("Assets/tx_reload.png");
+    check(t2 && t2->id != 0 && t2->id != oldId, "texture reload: the reloaded texture gets a new id");
+    ed.lib.invalidate("Assets/tx_reload.png"); ed.lib.invalidate("Assets/never_loaded.png");
+    check(forgotten.size() == 2, "texture reload: invalidating an unloaded texture releases nothing");
+    ed.lib.onTextureForget = nullptr;
+  }
+  { // permutacao no lugar (ordenacao de Draws por indices): igual ao std::stable_sort sobre pares {chave, id}
+    struct KV { std::uint32_t key, id; };
+    auto sortedBoth = [](std::vector<KV> v) {
+      std::vector<std::uint32_t> order(v.size());
+      for (std::size_t i = 0; i < v.size(); ++i) order[i] = static_cast<std::uint32_t>(i);
+      std::stable_sort(order.begin(), order.end(), [&](std::uint32_t a, std::uint32_t b) { return v[a].key < v[b].key; });
+      std::vector<KV> inPlace = v; tool::render::applyPermutationInPlace(inPlace, order);
+      std::vector<KV> ref = v; std::stable_sort(ref.begin(), ref.end(), [](const KV& a, const KV& b) { return a.key < b.key; });
+      for (std::size_t i = 0; i < v.size(); ++i) if (inPlace[i].key != ref[i].key || inPlace[i].id != ref[i].id) return false;
+      bool identity = true; for (std::size_t i = 0; i < order.size(); ++i) if (order[i] != i) identity = false;
+      return identity;   // `order` termina como a identidade
+    };
+    auto make = [](std::initializer_list<std::uint32_t> keys) { std::vector<KV> v; std::uint32_t id = 0; for (std::uint32_t k : keys) v.push_back({k, id++}); return v; };
+    bool ok = sortedBoth({}) && sortedBoth(make({5})) && sortedBoth(make({2, 1})) && sortedBoth(make({1, 2})) &&
+              sortedBoth(make({1, 2, 3, 4, 5, 6})) && sortedBoth(make({6, 5, 4, 3, 2, 1})) && sortedBoth(make({3, 3, 3, 3, 3})) &&
+              sortedBoth(make({1, 2, 3, 0}));   // um unico ciclo de 4 posicoes (3 -> 0 -> ...)
+    std::uint32_t seed = 12345u;
+    for (int c = 0; c < 1000 && ok; ++c) {
+      std::vector<KV> v; const std::uint32_t n = 3 + (seed = seed * 1664525u + 1013904223u) % 200u;
+      for (std::uint32_t i = 0; i < n; ++i) v.push_back({(seed = seed * 1664525u + 1013904223u) % 6u, i});   // so 6 chaves: muitas repetidas
+      ok = sortedBoth(v);
+    }
+    check(ok, "in-place permutation: matches std::stable_sort on {key, id} pairs (n=0/1/2, sorted, reversed, equal keys, single cycle, 1000 random)");
   }
   { // skybox de imagens: cada lado usa a sua imagem; lado sem imagem usa a cor solida; so preenche o fundo
     float sx = 0.f, sy = 0.f;
@@ -964,6 +1103,15 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(::editor::settings_model::ClampSimplifyAmount(2.f) == ::editor::settings_model::kSimplifyAmountMax &&
           ::editor::settings_model::ClampSimplifyAmount(-1.f) == 0.f && ::editor::settings_model::ClampSimplifyDistance(1.f) == ::editor::settings_model::kSimplifyDistanceMin,
           "simplify settings: amount and distance are clamped to their ranges");
+    // F0 do ray tracing: o dispositivo nulo nao tem RT por GPU e o texto de status escolhido e o de "indisponivel".
+    {
+      tool::rhi::NullDevice nullDev;
+      check(!nullDev.supportsRayTracing(), "ray tracing: NullDevice reports no GPU ray tracing");
+      check(std::strstr(::editor::settings_model::RayTracingGpuStatusKey(nullDev.supportsRayTracing()), "unavailable") != nullptr &&
+            std::strstr(::editor::settings_model::RayTracingGpuStatusKey(true), "available") != nullptr &&
+            std::strstr(::editor::settings_model::RayTracingGpuStatusKey(true), "unavailable") == nullptr,
+            "ray tracing: status text is 'unavailable' when the device has no RT");
+    }
   }
 
   { // escala de render efetiva: com FSR vale 1/fator do modo de qualidade; sem FSR vale o slider

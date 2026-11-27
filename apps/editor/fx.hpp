@@ -15,7 +15,8 @@ inline float rnd(uint32_t& s) { s = s * 1664525u + 1013904223u; return static_ca
 }
 
 // Particulas: simulacao em duas fases.
-//  1) SERIAL: le o mundo (worldMat nao e thread-safe) e calcula, por emissor, base de emissao, gravidade e quantas
+//  1) SERIAL: le o mundo (fora de renderScene worldMat anda a cadeia de pais sem cache e le o World; com o cache de render ativo ele
+//     e so-leitura, mas esta fase continua serial por escolher o que cada emissor cria) e calcula, por emissor, base de emissao, gravidade e quantas
 //     particulas pode criar neste quadro (respeitando o limite do emissor e o ORCAMENTO global de particulas).
 //  2) PARALELA: cada emissor cria e integra as proprias particulas (lista e semente proprias: nao ha dado compartilhado).
 // Desenho: view_overlays.hpp (cor e alfa reais, sobre a vista).

@@ -9,6 +9,24 @@
 
 namespace tool::render {
 
+// Aplica NO LUGAR a permutacao `order` (novo[k] = antigo[order[k]]) ao vetor `v`, seguindo ciclos: so um elemento temporario
+// (sem segundo vetor). `order` e consumido (termina como a identidade). Usada para ordenar Draws por indices em GpuRenderer::end().
+template <class T> void applyPermutationInPlace(std::vector<T>& v, std::vector<std::uint32_t>& order) {
+  const std::size_t n = v.size();
+  for (std::size_t i = 0; i < n; ++i) {
+    if (order[i] == i) continue;
+    T tmp = std::move(v[i]);
+    std::size_t j = i;
+    for (;;) {
+      const std::size_t k = order[j];
+      order[j] = static_cast<std::uint32_t>(j);
+      if (k == i) { v[j] = std::move(tmp); break; }
+      v[j] = std::move(v[k]);
+      j = k;
+    }
+  }
+}
+
 struct InstanceGPU {
   float world[16];
   float color[4];

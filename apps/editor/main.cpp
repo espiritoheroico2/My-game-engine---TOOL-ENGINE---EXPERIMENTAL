@@ -2530,6 +2530,7 @@ editor::settings_panel::Values settingsValues(Editor& ed) {
   v.shadowQuality = ::editor::settings_model::ShadowQualityIndex(L.shadowMapResolution);
   v.rayTracing = L.rayTracing;
   v.rtAo = L.rtAo;
+  v.gpuRayTracing = ed.gpuDev && ed.gpuDev->supportsRayTracing();   // consulta barata (um booleano), so para o texto de status
   v.adapter = F("Adapter: %s", ed.gpuDev ? ed.gpuDev->deviceName().c_str() : "(software renderer)");
   v.pixelsLine = F("Pixels per frame: %.2f M (all views)", static_cast<double>(ed.prof.last.pixels) / 1e6);
   v.gpuErrorLine = F("Consecutive GPU error frames: %d / 5 (then the editor falls back to the CPU renderer)", ed.gpuBadFrames);
@@ -2913,6 +2914,9 @@ static int runEditorMain(int argc, char** argv) {
     if (!scriptPlayer->load(argv[i + 1])) { std::fprintf(stderr, "script: nao abriu %s\n", argv[i + 1]); return 2; }
   }
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--ecs") == 0) ecsCount = std::atoll(argv[i + 1]);
+  // --ecs-mover N: igual ao console "test ecs: N" (instancias SEM fisica que oscilam via MoverComp); mesma saida do --ecs.
+  bool ecsMover = false;
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--ecs-mover") == 0) { ecsCount = std::atoll(argv[i + 1]); ecsMover = true; }
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--voxel") == 0) voxelCount = std::atoll(argv[i + 1]);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-frames") == 0) benchFrames = std::clamp(std::atoi(argv[i + 1]), 1, 10000);
   for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--bench-warmup") == 0) benchWarmup = std::clamp(std::atoi(argv[i + 1]), 0, 10000);
@@ -3050,7 +3054,7 @@ static int runEditorMain(int argc, char** argv) {
   // --ecs N: benchmark sem vsync. Cria N esferas (como "test ECS: N"), mede o tempo de cada quadro depois do nascimento
   // e imprime media, p50, p95 e maximo. Sai sozinho ao fim de benchFrames quadros medidos.
   if (benchNoOcclusion) ed.sceneInfo.render.occlusionCull = false;   // so nesta execucao (headless nao grava a cena)
-  if (ecsCount > 0) ed.startEcsTest(ecsCount);
+  if (ecsCount > 0) ed.startEcsTest(ecsCount, !ecsMover);   // --ecs-mover: sem fisica
   if (mapSide > 0) ed.generateChunkMap(mapSide);
   long long instancesMade = 0;
   if (instanceCount > 0) instancesMade = editor::createInstanceScene(ed, instanceCount, instanceShape);   // tudo antes do laco
@@ -3088,6 +3092,7 @@ static int runEditorMain(int argc, char** argv) {
     if (benchCsv) { std::fprintf(benchCsv, "frame,total_ms"); for (int z = 0; z < static_cast<int>(editor::Zone::Count); ++z) std::fprintf(benchCsv, ",z%d", z); std::fprintf(benchCsv, ",phys_steps,phys_awake,phys_pairs,phys_contacts,phys_colors\n"); }
   }
   bool benchArmed = false;
+  std::uint64_t benchImgHashGame = 1469598103934665603ull, benchImgHashScene = 1469598103934665603ull;   // TOOL_BENCH_IMGHASH
   editor::SpriteUiDiagnostics spriteUiDiagnostics;
   // Fonte e renderizador unicos das janelas SpriteUI.
   editor::sui::TextAtlasSet uiText;   // atlas de glifos por tamanho (texto nitido em qualquer tamanho)
@@ -3481,7 +3486,35 @@ static int runEditorMain(int argc, char** argv) {
       const tool::Camera bc = editor::benchCamera(benchCamK, benchRenderFrame++, benchOrbit);
       int bw = benchRenderW, bh = benchRenderH;
       if (benchResizeN > 0) { const int k = (benchRenderFrame - 1) % benchResizeN; bw = std::max(32, benchRenderW - k * 3); bh = std::max(18, benchRenderH - k * 2); }
-      ed.renderView(bc, bw, bh, false, editor::Zone::GameRender, &ed.sceneInfo.render.post);
+      const tool::u8* gameImg = ed.renderView(bc, bw, bh, false, editor::Zone::GameRender, &ed.sceneInfo.render.post);
+      // TOOL_BENCH_IMGHASH=1: hash FNV-1a de cada imagem (Game e, com TOOL_BENCH_SCENEVIEW=1, tambem Scene com camera diferente)
+      // acumulado nos quadros medidos, para provar "mesma imagem" entre variantes. Fora da medicao de tempo normal.
+      static const bool imgHash = std::getenv("TOOL_BENCH_IMGHASH") != nullptr, sceneToo = std::getenv("TOOL_BENCH_SCENEVIEW") != nullptr;
+      // (a ordem importa: imgDump e dumpPpm vem logo abaixo, antes do uso)
+      // TOOL_BENCH_IMGDUMP=<prefixo>: grava o ULTIMO quadro medido (Game e Scene) em <prefixo>_game.ppm / _scene.ppm para comparar pixels (cmp).
+      static const char* imgDump = std::getenv("TOOL_BENCH_IMGDUMP");
+      auto dumpPpm = [&](const std::string& path, const tool::u8* img) {
+        if (FILE* f = std::fopen(path.c_str(), "wb")) {
+          std::fprintf(f, "P6\n%d %d\n255\n", bw, bh);
+          for (int y = 0; y < bh; ++y) for (int x = 0; x < bw; ++x) std::fwrite(img + (static_cast<std::size_t>(y) * bw + x) * 4, 1, 3, f);
+          std::fclose(f);
+        }
+      };
+      const bool lastMeasured = benchArmed && benchMs.size() + 1 == static_cast<std::size_t>(benchFrames);
+      const bool prevMeasured = benchArmed && benchMs.size() + 2 == static_cast<std::size_t>(benchFrames);   // penultimo quadro (diagnostico)
+      if (imgDump && prevMeasured && gameImg) dumpPpm(std::string(imgDump) + "_gameprev.ppm", gameImg);
+      if (imgDump && lastMeasured && gameImg) dumpPpm(std::string(imgDump) + "_game.ppm", gameImg);
+      if (imgHash || imgDump) {
+        auto fnv = [](std::uint64_t h, const tool::u8* p, std::size_t n) { for (std::size_t k = 0; k < n; ++k) { h ^= p[k]; h *= 1099511628211ull; } return h; };
+        if (gameImg && benchArmed) benchImgHashGame = fnv(benchImgHashGame, gameImg, static_cast<std::size_t>(bw) * static_cast<std::size_t>(bh) * 4);
+        if (sceneToo) {
+          tool::Camera sc = bc; sc.eye = {sc.eye.x * 0.7f + 5.f, sc.eye.y * 0.9f, sc.eye.z * 0.7f}; sc.farZ = bc.farZ;
+          const tool::u8* sceneImg = ed.renderView(sc, bw, bh, false, editor::Zone::SceneRender, nullptr);
+          if (imgDump && prevMeasured && sceneImg) dumpPpm(std::string(imgDump) + "_sceneprev.ppm", sceneImg);
+          if (imgDump && lastMeasured && sceneImg) dumpPpm(std::string(imgDump) + "_scene.ppm", sceneImg);
+          if (sceneImg && benchArmed) benchImgHashScene = fnv(benchImgHashScene, sceneImg, static_cast<std::size_t>(bw) * static_cast<std::size_t>(bh) * 4);
+        }
+      }
     }
     { // "Panels" = tempo dos paineis SEM as renderizacoes 3D (essas ja foram contadas nas suas proprias zonas)
       const float total = std::chrono::duration<float, std::milli>(editor::FrameProfiler::Clock::now() - panelsStart).count();
@@ -3889,6 +3922,14 @@ static int runEditorMain(int argc, char** argv) {
               std::printf("ECS bench:   GPU frustum culling: ON, visible on GPU %u, visible by CPU frustum (same list) %u, editor frustum on GPU %s\n", gpuVis, ed.gpu.cpuVisibleOpaque(), ed.gpuFrustumActive ? "yes" : "no");
             else
               std::printf("ECS bench:   GPU frustum culling: OFF (CPU path)\n"); }
+          // Memoria ao fim da medicao: working set e memoria PRIVADA (pico do processo), mais o tamanho dos componentes.
+          std::printf("ECS bench:   RAM working set %.0f MB, private peak %.0f MB, sizeof(MeshRenderer) %zu B, sizeof(Transform) %zu B\n", editor::processMemoryMB(), editor::processPrivatePeakMB(), sizeof(editor::MeshRenderer), sizeof(editor::Transform));
+          // Versao por API: reconstrucoes do cache de matrizes e falhas de cache de worldMat() em toda a execucao (de ~%d quadros) e versoes finais.
+          std::printf("ECS bench:   world-matrix cache: %llu rebuilds, %u misses in %d frames; versions tf %llu par %llu mr %llu struct %llu\n",
+                      ed.worldMatRebuilds_, ed.worldMatMisses_.load(), frame, static_cast<unsigned long long>(ed.scene.world().epochOf<editor::Transform>()),
+                      static_cast<unsigned long long>(ed.scene.world().epochOf<editor::Parent>()), static_cast<unsigned long long>(ed.scene.world().epochOf<editor::MeshRenderer>()),
+                      static_cast<unsigned long long>(ed.scene.world().structuralEpoch()));
+          if (std::getenv("TOOL_BENCH_IMGHASH")) std::printf("ECS bench:   image hash game %016llx scene %016llx\n", static_cast<unsigned long long>(benchImgHashGame), static_cast<unsigned long long>(benchImgHashScene));
           { size_t renderables = 0;
             ed.scene.world().each<editor::MeshRenderer, editor::Transform>([&](tool::Entity e, editor::MeshRenderer&, editor::Transform&) { if (!ed.scene.world().has<editor::Inactive>(e)) ++renderables; });
             std::printf("ECS bench:   renderable entities: %zu\n", renderables); }

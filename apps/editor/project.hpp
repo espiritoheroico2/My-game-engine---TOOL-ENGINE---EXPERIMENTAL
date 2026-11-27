@@ -112,6 +112,7 @@ class AssetLib {
 public:
   explicit AssetLib(const Project* p) : proj_(p) {}
   std::function<void(const tool::Mesh*)> onMeshForget; // o renderizador de GPU precisa saber quando uma malha some
+  std::function<void(tool::u64)> onTextureForget;      // idem para texturas: recebe Texture::id (senao a textura antiga fica orfa na GPU)
 
   // Modelo importado com hierarquia. As partes ficam no espaco local do no delas; `whole` junta tudo no mundo
   // (enquadramento e modelos antigos sem hierarquia); `nodeMeshes` junta as partes de um no no espaco do no.
@@ -195,10 +196,16 @@ public:
   void invalidate(const std::string& rel) {
     if (auto it = models_.find(rel); it != models_.end()) { forget(*it->second); models_.erase(it); }
     sounds_.erase(rel); failed_.erase(rel); tint_.erase(rel);
-    textures_.erase(rel); failedTex_.erase(rel);
+    if (auto it = textures_.find(rel); it != textures_.end()) { if (onTextureForget && it->second) onTextureForget(it->second->id); textures_.erase(it); }   // libera a textura da GPU
+    failedTex_.erase(rel);
   }
-  // Esvazia todos os caches, avisando o renderizador de GPU de cada malha que some.
-  void clear() { for (auto& [k, m] : models_) forget(*m); models_.clear(); sounds_.clear(); failed_.clear(); tint_.clear(); textures_.clear(); failedTex_.clear(); }
+  // Esvazia todos os caches, avisando o renderizador de GPU de cada malha e textura que some.
+  void clear() {
+    for (auto& [k, m] : models_) forget(*m);
+    models_.clear(); sounds_.clear(); failed_.clear(); tint_.clear();
+    if (onTextureForget) for (auto& [k, t] : textures_) if (t) onTextureForget(t->id);
+    textures_.clear(); failedTex_.clear();
+  }
 
   // Textura de albedo (PNG, JPG, BMP, TGA) do projeto. Falha fica em cache para nao repetir a cada quadro.
   const tool::Texture* texture(const std::string& rel) {

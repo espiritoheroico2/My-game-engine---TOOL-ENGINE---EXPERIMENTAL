@@ -101,6 +101,7 @@ struct Values {
     int shadowQuality = 0;   // indice (0 a 3), ja convertido pelo main.cpp
     bool rayTracing = true;
     bool rtAo = false;
+    bool gpuRayTracing = false;   // o dispositivo grafico ativo suporta ray tracing por GPU (so para a linha de status)
     std::string adapter;
     std::string pixelsLine;
     std::string gpuErrorLine;
@@ -708,8 +709,11 @@ class SettingsPanel {
         y += Metrics::kRowH + Metrics::kGap;
         controlRow(shadowQuality_, y, T("Shadow quality"), "Resolution of the shadow maps. Higher is sharper and slower.");
         y += Metrics::kRowH + Metrics::kGap;
-        checkRow(rayTracing_, y, T("Enable ray tracing"), "Uses ray tracing for lighting effects when available.", v.rayTracing);
+        checkRow(rayTracing_, y, T("Enable ray tracing"), "Today it only affects CPU AO (slow). GPU ray tracing is not available yet.", v.rayTracing);
         y += Metrics::kRowH + Metrics::kGap;
+        // Linha de status (so texto): mostra o estado real do ray tracing na GPU.
+        text(Metrics::kPad, y, T(sm::RayTracingGpuStatusKey(v.gpuRayTracing)), Metrics::kSmallFont, textWidth());
+        y += Metrics::kTextH + Metrics::kGap;
         checkRow(rtAo_, y, T("Ray-traced ambient occlusion (CPU)"), "Darkens corners and creases using rays computed on the CPU. Needs ray tracing.",
                  v.rayTracing && v.rtAo, v.rayTracing);
         y += Metrics::kRowH + Metrics::kGap + 4.f;

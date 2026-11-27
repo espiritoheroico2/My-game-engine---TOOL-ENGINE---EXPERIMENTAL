@@ -5,6 +5,7 @@
 // - Integracao paralela, sono, CCD por raio, eventos Enter/Stay/Exit e raycast.
 #pragma once
 #include "newtoon_bvh.hpp"
+#include "newtoon_convex.hpp"
 #include "newtoon_jobs.hpp"
 
 #include <algorithm>
@@ -58,6 +59,19 @@ class PhysicsWorld {
     }
   }
 
+  // ---- LOD de colisao por distancia (cascos convexos) ----
+  // Limites do LOD (padrao: <= 20 m 24 pontos, <= 60 m 12, acima 8). Veja chooseColliderLod.
+  ColliderLodConfig collisionLod;
+  // Define o ponto de foco (camera ou jogador). A cada passo fixo, cada corpo CustomConvex com `hullLods` usa o nivel
+  // dado por chooseColliderLod(distancia ao foco). A troca vale a partir do PROXIMO passo fixo, e so troca um ponteiro
+  // para um casco ja cacheado (nada e reconstruido aqui, entao nao trava o quadro).
+  void setCollisionFocus(const Vec3& pos) { collisionFocus_ = pos; hasCollisionFocus_ = true; }
+  // Sem foco o LOD fica desligado: todos os corpos usam o casco mais detalhado.
+  void clearCollisionFocus() { hasCollisionFocus_ = false; }
+  bool hasCollisionFocus() const { return hasCollisionFocus_; }
+  // Quantos pontos tem o casco que o corpo `e` usa agora (0 se nao for casco). Valido apos um passo/Rebuild.
+  size_t ActiveHullPoints(Entity e) const { return e < cache_.size() && cache_[e].hull ? cache_[e].hull->points.size() : 0; }
+
   const std::vector<CollisionEvent>& GetCollisionEvents() const { return events_; }
   void ClearEvents() { events_.clear(); }
 
@@ -84,22 +98,104 @@ class PhysicsWorld {
     Prepare(tf, rb, col, std::min({tf.size(), rb.size(), col.size()}), true);
   }
 
-  RaycastHit Raycast(const Vec3& origin, const Vec3& dirIn, float maxDistance, Entity ignore = kNoEntity) const {
+  // ---- Consultas espaciais (raycast) ----
+  // Valor de QueryTriggerInteraction::UseGlobal: true = raios acertam gatilhos (como o Unity por padrao).
+  bool queryTriggersByDefault = true;
+
+  // RAYCAST UNICO: percorre a BVH de broadphase (BVH4) e testa a forma exata de cada folha (caixa, esfera, cilindro,
+  // casco convexo). Devolve o acerto MAIS PROXIMO. O raio so ve o estado do ultimo Prepare (passo fixo ou Rebuild).
+  RaycastHit Raycast(const Vec3& origin, const Vec3& dirIn, float maxDistance, const RaycastFilter& filter) const {
     RaycastHit best; const Vec3 d = Normalized(dirIn); if (d.SqrMagnitude() < 0.5f) return best;
     float maxT = maxDistance;
     bvh_.RayQuery(origin, d, maxT, [&](Entity e, float& mt) {
-      if (e == ignore || e >= cache_.size()) return;
       float t; Vec3 nrm;
-      if (RayShape(cache_[e], origin, d, mt, t, nrm)) { mt = t; best.hit = true; best.distance = t; best.entity = e; best.normal = nrm; best.point = origin + d * t; }
+      // mt encolhe a cada acerto: so formas mais proximas que o melhor ate agora passam.
+      if (RayBody(e, origin, d, mt, filter, t, nrm)) { mt = t; best.hit = true; best.distance = t; best.entity = e; best.normal = nrm; best.point = origin + d * t; }
     });
+    return best;
+  }
+  // Atalho de compatibilidade: so ignora uma entidade (camadas todas, gatilhos conforme queryTriggersByDefault).
+  RaycastHit Raycast(const Vec3& origin, const Vec3& dir, float maxDistance, Entity ignore = kNoEntity) const {
+    RaycastFilter f; f.ignore = ignore;
+    return Raycast(origin, dir, maxDistance, f);
+  }
+
+  // Todos os acertos ao longo do raio, ORDENADOS por distancia crescente (como o Physics.RaycastAll do Unity).
+  // `out` e limpo antes; cada corpo contribui no maximo uma vez (formas convexas). Devolve a quantidade.
+  size_t RaycastAll(const Vec3& origin, const Vec3& dirIn, float maxDistance, const RaycastFilter& filter, std::vector<RaycastHit>& out) const {
+    out.clear(); const Vec3 d = Normalized(dirIn); if (d.SqrMagnitude() < 0.5f) return 0;
+    float maxT = maxDistance;   // fixo: RaycastAll nao encolhe o alcance (nao altera maxT dentro do visitante)
+    bvh_.RayQuery(origin, d, maxT, [&](Entity e, float& mt) {
+      float t; Vec3 nrm;
+      if (!RayBody(e, origin, d, mt, filter, t, nrm)) return;
+      RaycastHit h; h.hit = true; h.distance = t; h.entity = e; h.normal = nrm; h.point = origin + d * t; out.push_back(h);
+    });
+    // Desempate por entidade: resultado deterministico mesmo com distancias iguais.
+    std::sort(out.begin(), out.end(), [](const RaycastHit& a, const RaycastHit& b) { return a.distance < b.distance || (a.distance == b.distance && a.entity < b.entity); });
+    return out.size();
+  }
+
+  // SEM ALOCACAO (como o RaycastNonAlloc do Unity): escreve ate `capacity` acertos no buffer do chamador, ordenados por
+  // distancia crescente, e devolve a quantidade. Se houver mais acertos que `capacity`, ficam os MAIS PROXIMOS.
+  // Camada, entidade, gatilho e alcance sao aplicados antes do teste exato da forma; a BVH descarta o resto.
+  size_t RaycastNonAlloc(const Vec3& origin, const Vec3& dirIn, float maxDistance, const RaycastFilter& filter, RaycastHit* buffer, size_t capacity) const {
+    const Vec3 d = Normalized(dirIn); if (buffer == nullptr || capacity == 0 || d.SqrMagnitude() < 0.5f) return 0;
+    size_t count = 0; float maxT = maxDistance;
+    bvh_.RayQuery(origin, d, maxT, [&](Entity e, float& mt) {
+      float t; Vec3 nrm;
+      if (!RayBody(e, origin, d, mt, filter, t, nrm)) return;
+      RaycastHit h; h.hit = true; h.distance = t; h.entity = e; h.normal = nrm; h.point = origin + d * t;
+      // Insercao ordenada no buffer (sem alocar); cheio: so entra se for mais proximo que o ultimo.
+      size_t pos = count < capacity ? count : capacity - 1;
+      if (count == capacity && !(t < buffer[pos].distance)) return;
+      if (count < capacity) ++count;
+      while (pos > 0 && buffer[pos - 1].distance > t) { buffer[pos] = buffer[pos - 1]; --pos; }
+      buffer[pos] = h;
+    });
+    return count;
+  }
+
+  // LOTE: `count` raios (origens[i], direcoes[i]) com o mesmo alcance e filtro; o resultado do raio i vai para
+  // saida[i] (hit=false se nada) -> ordem IDENTICA a da entrada, deterministica, sem alocar por raio. Os raios sao
+  // divididos em blocos de `grain` pelo pool persistente (tool::parallelFor via JobSystem); grain >= count roda inline
+  // na thread chamadora. Seguro porque a consulta so le o estado do ultimo Prepare/Rebuild.
+  void RaycastBatch(const Vec3* origins, const Vec3* directions, size_t count, float maxDistance, const RaycastFilter& filter,
+                    RaycastHit* out, size_t grain = 64) const {
+    if (count == 0) return;
+    JobSystem::Get().ParallelFor(count, std::max<size_t>(grain, 1), [&](size_t b, size_t e) {
+      for (size_t i = b; i < e; ++i) out[i] = Raycast(origins[i], directions[i], maxDistance, filter);
+    });
+  }
+
+  // Referencia O(N) SEM BVH, com o mesmo teste por forma e o mesmo filtro. Existe para validar a BVH nos testes e
+  // para medir o ganho; nao use no jogo.
+  RaycastHit RaycastBruteForce(const Vec3& origin, const Vec3& dirIn, float maxDistance, const RaycastFilter& filter) const {
+    RaycastHit best; const Vec3 d = Normalized(dirIn); if (d.SqrMagnitude() < 0.5f) return best;
+    float maxT = maxDistance;
+    for (size_t i = 0; i < cache_.size(); ++i) {
+      float t; Vec3 nrm;
+      if (RayBody(static_cast<Entity>(i), origin, d, maxT, filter, t, nrm)) { maxT = t; best.hit = true; best.distance = t; best.entity = static_cast<Entity>(i); best.normal = nrm; best.point = origin + d * t; }
+    }
     return best;
   }
 
   size_t BodyCount() const { return cache_.size(); }
 
  private:
-  struct Shape { Vec3 c; Mat3 R; Vec3 e; float r = 0; bool sphere = false; AABB box; bool valid = false; };
-  struct ShapeInput { Transform transform; ShapeType type; Vec3 extents, offset, inverseInertia; float radius; bool dynamic; };
+  // `hull` != nullptr: forma convexa (c = origem do corpo, e = meias-medidas da AABB local ja escalada, hs = escala).
+  struct Shape { Vec3 c; Mat3 R; Vec3 e; float r = 0; bool sphere = false; AABB box; bool valid = false;
+                 const ConvexHull* hull = nullptr; float hs[3] = {1.f, 1.f, 1.f};
+                 // Cilindro (eixo Y local): raio em `r`, meia altura em `hh`. Colide como prisma convexo (ViewOf) e
+                 // e testado analiticamente no raycast.
+                 bool cyl = false; float hh = 0.f;
+                 // Dados de consulta (raycast): camada e gatilho do collider.
+                 uint32_t layer = 0; bool trigger = false; };
+  struct ShapeInput { Transform transform; ShapeType type; Vec3 extents, offset, inverseInertia; float radius; bool dynamic;
+                      const ConvexHull* hull = nullptr; const HullLodSet* lods = nullptr; Vec3 hullScale{1.f, 1.f, 1.f};
+                      float halfHeight = -1.f; uint32_t layer = 0; bool trigger = false; };
+
+  // Meia altura efetiva do cilindro: halfHeight, ou extents.y se halfHeight < 0.
+  static float CylHalfHeight(const Collider& c) { return c.halfHeight >= 0.f ? c.halfHeight : c.extents.y; }
   struct Contact {
     Entity a, b;
     Vec3 p, n;
@@ -119,9 +215,33 @@ class PhysicsWorld {
 
   std::vector<ShapeInput> shapeInputs_;
 
-  static Shape MakeShape(const Transform& t, const Collider& c, const Rigidbody& r, bool active) {
+  // Escolhe o casco do corpo: com foco e conjunto de LODs, pela distancia ao foco; sem foco, o `hull` do collider (ou o
+  // nivel mais detalhado). nullptr se o tipo nao for CustomConvex ou o casco nao for um solido valido (cai para caixa).
+  const ConvexHull* PickHull(const Transform& t, const Collider& c) const {
+    if (c.type != ShapeType::CustomConvex) return nullptr;
+    const ConvexHull* h = c.hull;
+    if (c.hullLods) {
+      if (hasCollisionFocus_) h = c.hullLods->Pick(chooseColliderLod((t.position - collisionFocus_).Magnitude(), collisionLod));
+      else if (!h) h = c.hullLods->Max();
+    }
+    return h && h->Solid() ? h : nullptr;
+  }
+
+  static Shape MakeShape(const Transform& t, const Collider& c, const Rigidbody& r, bool active, const ConvexHull* hull = nullptr) {
     Shape s; s.valid = active;
-    if (c.type == ShapeType::Sphere) {
+    if (hull) {
+      // Casco: pontos no espaco do corpo (offset ignorado). A AABB do mundo vem da caixa local do casco (ConvexHull::bounds).
+      s.R = t.rotation.ToMat3(); s.c = t.position; s.hull = hull;
+      s.hs[0] = std::fabs(c.hullScale.x); s.hs[1] = std::fabs(c.hullScale.y); s.hs[2] = std::fabs(c.hullScale.z);
+      const Vec3 lc = (hull->bounds.min + hull->bounds.max) * 0.5f, he = (hull->bounds.max - hull->bounds.min) * 0.5f;
+      const Vec3 hc{lc.x * s.hs[0], lc.y * s.hs[1], lc.z * s.hs[2]};
+      s.e = {he.x * s.hs[0], he.y * s.hs[1], he.z * s.hs[2]};
+      const Vec3 wc = s.c + s.R * hc;
+      const Vec3 ex{std::fabs(s.R.r[0].x) * s.e.x + std::fabs(s.R.r[0].y) * s.e.y + std::fabs(s.R.r[0].z) * s.e.z,
+                    std::fabs(s.R.r[1].x) * s.e.x + std::fabs(s.R.r[1].y) * s.e.y + std::fabs(s.R.r[1].z) * s.e.z,
+                    std::fabs(s.R.r[2].x) * s.e.x + std::fabs(s.R.r[2].y) * s.e.y + std::fabs(s.R.r[2].z) * s.e.z};
+      s.box = {wc - ex, wc + ex};
+    } else if (c.type == ShapeType::Sphere) {
       s.sphere = true; s.r = c.radius; s.e = {c.radius, c.radius, c.radius}; s.c = t.position;
       const bool rotateOffset = c.offset.SqrMagnitude() != 0.f;
       const bool anisotropicInertia = r.IsDynamic() &&
@@ -129,6 +249,14 @@ class PhysicsWorld {
       if (rotateOffset || anisotropicInertia) s.R = t.rotation.ToMat3();
       if (rotateOffset) s.c += s.R * c.offset;
       s.box = {s.c - s.e, s.c + s.e};
+    } else if (c.type == ShapeType::Cylinder) {
+      // Cilindro: raio em r, meia altura em hh; s.e = (r, hh, r) e a AABB do mundo vem da caixa local orientada.
+      s.cyl = true; s.r = std::max(c.radius, 1e-4f); s.hh = std::max(CylHalfHeight(c), 1e-4f); s.e = {s.r, s.hh, s.r};
+      s.R = t.rotation.ToMat3(); s.c = t.position + s.R * c.offset;
+      // AABB exata do cilindro: extensao em cada eixo = |R_y| * hh + r * sqrt(1 - R_y^2) (disco + haste).
+      float ex[3];
+      for (int k = 0; k < 3; ++k) { const float ay = std::fabs(At(s.R.r[k], 1)); ex[k] = ay * s.hh + s.r * std::sqrt(std::max(0.f, 1.f - ay * ay)); }
+      s.box = {s.c - Vec3{ex[0], ex[1], ex[2]}, s.c + Vec3{ex[0], ex[1], ex[2]}};
     } else {
       s.R = t.rotation.ToMat3(); s.c = t.position + s.R * c.offset;
       s.e = c.extents;
@@ -137,6 +265,7 @@ class PhysicsWorld {
                     std::fabs(s.R.r[2].x) * s.e.x + std::fabs(s.R.r[2].y) * s.e.y + std::fabs(s.R.r[2].z) * s.e.z};
       s.box = {s.c - ex, s.c + ex};
     }
+    s.layer = c.layer; s.trigger = c.isTrigger;
     return s;
   }
 
@@ -146,7 +275,9 @@ class PhysicsWorld {
         a.transform.rotation.x == t.rotation.x && a.transform.rotation.y == t.rotation.y &&
         a.transform.rotation.z == t.rotation.z && a.transform.rotation.w == t.rotation.w &&
         a.type == c.type && SameVec(a.extents, c.extents) && SameVec(a.offset, c.offset) &&
-        a.radius == c.radius && SameVec(a.inverseInertia, r.inverseInertiaLocal) && a.dynamic == r.IsDynamic();
+        a.radius == c.radius && SameVec(a.inverseInertia, r.inverseInertiaLocal) && a.dynamic == r.IsDynamic() &&
+        a.hull == c.hull && a.lods == c.hullLods && SameVec(a.hullScale, c.hullScale) &&
+        a.halfHeight == c.halfHeight && a.layer == c.layer && a.trigger == c.isTrigger;
   }
 
   bool ShapeInputsUnchanged(const std::vector<Transform>& tf, const std::vector<Rigidbody>& rb,
@@ -160,9 +291,10 @@ class PhysicsWorld {
     cache_.resize(n); boxes_.resize(n); valid_.assign(n, 1); shapeInputs_.resize(n);
     JobSystem::Get().ParallelFor(n, 512, [&](size_t b, size_t e) {
       for (size_t i = b; i < e; ++i) {
-        cache_[i] = MakeShape(tf[i], col[i], rb[i], true);
+        cache_[i] = MakeShape(tf[i], col[i], rb[i], true, PickHull(tf[i], col[i]));
         boxes_[i] = cache_[i].box;
-        shapeInputs_[i] = {tf[i], col[i].type, col[i].extents, col[i].offset, rb[i].inverseInertiaLocal, col[i].radius, rb[i].IsDynamic()};
+        shapeInputs_[i] = {tf[i], col[i].type, col[i].extents, col[i].offset, rb[i].inverseInertiaLocal, col[i].radius, rb[i].IsDynamic(),
+                           col[i].hull, col[i].hullLods, col[i].hullScale, col[i].halfHeight, col[i].layer, col[i].isTrigger};
       }
     });
     constexpr std::size_t kRefitRebuildInterval = 60;
@@ -478,7 +610,33 @@ class PhysicsWorld {
   }
 
   // ------------------------------------------------------------------ narrow-phase
+  // Vista convexa de uma forma nao esfera (casco, cilindro ou caixa) para o SAT convexo.
+  static void ViewOf(const Shape& s, ConvexView& v) {
+    if (s.hull) BuildConvexView(*s.hull, s.R, s.c, Vec3{s.hs[0], s.hs[1], s.hs[2]}, v);
+    else if (s.cyl) BuildCylinderView(s.R, s.c, s.r, s.hh, v);
+    else BuildBoxView(s.R, s.c, s.e, v);
+  }
+
+  // Casco x (casco | caixa | esfera). Usa o mesmo formato Pt (ponto, normal A->B, profundidade) das caixas.
+  static bool CollideHull(const Shape& A, const Shape& B, std::vector<Pt>& out) {
+    if (A.sphere || B.sphere) {
+      const Shape& S = A.sphere ? A : B; const Shape& X = A.sphere ? B : A;
+      ConvexView xv; ViewOf(X, xv);
+      ConvexContact cc;
+      if (!SphereConvexCollide(S.c, S.r, xv, cc)) return false;   // normal da esfera para X
+      out.push_back({cc.p, A.sphere ? cc.n : -cc.n, cc.depth});
+      return true;
+    }
+    ConvexView av, bv; ViewOf(A, av); ViewOf(B, bv);
+    ConvexContact cc[kConvexMaxContacts];
+    const int n = ConvexCollide(av, bv, cc);
+    for (int i = 0; i < n; ++i) out.push_back({cc[i].p, cc[i].n, cc[i].depth});
+    return n > 0;
+  }
+
   bool Collide(const Shape& A, const Shape& B, std::vector<Pt>& out) const {
+    // Casco e cilindro (prisma de 16 lados) usam o SAT convexo; a esfera so e tratada como esfera exata nele.
+    if (A.hull || B.hull || A.cyl || B.cyl) return CollideHull(A, B, out);
     if (A.sphere && B.sphere) return SphereSphere(A, B, out);
     if (A.sphere) return SphereBox(A, B, out);
     if (B.sphere) {
@@ -564,13 +722,29 @@ class PhysicsWorld {
     return true;
   }
 
-  static bool RayShape(const Shape& S, const Vec3& o, const Vec3& d, float maxT, float& tOut, Vec3& nOut) {
+  // Teste de UM corpo da BVH: aplica o filtro (entidade, camada, gatilho) e depois o teste exato da forma.
+  bool RayBody(Entity e, const Vec3& o, const Vec3& d, float maxT, const RaycastFilter& f, float& tOut, Vec3& nOut) const {
+    if (e >= cache_.size() || e == f.ignore) return false;
+    const Shape& S = cache_[e];
+    if (((f.layerMask >> (S.layer & 31u)) & 1u) == 0u) return false;                       // camada fora da mascara
+    if (S.trigger && (f.triggers == QueryTriggerInteraction::Ignore ||
+                      (f.triggers == QueryTriggerInteraction::UseGlobal && !queryTriggersByDefault))) return false;
+    bool inside = false;
+    if (!RayShape(S, o, d, maxT, tOut, nOut, &inside)) return false;
+    return !(f.ignoreBackface && inside);                                                   // raio nasceu dentro: "face de tras"
+  }
+
+  // Teste exato raio x forma. `startsInside` (opcional) = true quando o raio nasce dentro da forma (acerto em t = 0 ou
+  // saindo pela face de tras). Normal sempre no mundo.
+  static bool RayShape(const Shape& S, const Vec3& o, const Vec3& d, float maxT, float& tOut, Vec3& nOut, bool* startsInside = nullptr) {
     if (S.sphere) {
       const Vec3 oc = o - S.c; const float b = Dot(oc, d), c = Dot(oc, oc) - S.r * S.r, disc = b * b - c; if (disc < 0.f) return false;
-      float t = -b - std::sqrt(disc); if (t < 0.f) { t = -b + std::sqrt(disc); if (t < 0.f) return false; }
+      float t = -b - std::sqrt(disc); bool in = false; if (t < 0.f) { t = -b + std::sqrt(disc); in = true; if (t < 0.f) return false; }
       if (t > maxT) return false;
-      tOut = t; nOut = Normalized(o + d * t - S.c); return true;
+      tOut = t; nOut = Normalized(o + d * t - S.c); if (startsInside) *startsInside = in; return true;
     }
+    if (S.hull) return RayConvex(*S.hull, S.R, S.c, Vec3{S.hs[0], S.hs[1], S.hs[2]}, o, d, maxT, tOut, nOut, startsInside);
+    if (S.cyl) return RayCylinder(S.R, S.c, S.r, S.hh, o, d, maxT, tOut, nOut, startsInside);
     const Mat3 Rt = S.R.Transposed(); const Vec3 lo = Rt * (o - S.c), ld = Rt * d;
     float t0 = 0.f, t1 = maxT; int axis = -1; float sgn = 1.f;
     for (int i = 0; i < 3; ++i) {
@@ -580,7 +754,7 @@ class PhysicsWorld {
       if (a > t0) { t0 = a; axis = i; sgn = s; } t1 = std::min(t1, b); if (t0 > t1) return false;
     }
     tOut = t0; Vec3 nl{}; if (axis == 0) nl.x = sgn; else if (axis == 1) nl.y = sgn; else if (axis == 2) nl.z = sgn; else nl = {0, 1, 0};
-    nOut = S.R * nl; return true;
+    nOut = S.R * nl; if (startsInside) *startsInside = axis < 0; return true;
   }
 
   // ------------------------------------------------------------------ solver paralelo
@@ -912,6 +1086,8 @@ class PhysicsWorld {
   std::vector<Transform> prevTransforms_;
   std::vector<CollisionEvent> events_;
   float acc_ = 0.f;
+  Vec3 collisionFocus_{0.f, 0.f, 0.f};   // ponto de foco do LOD de colisao (camera/jogador)
+  bool hasCollisionFocus_ = false;       // false = LOD desligado
 };
 
 } // namespace Newtoon

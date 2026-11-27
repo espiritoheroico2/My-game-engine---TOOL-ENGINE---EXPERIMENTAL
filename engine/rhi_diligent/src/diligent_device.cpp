@@ -477,6 +477,9 @@ public:
   }
   // Draw indireto: Vulkan/D3D11/D3D12 sempre; GL so com compute (4.3 inclui indirect draw).
   bool supportsIndirect() const override { return supportsCompute(); }
+  // Ray tracing por GPU: sempre falso nesta fase. O dispositivo nao pede DeviceFeatures::RayTracing na criacao
+  // e o RHI ainda nao expoe RT (fase F1), entao nao ha o que usar mesmo que o driver tenha a extensao.
+  bool supportsRayTracing() const override { return false; }
 
   // Leitura sincrona de um buffer: copia para um buffer STAGING, espera a GPU e copia para a CPU.
   bool readBuffer(BufferId b, std::vector<u8>& out) override {

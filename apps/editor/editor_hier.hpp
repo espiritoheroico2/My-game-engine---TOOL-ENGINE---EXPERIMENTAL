@@ -10,6 +10,11 @@
 #pragma once
 #include "editor_state.hpp"
 
+#include <atomic>
+#include <bit>
+#include <cstring>
+#include "tool/core/parallel.hpp"
+
 namespace editor {
 
 // Decompoe uma matriz afim T*Ry*Rx*Rz*S em posicao / rotacao (graus, ordem do editor) / escala.
@@ -42,42 +47,206 @@ inline tool::Mat4 inverseAffine(const tool::Mat4& a) {
 }
 
 inline tool::Entity Editor::parentOf(tool::Entity e) {
-  auto* p = scene.world().get<Parent>(e);
+  const auto* p = std::as_const(scene.world()).get<Parent>(e);   // leitura: nao sobe a versao do componente
   return p && scene.world().alive(p->e) && p->e != e ? p->e : tool::Entity{};
 }
 
-inline tool::Mat4 Editor::worldMat(tool::Entity e) {
-  if (renderWorldMatCacheActive_) {
-    const std::uint64_t key = (static_cast<std::uint64_t>(e.index) << 32) | e.generation;
-    const auto it = renderWorldMatCache_.find(key);
-    if (it != renderWorldMatCache_.end()) return it->second;
-
-    auto& w = scene.world();
-    tool::Mat4 m; bool first = true; tool::Entity cur = e;
-    // sobe ate a raiz multiplicando: world = P_n * ... * P_1 * local
-    for (int depth = 0; depth < 32 && w.alive(cur); ++depth) {
-      const Transform* t = w.get<Transform>(cur);
-      if (t) { m = first ? worldMatrix(*t) : worldMatrix(*t) * m; first = false; }
-      cur = parentOf(cur);
-      if (!w.alive(cur)) break;
-    }
-    renderWorldMatCache_.emplace(key, m);
-    return m;
-  }
-
+// Matriz de mundo SEM cache: sobe ate a raiz multiplicando (world = P_n * ... * P_1 * local; ciclos cortados em 32 niveis).
+inline tool::Mat4 Editor::worldMatWalk(tool::Entity e) {
   auto& w = scene.world();
   tool::Mat4 m; bool first = true; tool::Entity cur = e;
-  // sobe ate a raiz multiplicando: world = P_n * ... * P_1 * local
   for (int depth = 0; depth < 32 && w.alive(cur); ++depth) {
-    const Transform* t = w.get<Transform>(cur);
+    const Transform* t = std::as_const(w).get<Transform>(cur);   // leitura: nao sobe a versao
     if (t) { m = first ? worldMatrix(*t) : worldMatrix(*t) * m; first = false; }
     cur = parentOf(cur);
     if (!w.alive(cur)) break;
   }
   return m;
 }
+
+// Com o cache ativo (durante renderScene) esta funcao e SOMENTE LEITURA: acerto devolve a matriz pre-calculada em
+// beginWorldMatFrame (todos os niveis); erro (entidade criada depois, sem Transform, adormecida) calcula sem gravar.
+// Nada de resize/escrita aqui: seguro para chamar de varias threads enquanto beginWorldMatFrame nao roda.
+inline tool::Mat4 Editor::worldMat(tool::Entity e) {
+  if (renderWorldMatCacheActive_) {
+    const std::size_t slotIdx = static_cast<std::size_t>(e.index);
+    if (slotIdx < renderWorldMatCache_.size()) {
+      const WorldMatSlot& s = renderWorldMatCache_[slotIdx];
+      if (s.stamp == renderWorldMatStamp_ && s.gen == static_cast<std::uint32_t>(e.generation)) return s.m;
+    }
+    worldMatMisses_.fetch_add(1, std::memory_order_relaxed);   // falha de cache: o bench mostra quantas por quadro (nao esconde custo)
+    return worldMatWalk(e);
+  }
+
+  auto& w = scene.world();
+  tool::Mat4 m; bool first = true; tool::Entity cur = e;
+  // sobe ate a raiz multiplicando: world = P_n * ... * P_1 * local
+  for (int depth = 0; depth < 32 && w.alive(cur); ++depth) {
+    const Transform* t = std::as_const(w).get<Transform>(cur);
+    if (t) { m = first ? worldMatrix(*t) : worldMatrix(*t) * m; first = false; }
+    cur = parentOf(cur);
+    if (!w.alive(cur)) break;
+  }
+  return m;
+}
+// --- Assinaturas por valor dos vetores densos -------------------------------------------------------------------
+namespace worldsig {
+inline std::uint64_t mix64(std::uint64_t x) {
+  x += 0x9E3779B97F4A7C15ull; x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull; x = (x ^ (x >> 27)) * 0x94D049BB133111EBull; return x ^ (x >> 31);
+}
+// Soma dos hashes de cada entidade viva (indice + geracao + bytes do componente). A SOMA nao depende da ordem do vetor
+// denso (o swap-remove reordena) e e calculada em paralelo; qualquer escrita nos bytes muda o resultado, venha de onde vier.
+template <class T> std::uint64_t denseSum(const tool::World& w, const tool::World::DenseView<T>& v) {
+  static_assert(sizeof(T) % 4 == 0, "componente com tamanho multiplo de 4 bytes");
+  std::atomic<std::uint64_t> total{0};
+  tool::parallelFor(v.n, 4096, [&](std::size_t b, std::size_t e) {
+    std::uint64_t sum = 0;
+    for (std::size_t p = b; p < e; ++p) {
+      const tool::u32 i = v.idx[p];
+      if (!w.aliveIndex(i) || w.dormantAt(i)) continue;
+      std::uint64_t h = (static_cast<std::uint64_t>(i) << 32) | w.generationAt(i);
+      std::uint32_t words[sizeof(T) / 4]; std::memcpy(words, v.data + p, sizeof(T));
+      for (std::uint32_t wd : words) h = (h ^ wd) * 0x9E3779B97F4A7C15ull;
+      sum += mix64(h);
+    }
+    total.fetch_add(sum, std::memory_order_relaxed);
+  });
+  return total.load(std::memory_order_relaxed);
+}
+} // namespace worldsig
+
+// Valida o cache de matrizes mundiais no inicio de cada vista, por VERSAO (World::epochOf): se as versoes de Transform, Parent e
+// a estrutural nao mudaram desde a ultima construcao, as matrizes do quadro/vista anterior continuam validas (custo O(1)). Senao:
+// novo carimbo (invalida tudo em O(1)) e pre-calcula EM PARALELO as matrizes de raizes e de filhos diretos de raizes (o caso comum),
+// e em serie o resto (netos...). O verificador por valor (verifyVersionsByValue) protege contra escrita fora da versao.
+inline void Editor::beginWorldMatFrame() {
+  const auto bumpStamp = [&]() { if (++renderWorldMatStamp_ == 0) { renderWorldMatCache_.assign(renderWorldMatCache_.size(), WorldMatSlot{}); renderWorldMatStamp_ = 1; } };
+  const tool::World& cw = scene.world();
+  const auto tv = cw.denseView<Transform>();
+  // Versoes atuais; sem mudanca desde a ultima construcao, nada a fazer.
+  const std::uint64_t te = cw.epochOf<Transform>(), pe = cw.epochOf<Parent>(), se = cw.structuralEpoch();
+  if (worldMatBuilt_ && te == worldTxEpoch_ && pe == worldParEpoch_ && se == worldStructEpoch_) return;
+  // Passo final (serial): toda entidade viva com Transform que ainda nao tem matriz neste carimbo (netos, cadeias de 3+ niveis)
+  // recebe a sua pela cadeia de pais. Depois disto o vetor NAO muda mais de tamanho nem de conteudo ate o proximo carimbo.
+  const auto fillRemaining = [&]() {
+    if (tv.n == 0) return;
+    tool::u32 maxIdx = 0; for (std::size_t p = 0; p < tv.n; ++p) maxIdx = std::max(maxIdx, tv.idx[p]);
+    if (renderWorldMatCache_.size() <= maxIdx) renderWorldMatCache_.resize(static_cast<std::size_t>(maxIdx) + 1);
+    const std::uint32_t stamp = renderWorldMatStamp_;
+    for (std::size_t p = 0; p < tv.n; ++p) {
+      const tool::u32 i = tv.idx[p];
+      if (!cw.aliveIndex(i) || cw.dormantAt(i)) continue;
+      WorldMatSlot& s = renderWorldMatCache_[i];
+      if (s.stamp == stamp && s.gen == cw.generationAt(i)) continue;
+      s.m = worldMatWalk(tool::Entity{i, cw.generationAt(i)}); s.gen = cw.generationAt(i); s.stamp = stamp;
+    }
+  };
+  worldTxEpoch_ = te; worldParEpoch_ = pe; worldStructEpoch_ = se; worldMatBuilt_ = true;
+  ++worldMatRebuilds_;
+  bumpStamp();
+  if (tv.n == 0) return;
+  tool::u32 maxIdx = 0; for (std::size_t p = 0; p < tv.n; ++p) maxIdx = std::max(maxIdx, tv.idx[p]);
+  if (renderWorldMatCache_.size() <= maxIdx) renderWorldMatCache_.resize(static_cast<std::size_t>(maxIdx) + 1);
+  const std::uint32_t stamp = renderWorldMatStamp_;
+  WorldMatSlot* slots = renderWorldMatCache_.data();
+  // Raiz = sem Parent ou com Parent invalido (mesma regra de parentOf).
+  const auto parentIdxOf = [&](tool::u32 i, tool::u32& out) -> bool {
+    const Parent* par = cw.getByIndex<Parent>(i);
+    if (!par || !cw.alive(par->e) || par->e.index == i) return false;
+    out = par->e.index; return true;
+  };
+  // Passo 1: raizes (mundo = local).
+  tool::parallelFor(tv.n, 2048, [&](std::size_t b, std::size_t e) {
+    for (std::size_t p = b; p < e; ++p) {
+      const tool::u32 i = tv.idx[p];
+      if (!cw.aliveIndex(i) || cw.dormantAt(i)) continue;
+      tool::u32 pi;
+      if (parentIdxOf(i, pi)) continue;
+      WorldMatSlot& s = slots[i]; s.m = worldMatrix(tv.data[p]); s.gen = cw.generationAt(i); s.stamp = stamp;
+    }
+  });
+  // Passo 2: filhos diretos de uma raiz com Transform (mundo = mundo do pai * local; mesma ordem de produto do calculo sob demanda).
+  tool::parallelFor(tv.n, 2048, [&](std::size_t b, std::size_t e) {
+    for (std::size_t p = b; p < e; ++p) {
+      const tool::u32 i = tv.idx[p];
+      if (!cw.aliveIndex(i) || cw.dormantAt(i)) continue;
+      tool::u32 pi;
+      if (!parentIdxOf(i, pi)) continue;
+      const WorldMatSlot& ps = slots[pi];
+      if (ps.stamp != stamp || ps.gen != cw.generationAt(pi)) continue;   // pai nao e raiz pre-calculada: sai sob demanda
+      WorldMatSlot& s = slots[i]; s.m = ps.m * worldMatrix(tv.data[p]); s.gen = cw.generationAt(i); s.stamp = stamp;
+    }
+  });
+  fillRemaining();   // passo 3 (serial): netos e cadeias profundas; depois disto worldMat() e so-leitura durante o render
+}
+
+// Somas por VALOR dos vetores densos (O(N), paralelas). Nao e o mecanismo de invalidacao: e o VERIFICADOR que pega escrita feita
+// sem passar pela versao do World (ponteiro mutavel guardado e escrito depois). Usado em Debug ao fim de renderScene e no selftest.
+inline Editor::ValueSums Editor::valueSumsNow() {
+  const tool::World& cw = scene.world();
+  ValueSums out;
+  out.tf = worldsig::denseSum(cw, cw.denseView<Transform>());
+  out.par = worldsig::denseSum(cw, cw.denseView<Parent>());
+  const auto mv = cw.denseView<MeshRenderer>();
+  std::atomic<std::uint64_t> total{0};
+  tool::parallelFor(mv.n, 4096, [&](std::size_t b, std::size_t e) {
+    std::uint64_t sum = 0;
+    for (std::size_t p = b; p < e; ++p) {
+      const MeshRenderer& mr = mv.data[p];
+      if (!mr.castShadow) continue;
+      const tool::u32 i = mv.idx[p];
+      if (!cw.aliveIndex(i) || cw.dormantAt(i) || !cw.hasByIndex<Transform>(i)) continue;
+      std::uint64_t h = (static_cast<std::uint64_t>(i) << 32) | cw.generationAt(i);
+      h = worldsig::mix64(h ^ (static_cast<std::uint64_t>(static_cast<std::uint32_t>(mr.shape)) << 8) ^ (static_cast<std::uint64_t>(static_cast<std::uint32_t>(mr.node)) << 24));
+      if (mr.shape == 3) for (const char* c = mr.model; *c && c < mr.model + sizeof mr.model; ++c) h = (h ^ static_cast<unsigned char>(*c)) * 1099511628211ull;
+      sum += h;
+    }
+    total.fetch_add(sum, std::memory_order_relaxed);
+  });
+  out.mr = total.load(std::memory_order_relaxed);
+  const auto iv = cw.denseView<Inactive>();
+  for (std::size_t p = 0; p < iv.n; ++p) out.inactive += worldsig::mix64((static_cast<std::uint64_t>(iv.idx[p]) << 32) | (cw.aliveIndex(iv.idx[p]) ? cw.generationAt(iv.idx[p]) : 0u));
+  return out;
+}
+
+// true = coerente. Amostra as versoes e as somas por valor; se as versoes NAO mudaram desde a amostra anterior, as somas tambem
+// nao podem ter mudado (senao alguem escreveu sem passar pela versao: o cache de matrizes/sombras ficaria velho em silencio).
+inline bool Editor::verifyVersionsByValue() {
+  const tool::World& cw = scene.world();
+  const std::uint64_t tf = cw.epochOf<Transform>(), par = cw.epochOf<Parent>(), mr = cw.epochOf<MeshRenderer>(), in = cw.epochOf<Inactive>(), st = cw.structuralEpoch();
+  const ValueSums now = valueSumsNow();
+  const bool unchanged = versionSample_.valid && versionSample_.tf == tf && versionSample_.par == par && versionSample_.mr == mr && versionSample_.inact == in && versionSample_.st == st;
+  const bool ok = !unchanged || versionSample_.v == now;
+  versionSample_ = VersionSample{tf, par, mr, in, st, now, true};
+  return ok;
+}
+
+// Assinatura dos casters de sombra POR VERSAO: epochs de Transform/Parent/MeshRenderer/Inactive + estrutural + isolamento + malhas
+// internas + modelos carregados (+ voxel chunks, poucos). O(1) em relacao ao numero de objetos; sem laco com worldMat.
+// Limite conhecido: o LOD da esfera por distancia da camera nao entra (para o sol a camera ja esta na assinatura).
+inline std::uint64_t Editor::casterSignatureEpoch() {
+  if (!worldMatBuilt_) beginWorldMatFrame();
+  const tool::World& cw = scene.world();
+  std::uint64_t hs = 1469598103934665603ull;
+  auto mixu = [&](std::uint64_t v) { hs ^= v; hs *= 1099511628211ull; };
+  mixu(cw.epochOf<Transform>()); mixu(cw.epochOf<Parent>()); mixu(cw.epochOf<MeshRenderer>()); mixu(cw.epochOf<Inactive>()); mixu(cw.structuralEpoch());
+  mixu(renderIsolated_ ? 1u : 0u);
+  if (renderIsolated_ && cw.alive(isolatedRoot)) { mixu(isolatedRoot.index); mixu(isolatedRoot.generation); }
+  for (const tool::Mesh* m : {&cube, &sphere, &sphereFar, &plane, &cylinder, &cone, &capsule, &wheel, &triPrism, &hexPrism}) {
+    mixu(m->revision); mixu(m->pos.size()); mixu(m->idx.size());
+  }
+  mixu(lib.meshCount());   // modelo carregado/descartado muda o conjunto de casters desenhaveis
+  scene.world().eachRead<VoxelChunk, Transform>([&](tool::Entity ce, const VoxelChunk& vc, const Transform&) {
+    if ((scene.world().has<Inactive>(ce) || hiddenInView(ce))) return;
+    mixu(ce.index); mixu(ce.generation); mixu(vc.revision); mixu(std::bit_cast<std::uint32_t>(vc.cell));
+    const tool::Mat4 wm = worldMat(ce);
+    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixu(std::bit_cast<std::uint32_t>(wm.m[c][r]));
+  });
+  return hs;
+}
+
 inline tool::Vec3 Editor::worldPos(tool::Entity e) {
-  if (!scene.world().has<Parent>(e)) { const Transform* t = scene.world().get<Transform>(e); return t ? tool::Vec3{t->pos[0], t->pos[1], t->pos[2]} : tool::Vec3{}; }
+  if (!scene.world().has<Parent>(e)) { const Transform* t = std::as_const(scene.world()).get<Transform>(e); return t ? tool::Vec3{t->pos[0], t->pos[1], t->pos[2]} : tool::Vec3{}; }
   const tool::Mat4 m = worldMat(e); return {m.m[3][0], m.m[3][1], m.m[3][2]};
 }
 

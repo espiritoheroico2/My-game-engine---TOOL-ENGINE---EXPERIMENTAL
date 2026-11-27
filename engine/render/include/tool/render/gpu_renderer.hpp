@@ -427,7 +427,23 @@ public:
   void end() {
     if (!open_ || !dev_) return;
     open_ = false;
-    std::stable_sort(draws_.begin(), draws_.end(), [](const Draw& a, const Draw& b) { return a.mesh->vertex.index < b.mesh->vertex.index; });
+    // Ordena por buffer de vertices (mesma ordem estavel de antes). Ordena INDICES de 4 B (chave pre-lida) e move cada Draw
+    // (~230 B) uma unica vez, em vez de mover Draws inteiros ao longo de todas as passadas do stable_sort.
+    // Se a lista ja esta em ordem (caso comum: uma malha so, ou objetos criados por malha) nem ha o que mover.
+    {
+      const size_t n = draws_.size();
+      sortKeys_.resize(n);
+      bool sorted = true;
+      for (size_t i = 0; i < n; ++i) { sortKeys_[i] = draws_[i].mesh->vertex.index; if (i && sortKeys_[i] < sortKeys_[i - 1]) sorted = false; }
+      if (!sorted) {
+        sortOrder_.resize(n);
+        for (size_t i = 0; i < n; ++i) sortOrder_[i] = static_cast<u32>(i);
+        std::stable_sort(sortOrder_.begin(), sortOrder_.end(), [&](u32 a, u32 b) { return sortKeys_[a] < sortKeys_[b]; });
+        // Aplica a permutacao NO LUGAR (seguindo ciclos): so um Draw temporario, sem segundo vetor de ~300 B/objeto
+        // (a versao anterior guardava uma copia inteira e custava ~290 B por entidade de memoria privada).
+        render::applyPermutationInPlace(draws_, sortOrder_);
+      }
+    }
     const Mat4 view = Mat4::lookAt(cam_.eye, cam_.target, cam_.up);
     const Mat4 vp = cam_.projection(static_cast<f32>(w_), static_cast<f32>(h_)) * view;
     const render::Frustum cameraFrustum = render::frustumFromViewProj(vp.m, dev_->backend() != rhi::Backend::GLES);
@@ -913,6 +929,15 @@ public:
   // Total de uploads do BatchCB desde a criacao (um por lote desenhado). Diferenca entre dois quadros = uploads por quadro.
   u64 batchCbUploads() const { return batchCbUploads_; }
 
+  // Libera a textura da GPU de um Texture::id que saiu do cache da CPU (recarga/edicao). Sem isso ficava orfa ate o fim.
+  void forgetTexture(u64 id) {
+    if (!dev_) return;
+    auto it = texs_.find(id);
+    if (it == texs_.end()) return;
+    dev_->destroy(it->second); texs_.erase(it);
+  }
+  size_t cachedTextures() const { return texs_.size(); }
+
   void forget(const Mesh& m) {
     auto it = meshes_.find(&m);
     if (it == meshes_.end()) return;
@@ -1232,6 +1257,7 @@ private:
   Camera cam_; Vec3 clear_; f32 clearAlpha_ = 1.f; f32 cam_zNear_ = 0.1f, cam_zFar_ = 100.f;
   std::vector<Draw> draws_;
   std::vector<Draw> tdraws_;
+  std::vector<u32> sortOrder_, sortKeys_;       // indices e chaves da ordenacao de draws_ em end()
 
   static void fillFog(ObjectCB& oc, const Material& m) {
     oc.fogColor[0] = m.fogColor.x; oc.fogColor[1] = m.fogColor.y; oc.fogColor[2] = m.fogColor.z; oc.fogColor[3] = 0.f;

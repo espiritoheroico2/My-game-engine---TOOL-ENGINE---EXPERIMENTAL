@@ -74,6 +74,22 @@ inline double processMemoryMB() {
 #endif
 }
 
+// Pico de memoria PRIVADA do processo em MB (commit: PeakPagefileUsage no Windows; VmPeak/VmHWM no Linux). Melhor que o working set,
+// que conta paginas compartilhadas/de driver. 0 se nao suportado.
+inline double processPrivatePeakMB() {
+#if defined(_WIN32)
+  PROCESS_MEMORY_COUNTERS_EX pmc{};
+  if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof pmc)) return static_cast<double>(pmc.PeakPagefileUsage) / (1024.0 * 1024.0);
+  return 0.0;
+#elif defined(__linux__)
+  long kb = 0; char line[256];
+  if (FILE* f = std::fopen("/proc/self/status", "r")) { while (std::fgets(line, sizeof line, f)) if (std::sscanf(line, "VmHWM: %ld kB", &kb) == 1) break; std::fclose(f); }
+  return static_cast<double>(kb) / 1024.0;
+#else
+  return 0.0;
+#endif
+}
+
 struct FrameCounters {            // zerados a cada quadro
   unsigned views = 0;             // quantas imagens 3D foram renderizadas (Scene + Game, 1 ou 2 cameras)
   unsigned long long pixels = 0;  // pixels renderizados

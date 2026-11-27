@@ -114,6 +114,13 @@ inline constexpr int kShadowQualityCount = 4;
     return 3;
 }
 
+// Chave de traducao (em ingles) da linha de status do ray tracing por GPU: "indisponivel" quando o dispositivo
+// nao tem RT, "disponivel" caso contrario. So texto; nao muda o render.
+[[nodiscard]] inline const char* RayTracingGpuStatusKey(bool gpuSupportsRayTracing) noexcept {
+    return gpuSupportsRayTracing ? "GPU ray tracing: available"
+                                 : "GPU ray tracing: unavailable (RHI has no RT yet; phase F1)";
+}
+
 // Resolucao do mapa de sombra do degrau: 512 vezes 2 elevado ao indice.
 [[nodiscard]] inline std::uint32_t ShadowResolution(int index) noexcept {
     return 512u << ClampChoice(index, kShadowQualityCount);

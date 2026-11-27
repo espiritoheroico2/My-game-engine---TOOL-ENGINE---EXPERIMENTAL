@@ -23,7 +23,8 @@ target_link_libraries(tool_newtoon_scale_test PRIVATE tool::physics)
 
 # Fisica Newtoon (2D e 3D): executavel proprio, para validar a fisica sem depender do tool_tests (que tem o SpriteUI).
 add_executable(tool_physics_tests main.cpp test_newtoon_jobs.cpp test_newtoon_bvh.cpp test_newtoon_advanced.cpp
-  test_newtoon_2d.cpp test_newtoon_module_smoke.cpp test_newtoon_hull.cpp)
+  test_newtoon_2d.cpp test_newtoon_module_smoke.cpp test_newtoon_hull.cpp test_newtoon_convex.cpp
+  test_newtoon_raycast.cpp test_newtoon_cylinder.cpp)
 target_link_libraries(tool_physics_tests PRIVATE tool::physics)
 add_test(NAME tool_physics_tests COMMAND tool_physics_tests)
 
@@ -38,3 +39,9 @@ target_link_libraries(tool_particles_tests PRIVATE tool::particles)
 add_test(NAME Particles.Core COMMAND tool_particles_tests)
 add_executable(tool_particles_bench particles_bench.cpp)
 target_link_libraries(tool_particles_bench PRIVATE tool::particles)
+
+# PROTOTIPO de fisica de esferas na GPU (compute, Vulkan offscreen): so mede custo/viabilidade, sem add_test (rodar manualmente).
+if(TOOL_WITH_DILIGENT)
+  add_executable(tool_gpu_sphere_physics_bench gpu_sphere_physics_bench.cpp)
+  target_link_libraries(tool_gpu_sphere_physics_bench PRIVATE tool::rhi_diligent)
+endif()

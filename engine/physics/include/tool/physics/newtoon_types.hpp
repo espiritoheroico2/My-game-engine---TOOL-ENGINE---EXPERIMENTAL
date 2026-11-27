@@ -11,6 +11,10 @@
 
 namespace Newtoon {
 
+// Declaracoes antecipadas (definidas em newtoon_hull.hpp): o Collider so guarda ponteiros.
+struct ConvexHull;
+struct HullLodSet;
+
 using Entity = uint32_t;
 // Valor que indica 'nenhuma entidade'.
 constexpr Entity kNoEntity = 0xFFFFFFFFu;
@@ -57,6 +61,19 @@ bool hit = false;
 Vec3 point, normal;
 float distance = 0.f;
 Entity entity = kNoEntity;
+int triangleIndex = -1;  // indice do triangulo (reservado para malha estatica; -1 nas formas convexas)
+};
+
+// Como a consulta (raycast) trata colliders gatilho (como o QueryTriggerInteraction do Unity).
+//  Collide = acerta gatilhos; Ignore = ignora gatilhos; UseGlobal = segue PhysicsWorld::queryTriggersByDefault.
+enum class QueryTriggerInteraction : uint8_t { Collide, Ignore, UseGlobal };
+
+// Filtro de consultas espaciais (Raycast/RaycastAll).
+struct RaycastFilter {
+uint32_t layerMask = 0xFFFFFFFFu;                                    // bit i ligado = camada i participa (padrao: todas)
+Entity ignore = kNoEntity;                                           // entidade a ignorar (ex.: o proprio atirador)
+QueryTriggerInteraction triggers = QueryTriggerInteraction::UseGlobal;
+bool ignoreBackface = false;                                         // true = nao acerta quando o raio nasce DENTRO da forma
 };
 
 // Transformacao espacial de cada entidade passada para PhysicsWorld::Simulate.
@@ -164,10 +181,22 @@ ShapeType type = ShapeType::Box;
 uint16_t materialId = 0;
 Vec3 extents{0.5f, 0.5f, 0.5f};      // meia-medida da caixa (ja com a escala do objeto)
 float radius = 0.5f;                 // esfera
-float height = 1.f;                  // reservado (cilindro)
+float height = 1.f;                  // reservado
+// Cilindro (ShapeType::Cylinder): eixo Y local, raio = `radius`, meia altura = `halfHeight`.
+// Se halfHeight < 0 (padrao), usa extents.y como meia altura.
+float halfHeight = -1.f;
 Vec3 offset{0.f, 0.f, 0.f};          // deslocamento do centro no espaco do corpo
 bool isTrigger = false;              // detecta sem empurrar
+uint32_t layer = 0;                  // camada (0..31) usada pelo layerMask das consultas (raycast)
 void* customMesh = nullptr;          // reservado
+// Casco convexo (ShapeType::CustomConvex). Os pontos do casco estao no espaco do corpo (origem = posicao do corpo);
+// `offset` e IGNORADO pela narrowphase nesse tipo. `hullScale` multiplica os pontos (escala do objeto).
+// Se `hullLods` != nullptr e o mundo tem foco (PhysicsWorld::setCollisionFocus), o nivel e escolhido pela distancia;
+// senao vale `hull` (ou o nivel mais detalhado de `hullLods` quando `hull` e nulo). Sem casco solido: cai para a
+// caixa `extents`. Os ponteiros sao do chamador (normalmente o HullCache) e devem viver mais que o mundo.
+const ConvexHull* hull = nullptr;
+const HullLodSet* hullLods = nullptr;
+Vec3 hullScale{1.f, 1.f, 1.f};
 };
 
 // Calcula massa/inercia a partir da forma (caixa ou esfera solidas). Retorna sem mudar nada se mass <= 0 (corpo est
@@ -178,6 +207,15 @@ if (c.type == ShapeType::Sphere) {
 const float r = std::max(c.radius, 1e-4f);
 const float i = 0.4f * mass * r * r;
 rb.inverseInertiaLocal = {1.f / i, 1.f / i, 1.f / i};
+return;
+}
+if (c.type == ShapeType::Cylinder) {
+// Cilindro solido de eixo Y: Iy = m r^2 / 2; Ix = Iz = m (3 r^2 + h^2) / 12, com h = 2 * meia altura.
+const float r = std::max(c.radius, 1e-4f);
+const float h = 2.f * std::max(c.halfHeight >= 0.f ? c.halfHeight : c.extents.y, 1e-4f);
+const float iy = 0.5f * mass * r * r;
+const float ixz = mass * (3.f * r * r + h * h) / 12.f;
+rb.inverseInertiaLocal = {1.f / ixz, 1.f / iy, 1.f / ixz};
 return;
 }
 const Vec3 e = {std::max(c.extents.x, 1e-4f), std::max(c.extents.y, 1e-4f), std::max(c.extents.z, 1e-4f)};

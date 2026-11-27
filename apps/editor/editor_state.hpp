@@ -50,6 +50,7 @@
 #include <SDL3/SDL.h>
 
 #include <atomic>
+#include <cassert>
 #include <cstring>
 #include <array>
 
@@ -259,8 +260,30 @@ struct Editor {
   struct Bounds { tool::Vec3 center{}; float radius = 0.f; };
   struct BoundsEntry { size_t n = 0; const void* data = nullptr; tool::u32 revision = 0; Bounds b; };
   std::unordered_map<const tool::Mesh*, BoundsEntry> boundsCache_;   // esfera de cada malha (para o frustum culling)
-  std::unordered_map<std::uint64_t, tool::Mat4> renderWorldMatCache_; // matrizes reutilizadas durante a preparacao de cada vista
+  // Cache de matrizes mundiais por quadro de preparacao: vetor plano indexado por e.index (sem alocar no por objeto).
+  // Uma entrada vale se `stamp` == renderWorldMatStamp_ e a geracao confere; limpar o cache = ++stamp (O(1)).
+  struct WorldMatSlot { tool::Mat4 m; std::uint32_t gen = 0; std::uint32_t stamp = 0; };
+  std::vector<WorldMatSlot> renderWorldMatCache_;
+  std::uint32_t renderWorldMatStamp_ = 0;
   bool renderWorldMatCacheActive_ = false;
+  // Hash dos casters de sombra calculado uma vez por vista e compartilhado entre a assinatura do sol e a das luzes pontuais.
+  // Assinaturas por valor dos vetores densos de Transform e Parent (ver beginWorldMatFrame): o cache de matrizes mundiais
+  // vale ENTRE quadros e vistas enquanto elas nao mudarem. Exatas para qualquer caminho de escrita (nao dependem de API).
+  // VERSOES vistas na ultima construcao do cache (World::epochOf / structuralEpoch): sem mudanca = cache valido, custo O(1).
+  std::uint64_t worldTxEpoch_ = 0, worldParEpoch_ = 0, worldStructEpoch_ = 0; bool worldMatBuilt_ = false;
+  std::atomic<unsigned> worldMatMisses_{0};   // falhas de cache em worldMat() desde o ultimo zerar (o bench imprime por quadro)
+  unsigned long long worldMatRebuilds_ = 0;   // quantas vezes o cache foi reconstruido (versao mudou)
+  unsigned long long worldMatMissTotal_ = 0;  // soma das falhas de cache (antes de zerar a cada vista)
+  void beginWorldMatFrame();   // valida/reconstroi o cache de matrizes mundiais (editor_hier.hpp)
+  std::uint64_t casterSignatureEpoch();   // assinatura dos casters por VERSAO, O(1) + O(voxel chunks) (ver casterHash)
+  // Verificador por VALOR (nao e o mecanismo): somas dos vetores densos para pegar escrita sem passar pela versao.
+  struct ValueSums { std::uint64_t tf = 0, par = 0, mr = 0, inactive = 0; bool operator==(const ValueSums&) const = default; };
+  ValueSums valueSumsNow();
+  struct VersionSample { std::uint64_t tf = 0, par = 0, mr = 0, inact = 0, st = 0; ValueSums v; bool valid = false; } versionSample_;
+  // true = coerente: se nenhuma versao mudou desde a amostra anterior, as somas por valor tambem nao mudaram.
+  bool verifyVersionsByValue();
+  std::uint64_t casterHashFrame_ = 0; bool casterHashFrameValid_ = false;
+  tool::Vec3 casterHashCamEye_{};   // olho da camera para a qual casterHashFrame_ foi calculado
   std::unique_ptr<LightPrism::Rt::Bvh> rtBvh_;                         // BVH da cena para o RT AO (CPU); refeito so se a cena mudou
   std::uint64_t rtSig_ = 0; bool rtHave_ = false;
   std::uint64_t psigCpu[2] = {0, 0}; bool psigCpuValid[2] = {false, false};   // assinatura das sombras de pontual/spot (CPU), por vista (0 = Scene, 1 = Game)
@@ -407,7 +430,10 @@ struct Editor {
   std::string themeStatus, langStatus;
   bool themeDirty = false, langDirty = false, settingsDirty = false;
 
-  Editor() { lib.onMeshForget = [this](const tool::Mesh* m) { if (apiActive != 0) gpu.forget(*m); }; }
+  Editor() {
+    lib.onMeshForget = [this](const tool::Mesh* m) { if (apiActive != 0) gpu.forget(*m); };
+    lib.onTextureForget = [this](tool::u64 id) { if (apiActive != 0) gpu.forgetTexture(id); };   // textura editada/recarregada: libera a antiga na GPU
+  }
 
   // ---------------------------------------------------------------- API grafica
   void shutdownGpu() {
@@ -596,6 +622,7 @@ struct Editor {
   void destroy(tool::Entity e);                     // apaga o objeto e todos os seus filhos (editor_hier.hpp)
   // --- hierarquia pai/filho (editor_hier.hpp) ---
   tool::Entity parentOf(tool::Entity e);            // pai valido ou {}
+  tool::Mat4 worldMatWalk(tool::Entity e);          // matriz de mundo sem cache (sobe a cadeia de pais)
   tool::Mat4 worldMat(tool::Entity e);              // matriz de mundo (compoe os pais; sem pai = a propria)
   tool::Vec3 worldPos(tool::Entity e);
   bool findNamed(const std::string& name, tool::Entity& out);  // primeiro objeto com esse nome (Name)
@@ -738,7 +765,7 @@ struct Editor {
   std::vector<tool::Entity> principalCameras() {
     std::vector<tool::Entity> out;
     const auto ids = tagIdsFor("Principal");
-    scene.world().each<CameraComp, Transform>([&](tool::Entity e, CameraComp&, Transform&) {
+    scene.world().eachRead<CameraComp, Transform>([&](tool::Entity e, const CameraComp&, const Transform&) {
       const tool::TagMask m = scene.world().tagMask(e);
       for (auto id : ids) if (m.test(id)) { out.push_back(e); return; }
     });
@@ -862,7 +889,7 @@ struct Editor {
       if (sunIdx) *sunIdx = static_cast<int>(lights.size());
       lights.push_back(l); ambient = {g.ambient[0], g.ambient[1], g.ambient[2]};
     });
-    scene.world().each<LightComp, Transform>([&](tool::Entity le, LightComp& lc, Transform&) { if (scene.world().has<Inactive>(le)) return; tool::Light l = lc.light; l.position = worldPos(le); if (lc.syncRot) l.direction = lightDir(le, lc); lights.push_back(l); }); // castShadow vem do inspector: as N luzes mais proximas recebem sombra (LightRig)
+    scene.world().eachRead<LightComp, Transform>([&](tool::Entity le, const LightComp& lc, const Transform&) { if (scene.world().has<Inactive>(le)) return; tool::Light l = lc.light; l.position = worldPos(le); if (lc.syncRot) l.direction = lightDir(le, lc); lights.push_back(l); }); // castShadow vem do inspector: as N luzes mais proximas recebem sombra (LightRig)
   }
   const tool::Mesh* meshOf(const MeshRenderer& mr, tool::Vec3* tint = nullptr) {
     if (mr.shape == 3) return mr.node >= 0 ? lib.nodeMesh(mr.model, mr.node) : lib.mesh(mr.model, tint);
@@ -894,7 +921,7 @@ struct Editor {
     std::uint64_t hs = 1469598103934665603ull;
     auto mixu = [&](std::uint64_t v) { hs ^= v; hs *= 1099511628211ull; };
     auto mixf = [&](float f) { std::uint32_t b; std::memcpy(&b, &f, 4); mixu(b); };
-    scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+    scene.world().eachRead<MeshRenderer, Transform>([&](tool::Entity e, const MeshRenderer& mr, const Transform&) {
       if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
       const tool::Mesh* m = meshOf(mr); if (!m) return;
       mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m));
@@ -920,14 +947,33 @@ struct Editor {
     for (const tool::Vec3* v : {&cam.eye, &cam.target, &cam.up}) { mixf(v->x); mixf(v->y); mixf(v->z); }
     mixf(cam.fovY); mixf(cam.nearZ); mixf(cam.farZ); mixu(cam.ortho ? 1u : 0u); mixf(cam.orthoHeight);
     mixu(static_cast<std::uint64_t>(w)); mixu(static_cast<std::uint64_t>(h));
-    hashCasters(cam, mixu, mixf);
+    mixu(casterHash(cam));
+    return hs;
+  }
+
+  // Hash de todos os casters. Dentro de renderScene e calculado UMA vez por vista (o sol e as luzes pontuais
+  // compartilham o resultado: antes o laco O(N) rodava duas vezes por quadro). Fora do renderScene, sempre recalcula.
+  std::uint64_t casterHash(const tool::Camera& cam) {
+    // O valor em cache so vale para a MESMA camera (o LOD da esfera depende da posicao do olho): se a camera mudou
+    // dentro da mesma vista, recalcula em vez de devolver um hash de outra camera.
+    const bool sameCam = casterHashCamEye_.x == cam.eye.x && casterHashCamEye_.y == cam.eye.y && casterHashCamEye_.z == cam.eye.z;
+    if (renderWorldMatCacheActive_ && casterHashFrameValid_ && sameCam) return casterHashFrame_;
+    std::uint64_t hs = 1469598103934665603ull;
+    if (renderWorldMatCacheActive_) {
+      hs = casterSignatureEpoch();   // por VERSAO dos componentes: sem varrer a cena
+    } else {
+      auto mixu = [&](std::uint64_t v) { hs ^= v; hs *= 1099511628211ull; };
+      auto mixf = [&](float f) { std::uint32_t b; std::memcpy(&b, &f, 4); mixu(b); };
+      hashCasters(cam, mixu, mixf);
+    }
+    if (renderWorldMatCacheActive_) { casterHashFrame_ = hs; casterHashFrameValid_ = true; casterHashCamEye_ = cam.eye; }
     return hs;
   }
 
   // Quem projeta sombra (objetos ativos com castShadow e chunks), incluindo revisao da malha e transformacao mundial.
   template <class MU, class MF>
   void hashCasters(const tool::Camera& cam, MU&& mixu, MF&& mixf) {
-    scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+    scene.world().eachRead<MeshRenderer, Transform>([&](tool::Entity e, const MeshRenderer& mr, const Transform&) {
       if ((scene.world().has<Inactive>(e) || hiddenInView(e)) || !mr.castShadow) return;
       const tool::Mesh* m = lodMeshOf(e, mr, cam); if (!m) return;
       mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m));
@@ -935,7 +981,7 @@ struct Editor {
       const tool::Mat4 wm = worldMat(e);
       for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(wm.m[c][r]);
     });
-    scene.world().each<VoxelChunk, Transform>([&](tool::Entity ce, VoxelChunk& vc, Transform&) {
+    scene.world().eachRead<VoxelChunk, Transform>([&](tool::Entity ce, const VoxelChunk& vc, const Transform&) {
       if ((scene.world().has<Inactive>(ce) || hiddenInView(ce))) return;
       mixu(ce.index); mixu(ce.generation); mixu(vc.revision); mixf(vc.cell);
       const tool::Mat4 wm = worldMat(ce);
@@ -954,7 +1000,7 @@ struct Editor {
       mixu(static_cast<std::uint64_t>(sl.type)); mixu(sl.faces); mixf(sl.range); mixf(sl.nearZ);
       for (tool::u32 f = 0; f < sl.faces; ++f) for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(sl.vp[f].m[c][r]);
     }
-    hashCasters(cam, mixu, mixf);
+    mixu(casterHash(cam));
     return hs;
   }
 
@@ -1006,9 +1052,14 @@ private:
   const tool::u8* renderScene(const tool::Camera& cam, int w, int h, bool highlight, int vi, std::size_t gameGridSlot) {
     renderIsolated_ = vi == 0;
     struct IsoGuard { bool& f; ~IsoGuard() { f = false; } } isoGuard{renderIsolated_};
-    renderWorldMatCache_.clear();
-    renderWorldMatCache_.reserve(8192);
+    casterHashFrameValid_ = false;
     renderWorldMatCacheActive_ = true;
+    beginWorldMatFrame();   // reaproveita as matrizes do quadro/vista anterior se as VERSOES de Transform/Parent nao mudaram; senao recalcula (em paralelo)
+#ifndef NDEBUG
+    // Debug: ao fim da vista, as somas por valor devem ser as do inicio (escrita em Transform/Parent no meio do render deixaria o cache velho).
+    const ValueSums sumsAtBegin = valueSumsNow();
+    struct EndCheck { Editor& ed; ValueSums s0; ~EndCheck() { assert(ed.valueSumsNow() == s0 && "Transform/Parent/MeshRenderer escritos durante renderScene: cache de matrizes/sombras velho"); } } endCheck{*this, sumsAtBegin};
+#endif
     struct RenderWorldMatCacheGuard {
       Editor& editor;
       ~RenderWorldMatCacheGuard() { editor.renderWorldMatCacheActive_ = false; }
@@ -1053,18 +1104,30 @@ private:
     // Materiais do projeto: o cache le o disco uma vez e confere mudancas 1x por segundo (nunca por objeto/quadro).
     const std::string matRoot = project.root.string();
     materials.poll(matRoot);
+    // Resolucao de assets por quadro SEM lookup de string por objeto: objetos vizinhos quase sempre usam o mesmo
+    // caminho; guardamos o ultimo (chave de ate 160 B, comparada com strcmp) e o ponteiro resolvido. Vale so dentro
+    // desta preparacao de vista (nenhum asset e recarregado no meio dela), entao nao ha resultado velho.
+    struct AssetMemo { std::string key; bool valid = false; const void* ptr = nullptr; };   // chave std::string: sem truncar caminhos longos
+    AssetMemo texMemo, nmMemo, matMemo;
+    auto memoLookup = [](AssetMemo& memo, const char* key, auto&& resolve) -> const void* {
+      if (memo.valid && memo.key == key) return memo.ptr;
+      memo.ptr = resolve(); memo.valid = true; memo.key = key;
+      return memo.ptr;
+    };
     auto material = [&](tool::Entity e, const MeshRenderer& mr) {
       tool::Material m{{mr.color[0], mr.color[1], mr.color[2]}, mr.roughness, mr.metallic, mr.castShadow, mr.receiveShadow};
       m.emissive = emissionOf(mr); m.opacity = mr.opacity; applyFog(m, mr);
       // Com material atribuido (e encontrado) ele manda em cor, rugosidade, metalico, emissao e opacidade; sem ele, campos locais.
-      const material_asset::MaterialAsset* ma = mr.material[0] ? materials.find(matRoot, mr.material) : nullptr;
+      const material_asset::MaterialAsset* ma = mr.material[0]
+          ? static_cast<const material_asset::MaterialAsset*>(memoLookup(matMemo, mr.material, [&]() -> const void* { return materials.find(matRoot, mr.material); }))
+          : nullptr;
       // Campos avancados locais (normal map, UV, cutoff, dupla face); com material encontrado, applyMaterialAsset sobrepoe.
       m.normalStrength = mr.normalStrength; m.doubleSided = mr.doubleSided;
       m.uvTiling[0] = mr.uvTiling[0]; m.uvTiling[1] = mr.uvTiling[1]; m.uvOffset[0] = mr.uvOffset[0]; m.uvOffset[1] = mr.uvOffset[1];
       m.alphaCutoff = mr.alphaCutoff;
       if (ma) applyMaterialAsset(m, *ma);
-      if (const char* tex = textureOf(mr, ma); tex[0]) m.albedoMap = lib.texture(tex);
-      if (const char* nm = ma ? normalMapOf(ma) : mr.normalMap; nm[0]) m.normalMap = lib.texture(nm);   // normal map (nullptr se nao carregou)
+      if (const char* tex = textureOf(mr, ma); tex[0]) m.albedoMap = static_cast<decltype(m.albedoMap)>(memoLookup(texMemo, tex, [&]() -> const void* { return lib.texture(tex); }));
+      if (const char* nm = ma ? normalMapOf(ma) : mr.normalMap; nm[0]) m.normalMap = static_cast<decltype(m.normalMap)>(memoLookup(nmMemo, nm, [&]() -> const void* { return lib.texture(nm); }));   // normal map (nullptr se nao carregou)
       if (highlight && e == selected) m.albedo = m.albedo * 1.25f;
       return m;
     };
@@ -1116,7 +1179,7 @@ private:
       const float tanHalfFov = std::tan(0.5f * cam.fovY);
       const tool::Mat4 occVp = proj * view;
       occ.begin(static_cast<tool::u32>(w), static_cast<tool::u32>(h), occVp);
-      scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+      scene.world().eachRead<MeshRenderer, Transform>([&](tool::Entity e, const MeshRenderer& mr, const Transform&) {
         if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
         const tool::Mesh* m = lodMeshOf(e, mr, cam);
         if (!m || m->idx.size() / 3 > kOccluderMaxTris) return;
@@ -1257,7 +1320,7 @@ private:
         }
         {
           ZoneTimer drawListTimer(prof, Zone::DrawList);
-          scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+          scene.world().eachRead<MeshRenderer, Transform>([&](tool::Entity e, const MeshRenderer& mr, const Transform&) {
             if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
             pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); gpu.draw(m, worldMat(e), mat); });
           });
@@ -1336,7 +1399,7 @@ private:
     }
     {
       ZoneTimer drawListTimer(prof, Zone::DrawList);
-      scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+      scene.world().eachRead<MeshRenderer, Transform>([&](tool::Entity e, const MeshRenderer& mr, const Transform&) {
         if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
         pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); renderer.draw(m, worldMat(e), mat); });
       });
@@ -1349,7 +1412,7 @@ private:
       const std::uint64_t sig = rtSignature();
       if (!rtBvh_ || sig != rtSig_) {
         std::vector<LightPrism::Rt::Triangle> rtTris;
-        scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
+        scene.world().eachRead<MeshRenderer, Transform>([&](tool::Entity e, const MeshRenderer& mr, const Transform&) {
           if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
           const tool::Mesh* m = meshOf(mr);
           if (!m) return;
@@ -1388,7 +1451,7 @@ public:
   void updateListener() {
     tool::Entity ear;
     for (auto e : principalCameras()) if (scene.world().get<CameraComp>(e)->soundEar) { ear = e; break; }
-    if (!scene.world().alive(ear)) scene.world().each<CameraComp, Transform>([&](tool::Entity e, CameraComp& c, Transform&) { if (!scene.world().alive(ear) && c.soundEar) ear = e; });
+    if (!scene.world().alive(ear)) scene.world().eachRead<CameraComp, Transform>([&](tool::Entity e, const CameraComp& c, const Transform&) { if (!scene.world().alive(ear) && c.soundEar) ear = e; });
     tool::Listener l; float vol = 1.f;
     if (scene.world().alive(ear)) {
       const tool::Camera ec = cameraFor(ear); l.x = ec.eye.x; l.y = ec.eye.y; l.z = ec.eye.z;

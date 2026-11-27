@@ -7,9 +7,11 @@
 #include "newtoon_types.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <mutex>
 #include <vector>
 
 namespace Newtoon {
@@ -105,6 +107,7 @@ struct Collider2D {
   float radius = 0.5f;
   Vec2 offset{0.f, 0.f};
   bool isTrigger = false;
+  uint32_t layer = 0;      // camada (0..31) para o layerMask do raycast
 };
 
 inline void SetMassFromShape2D(Rigidbody2D& rb, const Collider2D& c, float mass) {
@@ -182,13 +185,55 @@ class PhysicsWorld2D {
     if (steps == 0 && cache_.size() != n) Prepare(tf, col, n);
   }
 
-  RaycastHit2D Raycast(const Vec2& origin, const Vec2& dirIn, float maxDistance, Entity ignore = kNoEntity) const {
+  // Valor de QueryTriggerInteraction::UseGlobal: true = raios acertam gatilhos.
+  bool queryTriggersByDefault = true;
+
+  // RAYCAST 2D com BVH: a arvore de caixas e (re)construida de forma PREGUICOSA na primeira consulta depois de cada
+  // passo (nao custa nada em quem nao usa raycast). Resultado igual ao da varredura O(N) (RaycastBruteForce); em
+  // empate exato de distancia vence a maior entidade, como na varredura. Seguro para varias threads consultando.
+  RaycastHit2D Raycast(const Vec2& origin, const Vec2& dirIn, float maxDistance, const RaycastFilter& filter) const {
+    RaycastHit2D best;
+    const Vec2 d = Normalized(dirIn);
+    if (d.SqrMagnitude() < 0.5f) return best;
+    EnsureRayBVH();
+    if (rayNodes_.empty()) return best;
+    float maxT = maxDistance;
+    const Vec2 inv{std::fabs(d.x) > 1e-12f ? 1.f / d.x : 1e12f, std::fabs(d.y) > 1e-12f ? 1.f / d.y : 1e12f};
+    int stack[64]; int sp = 0; stack[sp++] = 0;
+    while (sp > 0) {
+      const RayNode2D& n = rayNodes_[static_cast<size_t>(stack[--sp])];
+      if (n.left >= 0) {
+        // No interno: caixa x raio (slab). Descarta a subarvore se o raio nao a toca antes de maxT. A margem de
+        // 1e-4 evita descartar por erro de arredondamento (a multiplicacao por 1/d difere da divisao em ~1 ulp).
+        float t0 = 0.f, t1 = maxT;
+        { const float a = (n.box.min.x - origin.x) * inv.x, b = (n.box.max.x - origin.x) * inv.x; t0 = std::max(t0, std::min(a, b)); t1 = std::min(t1, std::max(a, b)); }
+        { const float a = (n.box.min.y - origin.y) * inv.y, b = (n.box.max.y - origin.y) * inv.y; t0 = std::max(t0, std::min(a, b)); t1 = std::min(t1, std::max(a, b)); }
+        if (t0 > t1 + 1e-4f) continue;
+        if (sp < 62) { stack[sp++] = n.left; stack[sp++] = n.right; }
+        continue;
+      }
+      // Folha: vai direto ao teste exato da forma (sem repetir o teste de caixa).
+      const Entity e = n.entity;
+      float t = 0.f; Vec2 nrm{};
+      if (!RayBody2D(e, origin, d, maxT, filter, t, nrm)) continue;
+      if (best.hit && t == best.distance && e < best.entity) continue;   // empate: maior entidade (igual a varredura)
+      maxT = t; best.hit = true; best.distance = t; best.entity = e; best.normal = nrm; best.point = origin + d * t;
+    }
+    return best;
+  }
+  RaycastHit2D Raycast(const Vec2& origin, const Vec2& dir, float maxDistance, Entity ignore = kNoEntity) const {
+    RaycastFilter f; f.ignore = ignore;
+    return Raycast(origin, dir, maxDistance, f);
+  }
+
+  // Referencia O(N) (a varredura original), com o mesmo filtro. Usada nos testes para validar a BVH e medir o ganho.
+  RaycastHit2D RaycastBruteForce(const Vec2& origin, const Vec2& dirIn, float maxDistance, const RaycastFilter& filter) const {
     RaycastHit2D best;
     const Vec2 d = Normalized(dirIn);
     if (d.SqrMagnitude() < 0.5f) return best;
     float maxT = maxDistance;
     for (size_t i = 0; i < cache_.size(); ++i) {
-      if (static_cast<Entity>(i) == ignore) continue;
+      if (!BodyPassesFilter2D(static_cast<Entity>(i), filter)) continue;
       const AABB2D& box = boxes_[i];
       // Teste rapido contra AABB 2D
       float tmin = 0.f, tmax = maxT;
@@ -230,7 +275,57 @@ class PhysicsWorld2D {
     Vec2 e{0.5f, 0.5f};
     float r = 0.5f;
     bool circle = false;
+    uint32_t layer = 0;      // camada do collider (layerMask das consultas)
+    bool trigger = false;    // collider gatilho (QueryTriggerInteraction)
   };
+
+  // No da BVH 2D de raycast: folha quando left < 0 (usa `entity`); senao filhos left/right.
+  struct RayNode2D { AABB2D box; int left = -1, right = -1; Entity entity = kNoEntity; };
+
+  // Filtro por corpo: entidade ignorada, camada e gatilho.
+  bool BodyPassesFilter2D(Entity e, const RaycastFilter& f) const {
+    if (e >= cache_.size() || e == f.ignore) return false;
+    const Shape2D& S = cache_[e];
+    if (((f.layerMask >> (S.layer & 31u)) & 1u) == 0u) return false;
+    if (S.trigger && (f.triggers == QueryTriggerInteraction::Ignore ||
+                      (f.triggers == QueryTriggerInteraction::UseGlobal && !queryTriggersByDefault))) return false;
+    return true;
+  }
+  bool RayBody2D(Entity e, const Vec2& o, const Vec2& d, float maxT, const RaycastFilter& f, float& t, Vec2& n) const {
+    return BodyPassesFilter2D(e, f) && RayShape2D(cache_[e], o, d, maxT, t, n);
+  }
+
+  // Constroi (se estiver desatualizada) a BVH 2D de caixas: divisao pela mediana no eixo maior (nth_element).
+  void EnsureRayBVH() const {
+    if (!rayDirty_.load(std::memory_order_acquire)) return;
+    std::lock_guard<std::mutex> lock(rayMutex_);
+    if (!rayDirty_.load(std::memory_order_relaxed)) return;
+    rayNodes_.clear();
+    rayIds_.resize(boxes_.size());
+    for (size_t i = 0; i < rayIds_.size(); ++i) rayIds_[i] = static_cast<Entity>(i);
+    if (!rayIds_.empty()) BuildRayRange(0, rayIds_.size());
+    rayDirty_.store(false, std::memory_order_release);
+  }
+  int BuildRayRange(size_t b, size_t e) const {
+    const int idx = static_cast<int>(rayNodes_.size()); rayNodes_.emplace_back();
+    AABB2D bb = boxes_[rayIds_[b]];
+    for (size_t i = b + 1; i < e; ++i) {
+      const AABB2D& x = boxes_[rayIds_[i]];
+      bb.min = {std::min(bb.min.x, x.min.x), std::min(bb.min.y, x.min.y)};
+      bb.max = {std::max(bb.max.x, x.max.x), std::max(bb.max.y, x.max.y)};
+    }
+    rayNodes_[static_cast<size_t>(idx)].box = bb;
+    if (e - b == 1) { rayNodes_[static_cast<size_t>(idx)].entity = rayIds_[b]; return idx; }
+    const bool axisX = (bb.max.x - bb.min.x) >= (bb.max.y - bb.min.y);
+    const size_t mid = (b + e) / 2;
+    std::nth_element(rayIds_.begin() + static_cast<long>(b), rayIds_.begin() + static_cast<long>(mid), rayIds_.begin() + static_cast<long>(e), [&](Entity p, Entity q) {
+      const AABB2D &u = boxes_[p], &v = boxes_[q];
+      return axisX ? (u.min.x + u.max.x < v.min.x + v.max.x) : (u.min.y + u.max.y < v.min.y + v.max.y);
+    });
+    const int l = BuildRayRange(b, mid), r = BuildRayRange(mid, e);
+    rayNodes_[static_cast<size_t>(idx)].left = l; rayNodes_[static_cast<size_t>(idx)].right = r;
+    return idx;
+  }
 
   struct Pt2D { Vec2 p, n; float depth = 0.f; };
 
@@ -258,8 +353,10 @@ class PhysicsWorld2D {
   void Prepare(const std::vector<Transform2D>& tf, const std::vector<Collider2D>& col, size_t n) {
     cache_.resize(n);
     boxes_.resize(n);
+    rayDirty_.store(true, std::memory_order_release);   // as caixas mudam: a BVH de raycast sera refeita na proxima consulta
     for (size_t i = 0; i < n; ++i) {
       Shape2D& s = cache_[i];
+      s.layer = col[i].layer; s.trigger = col[i].isTrigger;
       s.rot = Rot2::FromAngle(tf[i].rotation);
       const Vec2 off{col[i].offset.x * tf[i].scale.x, col[i].offset.y * tf[i].scale.y};
       s.c = tf[i].position + s.rot.Rotate(off);
@@ -669,6 +766,11 @@ class PhysicsWorld2D {
   std::vector<Entity> activeIndices_;
   std::vector<Shape2D> cache_;
   std::vector<AABB2D> boxes_;
+  // BVH 2D de raycast (preguicosa; mutable porque e construida dentro de Raycast const, protegida por mutex).
+  mutable std::vector<RayNode2D> rayNodes_;
+  mutable std::vector<Entity> rayIds_;
+  mutable std::mutex rayMutex_;
+  mutable std::atomic<bool> rayDirty_{true};
   std::vector<Entity> sorted_;
   std::vector<std::pair<Entity, Entity>> pairs_;
   std::vector<Contact2D> contacts_;

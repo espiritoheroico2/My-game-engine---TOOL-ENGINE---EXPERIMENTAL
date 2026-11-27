@@ -26,13 +26,23 @@ inline Newtoon::Collider Editor::colliderFor(tool::Entity e) {
     if (p && p->simplifiedHull) {
       // Modo "Simplified hull": usa a capa simplificada (<= kDefaultHullMaxPoints pontos) guardada no cache por malha
       // (chave = ponteiro + numero de vertices), sem varrer todos os vertices a cada Play.
-      // Obs.: a narrowphase ainda trata o colisor como caixa; a capa por enquanto fornece a caixa/offset (ver docs).
-      auto hull = Newtoon::GlobalHullCache().Get(mesh, mesh->pos.size(), Newtoon::kDefaultHullMaxPoints, [&] {
+      // A narrowphase usa o casco de verdade (ShapeType::CustomConvex, SAT convexo): o Collider recebe o conjunto de
+      // niveis de LOD (24/12/8 pontos, todos do cache por malha + maxPoints) e o mundo escolhe o nivel pela distancia
+      // ao foco (setCollisionFocus, chamado em stepPlay). A caixa/offset abaixo continuam servindo de inercia e de
+      // overlay (a AABB do casco). Sem casco solido valido, o colisor segue como caixa.
+      auto lods = Newtoon::GlobalHullCache().GetLods(mesh, mesh->pos.size(), play.world.collisionLod, [&] {
         std::vector<Newtoon::Vec3> pts; pts.reserve(mesh->pos.size());
         for (auto& v : mesh->pos) pts.push_back({v.x, v.y, v.z});
         return pts;
       });
-      if (!hull->Empty()) { lo = {hull->bounds.min.x, hull->bounds.min.y, hull->bounds.min.z}; hi = {hull->bounds.max.x, hull->bounds.max.y, hull->bounds.max.z}; }
+      const Newtoon::ConvexHull* hull = lods ? lods->Max() : nullptr;
+      if (hull && !hull->Empty()) {
+        lo = {hull->bounds.min.x, hull->bounds.min.y, hull->bounds.min.z}; hi = {hull->bounds.max.x, hull->bounds.max.y, hull->bounds.max.z};
+        if (hull->Solid()) {
+          c.type = Newtoon::ShapeType::CustomConvex; c.hull = hull; c.hullLods = lods.get();
+          c.hullScale = {sx, sy, sz};   // os pontos do cache sao da malha sem escala
+        }
+      }
     } else
     for (auto& v : mesh->pos) { lo = {std::min(lo.x, v.x), std::min(lo.y, v.y), std::min(lo.z, v.z)}; hi = {std::max(hi.x, v.x), std::max(hi.y, v.y), std::max(hi.z, v.z)}; }
     c.extents = {0.5f * (hi.x - lo.x) * sx, 0.5f * (hi.y - lo.y) * sy, 0.5f * (hi.z - lo.z) * sz};
@@ -187,6 +197,13 @@ inline void Editor::stepPlay(float dt) {
       }
     } else if (play.culledCount > 0) {
       play.updateSimulationRadiusParallel(w, 0.f, 0.f, 0.f, 0.f);
+    }
+    // LOD de colisao dos cascos: o foco e a posicao da camera principal do jogo (sem camera, LOD desligado = casco
+    // mais detalhado). Barato: so guarda um vetor; a troca de nivel acontece no proximo passo fixo do mundo.
+    {
+      const Transform* focusT = cams.empty() ? nullptr : w.get<Transform>(cams[0]);
+      if (focusT) play.world.setCollisionFocus({focusT->pos[0], focusT->pos[1], focusT->pos[2]});
+      else play.world.clearCollisionFocus();
     }
     {
       ZoneTimer physicsTimer(prof, Zone::Physics);

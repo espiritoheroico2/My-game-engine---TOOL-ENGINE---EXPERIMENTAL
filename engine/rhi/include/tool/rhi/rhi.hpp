@@ -220,6 +220,9 @@ public:
   // Capacidades: compute shader + UAV, e draw indireto. Falso por padrao (Null, GL sem compute).
   virtual bool supportsCompute() const { return false; }
   virtual bool supportsIndirect() const { return false; }
+  // Ray tracing por GPU (ray query / aceleracao de cena). Falso por padrao: o RHI ainda nao expoe RT por GPU
+  // (isso entra na fase F1 do plano de ray tracing). Serve so para o editor mostrar o estado real.
+  virtual bool supportsRayTracing() const { return false; }
   // Nome do adaptador (GPU) em uso, para diagnostico.
   virtual std::string deviceName() const { return "null"; }
   // Importa um buffer criado por outra biblioteca na mesma GPU (ex.: IBuffer do Diligent da Light Prism). O handle NAO

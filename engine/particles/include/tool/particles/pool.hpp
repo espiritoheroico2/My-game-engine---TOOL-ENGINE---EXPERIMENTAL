@@ -29,6 +29,9 @@ struct Chunk {
   alignas(64) f32 size[kChunkSize];       // tamanho (billboard)
   alignas(64) u32 color[kChunkSize];      // cor RGBA8 (R no byte baixo)
   alignas(64) u32 seed[kChunkSize];       // semente por particula (variacao em modulos futuros)
+  alignas(64) f32 temp[kChunkSize];       // temperatura simulada (fogo/fumaca): alimenta o empuxo
+  alignas(64) f32 alpha[kChunkSize];      // alfa suave 0..1 (multiplica o alfa da cor na hora de gerar os quads)
+  alignas(64) f32 rot[kChunkSize];        // rotacao no plano do billboard, em radianos
 
   // Copia todos os campos da particula `src` para `dst` (usado na remocao por troca).
   void copy(u32 dst, u32 src) {
@@ -36,6 +39,7 @@ struct Chunk {
     vx[dst] = vx[src]; vy[dst] = vy[src]; vz[dst] = vz[src];
     age[dst] = age[src]; life[dst] = life[src]; size[dst] = size[src];
     color[dst] = color[src]; seed[dst] = seed[src];
+    temp[dst] = temp[src]; alpha[dst] = alpha[src]; rot[dst] = rot[src];
   }
   // Remove a particula `i` trocando-a pela ultima viva. Nao mexe nos contadores do pool.
   void removeAt(u32 i) { if (i + 1 != count) copy(i, count - 1); --count; }
