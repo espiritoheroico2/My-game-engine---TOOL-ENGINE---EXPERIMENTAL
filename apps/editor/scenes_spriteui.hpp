@@ -83,6 +83,10 @@ struct Theme {
 using Colors = editor::file_panel_colors::Colors;
 inline Colors PaletteColors() { return editor::file_panel_colors::FromPalette(); }
 
+// Fundo "sem cor" dos grupos e rotulos: o visual padrao da SpriteUI e BRANCO opaco, entao todo no sem SetVisual
+// (barras, linhas de agrupamento, rotulos) pintava branco. Transparente deixa ver o fundo do painel.
+inline SU::Vec4 ClearTint() { return SU::Vec4{0.f, 0.f, 0.f, 0.f}; }
+
 // Cor sRGB comum -> linear pre-multiplicado do renderizador SpriteUI.
 inline SU::Vec4 Srgb(float r, float g, float b, float a = 1.f) {
   return SR::SrgbStraightToLinearPremultiplied({r, g, b, a});
@@ -121,6 +125,7 @@ class View {
   // Calcula um quadro (layout, cliques, hover, rolagem) e devolve o pacote de desenho. `actions` recebe o que foi clicado.
   SR::FramePacket Frame(float windowWidth, float windowHeight, const FrameInput& in, std::vector<Action>& actions) {
     frame_.refreshStyle();
+    applyPalette();   // troca de tema vale ja neste quadro
     actions.clear();
     removed_ = kNone;
     if (windowWidth <= 0.f || windowHeight <= 0.f) return {};
@@ -327,7 +332,9 @@ class View {
   // ---------- Arvore de layout ----------
   // Cria a arvore de layout uma vez: rotulos, botoes, campo de nome, linhas da lista e assets.
   void buildTree() {
-    SU::UIHandle toolbar{}, editRow{}, assetsHead{};
+    SU::UIHandle& toolbar = toolbarH_;
+    SU::UIHandle& editRow = editRowH_;
+    SU::UIHandle& assetsHead = assetsHeadH_;
     applyPalette();   // a arvore usa as cores do tema ja aqui (antes, o conteudo saia com a cor padrao: cinza)
 
     SU::FlexItem panel;
@@ -370,22 +377,6 @@ class View {
       assetRow_[i] = tree_.Create(panelHandle_, rowStyle(Theme::kRowHeight));
       assetName_[i] = tree_.Create(assetRow_[i], assetNameStyle(Theme::kRowHeight));
       assetRemove_[i] = tree_.Create(assetRow_[i], assetRemoveStyle());
-    }
-
-    // Linhas e caixas que so agrupam: nao recebem clique (o clique vai ao botao, ao campo ou a linha da lista).
-    for (const SU::UIHandle group : {toolbar, editRow, listBox_, assetsHead}) {
-      SU::ElementVisual v;
-      v.interactable = false;
-      v.clipOverflow = false;
-      v.zOrder = -0.5f;
-      bridge_.SetVisual(group, v);
-    }
-    for (std::size_t i = 0; i < Theme::kMaxAssets; ++i) {
-      SU::ElementVisual v;
-      v.interactable = false;
-      v.clipOverflow = false;
-      v.zOrder = -0.5f;
-      bridge_.SetVisual(assetRow_[i], v);
     }
 
     SU::ElementVisual panelVisual;
@@ -532,6 +523,25 @@ class View {
   // Habilita/desabilita botoes conforme selecao, cena atual e modo (criar/renomear/apagar) e pinta cada elemento.
   void applyVisuals() {
     enabled_.clear();
+    // Painel, grupos (barra de botoes, linhas, caixa da lista, linhas de assets) e rotulos: nunca o branco padrao.
+    {
+      SU::ElementVisual pv;
+      pv.tintPremultipliedLinear = panelColor_;
+      pv.interactable = false;
+      pv.clipOverflow = false;
+      pv.zOrder = -1.f;
+      bridge_.SetVisual(panelHandle_, pv);
+      SU::ElementVisual gv;
+      gv.tintPremultipliedLinear = ClearTint();
+      gv.interactable = false;
+      gv.clipOverflow = false;
+      gv.zOrder = -0.5f;
+      for (const SU::UIHandle g : {toolbarH_, editRowH_, listBox_, assetsHeadH_, assetRow_[0], assetRow_[1], assetRow_[2], assetRow_[3]})
+        bridge_.SetVisual(g, gv);
+      SU::ElementVisual lv = gv;   // rotulos so de texto
+      lv.zOrder = 0.f;
+      for (const SU::UIHandle l : {label_, status_, assetsLabel_}) bridge_.SetVisual(l, lv);
+    }
     const SM::Actions acts = SM::ActionsFor(model_.selected, model_.current);
     const bool confirming = model_.mode != NameMode::None;
     for (std::size_t i = 0; i < Theme::kMaxRows; ++i) {
@@ -568,7 +578,7 @@ class View {
       name.interactable = false;
       name.clipOverflow = false;
       name.zOrder = 0.f;
-      name.tintPremultipliedLinear = panelColor_;
+      name.tintPremultipliedLinear = i < model_.assets.size() ? colors_.field : ClearTint();   // mesma cor das linhas da lista
       bridge_.SetVisual(assetName_[i], name);
       paintButton(assetRemove_[i], i < model_.assets.size(), colors_.buttonDanger);
     }
@@ -866,6 +876,7 @@ class View {
   SU::Input::UIEventRouter router_;
   SR::RenderExtractor extractor_;
 
+  SU::UIHandle toolbarH_{}, editRowH_{}, assetsHeadH_{};
   SU::UIHandle panelHandle_{}, label_{}, save_{}, new_{}, reload_{}, open_{}, rename_{}, delete_{}, assign_{};
   SU::Rect content_{};        // area visivel do conteudo (abaixo do cabecalho)
   ui_scrollbar::Scrollbar bar_;

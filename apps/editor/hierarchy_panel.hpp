@@ -61,7 +61,10 @@ namespace SW = ToolEngine::SpriteUi::Widgets;
 namespace wf = editor::window_frame;
 
 // Acoes que o painel pede ao Editor. Algumas usam id (o objeto), outras parent (novo pai), kind (menu Create) ou text.
-enum class Act : std::uint8_t { Select, Activate, Reparent, Detach, ToggleHidden, ToggleLocked, Rename, Duplicate, Delete, Create };
+// Com id de linha de elemento de UI (hm::IsElemId), Select/Rename/Duplicate/Delete/MoveUp/MoveDown valem para o elemento.
+// AddElem: id = canvas alvo (NoId = o canvas selecionado), kind = tipo do elemento (indice em hm::kElemKindNames).
+enum class Act : std::uint8_t { Select, Activate, Reparent, Detach, ToggleHidden, ToggleLocked, Rename, Duplicate, Delete, Create,
+                                MoveUp, MoveDown, AddElem, EditIndividual };   // EditIndividual: isola o objeto na janela Node
 
 // Pedido da janela ao Editor (selecionar, renomear, apagar, criar...); o main.cpp aplica.
 struct Action {
@@ -107,6 +110,7 @@ struct Metrics {
     static constexpr float kBtnGap = 6.f;
     static constexpr float kMenuW = 200.f;
     static constexpr float kContextMenuW = 190.f;
+    static constexpr float kSubMenuW = 150.f;     // submenu "Add element" (tipos de elemento de UI)
     static constexpr float kMenuZ = 0.95f;       // fundo do menu: acima de linhas, selecao e texto da lista
     static constexpr float kMenuHoverZ = 0.955f; // destaque da linha: acima do fundo do menu
     static constexpr float kMenuTextZ = 0.97f;   // texto do menu: acima do fundo e do destaque
@@ -135,8 +139,9 @@ struct Colors {
         caret = sui::PaletteColor(t.caret);
     }
     // Cor do icone por tipo, na ordem de hm::Kind.
-    SU::Vec4 kinds[6] = {sui::Srgb(0.62f, 0.68f, 0.78f), sui::Srgb(0.42f, 0.85f, 0.52f), sui::Srgb(1.f, 0.85f, 0.35f),
-                         sui::Srgb(0.85f, 0.55f, 0.95f), sui::Srgb(1.f, 0.6f, 0.3f), sui::Srgb(0.35f, 0.95f, 0.7f)};
+    SU::Vec4 kinds[7] = {sui::Srgb(0.62f, 0.68f, 0.78f), sui::Srgb(0.42f, 0.85f, 0.52f), sui::Srgb(1.f, 0.85f, 0.35f),
+                         sui::Srgb(0.85f, 0.55f, 0.95f), sui::Srgb(1.f, 0.6f, 0.3f), sui::Srgb(0.35f, 0.95f, 0.7f),
+                         sui::Srgb(0.55f, 0.80f, 0.95f)};
 };
 
 // Botoes da barra do topo.
@@ -328,7 +333,7 @@ class HierarchyPanel {
         const float ly = y - rect_.y;
         if (!menu.contains(lx, ly)) return -1;
         const int index = static_cast<int>((ly - menu.y) / Metrics::kRowH);
-        return index < kCreateCount ? index : -1;
+        return index < kMenuRows ? index : -1;
     }
 
     // Indice do item do menu de contexto sob o ponto, ou -1.
@@ -339,12 +344,51 @@ class HierarchyPanel {
         const float ly = y - rect_.y;
         if (!menu.contains(lx, ly)) return -1;
         const int index = static_cast<int>((ly - menu.y) / Metrics::kRowH);
-        return index < kContextCount ? index : -1;
+        return index < static_cast<int>(contextItems_.size()) ? index : -1;
+    }
+
+    // Indice do tipo de elemento no submenu sob o ponto, ou -1.
+    [[nodiscard]] int subItemAt(float x, float y) const {
+        if (subOpen_ == 0) return -1;
+        const sui::Box sub = subMenuBox();
+        const float lx = x - rect_.x;
+        const float ly = y - rect_.y;
+        if (!sub.contains(lx, ly)) return -1;
+        const int index = static_cast<int>((ly - sub.y) / Metrics::kRowH);
+        return index < hm::kElemKindCount ? index : -1;
+    }
+
+    // Caixa do submenu "Add element": ao lado do item que o abriu (a esquerda se nao couber a direita).
+    [[nodiscard]] sui::Box subMenuBox() const {
+        const float h = Metrics::kRowH * static_cast<float>(hm::kElemKindCount);
+        const float w = Metrics::kSubMenuW;
+        sui::Box parent;
+        float rowY = 0.f;
+        if (subOpen_ == 2) {
+            parent = menuBox();
+            rowY = parent.y + Metrics::kRowH * static_cast<float>(kCreateCount);
+        } else {
+            parent = contextMenuBox();
+            int at = 0;
+            for (std::size_t i = 0; i < contextItems_.size(); ++i) if (contextItems_[i].cmd == kCtxAddElem) at = static_cast<int>(i);
+            rowY = parent.y + Metrics::kRowH * static_cast<float>(at);
+        }
+        float x = parent.x + parent.w;
+        if (x + w > rect_.w) x = std::max(0.f, parent.x - w);
+        return {x, std::clamp(rowY, 0.f, std::max(0.f, rect_.h - h)), w, h};
+    }
+
+    // Fecha os menus (Create, contexto e submenu).
+    void closeMenus() {
+        menuOpen_ = false;
+        contextOpen_ = false;
+        subOpen_ = 0;
+        hoverSub_ = -1;
     }
 
     // Caixa do menu Create, presa dentro da janela.
     [[nodiscard]] sui::Box menuBox() const {
-        const float h = std::min(Metrics::kRowH * kCreateCount + 8.f, std::max(0.f, rect_.h - Metrics::kToolbarH - 8.f));
+        const float h = std::min(Metrics::kRowH * kMenuRows + 8.f, std::max(0.f, rect_.h - Metrics::kToolbarH - 8.f));
         const float w = std::min(Metrics::kMenuW, std::max(120.f, rect_.w - Metrics::kPad));
         return {std::clamp(createX_, 0.f, std::max(0.f, rect_.w - w)),
                 Metrics::kToolbarH, w, h};
@@ -352,7 +396,7 @@ class HierarchyPanel {
 
     // Caixa do menu de contexto (clique direito), presa dentro da janela.
     [[nodiscard]] sui::Box contextMenuBox() const {
-        const float h = Metrics::kRowH * kContextCount;
+        const float h = Metrics::kRowH * static_cast<float>(contextItems_.size());
         return {std::clamp(contextX_, 0.f, std::max(0.f, rect_.w - Metrics::kContextMenuW)),
                 std::clamp(contextY_, 0.f, std::max(0.f, rect_.h - h)), Metrics::kContextMenuW, h};
     }
@@ -391,7 +435,7 @@ class HierarchyPanel {
     // Converte o resultado do modelo (selecao mudou, duplo clique, reparent...) em pedidos para o Editor.
     void applyOutcome(const hm::Outcome& out) {
         if (out.selectionChanged) pending_.push_back(Action{Act::Select, model_.Selected()});
-        if (out.activate != hm::NoId) pending_.push_back(Action{Act::Activate, out.activate});
+        if (out.activate != hm::NoId && !hm::IsElemId(out.activate)) pending_.push_back(Action{Act::Activate, out.activate});
     }
 
     // ---------- Clique, arraste e teclado ----------
@@ -399,8 +443,7 @@ class HierarchyPanel {
         if (!contains(x, y)) {
             focused_ = false;
             if (renaming_) commitRename();
-            menuOpen_ = false;
-            contextOpen_ = false;
+            closeMenus();
             return false;
         }
         focused_ = true;
@@ -414,16 +457,33 @@ class HierarchyPanel {
             renameDragging_ = true;
             return true;
         }
+        if (subOpen_ != 0) {   // submenu de tipos: escolher um adiciona o elemento (Create: ao canvas selecionado)
+            const int sub = subItemAt(x, y);
+            if (sub >= 0) {
+                pending_.push_back(Action{Act::AddElem, subOpen_ == 1 ? contextTarget_ : hm::NoId, hm::NoId, sub, {}});
+                closeMenus();
+                hoverCreateItem_ = -1;
+                return true;
+            }
+        }
         if (contextOpen_) {
             const int item = contextItemAt(x, y);
-            contextOpen_ = false;
-            if (item >= 0) applyContextAction(item);
+            if (item >= 0 && contextItems_[static_cast<std::size_t>(item)].cmd == kCtxAddElem) {   // abre o submenu e mantem o menu
+                subOpen_ = 1;
+                return true;
+            }
+            closeMenus();
+            if (item >= 0) applyContextAction(contextItems_[static_cast<std::size_t>(item)].cmd);
             else return onDown(x, y, ticks);
             return true;
         }
         if (menuOpen_) {
             const int item = menuItemAt(x, y);
-            menuOpen_ = false;
+            if (item == kCreateCount) {   // "Canvas element >": abre o submenu e mantem o menu
+                subOpen_ = 2;
+                return true;
+            }
+            closeMenus();
             hoverCreateItem_ = -1;
             if (item >= 0) pending_.push_back(Action{Act::Create, hm::NoId, hm::NoId, item, {}});
             return true;
@@ -447,13 +507,18 @@ class HierarchyPanel {
             applyOutcome(model_.Toggle(id));
             return true;
         }
-        const int toggle = toggleAt(lx);
+        const bool isElem = hm::IsElemId(id);   // linha de elemento de UI: sem olho, cadeado, foco nem arraste
+        const int toggle = isElem ? -1 : toggleAt(lx);
         if (toggle == 0) { pending_.push_back(Action{Act::ToggleHidden, id}); return true; }
         if (toggle == 1) { pending_.push_back(Action{Act::ToggleLocked, id}); return true; }
         const bool doubleClick = id == lastClickId_ && ticks - lastClickMs_ < Metrics::kDoubleClickMs;
         lastClickId_ = id;
         lastClickMs_ = ticks;
         applyOutcome(model_.Select(id));
+        if (isElem) {   // clicar no elemento sempre pede a selecao (mesmo se a linha ja estava marcada no modelo)
+            pending_.push_back(Action{Act::Select, id});
+            return true;
+        }
         if (doubleClick) pending_.push_back(Action{Act::Activate, id});
         (void)drag_.PointerDown(sui::handleFor(static_cast<std::uint32_t>(row + 1)), SU::Vec2{x - rect_.x, y - rect_.y},
                                 Dd::DragPayload{"hier-entity", std::to_string(id)});
@@ -465,13 +530,11 @@ class HierarchyPanel {
         if (!contains(x, y)) {
             focused_ = false;
             if (renaming_) commitRename();
-            menuOpen_ = false;
-            contextOpen_ = false;
+            closeMenus();
             return false;
         }
         focused_ = true;
-        menuOpen_ = false;
-        contextOpen_ = false;
+        closeMenus();
         if (renaming_ && !renameField().contains(x - rect_.x, y - rect_.y)) commitRename();
         const std::size_t row = rowAt(x, y);
         if (row == npos) return true;
@@ -480,20 +543,39 @@ class HierarchyPanel {
         contextY_ = y - rect_.y;
         hoverContextItem_ = -1;
         if (model_.Selected() != contextTarget_) applyOutcome(model_.Select(contextTarget_));
+        if (hm::IsElemId(contextTarget_)) pending_.push_back(Action{Act::Select, contextTarget_});
+        buildContextItems();
         contextOpen_ = true;
         return true;
     }
 
+    // Monta a lista do menu de contexto conforme o alvo: elemento de UI, canvas (com "Add element") ou objeto comum.
+    void buildContextItems() {
+        contextItems_.clear();
+        if (hm::IsElemId(contextTarget_)) {
+            contextItems_ = {{"Rename", kCtxRename}, {"Duplicate", kCtxDuplicate}, {"Move up", kCtxMoveUp},
+                             {"Move down", kCtxMoveDown}, {"Delete", kCtxDelete}};
+            return;
+        }
+        contextItems_ = {{"Focus", kCtxFocus}, {"Edit individual", kCtxEditIndividual}, {"Rename", kCtxRename}, {"Duplicate", kCtxDuplicate},
+                         {"Delete", kCtxDelete}, {"Hide / Show", kCtxHide}, {"Lock / Unlock", kCtxLock}};
+        const hm::Item* item = model_.Find(contextTarget_);
+        if (item && item->kind == hm::Kind::Canvas) contextItems_.push_back({"Add element", kCtxAddElem});
+    }
+
     // Executa o item do menu de contexto no objeto alvo (ativar, renomear, duplicar, apagar, ocultar, travar).
-    void applyContextAction(int item) {
+    void applyContextAction(int cmd) {
         if (contextTarget_ == hm::NoId) return;
-        switch (item) {
-            case 0: pending_.push_back(Action{Act::Activate, contextTarget_}); break;
-            case 1: beginRename(contextTarget_); break;
-            case 2: pending_.push_back(Action{Act::Duplicate, contextTarget_}); break;
-            case 3: pending_.push_back(Action{Act::Delete, contextTarget_}); break;
-            case 4: pending_.push_back(Action{Act::ToggleHidden, contextTarget_}); break;
-            case 5: pending_.push_back(Action{Act::ToggleLocked, contextTarget_}); break;
+        switch (cmd) {
+            case kCtxFocus: pending_.push_back(Action{Act::Activate, contextTarget_}); break;
+            case kCtxEditIndividual: pending_.push_back(Action{Act::EditIndividual, contextTarget_}); break;
+            case kCtxRename: beginRename(contextTarget_); break;
+            case kCtxDuplicate: pending_.push_back(Action{Act::Duplicate, contextTarget_}); break;
+            case kCtxDelete: pending_.push_back(Action{Act::Delete, contextTarget_}); break;
+            case kCtxHide: pending_.push_back(Action{Act::ToggleHidden, contextTarget_}); break;
+            case kCtxLock: pending_.push_back(Action{Act::ToggleLocked, contextTarget_}); break;
+            case kCtxMoveUp: pending_.push_back(Action{Act::MoveUp, contextTarget_}); break;
+            case kCtxMoveDown: pending_.push_back(Action{Act::MoveDown, contextTarget_}); break;
             default: break;
         }
     }
@@ -506,11 +588,20 @@ class HierarchyPanel {
             moveRenameCaret(x, y);
             return true;
         }
-        if (menuOpen_) hoverCreateItem_ = menuItemAt(x, y);
+        if (menuOpen_) {
+            const int over = menuItemAt(x, y);
+            if (over >= 0) subOpen_ = over == kCreateCount ? 2 : (subOpen_ == 2 ? 0 : subOpen_);   // passar no "Canvas element" abre o submenu
+            if (over >= 0 || subItemAt(x, y) < 0) hoverCreateItem_ = over;
+        }
+        if (subOpen_ != 0) hoverSub_ = subItemAt(x, y);
         const bool dragging = drag_.Phase() != Dd::DragPhase::Idle;
         if (dragging) (void)drag_.PointerMove(SU::Vec2{x - rect_.x, y - rect_.y}, buildTargets());
         if (contains(x, y)) hoverRow_ = rowAt(x, y);
-        if (contextOpen_) hoverContextItem_ = contextItemAt(x, y);
+        if (contextOpen_) {
+            const int over = contextItemAt(x, y);
+            if (over >= 0) subOpen_ = contextItems_[static_cast<std::size_t>(over)].cmd == kCtxAddElem ? 1 : (subOpen_ == 1 ? 0 : subOpen_);
+            if (over >= 0 || subItemAt(x, y) < 0) hoverContextItem_ = over;
+        }
         return dragging || contains(x, y);
     }
 
@@ -574,8 +665,7 @@ class HierarchyPanel {
                 return true;
             case SDLK_ESCAPE:
                 if (drag_.Phase() != Dd::DragPhase::Idle) drag_.Cancel();
-                menuOpen_ = false;
-                contextOpen_ = false;
+                closeMenus();
                 return true;
             default: return false;
         }
@@ -595,7 +685,7 @@ class HierarchyPanel {
         renaming_ = true;
         renameDragging_ = false;
         renameId_ = id;
-        rename_.setText(item->label);
+        rename_.setText(hm::IsElemId(id) ? item->editText : item->label);
         if (window_) SDL_StartTextInput(window_);
     }
 
@@ -913,10 +1003,12 @@ class HierarchyPanel {
         addKindIcon(iconX, iconY, item->kind);
         const float labelX = iconX + Metrics::kIcon + 6.f;
         const float lockX = list.w - Metrics::kToggle - Metrics::kPad;
-        const float labelW = lockX - Metrics::kToggleGap - Metrics::kToggle - Metrics::kPad - labelX;
+        const bool isElem = item->kind == hm::Kind::Element;   // linha de acesso a elemento de UI: sem olho nem cadeado
+        const float labelW = (isElem ? list.w - Metrics::kPad : lockX - Metrics::kToggleGap - Metrics::kToggle - Metrics::kPad) - labelX;
         const bool editing = renaming_ && id == renameId_;
         if (!editing) list_.addText(labelX, textY, item->label, Metrics::kListFont, item->hidden ? theme_.textDim : theme_.text, labelW);
         if (editing) addRenameText(labelX, y);
+        if (isElem) return;
         const float toggleY = y + (Metrics::kListRowH - Metrics::kToggle) * 0.5f;
         const float eyeX = lockX - Metrics::kToggle - Metrics::kToggleGap;
         addIcon(eyeX, toggleY, Metrics::kToggle, kEyeCell, item->hidden ? colors_.toggleOff : colors_.toggleOn);
@@ -956,35 +1048,54 @@ class HierarchyPanel {
         if (menuOpen_) {
             const sui::Box menu = menuBox();
             overlay_.addSolid(menu.x, menu.y, menu.w, menu.h, colors_.menu, Metrics::kMenuZ);
-            for (int i = 0; i < kCreateCount; ++i) {
+            for (int i = 0; i < kMenuRows; ++i) {
                 const float y = menu.y + static_cast<float>(i) * Metrics::kRowH;
                 if (i == hoverCreateItem_) {
                     overlay_.addSolid(menu.x + 2.f, y + 1.f, menu.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, Metrics::kMenuHoverZ);
                 }
                 const float textY = y + (Metrics::kRowH - overlay_.lineHeight(Metrics::kFont)) * 0.5f;
-                overlay_.addText(menu.x + Metrics::kPad, textY, T(kCreateLabels[i]), Metrics::kFont, theme_.text,
-                                 menu.w - 2.f * Metrics::kPad);
+                const std::string text = i < kCreateCount ? std::string(T(kCreateLabels[i])) : std::string(T("Canvas element")) + "  >";
+                overlay_.addText(menu.x + Metrics::kPad, textY, text, Metrics::kFont, theme_.text, menu.w - 2.f * Metrics::kPad);
             }
         }
         if (contextOpen_) {
-            static constexpr const char* labels[kContextCount] = {"Focus", "Rename", "Duplicate", "Delete", "Hide / Show",
-                                                                  "Lock / Unlock"};
             const sui::Box menu = contextMenuBox();
             overlay_.addSolid(menu.x, menu.y, menu.w, menu.h, colors_.menu, Metrics::kMenuZ);
-            for (int i = 0; i < kContextCount; ++i) {
+            for (int i = 0; i < static_cast<int>(contextItems_.size()); ++i) {
+                const CtxItem& it = contextItems_[static_cast<std::size_t>(i)];
                 const float y = menu.y + static_cast<float>(i) * Metrics::kRowH;
                 if (i == hoverContextItem_) {
                     overlay_.addSolid(menu.x + 2.f, y + 1.f, menu.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, Metrics::kMenuHoverZ);
                 }
                 const float textY = y + (Metrics::kRowH - overlay_.lineHeight(Metrics::kFont)) * 0.5f;
-                overlay_.addText(menu.x + Metrics::kPad, textY, T(labels[i]), Metrics::kFont, theme_.text,
-                                 menu.w - 2.f * Metrics::kPad);
+                const std::string text = std::string(T(it.label)) + (it.cmd == kCtxAddElem ? "  >" : "");
+                overlay_.addText(menu.x + Metrics::kPad, textY, text, Metrics::kFont, theme_.text, menu.w - 2.f * Metrics::kPad);
+            }
+        }
+        if (subOpen_ != 0 && (menuOpen_ || contextOpen_)) {   // submenu com os tipos de elemento de UI
+            const sui::Box sub = subMenuBox();
+            overlay_.addSolid(sub.x, sub.y, sub.w, sub.h, colors_.menu, Metrics::kMenuZ);
+            for (int i = 0; i < hm::kElemKindCount; ++i) {
+                const float y = sub.y + static_cast<float>(i) * Metrics::kRowH;
+                if (i == hoverSub_) {
+                    overlay_.addSolid(sub.x + 2.f, y + 1.f, sub.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, Metrics::kMenuHoverZ);
+                }
+                const float textY = y + (Metrics::kRowH - overlay_.lineHeight(Metrics::kFont)) * 0.5f;
+                overlay_.addText(sub.x + Metrics::kPad, textY, T(hm::kElemKindNames[i]), Metrics::kFont, theme_.text,
+                                 sub.w - 2.f * Metrics::kPad);
             }
         }
     }
 
+    // Comandos do menu de contexto (a lista muda conforme o alvo: objeto, canvas ou elemento de UI).
+    enum Ctx : int { kCtxFocus, kCtxRename, kCtxDuplicate, kCtxDelete, kCtxHide, kCtxLock, kCtxMoveUp, kCtxMoveDown, kCtxAddElem, kCtxEditIndividual };
+    // Item do menu de contexto: texto e comando.
+    struct CtxItem {
+        const char* label;
+        int cmd;
+    };
     static constexpr std::size_t npos = static_cast<std::size_t>(-1);
-    static constexpr int kContextCount = 6;
+    static constexpr int kMenuRows = kCreateCount + 1;   // itens do Create + "Canvas element >"
 
     sui::Canvas toolbar_;
     sui::Canvas list_;
@@ -1023,6 +1134,9 @@ class HierarchyPanel {
     float contextX_ = 0.f;
     float contextY_ = 0.f;
     int hoverContextItem_ = -1;
+    std::vector<CtxItem> contextItems_;   // itens do menu de contexto aberto
+    int subOpen_ = 0;                     // submenu de tipos: 0 fechado, 1 do menu de contexto, 2 do Create
+    int hoverSub_ = -1;
     bool focused_ = false;
     bool renaming_ = false;
     bool renameDragging_ = false;

@@ -18,6 +18,8 @@
 namespace editor {
 
 namespace perfdiag {
+// W301 e W302 sao medicao de desempenho: o Console os mostra na categoria work-debug (console_model.hpp,
+// isWorkDebugText), que combina com estes codigos. Se trocar um codigo aqui, ajuste la tambem.
 inline constexpr const char* kFrameJitter = "TOOL-W301";  // oscilacao do trabalho da CPU
 inline constexpr const char* kZoneSpike = "TOOL-W302";    // uma zona com pico muito acima da media
 inline constexpr const char* kDrawCalls = "TOOL-W303";    // objetos desenhados demais

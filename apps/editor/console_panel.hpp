@@ -87,6 +87,7 @@ struct Colors {
   SU::Vec4 panel, text, textDim, title, btn, btnHover, btnPressed, btnOn, field, fieldFocus, selection, caret, rowHover, infoText;
   SU::Vec4 warnText = Srgb(1.f, 0.85f, 0.3f);
   SU::Vec4 errorText = Srgb(1.f, 0.4f, 0.4f);
+  SU::Vec4 workDebugText = Srgb(0.45f, 0.95f, 0.55f);   // work-debug (medicao de desempenho): verde de ok
   SU::Vec4 scroll;
   Colors() {
     const editor::theme_colors::Colors t = editor::theme_colors::Active();
@@ -680,8 +681,8 @@ class ConsolePanel {
     const float pad = Theme::kPad;
     const float chipY = Theme::kRowH + (Theme::kRowH - Theme::kBtnH) * 0.5f;
     const cm::Counts counts = cm::ConsoleModel::countAll(entries);
-    const char* names[cm::kGroupCount] = {T("Info"), T("Warnings"), T("Errors")};
-    const SU::Vec4 colors[cm::kGroupCount] = {colors_.infoText, colors_.warnText, colors_.errorText};
+    const char* names[cm::kGroupCount] = {T("Info"), T("Warnings"), T("Errors"), T("work-debug")};
+    const SU::Vec4 colors[cm::kGroupCount] = {colors_.infoText, colors_.warnText, colors_.errorText, colors_.workDebugText};
 
     float x = pad;
     for (int g = 0; g < cm::kGroupCount; ++g) {
@@ -717,6 +718,7 @@ class ConsolePanel {
   SU::Vec4 colorOf(cm::Group g) const {
     if (g == cm::Group::Error) return colors_.errorText;
     if (g == cm::Group::Warn) return colors_.warnText;
+    if (g == cm::Group::WorkDebug) return colors_.workDebugText;
     return colors_.infoText;
   }
 
@@ -727,12 +729,12 @@ class ConsolePanel {
     const float textW = width - 2.f * Theme::kListInset;
     float y = Theme::kRowGap;
     for (std::size_t i : visible) {
-      const auto& [level, msg] = entries[i];
+      const std::string& msg = entries[i].second;
       Entry e;
       e.text = wrapped(msg, Theme::kFont, textW);
       e.h = std::max(e.text.lineHeight, e.text.size.y) + Theme::kRowGap;
       e.y = y;
-      e.color = colorOf(cm::groupOf(level));
+      e.color = colorOf(cm::groupOf(entries[i]));
       e.name = cm::bracketName(msg);
       y += e.h;
       entries_.push_back(std::move(e));

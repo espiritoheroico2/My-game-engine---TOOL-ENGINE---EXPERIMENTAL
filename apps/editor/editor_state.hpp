@@ -12,6 +12,7 @@
 #include "chunk_cache.hpp"
 #include "game_grid.hpp"
 #include "narrative_model.hpp"
+#include "node_model.hpp"
 #include "profiler.hpp"
 #include "perf_warnings.hpp"
 #include "project.hpp"
@@ -52,6 +53,7 @@
 #include "settings_model.hpp"
 #include <deque>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <map>
 #include <functional>
@@ -73,9 +75,16 @@ struct ViewTex {
   void destroy() { if (tex) SDL_DestroyTexture(tex); tex = nullptr; w = h = 0; }
 };
 
+// Elemento de UI selecionado (linha de acesso na Hierarchy): o canvas e o indice na lista dele. index -1 = nenhum.
+struct UiElemSel {
+  tool::Entity canvas{};   // objeto Canvas dono do elemento
+  int index = -1;          // posicao do elemento em CanvasComp::items
+};
+
 struct Editor {
   tool::Scene scene;
   tool::Entity selected;
+  UiElemSel selectedUiElem;   // um elemento por vez; limpo ao selecionar outro objeto (ver syncUiElemSelection no main.cpp)
   std::deque<std::pair<tool::LogLevel, std::string>> console;
   std::uint64_t consoleSerial = 0;   // cresce a cada mudanca no log (o painel SpriteUI refaz a lista so nesse caso)
   std::vector<float> frameHistory = std::vector<float>(120, 0.f);
@@ -87,6 +96,20 @@ struct Editor {
   bool showEditMesh = false, showPaintMesh = false;   // janelas de recursos futuros (so aviso de "em desenvolvimento")
   bool showAssets = true, showScenes = true, showCoding = true, showNarrative = true, showSettings = true, showInputMap = false;
   bool showSpriteUiDiagnostics = false;
+  bool showNode = false;   // janela Node (edicao individual)
+  // Isolamento da janela Node: objeto raiz cuja subarvore e a unica desenhada/clicavel na Scene (vazio = sem isolamento).
+  // So afeta a vista; a cena salva nao muda.
+  tool::Entity isolatedRoot{};
+  // true se o isolamento esta ativo e `e` fica fora da subarvore isolada (a Scene nao o desenha nem o seleciona).
+  bool hiddenByIsolation(tool::Entity e) {
+    if (!scene.world().alive(isolatedRoot)) return false;
+    return !node_model::InSubtree(isolatedRoot, e, [&](tool::Entity c) {
+      std::optional<tool::Entity> r;
+      const tool::Entity p = parentOf(c);
+      if (scene.world().alive(p)) r = p;
+      return r;
+    });
+  }
   bool showEditorInfo = false, showExport = false;   // File > Editor info / Export game
   bool resetLayout = false;
   unsigned sceneLoads = 0;          // conta aberturas de cena: os avisos de desempenho esperam o carregamento acabar
@@ -784,7 +807,7 @@ struct Editor {
     auto mixu = [&](std::uint64_t v) { hs ^= v; hs *= 1099511628211ull; };
     auto mixf = [&](float f) { std::uint32_t b; std::memcpy(&b, &f, 4); mixu(b); };
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-      if (scene.world().has<Inactive>(e)) return;
+      if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
       const tool::Mesh* m = meshOf(mr); if (!m) return;
       mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m));
       mixu(m->revision); mixu(m->pos.size()); mixu(m->idx.size());
@@ -817,7 +840,7 @@ struct Editor {
   template <class MU, class MF>
   void hashCasters(const tool::Camera& cam, MU&& mixu, MF&& mixf) {
     scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-      if (scene.world().has<Inactive>(e) || !mr.castShadow) return;
+      if ((scene.world().has<Inactive>(e) || hiddenInView(e)) || !mr.castShadow) return;
       const tool::Mesh* m = lodMeshOf(e, mr, cam); if (!m) return;
       mixu(e.index); mixu(e.generation); mixu(reinterpret_cast<std::uintptr_t>(m));
       mixu(m->revision); mixu(m->pos.size()); mixu(m->idx.size());
@@ -825,7 +848,7 @@ struct Editor {
       for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(wm.m[c][r]);
     });
     scene.world().each<VoxelChunk, Transform>([&](tool::Entity ce, VoxelChunk& vc, Transform&) {
-      if (scene.world().has<Inactive>(ce)) return;
+      if ((scene.world().has<Inactive>(ce) || hiddenInView(ce))) return;
       mixu(ce.index); mixu(ce.generation); mixu(vc.revision); mixf(vc.cell);
       const tool::Mat4 wm = worldMat(ce);
       for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) mixf(wm.m[c][r]);
@@ -884,7 +907,14 @@ struct Editor {
   }
 
 private:
+  // Isolamento vale so na vista Scene (vi == 0): o Game continua mostrando a cena toda. Ativo durante renderScene.
+  bool renderIsolated_ = false;
+  // true se o objeto fica fora do isolamento nesta vista (nunca desenhado, nem sombra, nem oclusor).
+  bool hiddenInView(tool::Entity e) { return renderIsolated_ && hiddenByIsolation(e); }
+
   const tool::u8* renderScene(const tool::Camera& cam, int w, int h, bool highlight, int vi, std::size_t gameGridSlot) {
+    renderIsolated_ = vi == 0;
+    struct IsoGuard { bool& f; ~IsoGuard() { f = false; } } isoGuard{renderIsolated_};
     renderWorldMatCache_.clear();
     renderWorldMatCache_.reserve(8192);
     renderWorldMatCacheActive_ = true;
@@ -973,7 +1003,7 @@ private:
       constexpr size_t kOccluderMaxTris = 2048;
       occ.begin(static_cast<tool::u32>(w), static_cast<tool::u32>(h), proj * view);
       scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-        if (scene.world().has<Inactive>(e)) return;
+        if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
         const tool::Mesh* m = lodMeshOf(e, mr, cam);
         if (!m || m->idx.size() / 3 > kOccluderMaxTris) return;
         const tool::Mat4 wm = worldMat(e);
@@ -1043,7 +1073,7 @@ private:
       // Indice da grade: chunk alinhado a um multiplo do seu tamanho tem vizinhos (para o culling de borda).
       std::map<std::array<int, 3>, const VoxelChunk*> grid;
       scene.world().each<VoxelChunk>([&](tool::Entity ce, VoxelChunk& vc) {
-        if (scene.world().has<Inactive>(ce)) return;
+        if ((scene.world().has<Inactive>(ce) || hiddenInView(ce))) return;
         const tool::Mat4 wm = worldMat(ce);
         const float s = vc.cell * kChunkSize;
         const float px = wm.m[3][0] / s, py = wm.m[3][1] / s, pz = wm.m[3][2] / s;
@@ -1051,7 +1081,7 @@ private:
         if (std::fabs(px - gx) < 1e-3f && std::fabs(py - gy) < 1e-3f && std::fabs(pz - gz) < 1e-3f) grid[{gx, gy, gz}] = &vc;
       });
       scene.world().each<VoxelChunk>([&](tool::Entity ce, VoxelChunk& vc) {
-        if (scene.world().has<Inactive>(ce)) return;
+        if ((scene.world().has<Inactive>(ce) || hiddenInView(ce))) return;
         const tool::Mat4 wm = worldMat(ce);
         const float s = vc.cell * kChunkSize;
         const int gx = static_cast<int>(std::lround(wm.m[3][0] / s)), gy = static_cast<int>(std::lround(wm.m[3][1] / s)), gz = static_cast<int>(std::lround(wm.m[3][2] / s));
@@ -1100,7 +1130,7 @@ private:
         {
           ZoneTimer drawListTimer(prof, Zone::DrawList);
           scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-            if (scene.world().has<Inactive>(e)) return;
+            if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
             pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); gpu.draw(m, worldMat(e), mat); });
           });
           drawChunks(gpu);
@@ -1176,7 +1206,7 @@ private:
     {
       ZoneTimer drawListTimer(prof, Zone::DrawList);
       scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-        if (scene.world().has<Inactive>(e)) return;
+        if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
         pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); renderer.draw(m, worldMat(e), mat); });
       });
       drawChunks(renderer);
@@ -1189,7 +1219,7 @@ private:
       if (!rtBvh_ || sig != rtSig_) {
         std::vector<LightPrism::Rt::Triangle> rtTris;
         scene.world().each<MeshRenderer, Transform>([&](tool::Entity e, MeshRenderer& mr, Transform&) {
-          if (scene.world().has<Inactive>(e)) return;
+          if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
           const tool::Mesh* m = meshOf(mr);
           if (!m) return;
           const tool::Mat4 wm = worldMat(e);

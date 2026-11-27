@@ -12,6 +12,8 @@
 #include "view_shapes.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <string>
 
 namespace editor::canvas_paint {
 
@@ -46,6 +48,60 @@ inline void drawBase(view::ShapeList& out, view::Pixel a, view::Pixel b, const f
   } else if (hasBg) {
     out.rectFilled(a, b, shapeColor(bg), radius);
   }
+}
+
+// Sombra projetada: deslocamento (x, y) e suavizacao (blur) ja na escala da tela, cor RGBA 0..1. Desligada = nada.
+struct Shadow {
+  bool on = false;
+  float x = 2.f, y = 2.f;   // deslocamento em pixels
+  float blur = 0.f;         // raio de suavizacao em pixels (0 = borda dura)
+  float color[4] = {0.f, 0.f, 0.f, 0.6f};
+};
+
+// Quantidade de camadas da sombra: 1 sem blur, ate kMaxShadowSteps com blur (uma camada a cada ~2 px).
+inline constexpr int kMaxShadowSteps = 4;
+inline int shadowSteps(float blur) {
+  if (blur <= 0.f) return 1;
+  return std::clamp(static_cast<int>(std::ceil(blur / 2.f)) + 1, 2, kMaxShadowSteps);
+}
+
+// Sombra de uma caixa (a, b): copias do retangulo deslocadas por (x, y), da mais larga e fraca para a mais justa e
+// forte. O alfa total fica em torno do alfa da cor (cada camada soma alfa/steps). Sem shader: so retangulos.
+inline void drawShadowBox(view::ShapeList& out, view::Pixel a, view::Pixel b, float radius, const Shadow& sh) {
+  if (!sh.on || sh.color[3] <= 0.f) return;
+  const int steps = shadowSteps(sh.blur);
+  for (int i = 0; i < steps; ++i) {
+    const float grow = steps == 1 ? 0.f : sh.blur * static_cast<float>(steps - 1 - i) / static_cast<float>(steps - 1);
+    const float alpha = sh.color[3] / static_cast<float>(steps);
+    const view::Pixel pa{a.x + sh.x - grow, a.y + sh.y - grow}, pb{b.x + sh.x + grow, b.y + sh.y + grow};
+    const float r = clampRadius(radius + grow, pb.x - pa.x, pb.y - pa.y);
+    out.rectFilled(pa, pb, view::rgbaF(sh.color[0], sh.color[1], sh.color[2], alpha), r);
+  }
+}
+
+// Sombra de um texto: copias deslocadas por (x, y). Com blur, cada camada repete o texto em 4 direcoes (cruz) a uma
+// distancia crescente, com alfa menor. `fn` grava uma copia do texto na posicao e cor dadas (pode ser com quebra).
+template <class Fn>
+inline void drawShadowText(view::Pixel at, const Shadow& sh, Fn fn) {
+  if (!sh.on || sh.color[3] <= 0.f) return;
+  const int steps = shadowSteps(sh.blur);
+  if (steps == 1) { fn(view::Pixel{at.x + sh.x, at.y + sh.y}, view::rgbaF(sh.color[0], sh.color[1], sh.color[2], sh.color[3])); return; }
+  for (int i = 0; i < steps; ++i) {
+    const float d = sh.blur * static_cast<float>(steps - 1 - i) / static_cast<float>(steps - 1);   // do mais longe ao centro
+    const float alpha = sh.color[3] * (i == steps - 1 ? 0.6f : 0.4f / static_cast<float>(steps - 1));
+    const view::Color c = view::rgbaF(sh.color[0], sh.color[1], sh.color[2], alpha);
+    if (d <= 0.f) { fn(view::Pixel{at.x + sh.x, at.y + sh.y}, c); continue; }
+    const float ox[4] = {d, -d, 0.f, 0.f}, oy[4] = {0.f, 0.f, d, -d};
+    for (int k = 0; k < 4; ++k) fn(view::Pixel{at.x + sh.x + ox[k], at.y + sh.y + oy[k]}, c);
+  }
+}
+
+// Desenha uma imagem (caminho absoluto) no retangulo (a, b) com a cor de tinta `tint`. O pintor cria a textura e, se o
+// arquivo falhar, desenha um placeholder visivel. O raio de canto nao vale para a imagem (o SDL recorta so retangulos).
+// preserveAspect = true: a imagem entra inteira no retangulo mantendo a proporcao dela (centrada, sem esticar).
+inline void drawImageBox(view::ShapeList& out, view::Pixel a, view::Pixel b, const std::string& absPath, view::Color tint,
+                         bool preserveAspect = false) {
+  out.image(a, b, absPath, tint, preserveAspect);
 }
 
 }  // namespace editor::canvas_paint

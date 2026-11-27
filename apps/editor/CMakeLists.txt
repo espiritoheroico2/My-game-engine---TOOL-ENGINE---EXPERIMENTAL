@@ -188,6 +188,15 @@ if(TOOL_WITH_SPRITEUI)
   endif()
   add_test(NAME Editor.ScenesView COMMAND editor_scenes_view_tests)
 
+  # Cores da janela Scenes: paleta (Dark blue e Light), sem branco fixo.
+  add_executable(editor_scenes_colors_tests tests/test_scenes_colors.cpp)
+  target_include_directories(editor_scenes_colors_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(editor_scenes_colors_tests PRIVATE SDL3::SDL3-static SpriteUi::SpriteUI SpriteUi::TextStb tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+  if(TOOL_WITH_MINIAUDIO)
+    target_link_libraries(editor_scenes_colors_tests PRIVATE tool::audio_miniaudio)
+  endif()
+  add_test(NAME Editor.ScenesColors COMMAND editor_scenes_colors_tests)
+
   # Janela Assets em SpriteUI (assets_spriteui.hpp): cliques, duplo clique, renomear, apagar, filtro, texto, rolagem.
   add_executable(editor_assets_view_tests tests/test_assets_view.cpp)
   target_include_directories(editor_assets_view_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -279,6 +288,11 @@ add_executable(editor_console_model_tests tests/test_console_model.cpp)
 target_include_directories(editor_console_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(editor_console_model_tests PRIVATE tool::core)
 add_test(NAME Editor.ConsoleModel COMMAND editor_console_model_tests)
+# Classificador work-debug do Console (TOOL-W301/W302 fora de Warnings, escondidos por padrao).
+add_executable(editor_console_work_debug_tests tests/test_console_work_debug.cpp)
+target_include_directories(editor_console_work_debug_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_console_work_debug_tests PRIVATE tool::core)
+add_test(NAME Editor.ConsoleWorkDebug COMMAND editor_console_work_debug_tests)
 
 # Modelo da barra de menus principal (mainmenu_model.hpp): titulos, itens, marcas, pedidos e botoes Play/Pausa.
 add_executable(editor_mainmenu_model_tests tests/test_mainmenu_model.cpp)
@@ -302,6 +316,11 @@ add_executable(editor_narrative_model_tests tests/test_narrative_model.cpp)
 target_include_directories(editor_narrative_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(editor_narrative_model_tests PRIVATE tool::narrative)
 add_test(NAME Editor.NarrativeModel COMMAND editor_narrative_model_tests)
+
+# Modelo da janela Node (node_model.hpp): subarvore isolada (objeto + filhos) e filtro de isolamento.
+add_executable(editor_node_model_tests tests/test_node_model.cpp)
+target_include_directories(editor_node_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.NodeModel COMMAND editor_node_model_tests)
 
 # Captura do mouse dos paineis SpriteUI (pointer_capture.hpp): Up fora do painel e movimento sem botao.
 add_executable(editor_pointer_capture_tests tests/test_pointer_capture.cpp)
@@ -374,6 +393,25 @@ target_include_directories(editor_canvas_radius_tests PRIVATE ${CMAKE_CURRENT_SO
 target_link_libraries(editor_canvas_radius_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
 add_test(NAME Editor.CanvasRadius COMMAND editor_canvas_radius_tests)
 
+# Recursos novos do Canvas (canvas_text/widgets/paint + components): campos no JSON, quebra de linha, sombra e elementos compostos.
+add_executable(editor_canvas_widgets_tests tests/test_canvas_widgets.cpp)
+target_include_directories(editor_canvas_widgets_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_canvas_widgets_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+add_test(NAME Editor.CanvasWidgets COMMAND editor_canvas_widgets_tests)
+
+# Preserve image (encaixe com proporcao), imagens dos slots do Inventory e campos novos no JSON.
+add_executable(editor_canvas_preserve_tests tests/test_canvas_preserve.cpp)
+target_include_directories(editor_canvas_preserve_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_canvas_preserve_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+add_test(NAME Editor.CanvasPreserve COMMAND editor_canvas_preserve_tests)
+
+# Carregador de imagens do Canvas (image_io.cpp, stb): PNG e JPEG pequenos em tests/data e arquivo ausente.
+add_executable(editor_canvas_image_tests tests/test_canvas_image.cpp image_io.cpp)
+target_include_directories(editor_canvas_image_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/third_party/stb)
+target_compile_definitions(editor_canvas_image_tests PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+target_link_libraries(editor_canvas_image_tests PRIVATE tool::render)
+add_test(NAME Editor.CanvasImage COMMAND editor_canvas_image_tests)
+
 # Modelo da janela Jogo (game_view_model.hpp): letterbox, divisao entre duas cameras e recorte do preencher.
 add_executable(editor_game_view_model_tests tests/test_game_view_model.cpp)
 target_include_directories(editor_game_view_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -422,3 +460,9 @@ add_custom_command(TARGET tool_editor POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets" "${TOOL_FINAL_DIR}/assets"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/docs/referencia/LEIA_ME_PROJETO_FINAL.txt" "${TOOL_FINAL_DIR}/LEIA-ME.txt"
   COMMAND_EXPAND_LISTS VERBATIM)
+
+# Elementos de UI do Canvas na Hierarchy (canvas_elems_model.hpp): linhas filhas, renomear, duplicar, mover, apagar e valores iniciais.
+add_executable(editor_canvas_elems_tests tests/test_canvas_elems.cpp)
+target_include_directories(editor_canvas_elems_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_canvas_elems_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+add_test(NAME Editor.CanvasElems COMMAND editor_canvas_elems_tests)

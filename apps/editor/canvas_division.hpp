@@ -23,6 +23,9 @@
 namespace editor::canvas_division {
 
 inline constexpr float kHitRadiusPx = 8.f;   // raio de acerto do clique, em pixels de tela
+// Chave geral dos pontos de divisao no canvas: false = nao desenha cruzes/linhas/regioes, nao reage a clique e some dos
+// botoes. O codigo e os dados salvos continuam; as funcoes puras abaixo seguem funcionando (testes).
+inline constexpr bool kDivisionPointsEnabled = false;
 
 struct Point {
   float x = 0.5f;   // fracao do canvas, 0 = esquerda/topo, 1 = direita/base

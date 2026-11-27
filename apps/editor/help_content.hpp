@@ -166,6 +166,12 @@ Escolha teclas e botoes nas listas, ou aperte "Listen" e toque na tecla / botao 
 Nos Tools escolha o nome da acao e o Player. Nos scripts, leia as teclas direto: input.pressed("Space"), input.down("W"), input.mouseDelta() (veja "Scripts: exemplos").
 O mapa fica em Project/input_map.json (texto que voce pode editar).)H"},
 
+  {"node", "Physics", "Node (edit one object alone)", "Node (editar um objeto isolado)",
+R"H(Right-click an object in the Hierarchy > Edit individual (or Window > Node). The Scene then shows only that object and its children; everything else is hidden for drawing and clicking. The Node window lists the object and its children: click a row to select it, and use the Inspector as usual.
+"Exit isolation" brings the whole scene back. Isolation is only a view: the saved scene is not changed.)H",
+R"H(Botao direito num objeto da Hierarchy > Edit individual (ou Window > Node). A Scene passa a mostrar so esse objeto e os filhos dele; o resto fica oculto para desenhar e clicar. A janela Node lista o objeto e os filhos: clique numa linha para seleciona-la e use o Inspector como sempre.
+"Exit isolation" traz a cena inteira de volta. O isolamento e so uma visao: a cena salva nao muda.)H"},
+
   // ------------------------------------------------------------------------------------------------ EXAMPLES
   {"ex_jump", "Examples", "Example: make a cube jump", "Exemplo: fazer um cubo pular",
 R"H(# With Tools (works today)

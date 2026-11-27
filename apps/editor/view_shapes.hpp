@@ -37,7 +37,7 @@ inline Color rgbaF(float r, float g, float b, float a) {
   return Rgba(q(r), q(g), q(b), q(a));
 }
 
-enum class ShapeKind : std::uint8_t { Line, RoundRect, CircleFilled, Ring, Triangle, Text, Panel };
+enum class ShapeKind : std::uint8_t { Line, RoundRect, CircleFilled, Ring, Triangle, Text, Panel, Image };
 
 // Uma forma. Campos sem uso no tipo ficam zerados: a/b = pontos, c = terceiro ponto (triangulo), r = raio, espessura
 // ou largura maxima do texto, radius = cantos (retangulo e painel), size = fonte (texto), centered = texto centrado
@@ -54,7 +54,20 @@ struct Shape {
   std::string text;
   Color edge = 0;
   bool middle = false;   // texto: a/y e o centro vertical da linha (a altura medida da fonte), nao o topo
+  float wrap = 0.f;      // texto: largura de quebra de linha em pixels (0 = sem quebra); linhas nascem no pintor
+  // Image: a/b = retangulo, text = caminho absoluto do arquivo, color = tinta (branco = imagem como esta).
+  bool fit = false;      // Image: true = mantem a proporcao da imagem dentro do retangulo (centrada, sobra nas bordas)
 };
+
+// Retangulo de encaixe de uma imagem iw x ih numa caixa bw x bh, mantendo a proporcao e centrado (letterbox).
+// Medidas invalidas (<= 0) devolvem a caixa inteira. Exemplo: imagem 200x100 em caixa 100x100 -> 100x50 em y = 25.
+struct FitRect { float x = 0.f, y = 0.f, w = 0.f, h = 0.f; };
+inline FitRect fitAspect(float bw, float bh, float iw, float ih) {
+  if (bw <= 0.f || bh <= 0.f || iw <= 0.f || ih <= 0.f) return {0.f, 0.f, bw, bh};
+  const float s = bw / iw < bh / ih ? bw / iw : bh / ih;
+  const float w = iw * s, h = ih * s;
+  return {(bw - w) * 0.5f, (bh - h) * 0.5f, w, h};
+}
 
 class ShapeList {
 public:
@@ -76,6 +89,17 @@ public:
     add({ShapeKind::Text, at, {}, {}, maxWidth, 0.f, 0.f, size, centered, col, std::move(s)});
   }
   // Texto com o centro vertical em at.y: a linha fica centrada na altura medida, qualquer que seja a fonte.
+  // Texto com quebra de linha por palavras em `wrap` pixels (wrap <= 0 = sem quebra). Cada linha sobe a altura da fonte.
+  void textWrapped(Pixel at, std::string s, float size, Color col, float wrap, bool centered = false) {
+    add({ShapeKind::Text, at, {}, {}, 0.f, 0.f, 0.f, size, centered, col, std::move(s), 0, false, wrap});
+  }
+  // Imagem do projeto esticada em (a, b); `path` e o caminho absoluto do arquivo PNG/JPEG, tint multiplica a cor.
+  // fit = true: o pintor encaixa a imagem no retangulo mantendo a proporcao (sem esticar).
+  void image(Pixel a, Pixel b, std::string path, Color tint = 0xffffffffu, bool fit = false) {
+    Shape s{ShapeKind::Image, a, b, {}, 0.f, 0.f, 0.f, 0.f, false, tint, std::move(path)};
+    s.fit = fit;
+    add(std::move(s));
+  }
   void textMiddle(Pixel at, std::string s, float size, Color col, bool centered = false, float maxWidth = 0.f) {
     add({ShapeKind::Text, at, {}, {}, maxWidth, 0.f, 0.f, size, centered, col, std::move(s), 0, true});
   }

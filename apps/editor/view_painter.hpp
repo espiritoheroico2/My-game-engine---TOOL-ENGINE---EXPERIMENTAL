@@ -10,6 +10,7 @@
 // e vira um trecho; o menu de contexto, gravado depois, cobre a seta quando os dois se encostam. Textos saem depois
 // das formas do mesmo grupo, entao a legenda do botao aparece por cima do retangulo.
 
+#include "canvas_text.hpp"
 #include "sui_panel.hpp"
 #include "view_shapes.hpp"
 
@@ -22,7 +23,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace editor::view {
@@ -45,10 +48,64 @@ inline SDL_FColor straight(Color c) {
 }
 
 // Trecho de triangulos: sai depois dos primeiros `before` itens, recortado no clip `clip` (indice da lista de clips).
+// Se `image` nao e vazio, o trecho e uma imagem: 4 vertices (um quadrilatero com UV) e o caminho do arquivo.
 struct TriRun {
   std::size_t before = 0;
   std::uint32_t clip = 0;
   std::vector<SDL_Vertex> verts;
+  std::string image;   // caminho absoluto da imagem PNG/JPEG (vazio = trecho de triangulos; "?" = sem caminho)
+  bool fit = false;    // imagem: encaixa na caixa mantendo a proporcao (a caixa cheia vale so para o placeholder)
+};
+
+// Pixels de uma imagem decodificada (RGBA8, linha a linha de cima para baixo).
+struct ImagePixels {
+  int w = 0, h = 0;
+  std::vector<std::uint8_t> rgba;
+};
+
+// Cache de texturas SDL das imagens do Canvas, por caminho. Quem liga o decodificador (o editor, via image_io) chama
+// setLoader; sem ele toda imagem vira placeholder. Falha e lembrada: o aviso sai uma vez por arquivo, nao por quadro.
+// Limite: as texturas ficam ate trocar o renderizador ou chamar clear(); nao ha recarga automatica se o arquivo muda.
+class ImageCache {
+public:
+  using Loader = std::function<bool(const std::string&, ImagePixels&, std::string*)>;
+  using Warn = std::function<void(const std::string&)>;
+
+  // Cache unico do processo.
+  static ImageCache& get() { static ImageCache c; return c; }
+  // Liga o decodificador e a funcao de aviso (log).
+  void setLoader(Loader l, Warn w) { loader_ = std::move(l); warn_ = std::move(w); }
+  // true se ja ha decodificador ligado.
+  bool hasLoader() const { return static_cast<bool>(loader_); }
+  // Esquece tudo e destroi as texturas (o renderizador ainda deve existir).
+  void clear() { for (auto& [k, e] : map_) if (e.tex) SDL_DestroyTexture(e.tex); map_.clear(); }
+
+  // Textura da imagem, ou nullptr (arquivo ausente, formato ruim ou sem decodificador): o chamador desenha o placeholder.
+  SDL_Texture* texture(SDL_Renderer* renderer, const std::string& path) {
+    if (renderer != owner_) { map_.clear(); owner_ = renderer; }   // renderizador novo: as texturas antigas morreram junto
+    auto it = map_.find(path);
+    if (it != map_.end()) return it->second.tex;
+    Entry e;
+    ImagePixels px;
+    std::string err;
+    if (!loader_ || !loader_(path, px, &err) || px.w <= 0 || px.h <= 0) {
+      if (warn_) warn_("canvas image not loaded: '" + path + "' (" + (err.empty() ? "no decoder" : err) + ")");
+    } else if ((e.tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, px.w, px.h))) {
+      SDL_SetTextureBlendMode(e.tex, SDL_BLENDMODE_BLEND);
+      SDL_SetTextureScaleMode(e.tex, SDL_SCALEMODE_LINEAR);
+      if (!SDL_UpdateTexture(e.tex, nullptr, px.rgba.data(), px.w * 4)) { SDL_DestroyTexture(e.tex); e.tex = nullptr; }
+    }
+    map_[path] = e;
+    return e.tex;
+  }
+
+private:
+  // Uma imagem do cache (textura nula = falhou, nao tenta de novo).
+  struct Entry { SDL_Texture* tex = nullptr; };
+  std::unordered_map<std::string, Entry> map_;
+  SDL_Renderer* owner_ = nullptr;
+  Loader loader_;
+  Warn warn_;
 };
 
 // Um quadro de uma janela: itens da SpriteUI na ordem de pintura, e os trechos de triangulos entre eles.
@@ -71,7 +128,14 @@ public:
   void append(const ShapeList& list, std::uint32_t clip, PaintList& out) {
     for (const Shape& s : list.shapes()) {
       switch (s.kind) {
-        case ShapeKind::Text: text_.addText(textX(s), textY(s), s.text, s.size, premultiplied(s.color), textWidth(s)); break;
+        case ShapeKind::Text:
+          if (s.wrap > 0.f) addWrapped(s);
+          else text_.addText(textX(s), textY(s), s.text, s.size, premultiplied(s.color), textWidth(s));
+          break;
+        case ShapeKind::Image:
+          flushText(clip, out);   // o que veio antes (texto) fica embaixo da imagem
+          addImage(s, clip, out);
+          break;
         case ShapeKind::Triangle: addTriangle(s, clip, out); break;
         case ShapeKind::Panel:
           flushText(clip, out);
@@ -145,9 +209,34 @@ private:
     out.items.insert(out.items.end(), built.begin(), built.end());
   }
 
+  // Texto com quebra: as linhas saem do wrapLines com a mesma medida do desenho; altura de linha da fonte.
+  void addWrapped(const Shape& s) {
+    const float lh = text_.lineHeight(s.size);
+    const std::vector<std::string> lines = canvas_text::wrapLines(s.text, s.wrap, [&](const std::string& t) { return measure(t, s.size); });
+    float y = s.a.y;
+    for (const std::string& line : lines) {
+      if (!line.empty()) {
+        const float x = s.centered ? s.a.x - measure(line, s.size) * 0.5f : s.a.x;
+        text_.addText(x, y, line, s.size, premultiplied(s.color), 1e6f);
+      }
+      y += lh;
+    }
+  }
+
+  // Imagem: um trecho proprio (quadrilatero com UV), desenhado pelo SDL entre os lotes, na ordem de pintura.
+  static void addImage(const Shape& s, std::uint32_t clip, PaintList& out) {
+    const SU::Rect r = rectOf(s.a, s.b);
+    const SDL_FColor col = straight(s.color);
+    TriRun run{out.items.size(), clip, {}, s.text.empty() ? std::string("?") : s.text, s.fit};
+    const SDL_FPoint pt[4] = {{r.position.x, r.position.y}, {r.position.x + r.size.x, r.position.y}, {r.position.x + r.size.x, r.position.y + r.size.y}, {r.position.x, r.position.y + r.size.y}};
+    const SDL_FPoint uv[4] = {{0.f, 0.f}, {1.f, 0.f}, {1.f, 1.f}, {0.f, 1.f}};
+    for (int k = 0; k < 4; ++k) run.verts.push_back({pt[k], col, uv[k]});
+    out.runs.push_back(std::move(run));
+  }
+
   // Triangulo: entra no trecho aberto (ou abre um novo, se ja ha itens depois do ultimo trecho ou o recorte mudou).
   static void addTriangle(const Shape& s, std::uint32_t clip, PaintList& out) {
-    if (out.runs.empty() || out.runs.back().before != out.items.size() || out.runs.back().clip != clip) {
+    if (out.runs.empty() || out.runs.back().before != out.items.size() || out.runs.back().clip != clip || !out.runs.back().image.empty()) {
       out.runs.push_back({out.items.size(), clip, {}});
     }
     const SDL_FColor col = straight(s.color);
@@ -175,6 +264,20 @@ inline bool drawItemRange(SDL_Renderer* renderer, sui::SpriteUiSdlRenderer& sdl,
   return sdl.draw(renderer, packet);
 }
 
+// Imagem ausente ou invalida: caixa magenta translucida com um X, para o erro ficar visivel na tela.
+inline bool drawImagePlaceholder(SDL_Renderer* renderer, const TriRun& run) {
+  if (run.verts.size() < 4) return true;
+  const SDL_FPoint a = run.verts[0].position, b = run.verts[2].position;
+  const SDL_FRect box{a.x, a.y, b.x - a.x, b.y - a.y};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SDL_SetRenderDrawColor(renderer, 200, 40, 200, 110);
+  SDL_RenderFillRect(renderer, &box);
+  SDL_SetRenderDrawColor(renderer, 255, 255, 255, 220);
+  SDL_RenderRect(renderer, &box);
+  SDL_RenderLine(renderer, a.x, a.y, b.x, b.y);
+  return SDL_RenderLine(renderer, b.x, a.y, a.x, b.y);
+}
+
 inline bool drawTriRun(SDL_Renderer* renderer, const std::vector<SR::ClipRectGPU>& clips, const TriRun& run) {
   if (run.verts.empty()) return true;
   const bool clipped = run.clip < clips.size();
@@ -182,6 +285,26 @@ inline bool drawTriRun(SDL_Renderer* renderer, const std::vector<SR::ClipRectGPU
     const SR::ClipRectGPU& c = clips[run.clip];
     const SDL_Rect rect{static_cast<int>(c.minX), static_cast<int>(c.minY), static_cast<int>(c.maxX - c.minX), static_cast<int>(c.maxY - c.minY)};
     SDL_SetRenderClipRect(renderer, &rect);
+  }
+  if (!run.image.empty()) {   // imagem do Canvas: textura do cache, ou placeholder se falhou
+    SDL_Texture* tex = run.image == "?" ? nullptr : ImageCache::get().texture(renderer, run.image);
+    const int idx[6] = {0, 1, 2, 0, 2, 3};
+    std::vector<SDL_Vertex> fitted;   // proporcao mantida: so os vertices mudam (UV inteira)
+    const SDL_Vertex* vs = run.verts.data();
+    float iw = 0.f, ih = 0.f;
+    if (tex && run.fit && run.verts.size() >= 4 && SDL_GetTextureSize(tex, &iw, &ih)) {
+      const SDL_FPoint p0 = run.verts[0].position, p2 = run.verts[2].position;
+      const FitRect f = fitAspect(p2.x - p0.x, p2.y - p0.y, iw, ih);
+      fitted = run.verts;
+      fitted[0].position = {p0.x + f.x, p0.y + f.y};
+      fitted[1].position = {p0.x + f.x + f.w, p0.y + f.y};
+      fitted[2].position = {p0.x + f.x + f.w, p0.y + f.y + f.h};
+      fitted[3].position = {p0.x + f.x, p0.y + f.y + f.h};
+      vs = fitted.data();
+    }
+    const bool ok = tex ? SDL_RenderGeometry(renderer, tex, vs, 4, idx, 6) : drawImagePlaceholder(renderer, run);
+    SDL_SetRenderClipRect(renderer, nullptr);
+    return ok;
   }
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);   // cor reta: o alfa vale na mistura (ver canvas_paint.hpp)
   const bool ok = SDL_RenderGeometry(renderer, nullptr, run.verts.data(), static_cast<int>(run.verts.size()), nullptr, 0);

@@ -17,6 +17,9 @@
 
 #include "canvas_edit.hpp"
 #include "canvas_paint.hpp"
+#include "canvas_widgets.hpp"
+#include "image_io.hpp"
+#include "view_painter.hpp"
 #include "editor_state.hpp"
 #include "fx.hpp"                 // fxdetail (trajetoria, alfa e cor) e uiFormat
 #include "game_view_panel.hpp"
@@ -26,6 +29,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <utility>
 
 namespace editor::view_overlays {
 
@@ -132,11 +136,35 @@ inline void buildParticles(Editor& ed, const tool::Camera& cam, sui::Box area, t
 // UI do jogo de uma camera: desenha os Canvas que pertencem a camEnt dentro da celula. Cada canvas se posiciona na
 // area da camera (ancora e tamanho do layout); os elementos sao fracoes do canvas. Os botoes viram acertos na
 // celula (com a cor de hover/pressionado vinda de hoverIdx/pressedIdx, indices de botao da celula).
+// Liga o decodificador de imagens do editor (image_io, PNG/JPEG via stb) ao cache de texturas do pintor, uma vez.
+// O aviso de arquivo ausente sai no log uma unica vez por arquivo (o cache lembra a falha).
+inline void bindCanvasImageLoader() {
+  view::ImageCache& cache = view::ImageCache::get();
+  if (cache.hasLoader()) return;
+  cache.setLoader(
+      [](const std::string& path, view::ImagePixels& out, std::string* err) {
+        tool::Texture t;
+        if (!loadImageFile(path, t, err)) return false;
+        out.w = static_cast<int>(t.w); out.h = static_cast<int>(t.h); out.rgba = std::move(t.rgba);
+        return true;
+      },
+      [](const std::string& msg) { tool::logWarn(msg); });
+}
+
+// Caminho absoluto da imagem de um elemento (relativo ao projeto). Vazio se o elemento nao tem imagem.
+inline std::string canvasImagePathOf(Editor& ed, const char* rel) {
+  if (!rel[0]) return {};
+  const std::string full = ed.project.resolve(rel).string();
+  return full.empty() ? std::string(rel) : full;   // caminho invalido: o pintor avisa e desenha o placeholder
+}
+inline std::string canvasImagePath(Editor& ed, const UiElem& it) { return canvasImagePathOf(ed, it.image); }
+
 // Um canvas no retangulo r (pixels de janela): fundo, borda e elementos (fracoes do canvas). Os botoes viram acertos
 // em cell.hits quando interactive; a previa da Scene desenha sem acertos.
 inline void drawCanvas(Editor& ed, CanvasComp& cv, tool::canvas::Rect r, bool interactive, int hoverIdx, int pressedIdx,
                        gp::Cell& cell) {
   view::ShapeList& out = cell.overlay;
+  bindCanvasImageLoader();
   const float k = cv.layout.width > 0.f ? r.w / cv.layout.width : 1.f;   // raio e borda acompanham a escala do canvas
   canvas_paint::drawBase(out, {r.x, r.y}, {r.x + r.w, r.y + r.h}, cv.bg, cv.edge, cv.style.radius * k, cv.style.borderWidth * k);
   // Ordem Z: desenha do de z menor para o maior (o de z maior fica por cima). Empate: a ordem da lista.
@@ -151,8 +179,40 @@ inline void drawCanvas(Editor& ed, CanvasComp& cv, tool::canvas::Rect r, bool in
     const float fs = kUiFont * it.fontScale * std::max(0.5f, r.h / 600.f);
     const view::Color col = canvas_paint::shapeColor(it.color);
     auto label = [&](view::Color c) { out.text({(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f - fs * 0.5f}, txt, fs, c, true, b.x - a.x); };
-    switch (static_cast<UiKind>(it.kind)) {
-      case UiKind::Text: out.text(a, txt, fs, col); break;
+    // Sombra do elemento: deslocamento e blur em pixels de projeto, escalados para a tela.
+    canvas_paint::Shadow sh;
+    sh.on = it.shadow;
+    sh.x = it.shadowX * k; sh.y = it.shadowY * k; sh.blur = it.shadowBlur * k;
+    for (int c = 0; c < 4; ++c) sh.color[c] = it.shadowColor[c];
+    const std::string imgPath = canvasImagePath(ed, it);
+    const UiKind kind = static_cast<UiKind>(it.kind);
+    if (kind == UiKind::Panel || kind == UiKind::Button || kind == UiKind::Image || kind == UiKind::Window) {
+      canvas_paint::drawShadowBox(out, a, b, kind == UiKind::Image ? 0.f : it.radius * k, sh);   // sombra fica embaixo do elemento
+    }
+    switch (kind) {
+      case UiKind::Text:
+        if (it.wrapWidth > 0.f) {
+          auto putWrapped = [&](vm::Pixel at, view::Color c) { out.textWrapped(at, txt, fs, c, it.wrapWidth * k); };
+          canvas_paint::drawShadowText(a, sh, putWrapped);
+          out.textWrapped(a, txt, fs, col, it.wrapWidth * k);
+        } else {
+          canvas_paint::drawShadowText(a, sh, [&](vm::Pixel at, view::Color c) { out.text(at, txt, fs, c); });
+          out.text(a, txt, fs, col);
+        }
+        break;
+      case UiKind::Image:
+        canvas_paint::drawImageBox(out, a, b, imgPath, view::Rgba(255, 255, 255, static_cast<int>(std::clamp(it.color[3], 0.f, 1.f) * 255.f + 0.5f)), it.preserveAspect);
+        break;
+      case UiKind::Window: canvas_widgets::drawWindow(out, a, b, it.color, it.radius * k, fs, txt); break;
+      case UiKind::Menu: canvas_widgets::drawMenu(out, a, b, it.color, it.radius * k, fs, k, it.entries, std::min(it.entryCount, kMaxUiEntries)); break;
+      case UiKind::List: canvas_widgets::drawList(out, a, b, it.color, it.radius * k, fs, it.entries, std::min(it.entryCount, kMaxUiEntries)); break;
+      case UiKind::Inventory:
+        canvas_widgets::drawInventory(out, a, b, it.color, it.radius * k, fs, k, it.rows, it.cols, it.entries, std::min(it.entryCount, kMaxUiEntries),
+                                      canvasImagePathOf(ed, it.slotBackImage), canvasImagePathOf(ed, it.slotFrontImage), it.preserveAspect);
+        break;
+      case UiKind::ListContainer:
+        canvas_widgets::drawListContainer(out, a, b, it.color, it.radius * k, fs, it.entries, std::min(it.entryCount, kMaxUiEntries));
+        break;
       case UiKind::Panel:
         canvas_paint::drawBox(out, a, b, col, view::Rgba(0, 0, 0, 0), it.radius * k, false);
         if (!txt.empty()) label(view::Rgba(255, 255, 255));
@@ -172,7 +232,10 @@ inline void drawCanvas(Editor& ed, CanvasComp& cv, tool::canvas::Rect r, bool in
         const bool hov = interactive && hoverIdx == k2, down = interactive && pressedIdx == k2;
         const float m = down ? 0.7f : hov ? 1.15f : 1.f;
         const float tint[4] = {std::min(1.f, it.color[0] * m), std::min(1.f, it.color[1] * m), std::min(1.f, it.color[2] * m), it.color[3]};
-        if (it.radius > 0.f) {   // borda arredondada junto com o fundo
+        if (!imgPath.empty()) {   // imagem de fundo no lugar da forma (sem raio: o recorte do SDL e so retangular)
+          const auto q = [](float v) { return static_cast<int>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f); };
+          canvas_paint::drawImageBox(out, a, b, imgPath, view::Rgba(q(m), q(m), q(m), q(it.color[3])));   // hover/pressionado escurece ou clareia
+        } else if (it.radius > 0.f) {   // borda arredondada junto com o fundo
           canvas_paint::drawBox(out, a, b, canvas_paint::shapeColor(tint), view::Rgba(255, 255, 255, 160), it.radius * k, true);
         } else {
           out.rectFilled(a, b, canvas_paint::shapeColor(tint), 0.f);

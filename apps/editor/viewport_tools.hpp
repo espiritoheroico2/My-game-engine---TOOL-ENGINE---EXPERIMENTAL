@@ -125,6 +125,7 @@ inline tool::Entity pickByRay(Editor& ed, const Ray& ray) {
   tool::Entity best; float bestT = 1e30f;
   w.eachEntity([&](tool::Entity e) {
     auto* t = w.get<Transform>(e); if (!t) return;
+    if (ed.hiddenByIsolation(e)) return;   // Node: fora do isolamento nao se seleciona na Scene
     const tool::Mat4 wm = ed.worldMat(e); const tool::Vec3 P{wm.m[3][0], wm.m[3][1], wm.m[3][2]};
     auto* m = w.get<MeshRenderer>(e);
     float hit = -1.f;

@@ -44,6 +44,7 @@ enum class Command : std::uint8_t {
   ToggleSettings,
   ToggleNarrative,
   ToggleInputMap,
+  ToggleNode,
   ToggleSpriteUiDiagnostics,
   ToggleHelp,
   ResetLayout,
@@ -81,6 +82,7 @@ struct MenuState {
   bool settings = false;
   bool narrative = false;
   bool inputMap = false;
+  bool node = false;
   bool spriteUiDiagnostics = false;
   bool help = false;
   bool lockInterface = false;
@@ -152,6 +154,7 @@ inline const std::vector<MenuDef>& definitions() {
         {"Settings", "", Command::ToggleSettings, 0},
         {"Narrative Controller", "", Command::ToggleNarrative, 0},
         {"Input Map", "", Command::ToggleInputMap, 0},
+        {"Node", "", Command::ToggleNode, 0},
         {"SpriteUI diagnostics", "", Command::ToggleSpriteUiDiagnostics, 0},
         {"Help", "F1", Command::ToggleHelp, 0},
         {nullptr, nullptr, Command::None, 0},
@@ -192,6 +195,7 @@ inline std::optional<bool> toggleValue(const MenuState& s, Command c) {
     case Command::ToggleSettings: return s.settings;
     case Command::ToggleNarrative: return s.narrative;
     case Command::ToggleInputMap: return s.inputMap;
+    case Command::ToggleNode: return s.node;
     case Command::ToggleSpriteUiDiagnostics: return s.spriteUiDiagnostics;
     case Command::ToggleHelp: return s.help;
     case Command::ToggleLockInterface: return s.lockInterface;

@@ -492,6 +492,7 @@ private:
   // o arrasto. True: o clique foi do canvas (nao vai para o objeto da cena).
   bool startCanvas(vm::Pixel p, const Values& v, const sui::Box& img, Requests& out) {
     for (const Values::CanvasBox& c : v.canvases) {
+      if (!canvas_division::kDivisionPointsEnabled) break;   // pontos de divisao desligados: nao reage a clique
       if (!c.visible || !c.selected || c.locked) continue;   // travado: sem pontos nem linhas
       const canvas_edit::Box b = canvas_edit::boxFor(c.layout, img.w, img.h, c.ref);
       const canvas_edit::Box win{img.x + b.x, img.y + b.y, b.w, b.h};
@@ -563,7 +564,7 @@ private:
       out.line({a.x, z.y}, a, 1.f, edge);
       out.text({a.x + 4.f, a.y + 4.f}, T("Canvas"), kFont, edge);
       // Linhas entre pontos (pontilhadas ou solidas); a selecionada fica em destaque.
-      for (std::size_t i = 0; i < c.divisionLines.size(); ++i) {
+      for (std::size_t i = 0; canvas_division::kDivisionPointsEnabled && i < c.divisionLines.size(); ++i) {
         const canvas_division::Line& l = c.divisionLines[i];
         if (l.a >= c.divisions.size() || l.b >= c.divisions.size()) continue;
         float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
@@ -582,13 +583,13 @@ private:
         }
       }
       // Numero de cada regiao, no centro dela.
-      for (int id = 1; id < c.regions.next; ++id) {
+      for (int id = 1; canvas_division::kDivisionPointsEnabled && id < c.regions.next; ++id) {
         float rx = 0.f, ry = 0.f;
         if (!canvas_regions::centerOf(c.regions, id, rx, ry)) continue;
         out.text({a.x + rx * b.w - 4.f, a.y + ry * b.h - 6.f}, std::to_string(id), kFont, edge);
       }
       // Pontos de divisao: cruz e nome (viewpoint). O ponto selecionado fica em destaque.
-      for (std::size_t i = 0; i < c.divisions.size(); ++i) {
+      for (std::size_t i = 0; canvas_division::kDivisionPointsEnabled && i < c.divisions.size(); ++i) {
         float px = 0.f, py = 0.f;
         canvas_division::toPixels(c.divisions[i], {a.x, a.y, b.w, b.h}, px, py);
         const bool sel = c.selected && static_cast<int>(i) == v.selDivision;
@@ -872,11 +873,12 @@ private:
     x += 4.f;
     addButton(bar, x, by, kBtnH, v.localSpace ? T("Local (Q)") : T("World (Q)"), Btn::Space, v.localSpace, true, 8.f);
     if (v.selCanvas) addButton(bar, x, by, kBtnH, T("Edit canvas"), Btn::EditCanvas, v.canvasEdit, true, 8.f);
-    if (v.selCanvas && v.canvasEdit) addButton(bar, x, by, kBtnH, T("Add point"), Btn::AddPoint, v.divisionAdd, true, 8.f);
-    if (v.selCanvas && v.canvasEdit && v.selDivision >= 0) addButton(bar, x, by, kBtnH, T("Remove point"), Btn::RemovePoint, false, true, 8.f);
-    if (v.selCanvas && v.canvasEdit) addButton(bar, x, by, kBtnH, T("Line"), Btn::AddLine, v.divisionLine, true, 8.f);
-    if (v.selCanvas && v.canvasEdit && v.divisionLine) addButton(bar, x, by, kBtnH, T("Dotted"), Btn::DottedLine, v.dottedLine, true, 8.f);
-    if (v.selCanvas && v.canvasEdit && v.selLine >= 0) addButton(bar, x, by, kBtnH, T("Remove line"), Btn::RemoveLine, false, true, 8.f);
+    constexpr bool kDiv = canvas_division::kDivisionPointsEnabled;   // botoes de divisao so com a chave ligada
+    if (kDiv && v.selCanvas && v.canvasEdit) addButton(bar, x, by, kBtnH, T("Add point"), Btn::AddPoint, v.divisionAdd, true, 8.f);
+    if (kDiv && v.selCanvas && v.canvasEdit && v.selDivision >= 0) addButton(bar, x, by, kBtnH, T("Remove point"), Btn::RemovePoint, false, true, 8.f);
+    if (kDiv && v.selCanvas && v.canvasEdit) addButton(bar, x, by, kBtnH, T("Line"), Btn::AddLine, v.divisionLine, true, 8.f);
+    if (kDiv && v.selCanvas && v.canvasEdit && v.divisionLine) addButton(bar, x, by, kBtnH, T("Dotted"), Btn::DottedLine, v.dottedLine, true, 8.f);
+    if (kDiv && v.selCanvas && v.canvasEdit && v.selLine >= 0) addButton(bar, x, by, kBtnH, T("Remove line"), Btn::RemoveLine, false, true, 8.f);
     x += 4.f;
     sliderBox_ = {x, y + (kFloatH - 8.f) * 0.5f, kSliderW, 8.f};
     const float t = stm::sliderFromSnapStep(v.snapStep);
@@ -913,11 +915,12 @@ private:
     cursor += 4.f;
     addWidth(v.localSpace ? T("Local (Q)") : T("World (Q)"), 8.f);
     if (v.selCanvas) addWidth(T("Edit canvas"), 8.f);
-    if (v.selCanvas && v.canvasEdit) addWidth(T("Add point"), 8.f);
-    if (v.selCanvas && v.canvasEdit && v.selDivision >= 0) addWidth(T("Remove point"), 8.f);
-    if (v.selCanvas && v.canvasEdit) addWidth(T("Line"), 8.f);
-    if (v.selCanvas && v.canvasEdit && v.divisionLine) addWidth(T("Dotted"), 8.f);
-    if (v.selCanvas && v.canvasEdit && v.selLine >= 0) addWidth(T("Remove line"), 8.f);
+    constexpr bool kDiv = canvas_division::kDivisionPointsEnabled;   // mesma regra dos botoes
+    if (kDiv && v.selCanvas && v.canvasEdit) addWidth(T("Add point"), 8.f);
+    if (kDiv && v.selCanvas && v.canvasEdit && v.selDivision >= 0) addWidth(T("Remove point"), 8.f);
+    if (kDiv && v.selCanvas && v.canvasEdit) addWidth(T("Line"), 8.f);
+    if (kDiv && v.selCanvas && v.canvasEdit && v.divisionLine) addWidth(T("Dotted"), 8.f);
+    if (kDiv && v.selCanvas && v.canvasEdit && v.selLine >= 0) addWidth(T("Remove line"), 8.f);
     cursor += 4.f + kSliderW + 6.f;
     char val[32];
     std::snprintf(val, sizeof val, "%.2f m", static_cast<double>(v.snapStep));

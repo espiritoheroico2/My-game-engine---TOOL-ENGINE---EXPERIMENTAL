@@ -30,6 +30,7 @@
 #include "SpriteUi/Widgets/TextField.hpp"
 
 #include "components.hpp"
+#include "canvas_elems_model.hpp"
 #include "framed_window.hpp"
 #include "i18n.hpp"
 #include "inspector_bridge.hpp"
@@ -60,6 +61,7 @@
 namespace editor::inspector_panel {
 
 namespace im = editor::inspector_model;
+namespace hm = editor::hierarchy_model;
 namespace ib = editor::inspector_bridge;
 namespace SU = ToolEngine::SpriteUi;
 namespace Elm = SU::Elements;
@@ -103,6 +105,9 @@ struct Context {
     VoxelChunk* voxel = nullptr;         // blocos do objeto (nullptr: nao tem)
     unsigned voxelSolid = 0;             // blocos preenchidos no chunk
     CanvasComp* cv = nullptr;            // Canvas (UI de jogo) do objeto (nullptr: nao tem)
+    UiElem* uiElem = nullptr;            // elemento de UI selecionado na Hierarchy: o Inspector mostra so ele
+    int uiIndex = -1;                    // posicao do elemento na lista do canvas
+    std::string uiCanvasName;            // nome do Canvas dono do elemento
     std::vector<std::string> cameraNames;   // cameras da cena (para escolher onde a UI aparece)
     ParticleComp* particles = nullptr;   // particulas do objeto (nullptr: nao tem)
     std::vector<int> addable;            // recursos (im::Resource) que o objeto ainda pode receber
@@ -139,8 +144,7 @@ struct Hooks {
     std::function<void()> voxelFill;                               // preenche o terreno
     std::function<void()> voxelClear;                              // limpa o chunk
     std::function<void()> removeUi;                                // tira a UI de jogo do objeto
-    std::function<void(int)> addUiElem;                            // novo elemento: 0 texto, 1 painel, 2 botao, 3 barra
-    std::function<void(std::size_t)> removeUiElem;                 // tira um elemento da UI
+    std::function<std::vector<std::string>()> uiImages;            // imagens do projeto para elementos de UI (so PNG e JPEG)
     std::function<void()> smokePreset;                             // "Smoke preset": valores de fumaca nas particulas
     std::function<void()> removeParticles;                         // tira as particulas do objeto
     std::function<void(int)> addResource;                          // adiciona um recurso (im::Resource)
@@ -217,13 +221,19 @@ class InspectorPanel {
             addScrollbar();
             return y_ + Metrics::kPad;
         }
-        const unsigned id = (ctx.entityGeneration << 20) ^ ctx.entityIndex;
+        const unsigned id = ((ctx.entityGeneration << 20) ^ ctx.entityIndex) ^ (static_cast<unsigned>(ctx.uiIndex + 1) * 0x9E3779B1u);
         if (id != lastObject_) {   // outro objeto: fecha listas e campo em edicao
             lastObject_ = id;
             closePopups();
             endEdit();
             tagMsg_.clear();
             renaming_ = -1;
+        }
+        if (ctx.uiElem) {   // elemento de UI selecionado: so as propriedades dele
+            uiElemSection();
+            contentH_ = y_ + scrollY_ + Metrics::kPad;
+            addScrollbar();
+            return y_ + Metrics::kPad;
         }
         header();
         if (ctx.transform) transform();
@@ -1101,9 +1111,8 @@ class InspectorPanel {
         endSection();
     }
 
-    // Canvas (UI de jogo): visivel, camera onde aparece (vazio = todas as Principais), ancora e tamanho do canvas,
-    // elementos (texto, painel, botao, barra) em fracoes do canvas, e os botoes para adicionar. A lista e fixa
-    // (sem recolher por elemento), como as ferramentas.
+    // Canvas (UI de jogo): visivel, camera onde aparece (vazio = todas as Principais), ancora e tamanho do canvas e
+    // aparencia. Os elementos nao se editam aqui: sao linhas filhas do Canvas na Hierarchy (ver uiElemSection).
     void canvasSection() {
         CanvasComp& ui = *ctx_.cv;
         if (!beginSection(im::Section::Canvas, T("Canvas (game UI)"))) return;
@@ -1142,47 +1151,127 @@ class InspectorPanel {
         slider(T("Border opacity"), &ui.edge[3], {0.f, 1.f});
         slider(T("Corner radius"), &ui.style.radius, {0.f, 200.f});
         slider(T("Border width"), &ui.style.borderWidth, {0.f, 40.f});
-        static const char* kinds[] = {"Text", "Panel", "Button", "Bar"};
-        for (int i = 0; i < ui.count && i < kMaxUi; ++i) {
-            UiElem& it = ui.items[i];
-            const std::size_t idx = static_cast<std::size_t>(i);
-            const int k = std::clamp(it.kind, 0, 3);
-            canvas_.addText(innerX_, y_ + 5.f, F("%s: %s  (%s %d)", T(kinds[k]), it.text, T("Region"), it.region), Metrics::kFont, headingColor_, ctrlX_ - innerX_ - 6.f);
-            button(ctrlX_, T("Remove"), [this, idx] { hooks_.removeUiElem(idx); }, Metrics::kButtonW);
-            nextRow();
-            drop(T("Type"), tr({"Text", "Panel", "Button", "Bar"}), static_cast<std::size_t>(k), [&it](std::size_t t) { it.kind = static_cast<int>(t); });
-            textRow(T("Text (use {variable})"), it.text, sizeof it.text);
-            canvas_.addText(innerX_, y_ + 5.f, F("%s: %s", T("Id (unique, automatic)"), it.id), Metrics::kFont, headingColor_, ctrlX_ - innerX_ - 6.f);
-            nextRow();
-            intRow(T("Order Z (higher = in front)"), &it.z, -999, 999);
-            if (it.kind == 2) textRow(T("Event name (on click)"), it.action, sizeof it.action);
-            if (it.kind == 3) {
-                textRow(T("Variable"), it.action, sizeof it.action);
-                numberRow(T("Full at"), &it.maxValue, 2, {0.0001f, 1e9f});
-            }
-            slider(T("Position X"), &it.x, {0.f, 1.f});
-            slider(T("Position Y"), &it.y, {0.f, 1.f});
-            slider(T("Width"), &it.w, {0.f, 1.f});
-            slider(T("Height"), &it.h, {0.f, 1.f});
-            swatch(T("Color"), it.color);
-            slider(T("Color opacity"), &it.color[3], {0.f, 1.f});
-            if (it.kind == 1 || it.kind == 2) slider(T("Corner radius"), &it.radius, {0.f, 200.f});   // painel e botao
-            slider(T("Font scale"), &it.fontScale, {0.5f, 4.f});
-            y_ += Metrics::kGap;   // respiro entre elementos
-        }
-        if (ui.count < kMaxUi) {
-            button(innerX_, T("+ Text"), [this] { hooks_.addUiElem(0); }, Metrics::kButtonW);
-            button(innerX_ + Metrics::kButtonW + Metrics::kGap, T("+ Button"), [this] { hooks_.addUiElem(2); }, Metrics::kButtonW);
-            nextRow();
-            button(innerX_, T("+ Bar"), [this] { hooks_.addUiElem(3); }, Metrics::kButtonW);
-            button(innerX_ + Metrics::kButtonW + Metrics::kGap, T("+ Panel"), [this] { hooks_.addUiElem(1); }, Metrics::kButtonW);
-            nextRow();
-        }
+        canvas_.addText(innerX_, y_, F("%s: %d / %d  (%s)", T("Elements"), ui.count, kMaxUi,
+                                       T("edit them in the Hierarchy: click a child row; right-click the Canvas > Add element")),
+                        Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+        nextRow();
         canvas_.addText(innerX_, y_, T("Appears over the Game view of the chosen camera. Button clicks (while playing) send their event name."),
                         Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
         nextRow();
         button(ctrlX_, T("Remove Canvas"), [this] { hooks_.removeUi(); }, Metrics::kButtonW);
         nextRow();
+        endSection();
+    }
+
+    // Imagem do elemento de UI: lista so de PNG e JPEG do projeto. "(none)" limpa. Nao passa por assignAsset (so grava o caminho).
+    void uiImageRow(const char* text, char* buf, std::size_t cap) {
+        std::vector<std::string> options{T("(none)")};
+        std::size_t selected = 0;
+        if (hooks_.uiImages) {
+            for (const std::string& rel : hooks_.uiImages()) {
+                if (rel == buf) selected = options.size();
+                options.push_back(rel);
+            }
+        }
+        if (buf[0] && selected == 0) {   // arquivo fora da lista: mostra o caminho gravado mesmo assim
+            options.push_back(buf);
+            selected = options.size() - 1;
+        }
+        const std::vector<std::string> list = options;
+        drop(text, std::move(options), selected, [buf, cap, list](std::size_t i) {
+            const std::string chosen = i == 0 || i >= list.size() ? std::string() : list[i];
+            std::snprintf(buf, cap, "%s", chosen.c_str());
+        });
+    }
+
+    // Linha de botoes pequenos (cada um com seu texto), a partir da coluna dos controles.
+    void smallButtons(std::initializer_list<std::pair<const char*, std::function<void()>>> items) {
+        float x = ctrlX_;
+        for (const auto& it : items) {
+            button(x, it.first, it.second, 60.f);
+            x += 60.f + Metrics::kGap;
+        }
+        nextRow();
+    }
+
+    // Elemento de UI selecionado na Hierarchy: todas as propriedades dele (nome, tipo, posicao, tamanho, cor, texto,
+    // imagem, sombra, lista de entradas e linhas/colunas). O que nao vale para o tipo nao aparece.
+    void uiElemSection() {
+        UiElem& it = *ctx_.uiElem;
+        const int kind = std::clamp(it.kind, 0, static_cast<int>(UiKind::Count) - 1);
+        const bool isText = kind == static_cast<int>(UiKind::Text);
+        const bool isButton = kind == static_cast<int>(UiKind::Button);
+        const bool isBar = kind == static_cast<int>(UiKind::Bar);
+        const bool isImage = kind == static_cast<int>(UiKind::Image);
+        const bool isInventory = kind == static_cast<int>(UiKind::Inventory);
+        const bool hasEntries = kind == static_cast<int>(UiKind::Menu) || kind == static_cast<int>(UiKind::List) ||
+                                kind == static_cast<int>(UiKind::ListContainer) || isInventory;
+        canvas_.addText(Metrics::kPad, y_, F("%s: %s  [%d]", T("UI element of"), ctx_.uiCanvasName.c_str(), ctx_.uiIndex),
+                        Metrics::kSmallFont + 1.f, theme_.textDim, width_ - 2.f * Metrics::kPad);
+        y_ += Metrics::kRowH - 4.f;
+        if (!beginSection(im::Section::Canvas, T("UI element"))) return;
+        textRow(T("Name"), it.name, sizeof it.name);   // nome do elemento (Hierarchy); vazio = nome do tipo
+        textRow(T("Text"), it.text, sizeof it.text);
+        std::vector<std::string> kinds;
+        for (int k = 0; k < static_cast<int>(UiKind::Count); ++k) kinds.emplace_back(T(hm::kElemKindNames[k]));
+        drop(T("Kind"), std::move(kinds), static_cast<std::size_t>(kind), [&it](std::size_t t) { it.kind = static_cast<int>(t); });
+        canvas_.addText(innerX_, y_ + 5.f, F("%s: %s  (%s %d)", T("Id (unique, automatic)"), it.id, T("Region"), it.region),
+                        Metrics::kFont, headingColor_, width_ - innerX_ - Metrics::kPad);
+        nextRow();
+        intRow(T("Order Z (higher = in front)"), &it.z, -999, 999);
+        if (isButton) textRow(T("Event name (on click)"), it.action, sizeof it.action);
+        if (isBar) {
+            textRow(T("Variable"), it.action, sizeof it.action);
+            numberRow(T("Full at"), &it.maxValue, 2, {0.0001f, 1e9f});
+        }
+        // Posicao (ponto do elemento na area do canvas: 0 = esquerda/topo, 1 = direita/base) e tamanho, em fracao do canvas.
+        slider(T("Position X (anchor)"), &it.x, {0.f, 1.f});
+        slider(T("Position Y (anchor)"), &it.y, {0.f, 1.f});
+        slider(T("Width"), &it.w, {0.f, 1.f});
+        slider(T("Height"), &it.h, {0.f, 1.f});
+        slider(T("Corner radius"), &it.radius, {0.f, 200.f});
+        swatch(T("Color"), it.color);
+        slider(T("Color opacity"), &it.color[3], {0.f, 1.f});
+        if (isText || isButton || kind == static_cast<int>(UiKind::Window)) slider(T("Font size"), &it.fontScale, {0.3f, 8.f});
+        if (isText) numberRow(T("Wrap width (px, 0 = none)"), &it.wrapWidth, 0, {0.f, 1e5f});
+        if (isImage) {
+            uiImageRow(T("Image (png/jpg)"), it.image, sizeof it.image);
+            checkField(T("Preserve image"), &it.preserveAspect);   // mantem a proporcao da imagem ao redimensionar
+        }
+        if (isButton) uiImageRow(T("Background image"), it.image, sizeof it.image);
+        // Sombra projetada: liga e desliga; deslocamento, suavizacao e cor.
+        checkField(T("Shadow"), &it.shadow);
+        if (it.shadow) {
+            numberRow(T("Shadow offset X"), &it.shadowX, 1, {-200.f, 200.f});
+            numberRow(T("Shadow offset Y"), &it.shadowY, 1, {-200.f, 200.f});
+            slider(T("Shadow blur"), &it.shadowBlur, {0.f, 100.f});
+            swatch(T("Shadow color"), it.shadowColor);
+            slider(T("Shadow opacity"), &it.shadowColor[3], {0.f, 1.f});
+        }
+        if (isInventory) {
+            intRow(T("Rows"), &it.rows, 1, 16);
+            intRow(T("Columns"), &it.cols, 1, 16);
+            uiImageRow(T("Slot background image"), it.slotBackImage, sizeof it.slotBackImage);   // vazio = quadrado
+            uiImageRow(T("Slot front image"), it.slotFrontImage, sizeof it.slotFrontImage);
+            checkField(T("Preserve image"), &it.preserveAspect);
+        }
+        if (hasEntries) {   // lista editavel: um campo por entrada, com subir, descer e remover; "Add" no fim
+            canvas_.addText(innerX_, y_ + 5.f, F("%s: %d / %d", isInventory ? T("Slot labels") : T("Entries"), it.entryCount, kMaxUiEntries),
+                            Metrics::kFont, headingColor_, width_ - innerX_ - Metrics::kPad);
+            nextRow();
+            UiElem* target = &it;
+            for (int i = 0; i < it.entryCount && i < kMaxUiEntries; ++i) {
+                const std::string entryLabel = F("%s %d", T("Entry"), i + 1);
+                textRow(entryLabel.c_str(), it.entries[i], kUiEntryLen);
+                smallButtons({{T("Up"), [target, i] { editor::canvas_elems::MoveEntry(*target, i, -1); }},
+                              {T("Down"), [target, i] { editor::canvas_elems::MoveEntry(*target, i, 1); }},
+                              {T("Remove"), [target, i] { editor::canvas_elems::RemoveEntry(*target, i); }}});
+            }
+            if (it.entryCount < kMaxUiEntries) {
+                button(ctrlX_, T("+ Add entry"), [target] { editor::canvas_elems::AddEntry(*target); }, Metrics::kButtonW);
+                nextRow();
+            }
+        }
         endSection();
     }
 

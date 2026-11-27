@@ -32,7 +32,19 @@ using Id = std::uint64_t;
 inline constexpr Id NoId = 0;
 
 // Tipo do objeto: so muda o icone e a cor. Object e o objeto vazio.
-enum class Kind : std::uint8_t { Object, Camera, Light, Audio, Particles, Canvas };
+// Element = linha de acesso a um elemento de UI dentro de um Canvas (nao e objeto da cena).
+enum class Kind : std::uint8_t { Object, Camera, Light, Audio, Particles, Canvas, Element };
+
+// Id de linha de elemento de UI: bit 63 ligado. Os ids de objeto reais nunca usam esse bit.
+inline constexpr Id kElemBit = Id{1} << 63;
+// A linha e um elemento de UI (acesso), e nao um objeto da cena?
+[[nodiscard]] inline constexpr bool IsElemId(Id id) noexcept { return (id & kElemBit) != 0; }
+
+// Nomes dos tipos de elemento de UI, na ordem de UiKind (usados nos menus e nas linhas).
+inline constexpr const char* kElemKindNames[] = {"Text", "Panel", "Button", "Bar", "Image",
+                                                 "Window", "Menu", "List", "Inventory", "List container"};
+// Quantidade de tipos de elemento de UI.
+inline constexpr int kElemKindCount = static_cast<int>(sizeof(kElemKindNames) / sizeof(kElemKindNames[0]));
 
 struct Item {
     Id id = NoId;
@@ -41,6 +53,7 @@ struct Item {
     Kind kind = Kind::Object;
     bool hidden = false;
     bool locked = false;
+    std::string editText;   // texto inicial do campo de renomear (vazio = usa label)
 };
 
 // Resultado de uma acao sobre a arvore. activate = objeto a focar (duplo clique ou Enter numa folha).
@@ -133,6 +146,7 @@ class HierarchyModel {
     // Reparentar: child vira filho de parent. Recusa o proprio objeto e qualquer ancestral da arvore (ciclo).
     [[nodiscard]] bool CanReparent(Id child, Id parent) const {
         if (child == NoId || parent == NoId || child == parent) return false;
+        if (IsElemId(child) || IsElemId(parent)) return false;   // linhas de elemento nao entram na hierarquia de objetos
         if (!index_.count(child) || !index_.count(parent)) return false;
         for (Id up = parent; up != NoId;) {
             if (up == child) return false;

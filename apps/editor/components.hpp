@@ -132,7 +132,14 @@ constexpr int kMaxTools = 8;
 struct ToolsComp { int count = 0; ToolItem items[kMaxTools]; };
 
 // Tipos de elemento de UI do jogo.
-enum class UiKind : int { Text = 0, Panel, Button, Bar, Count };
+// Os quatro primeiros valores sao os antigos (arquivos salvos dependem deles): nao reordenar.
+// Image = imagem do projeto; Window = painel com faixa de titulo; Menu = botoes em coluna; List = linhas de texto;
+// Inventory = grade de slots (rows x cols); ListContainer = regiao com rolagem (linhas cortadas pela caixa).
+enum class UiKind : int { Text = 0, Panel, Button, Bar, Image, Window, Menu, List, Inventory, ListContainer, Count };
+// Maximo de textos (itens de Menu/List/ListContainer, rotulos de slots do Inventory) por elemento.
+constexpr int kMaxUiEntries = 12;
+// Tamanho de cada texto de entrada, com o zero final.
+constexpr int kUiEntryLen = 32;
 // Elemento de UI dentro de um canvas: posicao e tamanho em fracao do canvas, cor, texto e acao do botao.
 struct UiElem {
   char id[32] = "";   // id unico do elemento no jogo inteiro, gerado na criacao (ver ui_ids.hpp): "e" + base36
@@ -143,9 +150,41 @@ struct UiElem {
   float maxValue = 100.f;
   float fontScale = 1.f;
   float radius = 0.f; // raio do canto em pixels de projeto (0 = quadrado); limitado a metade do menor lado ao desenhar
+  char name[64] = "";         // nome do elemento (so para a Hierarchy e o Inspector)
+  char image[96] = "";        // imagem PNG/JPEG do projeto (caminho relativo); vazio = sem imagem. Image e Button usam
+  bool shadow = false;        // sombra projetada (texto e elementos); desligada por padrao
+  float shadowX = 2.f, shadowY = 2.f;   // deslocamento da sombra, em pixels de projeto
+  float shadowBlur = 0.f;     // suavizacao da sombra em pixels de projeto (0 = borda dura); vira camadas com alfa decrescente
+  float shadowColor[4] = {0.f, 0.f, 0.f, 0.6f};   // cor RGBA 0..1 da sombra
+  float wrapWidth = 0.f;      // Text: largura de quebra de linha em pixels de projeto (0 = sem quebra)
+  int rows = 3, cols = 4;     // Inventory: linhas e colunas de slots
+  int entryCount = 0;         // quantidade de textos validos em entries (Menu, List, ListContainer, rotulos do Inventory)
+  char entries[kMaxUiEntries][kUiEntryLen] = {};   // textos das entradas (um por botao, linha ou slot)
+  bool preserveAspect = false;   // Image e Inventory: imagem encaixada mantendo a proporcao (sem esticar); padrao: estica
+  char slotBackImage[96] = "";   // Inventory: imagem de fundo de cada slot (caminho do projeto); vazio = quadrado de sempre
+  char slotFrontImage[96] = "";  // Inventory: imagem da frente de cada slot, sobre o fundo e abaixo do rotulo
 };
 // Maximo de elementos de UI por canvas.
 constexpr int kMaxUi = 16;
+// Poe o tamanho padrao (fracao do canvas), o raio e as entradas de exemplo de um tipo de elemento novo. Nao mexe em
+// posicao, cor, id nem z. Os tipos antigos ficam como estao (so o kind muda).
+inline void initUiKind(UiElem& e, int kind) {
+  e.kind = kind;
+  auto entry = [&e](const char* t) {
+    if (e.entryCount < kMaxUiEntries) std::snprintf(e.entries[e.entryCount++], kUiEntryLen, "%s", t);
+  };
+  e.entryCount = 0;
+  switch (static_cast<UiKind>(kind)) {
+    case UiKind::Image: e.w = 0.12f; e.h = 0.2f; e.text[0] = 0; break;
+    case UiKind::Window: e.w = 0.3f; e.h = 0.4f; e.radius = 4.f; std::snprintf(e.text, sizeof e.text, "%s", "Window"); break;
+    case UiKind::Menu: e.w = 0.18f; e.h = 0.3f; e.radius = 6.f; e.text[0] = 0; entry("Start"); entry("Options"); entry("Quit"); break;
+    case UiKind::List: e.w = 0.2f; e.h = 0.3f; e.text[0] = 0; entry("Item 1"); entry("Item 2"); entry("Item 3"); break;
+    case UiKind::Inventory: e.w = 0.25f; e.h = 0.25f; e.radius = 3.f; e.rows = 3; e.cols = 4; e.text[0] = 0; break;
+    case UiKind::ListContainer: e.w = 0.25f; e.h = 0.35f; e.radius = 4.f; e.text[0] = 0;
+      for (int i = 1; i <= 8; ++i) { char b[kUiEntryLen]; std::snprintf(b, sizeof b, "Row %d", i); entry(b); } break;
+    default: break;
+  }
+}
 // Marca: objeto desativado (nao simula nem desenha).
 struct Inactive {};
 // Marca: objeto travado (nao pode ser selecionado/movido no editor).
@@ -332,6 +371,18 @@ inline tool::Json itemsJson(const CanvasComp& c) {
     q.set("rect", ser::vec(&it.x, 4)); q.set("color", ser::vec(it.color, 4));
     q.set("max", static_cast<double>(it.maxValue)); q.set("font", static_cast<double>(it.fontScale));
     q.set("radius", static_cast<double>(it.radius));
+    q.set("name", std::string(it.name)); q.set("image", std::string(it.image));
+    q.set("preserveAspect", it.preserveAspect);
+    q.set("slotBackImage", std::string(it.slotBackImage)); q.set("slotFrontImage", std::string(it.slotFrontImage));
+    tool::Json sh = tool::Json::object();
+    sh.set("on", it.shadow); sh.set("x", static_cast<double>(it.shadowX)); sh.set("y", static_cast<double>(it.shadowY));
+    sh.set("blur", static_cast<double>(it.shadowBlur)); sh.set("color", ser::vec(it.shadowColor, 4));
+    q.set("shadow", sh);
+    q.set("wrap", static_cast<double>(it.wrapWidth));
+    q.set("rows", static_cast<double>(it.rows)); q.set("cols", static_cast<double>(it.cols));
+    tool::Json ents = tool::Json::array();
+    for (int e = 0; e < it.entryCount && e < kMaxUiEntries; ++e) ents.push(std::string(it.entries[e]));
+    q.set("entries", ents);
     arr.push(q);
   }
   return arr;
@@ -395,6 +446,24 @@ inline void readItems(const tool::Json& arr, CanvasComp& c) {
     // Arquivo antigo sem o campo: mantem o visual de antes (Panel 4 px, Button 6 px, demais 0).
     const float legacy = it.kind == static_cast<int>(UiKind::Panel) ? 4.f : it.kind == static_cast<int>(UiKind::Button) ? 6.f : 0.f;
     it.radius = ser::clampNum(q, "radius", legacy, 0.f, 1e4f);
+    // Campos novos: arquivo antigo sem eles fica sem imagem, sem sombra, sem quebra (mesmo visual de antes).
+    ser::copyStr(it.image, sizeof it.image, q["image"].asString());
+    it.preserveAspect = ser::flag(q, "preserveAspect", false);   // arquivo antigo: estica como antes
+    ser::copyStr(it.slotBackImage, sizeof it.slotBackImage, q["slotBackImage"].asString());
+    ser::copyStr(it.slotFrontImage, sizeof it.slotFrontImage, q["slotFrontImage"].asString());
+    ser::copyStr(it.name, sizeof it.name, q["name"].asString());   // arquivo antigo sem nome: fica ""
+    const tool::Json& sh = q["shadow"];
+    it.shadow = ser::flag(sh, "on", false);
+    it.shadowX = ser::clampNum(sh, "x", 2.f, -200.f, 200.f); it.shadowY = ser::clampNum(sh, "y", 2.f, -200.f, 200.f);
+    it.shadowBlur = ser::clampNum(sh, "blur", 0.f, 0.f, 100.f);
+    ser::readVec(sh["color"], it.shadowColor, 4); for (float& c : it.shadowColor) c = std::clamp(c, 0.f, 1.f);
+    it.wrapWidth = ser::clampNum(q, "wrap", 0.f, 0.f, 1e5f);
+    it.rows = std::clamp(static_cast<int>(ser::num(q, "rows", 3.f)), 1, 16); it.cols = std::clamp(static_cast<int>(ser::num(q, "cols", 4.f)), 1, 16);
+    it.entryCount = 0;
+    for (const auto& en : q["entries"].items()) {
+      if (it.entryCount >= kMaxUiEntries) break;
+      ser::copyStr(it.entries[it.entryCount++], kUiEntryLen, en.asString());
+    }
   }
 }
 

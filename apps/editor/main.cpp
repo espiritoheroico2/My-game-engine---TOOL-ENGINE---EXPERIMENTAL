@@ -10,6 +10,7 @@
 #include "export_panel.hpp"
 #include "frame_pacing.hpp"
 #include "input_map_panel.hpp"
+#include "node_panel.hpp"
 #include "frame_input.hpp"
 #include "extra_ui.hpp"
 #include "fx.hpp"
@@ -31,6 +32,7 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "console_model.hpp"
 #include "console_panel.hpp"
 #include "hierarchy_panel.hpp"
+#include "canvas_elems_model.hpp"
 #include "inspector_panel.hpp"
 #include "coding_panel.hpp"
 #include "scenes_panel.hpp"
@@ -140,8 +142,29 @@ editor::hierarchy_model::Kind hierarchyKindOf(tool::World& w, tool::Entity e) {
   return K::Object;
 }
 
+// Canvas dono de uma linha de elemento de UI (pelo id de linha), ou entidade vazia se nao existe mais.
+tool::Entity canvasOfRow(Editor& ed, editor::hierarchy_model::Id rowId) {
+  tool::Entity found{};
+  ed.scene.world().each<ed_::CanvasComp>([&](tool::Entity e, ed_::CanvasComp&) {
+    if ((hierarchyKey(e) & editor::canvas_elems::kCanvasMask) == editor::canvas_elems::CanvasPartOfRow(rowId)) found = e;
+  });
+  return found;
+}
+
+// Mantem a selecao de elemento de UI coerente: o canvas precisa estar vivo, ser o objeto selecionado e ter o indice.
+// Selecionar outro objeto (em qualquer janela), apagar o canvas ou desfazer limpa a selecao do elemento.
+void syncUiElemSelection(Editor& ed) {
+  ed_::UiElemSel& s = ed.selectedUiElem;
+  if (s.index < 0) return;
+  tool::World& w = ed.scene.world();
+  const ed_::CanvasComp* c = w.alive(s.canvas) ? w.get<ed_::CanvasComp>(s.canvas) : nullptr;
+  if (!c || !(ed.selected == s.canvas) || s.index >= c->count) s = ed_::UiElemSel{};
+}
+
 // Lista de objetos do quadro (pai, nome, tipo, ocultar e travar) e a selecao do Editor.
+// Cada Canvas ganha, logo depois dele, as linhas de acesso dos seus elementos de UI (nao sao objetos da cena).
 editor::hierarchy_panel::Source hierarchySource(Editor& ed) {
+  syncUiElemSelection(ed);
   tool::World& w = ed.scene.world();
   editor::hierarchy_panel::Source src;
   w.eachEntity([&](tool::Entity e) {
@@ -155,8 +178,10 @@ editor::hierarchy_panel::Source hierarchySource(Editor& ed) {
     item.hidden = w.has<ed_::Inactive>(e);
     item.locked = w.has<ed_::Locked>(e);
     src.items.push_back(std::move(item));
+    if (const auto* cv = w.get<ed_::CanvasComp>(e)) editor::canvas_elems::AppendRows(src.items, hierarchyKey(e), *cv);
   });
   src.selected = w.alive(ed.selected) ? hierarchyKey(ed.selected) : editor::hierarchy_model::NoId;
+  if (ed.selectedUiElem.index >= 0 && w.alive(ed.selected)) src.selected = editor::canvas_elems::RowId(hierarchyKey(ed.selected), ed.selectedUiElem.index);
   return src;
 }
 
@@ -177,15 +202,66 @@ void createFromHierarchyMenu(Editor& ed, int kind) {
   }
 }
 
+// Pedido da Hierarchy sobre uma linha de elemento de UI (selecionar, renomear, duplicar, mover, apagar). Cada
+// mudanca na lista vira um passo de desfazer (a cena inteira e fotografada, como nas outras edicoes).
+void applyUiElemRequest(Editor& ed, const editor::hierarchy_panel::Action& a) {
+  using A = editor::hierarchy_panel::Act;
+  namespace ce = editor::canvas_elems;
+  tool::World& w = ed.scene.world();
+  const tool::Entity canvas = canvasOfRow(ed, a.id);
+  ed_::CanvasComp* cv = w.alive(canvas) ? w.get<ed_::CanvasComp>(canvas) : nullptr;
+  const int i = ce::IndexOfRow(a.id);
+  if (!cv || !ce::ValidIndex(*cv, i)) return;
+  if (a.act == A::Select) {
+    ed.selected = canvas;
+    ed.selectedUiElem = ed_::UiElemSel{canvas, i};
+    return;
+  }
+  if (w.has<ed_::Locked>(canvas)) { ed.statusLine = T("Canvas is locked: unlock it before editing its elements."); return; }
+  int sel = ed.selectedUiElem.index >= 0 && ed.selectedUiElem.canvas == canvas ? ed.selectedUiElem.index : ce::kNone;
+  ed.undoTick(true);
+  switch (a.act) {
+    case A::Rename: (void)ce::Rename(*cv, i, a.text); break;
+    case A::Duplicate: if (ce::Duplicate(*cv, i, sel) == ce::kNone) ed.statusLine = T("Canvas is full."); break;
+    case A::MoveUp: (void)ce::Move(*cv, i, -1, sel); break;
+    case A::MoveDown: (void)ce::Move(*cv, i, 1, sel); break;
+    case A::Delete: (void)ce::Delete(*cv, i, sel); break;
+    default: break;
+  }
+  ed.undoTick(false);
+  ed.selected = canvas;
+  ed.selectedUiElem = sel >= 0 ? ed_::UiElemSel{canvas, sel} : ed_::UiElemSel{};
+}
+
+// "Add element" (menu do Canvas ou Create): cria o elemento do tipo pedido, com os valores iniciais do tipo, e o seleciona.
+// id vazio = o canvas selecionado.
+void addUiElemFromHierarchy(Editor& ed, editor::hierarchy_model::Id id, int kind) {
+  tool::World& w = ed.scene.world();
+  const tool::Entity canvas = id != editor::hierarchy_model::NoId ? hierarchyEntity(id) : ed.selected;
+  ed_::CanvasComp* cv = w.alive(canvas) ? w.get<ed_::CanvasComp>(canvas) : nullptr;
+  if (!cv) { ed.statusLine = T("Select a Canvas first."); return; }
+  if (w.has<ed_::Locked>(canvas)) { ed.statusLine = T("Canvas is locked: unlock it before editing its elements."); return; }
+  int sel = ed_::UiElemSel{}.index;
+  ed.undoTick(true);
+  const int index = editor::canvas_elems::Add(*cv, kind, sel);
+  ed.undoTick(false);
+  if (index < 0) { ed.statusLine = T("Canvas is full."); return; }
+  ed.selected = canvas;
+  ed.selectedUiElem = ed_::UiElemSel{canvas, index};
+}
+
 void applyHierarchyRequests(Editor& ed, const editor::hierarchy_panel::Requests& reqs) {
   using A = editor::hierarchy_panel::Act;
   tool::World& w = ed.scene.world();
   for (const editor::hierarchy_panel::Action& a : reqs) {
+    if (a.act == A::AddElem) { addUiElemFromHierarchy(ed, a.id, a.kind); continue; }
+    if (editor::hierarchy_model::IsElemId(a.id)) { applyUiElemRequest(ed, a); continue; }
+    if (a.act == A::MoveUp || a.act == A::MoveDown) continue;   // so valem para elementos de UI
     const tool::Entity e = hierarchyEntity(a.id);
     const bool alive = w.alive(e);
     const bool locked = alive && w.has<ed_::Locked>(e);
     switch (a.act) {
-      case A::Select: ed.selected = alive ? e : tool::Entity{}; break;
+      case A::Select: ed.selected = alive ? e : tool::Entity{}; ed.selectedUiElem = ed_::UiElemSel{}; break;
       case A::Activate: if (alive) ed.focusOn(e); break;
       case A::Reparent: {
         const tool::Entity parent = hierarchyEntity(a.parent);
@@ -213,8 +289,41 @@ void applyHierarchyRequests(Editor& ed, const editor::hierarchy_panel::Requests&
         else ed.destroy(e);
         break;
       case A::Create: createFromHierarchyMenu(ed, a.kind); break;
+      case A::EditIndividual:   // "Edit individual": isola o objeto (so ele e os filhos na Scene) e abre a janela Node
+        if (!alive) break;
+        ed.isolatedRoot = e;
+        ed.selected = e;
+        ed.selectedUiElem = ed_::UiElemSel{};
+        ed.showNode = true;
+        break;
+      default: break;
     }
   }
+}
+
+// Dados da janela Node neste quadro: o isolado e os filhos dele (recursivo, pelo Parent), na ordem da cena.
+editor::nodeui::Source nodeSource(Editor& ed) {
+  namespace nm = editor::node_model;
+  editor::nodeui::Source src;
+  tool::World& w = ed.scene.world();
+  src.selected = w.alive(ed.selected) ? hierarchyKey(ed.selected) : 0;
+  if (!w.alive(ed.isolatedRoot)) return src;
+  std::vector<nm::Link<tool::Entity>> all;
+  w.eachEntity([&](tool::Entity e) {
+    nm::Link<tool::Entity> l;
+    l.id = e;
+    const tool::Entity par = ed.parentOf(e);
+    if (w.alive(par)) l.parent = par;
+    all.push_back(l);
+  });
+  src.isolated = true;
+  const auto* rootName = w.get<ed_::Name>(ed.isolatedRoot);
+  src.title = rootName ? std::string(rootName->text) : std::string(T("(unnamed)"));
+  for (const nm::Row<tool::Entity>& r : nm::CollectSubtree(ed.isolatedRoot, all)) {
+    const auto* nme = w.get<ed_::Name>(r.id);
+    src.rows.push_back({hierarchyKey(r.id), nme ? std::string(nme->text) : std::string(T("(unnamed)")), r.depth});
+  }
+  return src;
 }
 
 
@@ -568,6 +677,7 @@ std::string gProfilerExportStatus;
 // Dados do objeto selecionado para o painel. Os ponteiros valem neste quadro.
 editor::inspector_panel::Context inspectorContext(Editor& ed) {
   editor::inspector_panel::Context c;
+  syncUiElemSelection(ed);
   tool::World& w = ed.scene.world();
   c.hasObject = w.alive(ed.selected);
   if (!c.hasObject) return c;
@@ -577,6 +687,14 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   c.active = !w.has<ed_::Inactive>(e);
   c.locked = w.has<ed_::Locked>(e);
   c.name = w.get<ed_::Name>(e);
+  if (ed.selectedUiElem.index >= 0) {   // elemento de UI selecionado: o Inspector mostra so as propriedades dele
+    if (auto* cv = w.get<ed_::CanvasComp>(e)) {
+      c.uiElem = &cv->items[ed.selectedUiElem.index];
+      c.uiIndex = ed.selectedUiElem.index;
+      if (c.name) c.uiCanvasName = c.name->text;
+      return c;
+    }
+  }
   c.transform = w.get<ed_::Transform>(e);
   c.mesh = w.get<ed_::MeshRenderer>(e);
   c.overrides = w.get<ed_::PartOverrides>(e);
@@ -798,35 +916,15 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     if (auto* p = ed.scene.world().get<ed_::ParticleComp>(ed.selected)) editor::applySmokePreset(*p);
   };
   h.removeParticles = [&ed] { ed.scene.world().remove<ed_::ParticleComp>(ed.selected); };
-  h.addUiElem = [&ed](int kind) {   // valores iniciais de cada tipo: do botao "+"
-    auto* u = ed.scene.world().get<ed_::CanvasComp>(ed.selected);
-    if (!u || u->count >= ed_::kMaxUi) return;
-    ed_::UiElem& e = u->items[u->count++];
-    e = ed_::UiElem{};
-    ed_::stampNew(e, *u);   // id unico e ordem Z acima dos outros elementos
-    if (kind == 0) {   // texto
-      e.y = 0.05f + 0.07f * static_cast<float>(u->count);
-      std::snprintf(e.text, sizeof e.text, "%s", "Score: {score}");
-    } else if (kind == 2) {   // botao
-      e.kind = 2; e.x = 0.4f; e.y = 0.8f;
-      e.color[0] = 0.9f; e.color[1] = 0.8f; e.color[2] = 0.3f;
-      std::snprintf(e.text, sizeof e.text, "%s", "Play");
-      std::snprintf(e.action, sizeof e.action, "%s", "play_clicked");
-    } else if (kind == 3) {   // barra
-      e.kind = 3; e.w = 0.3f; e.h = 0.03f; e.y = 0.92f;
-      std::snprintf(e.action, sizeof e.action, "%s", "health");
-      e.color[1] = 0.8f; e.color[2] = 0.2f;
-    } else {   // painel
-      e.kind = 1;
-      e.color[0] = e.color[1] = e.color[2] = 0.1f; e.color[3] = 0.6f;
-      e.text[0] = 0;
+  h.uiImages = [&ed] {   // imagens do projeto aceitas pelos elementos de UI: so PNG e JPEG
+    std::vector<std::string> out;
+    for (const std::string& rel : assetsOfKind(ed, ed_::AssetKind::Image)) {
+      const std::string ext = std::filesystem::path(rel).extension().string();
+      std::string low;
+      for (char ch : ext) low.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+      if (low == ".png" || low == ".jpg" || low == ".jpeg") out.push_back(rel);
     }
-  };
-  h.removeUiElem = [&ed](std::size_t i) {   // desloca os elementos seguintes
-    auto* u = ed.scene.world().get<ed_::CanvasComp>(ed.selected);
-    if (!u || static_cast<int>(i) >= u->count) return;
-    for (int k = static_cast<int>(i); k + 1 < u->count; ++k) u->items[k] = u->items[k + 1];
-    --u->count;
+    return out;
   };
   h.removeTool = [&ed](std::size_t i) {   // desloca os itens seguintes
     auto* tl = ed.scene.world().get<ed_::ToolsComp>(ed.selected);
@@ -1044,6 +1142,7 @@ tool::Entity pickSceneAt(Editor& ed, const tool::Camera& cam, editor::sui::Box i
   ed.scene.world().eachEntity([&](tool::Entity e) {
     const auto* t = ed.scene.world().get<ed_::Transform>(e);
     if (!t) return;
+    if (ed.hiddenByIsolation(e)) return;   // Node: fora do isolamento nao disputa o clique
     const auto* m = ed.scene.world().get<ed_::MeshRenderer>(e);
     if (m && m->shape == 2) return;   // o chao nao disputa o clique
     vm::Pixel sp{};
@@ -2305,6 +2404,7 @@ editor::mainmenu::MenuState menuStateOf(Editor& ed) {
   s.settings = ed.showSettings;
   s.narrative = ed.showNarrative;
   s.inputMap = ed.showInputMap;
+  s.node = ed.showNode;
   s.spriteUiDiagnostics = ed.showSpriteUiDiagnostics;
   s.help = editor::helpState().open;
   s.lockInterface = ed.lockInterface;
@@ -2334,6 +2434,7 @@ bool toggleFromMenu(Editor& ed, editor::mainmenu::Command c) {
     case C::ToggleSettings: flag = &ed.showSettings; break;
     case C::ToggleNarrative: flag = &ed.showNarrative; break;
     case C::ToggleInputMap: flag = &ed.showInputMap; break;
+    case C::ToggleNode: flag = &ed.showNode; ed.isolatedRoot = tool::Entity{}; break;   // Window > Node abre/fecha sem isolamento
     case C::ToggleSpriteUiDiagnostics: flag = &ed.showSpriteUiDiagnostics; break;
     case C::ToggleHelp: flag = &editor::helpState().open; break;
     case C::ToggleLockInterface: flag = &ed.lockInterface; break;
@@ -2747,6 +2848,8 @@ static int runEditorMain(int argc, char** argv) {
   if (uiReady) exportPanel = std::make_unique<editor::exportui::Panel>(uiText, uiRenderer);
   std::unique_ptr<editor::inputui::Panel> inputPanel;     // Input Map em SpriteUI (dados em input_map.hpp)
   if (uiReady) inputPanel = std::make_unique<editor::inputui::Panel>(uiText, uiRenderer);
+  std::unique_ptr<editor::nodeui::Panel> nodePanel;       // Node em SpriteUI (isolamento: ed.isolatedRoot)
+  if (uiReady) nodePanel = std::make_unique<editor::nodeui::Panel>(uiText, uiRenderer);
   bool testMapGenerate = false;   // o botao "Generate map" so marca; o mapa e gerado depois do quadro
   bool exportRequested = false;   // o botao "Export game" so marca; a exportacao roda depois do quadro
   std::unique_ptr<editor::console_panel::ConsolePanel> consolePanel;
@@ -2822,6 +2925,7 @@ static int runEditorMain(int argc, char** argv) {
     addDockWindow(*dockOwner, Kind::Export, [] { return std::string(T("Export game")); }, [&ed]() -> bool& { return ed.showExport; }, [&] { return exportPanel ? &exportPanel->chrome() : nullptr; });
     addDockWindow(*dockOwner, Kind::Help, [] { return std::string(T("Help")); }, []() -> bool& { return editor::helpState().open; }, [&] { return helpPanel ? &helpPanel->chrome() : nullptr; });
     addDockWindow(*dockOwner, Kind::TestMap, [] { return std::string(T("Test map of chunks")); }, []() -> bool& { return editor::testMapState().open; }, [&] { return testMapPanel ? &testMapPanel->chrome() : nullptr; });
+    addDockWindow(*dockOwner, Kind::Node, [] { return std::string(T("Node")); }, [&ed]() -> bool& { return ed.showNode; }, [&] { return nodePanel ? &nodePanel->chrome() : nullptr; });
     dockOwner->load(kDockLayoutFile);   // organizacao salva na sessao anterior (se houver e for valida)
   }
   // Ritmo dos quadros (frame_pacing.hpp): ocioso e sem nada pedindo, o laco dorme em vez de refazer a interface a cada ~16 ms.
@@ -2923,6 +3027,7 @@ static int runEditorMain(int argc, char** argv) {
     routeFramed(inputPanel ? &inputPanel->chrome() : nullptr, editor::dock_host::Kind::InputMap, ed.showInputMap);
     routeFramed(exportPanel ? &exportPanel->chrome() : nullptr, editor::dock_host::Kind::Export, ed.showExport);
     routeFramed(testMapPanel ? &testMapPanel->chrome() : nullptr, editor::dock_host::Kind::TestMap, editor::testMapState().open);
+    routeFramed(nodePanel ? &nodePanel->chrome() : nullptr, editor::dock_host::Kind::Node, ed.showNode);
     routeFramed(helpPanel ? &helpPanel->chrome() : nullptr, editor::dock_host::Kind::Help, editor::helpState().open);
     if (scriptPlayer) {
       static auto lastStart = std::chrono::steady_clock::now();
@@ -2984,6 +3089,11 @@ static int runEditorMain(int argc, char** argv) {
       const editor::exportui::Action exportAction = !dockHandled && exportPanel && framedMayReceive(DockKind::Export) ? exportPanel->handleEvent(e, ed.showExport, ed.projSettings.exportPreset.platform) : editor::exportui::Action::None;
       if (exportAction == editor::exportui::Action::Platform) ed.projSettings.save(ed.project);   // a escolha de plataforma vai para o projeto
       if (exportAction == editor::exportui::Action::Export) exportRequested = true;
+      // Node: selecionar uma linha seleciona o objeto; "Exit isolation" limpa o isolamento.
+      const editor::nodeui::Result nodeResult = !dockHandled && nodePanel && framedMayReceive(DockKind::Node) ? nodePanel->handleEvent(e, ed.showNode) : editor::nodeui::Result{};
+      if (nodeResult.kind == editor::nodeui::Result::Kind::Select) { ed.selected = hierarchyEntity(nodeResult.key); ed.selectedUiElem = ed_::UiElemSel{}; }
+      if (nodeResult.kind == editor::nodeui::Result::Kind::Exit) ed.isolatedRoot = tool::Entity{};
+      if (nodeResult.kind != editor::nodeui::Result::Kind::None) ed.requestFrame();
       if (helpHandled || inputHandled || testMapAction != editor::testmap::Action::None || exportAction != editor::exportui::Action::None) ed.requestFrame();
       const bool menuHandled = menuPanel && menuPanel->handleEvent(e);
       const bool consoleHandled = !dockHandled && consolePanel && consolePanel->handleEvent(e, dockShown(editor::dock_host::Kind::Console, ed.showConsole));
@@ -3279,6 +3389,17 @@ static int runEditorMain(int argc, char** argv) {
       } else {
         if (inputPanel->chrome().consumeClose()) ed.showInputMap = false;
         if (inputPanel->chrome().consumeHelp()) editor::openHelp("inputmap");
+      }
+    }
+    if (nodePanel && onPass(editor::dock_host::Kind::Node)) {   // Node na moldura padrao: fechar a janela encerra o isolamento
+      if (!ed.showNode) ed.isolatedRoot = tool::Entity{};
+      if (!ed.scene.world().alive(ed.isolatedRoot)) ed.isolatedRoot = tool::Entity{};   // objeto apagado: sem isolamento
+      if (!nodePanel->draw(renderer, window, dockShown(editor::dock_host::Kind::Node, ed.showNode), nodeSource(ed))) {
+        tool::logError(std::string("Node SpriteUI render failed: ") + SDL_GetError());
+        nodePanel.reset();
+      } else {
+        if (nodePanel->chrome().consumeClose()) { ed.showNode = false; ed.isolatedRoot = tool::Entity{}; }
+        if (nodePanel->chrome().consumeHelp()) editor::openHelp("node");
       }
     }
     if (exportPanel && onPass(editor::dock_host::Kind::Export)) {   // Export game na moldura padrao: plataforma indisponivel volta para a primeira disponivel

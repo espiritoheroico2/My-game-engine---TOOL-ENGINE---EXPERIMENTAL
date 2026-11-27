@@ -6,6 +6,7 @@
 //
 // Regras que o modelo garante (testadas em tests/test_console_model.cpp):
 //  - Niveis: Trace e Info viram o grupo "Info"; Warn vira "Warnings"; Error vira "Errors".
+//  - Avisos de medicao TOOL-W301 e TOOL-W302 viram o grupo "work-debug" (desligado por padrao, fora da contagem de Warnings).
 //  - Uma linha aparece se o seu grupo esta ligado E o texto contem o filtro (sem diferenca de maiusculas).
 //  - Contagens por grupo sao sobre TODAS as linhas (filtro nao muda a contagem).
 //  - Copiar leva so as linhas visiveis, uma por linha, na ordem do log.
@@ -34,8 +35,8 @@ constexpr float kTailSlack = 1.f;             // px: abaixo disso do fim, conta 
 using LogEntry = std::pair<tool::LogLevel, std::string>;
 using LogEntries = std::deque<LogEntry>;
 
-enum class Group : std::uint8_t { Info = 0, Warn = 1, Error = 2 };
-constexpr int kGroupCount = 3;
+enum class Group : std::uint8_t { Info = 0, Warn = 1, Error = 2, WorkDebug = 3 };
+constexpr int kGroupCount = 4;
 
 inline Group groupOf(tool::LogLevel level) {
   if (level == tool::LogLevel::Error) return Group::Error;
@@ -43,10 +44,28 @@ inline Group groupOf(tool::LogLevel level) {
   return Group::Info;
 }
 
+// Avisos de medicao de desempenho: TOOL-W301 (oscilacao da CPU) e TOOL-W302 (pico de zona). Sao dados, nao
+// problemas. Os codigos sao os de perfdiag::kFrameJitter e kZoneSpike (perf_warnings.hpp): manter iguais.
+inline bool isWorkDebugText(std::string_view msg) {
+  constexpr std::string_view kCodes[] = {"TOOL-W301", "TOOL-W302"};
+  for (std::string_view code : kCodes) {
+    if (msg.substr(0, code.size()) != code) continue;
+    const std::string_view rest = msg.substr(code.size());
+    if (rest.empty() || rest[0] == ' ' || rest[0] == '.') return true;
+  }
+  return false;
+}
+
+// Grupo de uma linha do log: work-debug pelo codigo do texto, senao pelo nivel.
+inline Group groupOf(const LogEntry& e) {
+  if (isWorkDebugText(e.second)) return Group::WorkDebug;
+  return groupOf(e.first);
+}
+
 struct Counts {
-  std::size_t byGroup[kGroupCount] = {0, 0, 0};
+  std::size_t byGroup[kGroupCount] = {0, 0, 0, 0};
   [[nodiscard]] std::size_t of(Group g) const { return byGroup[static_cast<int>(g)]; }
-  [[nodiscard]] std::size_t total() const { return byGroup[0] + byGroup[1] + byGroup[2]; }
+  [[nodiscard]] std::size_t total() const { return byGroup[0] + byGroup[1] + byGroup[2] + byGroup[3]; }
 };
 
 // Procura `needle` em `hay` sem diferenca de maiusculas (ASCII). Vazio casa com tudo.
@@ -177,7 +196,7 @@ class LineEdit {
 
 class ConsoleModel {
  public:
-  // ---- filtros por nivel (Info / Warnings / Errors), todos ligados por padrao
+  // ---- filtros por nivel (Info / Warnings / Errors); work-debug vem desligado por padrao
   [[nodiscard]] bool enabled(Group g) const { return on_[static_cast<int>(g)]; }
   void toggle(Group g) { on_[static_cast<int>(g)] = !on_[static_cast<int>(g)]; }
 
@@ -189,13 +208,13 @@ class ConsoleModel {
 
   // Uma linha passa se o grupo esta ligado e o texto do filtro esta contido nela.
   [[nodiscard]] bool visible(const LogEntry& e) const {
-    return enabled(groupOf(e.first)) && containsIgnoreCase(e.second, filter_.text());
+    return enabled(groupOf(e)) && containsIgnoreCase(e.second, filter_.text());
   }
 
   // Contagens por grupo sobre todas as linhas (nao depende do filtro).
   [[nodiscard]] static Counts countAll(const LogEntries& entries) {
     Counts c;
-    for (const auto& e : entries) ++c.byGroup[static_cast<int>(groupOf(e.first))];
+    for (const auto& e : entries) ++c.byGroup[static_cast<int>(groupOf(e))];
     return c;
   }
 
@@ -259,7 +278,7 @@ class ConsoleModel {
   void onScrolled(float offset, float maxOffset) { follow_ = offset >= maxOffset - kTailSlack; }
 
  private:
-  bool on_[kGroupCount] = {true, true, true};
+  bool on_[kGroupCount] = {true, true, true, false};   // work-debug desligado por padrao
   LineEdit filter_;
   LineEdit command_;
   std::vector<std::string> history_;
