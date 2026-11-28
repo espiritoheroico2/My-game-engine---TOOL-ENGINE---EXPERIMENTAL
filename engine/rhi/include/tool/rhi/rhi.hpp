@@ -90,7 +90,8 @@ struct PipelineDesc {
   std::vector<std::string> storageNames; // slot i -> nome de um StructuredBuffer somente leitura (SRV) em VS e PS (setStorage)
   std::string name;
   // Pipeline de COMPUTE: se `cs` nao for nulo, vs/ps sao ignorados e o pipeline e de compute. Os slots usam
-  // uniformNames (cbuffer), storageNames (SRV de leitura) e storageRWNames (UAV, setStorageRW).
+  // uniformNames (cbuffer), storageNames (SRV de leitura), storageRWNames (UAV, setStorageRW) e textureNames (textura lida
+  // com Texture2D.Load no compute; setTexture; so texturas de cor/renderTarget, a profundidade D32F nao e legivel).
   Handle cs;
   std::vector<std::string> storageRWNames; // slot i -> nome de um RWStructuredBuffer/RWByteAddressBuffer no compute
 };
@@ -162,6 +163,12 @@ public:
   virtual void setStorageRW(u32 /*slot*/, BufferId /*b*/) {}
   // Desenho indireto indexado: os argumentos (DrawIndexedIndirectArgs) vem de `args` no byte `offset`, gravados pela GPU.
   virtual void drawIndexedIndirect(BufferId /*args*/, u32 /*offset*/) {}
+  // ---- Tempo de GPU (padrao: no-op; so tem efeito com IDevice::setGpuTimers(true) num backend com timestamps) ----
+  // Marca o inicio de um intervalo de GPU com nome. Zonas com o mesmo nome no mesmo quadro somam. Podem aninhar.
+  // O resultado sai em IDevice::gpuZoneMs(name) com ~2 quadros de atraso (leitura assincrona, nunca bloqueia).
+  virtual void beginGpuZone(const char* /*name*/) {}
+  // Fecha a zona aberta mais recente (par de beginGpuZone).
+  virtual void endGpuZone() {}
   // Fecha a lista. Depois disso ela pode ser enviada com IDevice::submit().
   virtual void end() = 0;
 };
@@ -236,6 +243,24 @@ public:
   virtual void* nativeContext() const { return nullptr; }
   // Durante o quadro, as estatisticas acumuladas; depois de present(), as do ultimo quadro.
   virtual DrawStats frameStats() const = 0;
+
+  // ---- Tempo de GPU (contadores de timestamp). Desligado por padrao: sem custo. ----
+  // O backend tem consultas de timestamp? Falso em Null, OpenGL e D3D11 (nesses, gpuZoneMs() devolve sempre 0).
+  virtual bool gpuTimersSupported() const { return false; }
+  // Liga/desliga a medicao. Sem suporte, fica desligada (e o backend avisa uma vez). Tambem pode ser pedida na criacao
+  // com DeviceInfo::gpuTimers.
+  virtual void setGpuTimers(bool /*on*/) {}
+  // Medicao ligada de fato (pedida E suportada).
+  virtual bool gpuTimersEnabled() const { return false; }
+  // Marca/fecha uma zona direto no dispositivo (para zonas que cobrem varias listas de comandos, como um passe com
+  // varios submits). Mesma semantica de ICommandList::beginGpuZone/endGpuZone. No-op com a medicao desligada.
+  virtual void gpuZoneBegin(const char* /*name*/) {}
+  virtual void gpuZoneEnd() {}
+  // Ultimo valor resolvido da zona, em ms (soma das ocorrencias do quadro). 0 se a zona nao existe, a medicao esta desligada
+  // ou o backend nao suporta. Resolvido de forma assincrona com atraso de ~2 quadros (nao bloqueia o quadro).
+  virtual double gpuZoneMs(const char* /*name*/) const { return 0.0; }
+  // Todas as zonas do ultimo quadro resolvido, na ordem em que apareceram (para o profiler).
+  virtual std::vector<std::pair<std::string, double>> gpuZones() const { return {}; }
 };
 
 // Tamanho do "dynamic heap" do Vulkan (MiB). O Diligent usa 8 MB por padrao, pequeno demais para os buffers
@@ -253,6 +278,7 @@ struct DeviceInfo {
   u32 width = 1280, height = 720;
   bool validation = false;        // camadas de validacao (Vulkan/D3D12) e depuracao GL. Custam CPU: ligue so para depurar
   u32 dynamicHeapMB = TOOL_DYNAMIC_HEAP_MB;
+  bool gpuTimers = false;         // tempo de GPU por zona (timestamps). Desligado: sem custo. Ver IDevice::setGpuTimers
 };
 
 } // namespace tool::rhi

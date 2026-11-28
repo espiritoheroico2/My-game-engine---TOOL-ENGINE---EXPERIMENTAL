@@ -77,8 +77,13 @@ public:
     alpha_ = alpha;
     box_ = box;
     box_.size.y += kExtraH;
-    ib::SyncColorPicker(picker_, rgb);
+    syncPicker();
   }
+
+  // Alfa atual (0 a 1) da cor aberta, ou 1 quando a cor nao tem transparencia.
+  [[nodiscard]] float alphaValue() const { return alpha_ ? *alpha_ : 1.f; }
+  // Arrasto em curso (area de cor, matiz ou alfa): o dono repassa o ponteiro mesmo fora da caixa, para o Up chegar.
+  [[nodiscard]] bool dragging() const { return open_ && dragArea_ != 0; }
 
   // Fecha e encerra a edicao do HEX. window: janela do SDL para desligar o texto (nullptr se nao houver).
   void close(SDL_Window* window = nullptr) {
@@ -128,15 +133,17 @@ public:
       for (std::size_t i = 0; i < kSwatchCount; ++i) {
         if (!inside(swatchRect(i), p)) continue;
         swatchColor(i, rgb_);   // a cor da amostra vai direto para o RGB atual
-        ib::SyncColorPicker(picker_, rgb_);
+        syncPicker();
         emit();
         return;
       }
     }
-    if (alpha_ && ((phase == Elm::PointerPhase::Down && inside(alphaTrack(), p)) || (phase == Elm::PointerPhase::Move && dragArea_ == 3))) {
+    // Faixa de alfa do proprio seletor (layout.alpha): e a que o usuario ve e arrasta. Grava no float do dono.
+    if (alpha_ && ((phase == Elm::PointerPhase::Down && inside(layout.alpha, p)) || (phase == Elm::PointerPhase::Move && dragArea_ == 3))) {
       if (phase == Elm::PointerPhase::Down) dragArea_ = 3;
-      const SU::Rect t = alphaTrack();
-      *alpha_ = clamp01((p.x - t.position.x) / t.size.x);   // faixa do alfa: arrastar muda a transparencia
+      const float a = layout.alpha.size.x > 0.f ? clamp01((p.x - layout.alpha.position.x) / layout.alpha.size.x) : 1.f;
+      (void)picker_.SetAlpha(a);
+      *alpha_ = a;
       emit();
       return;
     }
@@ -189,7 +196,16 @@ public:
     frame.border = box_;
     appendShifted(items, Elm::BuildPanelItems(frame, look_.frame, look_.zPanel, paint), origin, owner, clipIndex);
     const Wd::ColorPickerLayout layout = pickerLayout();
-    appendShifted(items, Wd::BuildColorPickerItems(picker_, layout, owner, style_, look_.zPanel, paint), origin, owner, clipIndex);
+    std::vector<SR::UIRenderItem> built = Wd::BuildColorPickerItems(picker_, layout, owner, style_, look_.zPanel, paint);
+    if (!alpha_) {   // cor sem transparencia: some a faixa de alfa e o campo A do seletor (nao teriam efeito)
+      const float top = layout.alpha.position.y - style_.markerBorder - 1.f, bottom = layout.alpha.position.y + layout.alpha.size.y + style_.markerBorder + 1.f;
+      const SU::Rect aField = layout.channelFields[3];
+      std::erase_if(built, [&](const SR::UIRenderItem& it) {
+        const float cx = it.layout.resolvedPosition.x + it.layout.resolvedSize.x * 0.5f, cy = it.layout.resolvedPosition.y + it.layout.resolvedSize.y * 0.5f;
+        return (cy >= top && cy <= bottom) || inside(aField, SU::Vec2{cx, cy});
+      });
+    }
+    appendShifted(items, std::move(built), origin, owner, clipIndex);
     if (editing_) {
       const SU::Rect screen = shifted(layout.hexField, origin);
       std::vector<SR::ClipRectGPU> clips{{visible.position.x, visible.position.y, visible.position.x + visible.size.x,
@@ -212,6 +228,11 @@ public:
     for (std::size_t i = 0; i < 3; ++i) {   // so leitura: a digitacao e pelo HEX
       const SU::Rect r = layout.channelFields[i];
       overlay_.addText(r.position.x + 6.f, r.position.y + 5.f, picker_.ChannelText(channels[i]), look_.font - 1.f, look_.text,
+                       r.size.x - 8.f);
+    }
+    if (alpha_) {   // campo A (so leitura): o alfa tambem muda pela faixa de alfa acima
+      const SU::Rect r = layout.channelFields[3];
+      overlay_.addText(r.position.x + 6.f, r.position.y + 5.f, picker_.ChannelText(Wd::ColorChannel::Alpha), look_.font - 1.f, look_.text,
                        r.size.x - 8.f);
     }
     appendExtras();
@@ -282,21 +303,20 @@ private:
                     {w, kSwatchH}};
   }
 
-  // Linha de baixo: a amostra da cor atual (a esquerda) e a faixa do alfa (o resto, menos o texto da porcentagem).
+  // Linha de baixo: a amostra da cor atual (a esquerda) e, com alfa, a porcentagem ao lado.
   [[nodiscard]] SU::Rect currentRect() const {
     const SU::Rect in = pickerInner();
     const float y = in.position.y + in.size.y + kExtraGap + kSwatchRows * kSwatchH + (kSwatchRows - 1.f) * kSwatchGap + kExtraGap;
     return SU::Rect{{in.position.x, y}, {24.f, kAlphaRowH}};
   }
-  // Trilho do alfa: ocupa o espaco ao lado da amostra, deixando 44 px a direita para o texto da porcentagem.
-  [[nodiscard]] SU::Rect alphaTrack() const {
-    const SU::Rect c = currentRect();
-    const SU::Rect in = pickerInner();
-    const float x = c.position.x + c.size.x + 10.f;
-    return SU::Rect{{x, c.position.y + 4.f}, {std::max(10.f, in.position.x + in.size.x - 44.f - x), kAlphaRowH - 8.f}};
+  // Sincroniza o seletor com a cor do dono: RGB e o alfa (SyncColorPicker zera o alfa para 1).
+  void syncPicker() {
+    if (!rgb_) return;
+    ib::SyncColorPicker(picker_, rgb_);
+    (void)picker_.SetAlpha(alphaValue());
   }
 
-  // Desenha a grade de cores comuns, a amostra da cor atual e, se houver alfa, a faixa de transparencia (no overlay).
+  // Desenha a grade de cores comuns, a amostra da cor atual e, se houver alfa, a porcentagem (no overlay).
   void appendExtras() {
     if (!rgb_) return;
     const float z = look_.zPanel + 0.02f;
@@ -311,12 +331,8 @@ private:
     overlay_.addSolid(c.position.x, c.position.y, c.size.x, c.size.y, SU::Vec4{0.f, 0.f, 0.f, 1.f}, z, 2.f);   // fundo escuro sob a cor
     overlay_.addSolid(c.position.x, c.position.y, c.size.x, c.size.y, SU::Vec4{rgb_[0], rgb_[1], rgb_[2], a}, z + 0.005f, 2.f);
     if (!alpha_) return;
-    const SU::Rect t = alphaTrack();
-    overlay_.addSolid(t.position.x, t.position.y, t.size.x, t.size.y, look_.field, z, 2.f);
-    overlay_.addSolid(t.position.x, t.position.y, t.size.x * a, t.size.y, SU::Vec4{rgb_[0], rgb_[1], rgb_[2], 1.f}, z + 0.005f, 2.f);
-    overlay_.addSolid(t.position.x + t.size.x * a - 2.f, t.position.y - 2.f, 4.f, t.size.y + 4.f, look_.text, z + 0.01f, 1.f);
-    overlay_.addText(t.position.x + t.size.x + 8.f, c.position.y + 2.f, "A " + std::to_string(static_cast<int>(a * 100.f + 0.5f)) + "%",
-                     look_.font - 1.f, look_.text, 40.f);
+    overlay_.addText(c.position.x + c.size.x + 8.f, c.position.y + 2.f, "A " + std::to_string(static_cast<int>(a * 100.f + 0.5f)) + "%",
+                     look_.font - 1.f, look_.text, 60.f);
   }
 
   // Layout do seletor principal dentro da area interna.
@@ -356,7 +372,7 @@ private:
   void commitHex() {
     float rgb[3] = {0.f, 0.f, 0.f};
     if (!open_ || !im::ApplyHexColor(hex_.Edit().Text(), rgb)) return;
-    (void)picker_.SetColor(SU::Vec4{rgb[0], rgb[1], rgb[2], 1.0f});
+    (void)picker_.SetColor(SU::Vec4{rgb[0], rgb[1], rgb[2], alphaValue()});
     if (rgb_) {
       rgb_[0] = rgb[0];
       rgb_[1] = rgb[1];
@@ -382,7 +398,7 @@ private:
   float* alpha_ = nullptr;   // alfa (0 a 1), ou nullptr quando a cor nao tem transparencia
   SU::Rect box_{};
   Wd::ColorPickerControl picker_;
-  int dragArea_ = 0;   // 1 = saturacao/valor, 2 = matiz: a area do arrasto em curso
+  int dragArea_ = 0;   // 1 = saturacao/valor, 2 = matiz, 3 = alfa: a area do arrasto em curso
 
   bool editing_ = false;
   Edit::TextField hex_;

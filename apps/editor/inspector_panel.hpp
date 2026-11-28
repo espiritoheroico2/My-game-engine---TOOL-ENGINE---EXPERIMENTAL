@@ -1971,7 +1971,7 @@ class InspectorPanel {
         }
         // Seletor de cor aberto: arrastes na area e nos campos.
         if (popup_.isOpen()) {
-            if (popup_.contains(p)) {
+            if (popup_.contains(p) || popup_.dragging()) {   // arrasto em curso segue mesmo fora da caixa
                 popup_.pointer(phase, p, window);
                 return true;
             }

@@ -144,6 +144,10 @@ inline void Editor::beginWorldMatFrame() {
   worldTxEpoch_ = te; worldParEpoch_ = pe; worldStructEpoch_ = se; worldMatBuilt_ = true;
   ++worldMatRebuilds_;
   bumpStamp();
+  // --gpu-motion com TODA a cena na GPU: a CPU nao precisa das matrizes de N objetos. Invalida o cache em O(1) e deixa worldMat() calcular
+  // sob demanda (correto, sem gravar) so o que a CPU ainda pedir (luzes, selecionado). Sem isto, o Transform de 2 corpos de fisica
+  // mudando todo quadro reconstruiria as N matrizes a cada quadro.
+  if (gpuMotion && gpuMotionLive_) return;
   if (tv.n == 0) return;
   tool::u32 maxIdx = 0; for (std::size_t p = 0; p < tv.n; ++p) maxIdx = std::max(maxIdx, tv.idx[p]);
   if (renderWorldMatCache_.size() <= maxIdx) renderWorldMatCache_.resize(static_cast<std::size_t>(maxIdx) + 1);

@@ -84,6 +84,7 @@ struct Extras {
   unsigned gpuDraws = 0, gpuTriangles = 0, gpuUploads = 0, gpuPipelineSwitches = 0;
   tool::render::FrameRenderStats renderStats;
   unsigned gpuBadFrames = 0;
+  std::string gpuPasses;            // tempo de GPU por passe ("opaque 1.20 ms | shadow 0.40 ms"); vazio = medicao desligada
   bool lightShadows = false;
   unsigned lightCascades = 0, lightShadowRes = 0, lightDropped = 0;
   bool postOn = false;
@@ -179,7 +180,12 @@ class ProfilerModel {
       cell(r, tr("delay max ms"), num(st.max), 2, 7);
       cell(r, tr("jitter ms"), num(st.jitter), 2, 7);
     }
-    text(tr("GPU % is not measured yet: it needs GPU timestamp queries in the RHI (see docs/planos/00_ROADMAP.md, item 7)."));
+    if (!ex.gpuPasses.empty()) {
+      const std::string line = std::string("GPU: passes ") + ex.gpuPasses;
+      text(line.c_str());
+    } else {
+      text(tr("GPU passes: off. Set TOOL_GPU_TIMERS=1 before starting the editor (Vulkan/D3D12), see docs/planos/33_TEMPO_GPU.md."));
+    }
     // ---- Frames
     heading(tr("Frames"));
     {

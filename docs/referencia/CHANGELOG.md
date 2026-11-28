@@ -3,6 +3,47 @@
 > Histórico de versões. Para o estado atual consolidado e o que fazer em seguida, veja
 > [`../../planos/00_ROADMAP.md`](../../planos/00_ROADMAP.md).
 
+## 0.9-beta — física convexa e raycast, culling em GPU, partículas v2, Canvas e Settings por categorias
+
+> A versão 0.8 aparece no README, mas não tem entrada própria neste changelog. Esta entrada cobre tudo desde a última versão registrada (0.7.19-beta, em andamento), com base nos planos 19, 20, 22, 26 a 30, 32, 33 e 35 e no histórico do git (commits de 2026-11-24 a 2026-11-27).
+
+**Física (Newtoon)**
+- Casco convexo colide de verdade (`ShapeType::CustomConvex`, SAT convexo, contato de face com até 8 pontos). Narrowphase de um cubo com 8 pontos: 0,17 ms antes, 0,40 ms depois, com 200 corpos (`20_COLISAO_CASCO_LOD.md`).
+- LOD de colisão por distância: 24, 12 e 8 pontos (até 20 m, até 60 m e acima), com o foco na câmera. Troca só no próximo passo fixo.
+- Cilindro: prisma de 16 lados no narrowphase e raycast analítico; massa e inércia próprias (`22_RAYCAST_CILINDRO.md`).
+- Raycast único em 3D pela BVH, com filtro (camada, ignorar, gatilhos, backface), `RaycastAll`, `RaycastNonAlloc` e `RaycastBatch` em paralelo. Medido com 1000 raios x 1000 formas: força bruta 49 a 53 ms, BVH 0,49 a 0,55 ms. Lote de 20 mil raios: 9,9 a 10,4 ms com 1 thread, 0,99 a 1,06 ms com o pool. Raycast 2D também usa BVH.
+- Estudos de física na GPU (não substituem o Newtoon): protótipo de esferas em compute, 100 mil esferas em 2,74 ms por passo (`26_FISICA_GPU_PROTOTIPO.md`); híbrido CPU/GPU medido sem ganho a favor (`27_FISICA_HIBRIDA.md`).
+
+**ECS e render**
+- Cache de matrizes mundiais com versão por API (`29_ITEM3_VERSAO_API.md`): assinatura de sombra com 100 mil objetos em movimento caiu de 2,78 ms para 0,01 ms. O quadro de movimento não foi medido de novo com máquina ociosa, então não há prova de ganho no quadro.
+- Medição de escala (`19_ESCALA_ECS.md`, RX 6500 XT, Vulkan, 1280x720, mediana de 3 execuções): movers 10 mil 24,71 ms, 50 mil 104,04 ms, 100 mil 221,09 ms por quadro; física (ecsf) 100 mil 222,80 ms, com 56,9 ms de física. Meta de 1 milhão não atingida (extrapolação de cerca de 2,2 s por quadro).
+- Tempo de GPU por passe com consultas de timestamp (`33_TEMPO_GPU.md`): zonas shadow, ssao, cull, opaque, transparent, particles e bloom. Desligado por padrão; ligar com `TOOL_GPU_TIMERS=1` (só Vulkan). Com a flag ligada custa cerca de 0,12 ms por quadro (cerca de 9%) na cena de teste.
+- Culling em GPU (computes, zona `cull`) já roda; a oclusão por software continua na CPU. Inventário de trabalho de CPU e GPU e ordem de migração em `32_INVENTARIO_CPU_GPU.md`.
+- FSR 1.0 concluído. FSR 4: consulta de suporte e upscale de teste concluídos. Motion vectors e frame generation pendentes.
+- Ray tracing por GPU: F0 concluída; F1 pendente.
+
+**Partículas**
+- Biblioteca v2 (`28_PARTICULAS_BIBLIOTECA_V2.md`): formas de emissão (ponto, esfera, caixa, cone, disco, linha), modos de velocidade (cone, radial, aleatório), turbulência, empuxo, alfa ao longo da vida e quads de render. Medido com 1 milhão de partículas vivas: atualização de 19,8 ms por quadro (turbulência é o maior custo).
+- Editor (`30_PARTICULAS_EDITOR.md`): objeto "Particles" com Play, Pause, Stop and clear e Burst; presets smoke, fire e fluid; passe de render com profundidade sem escrita, alfa ordenado de trás para frente e soft particles; bloom reaproveitado. Medido com 100 mil partículas vivas (Vulkan): quadro de 3,38 ms sem partículas, 8,77 ms com o passe.
+- Limites: sem passe em OpenGL; textura do sprite ainda procedural (sem atlas); o sistema antigo (`ParticleComp`) continua até a remoção (F5).
+
+**Editor e interface**
+- Canvas substitui o UiCanvas: UI de jogo com âncora, tamanho e câmera, elementos com Id e região, prévia na Scene e modo Edit canvas (commits de 2026-11-26).
+- Janelas soltas (fora do encaixe) ficam por cima das acopladas e não saem da área do dock.
+- Seletor de cor compartilhado entre Inspector e Configurações; campo numérico editável ao lado de cada deslizante.
+- Settings organizado por categorias, com a opção de escala de renderização mostrando o valor.
+- Materiais e FSR: commits `04104de` ("novos recursos FSR/Materiais") e `fd89288`.
+
+**Documentação e planos**
+- Plano 0.9 (`35_PLANO_V09.md`) com tarefas fáceis, médias e difíceis; ordem de execução.
+- Documento de impostores (`docs/estudos/IMPOSTORES.md`) e capítulo 16 do Engine Book.
+- Planos 31 e 34 não existem no repositório. O plano 32 cita o 31 no modo `--gpu-motion`; esse modo não tem medição registrada.
+
+**Pendente nesta versão**
+- Oclusão em GPU (HiZ), em andamento (D1); LODs por objeto e AutoLOD (D2); impostores (D3); simplificação de malhas atrás de outras (D4); movimento e render na GPU, sem medição (D5).
+- Entity Manager (M8), filtros de textura, antisserrilhado, oclusão estática, culling de áudio, gerenciamento automático de malhas (M1 a M10).
+- Frame generation, motion vectors para FSR e TAA; ray tracing por GPU (F1).
+
 ## 0.7.19-beta (em andamento)
 
 **Janelas, roteamento de clique e estabilidade do teste ECS (2026-11-18 e 2026-11-19)**

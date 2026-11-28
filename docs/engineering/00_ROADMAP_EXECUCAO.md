@@ -4,7 +4,7 @@
 **Branch de trabalho:** `work/architecture-improvements-2026-11`  
 **Branch protegida por procedimento:** `main` (não será alterada durante este trabalho)  
 **Baseline de partida:** `1a3c1d23ab672153a3aa2c2fc049bf331643baa6`  
-**Versão declarada no README:** 0.8 beta · **Padrão:** C++20
+**Versão declarada no README:** 0.9 beta · **Padrão:** C++20
 
 ## Objetivo
 

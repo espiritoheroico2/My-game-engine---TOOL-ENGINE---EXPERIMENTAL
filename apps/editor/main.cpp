@@ -1104,6 +1104,13 @@ editor::profiler_model::Extras fillProfilerExtras(Editor& ed) {
     x.gpuTriangles = static_cast<unsigned>(g.backendTriangles);
     x.gpuUploads = static_cast<unsigned>(g.backendBufferUploads);
     x.gpuPipelineSwitches = static_cast<unsigned>(g.backendPipelineSwitches);
+    if (ed.gpuDev->gpuTimersEnabled()) {   // zonas de GPU (resolvidas com ~2 quadros de atraso)
+      char b[48];
+      for (const auto& z : ed.gpuDev->gpuZones()) {
+        std::snprintf(b, sizeof b, "%s%s %.2f ms", x.gpuPasses.empty() ? "" : " | ", z.first.c_str(), z.second);
+        x.gpuPasses += b;
+      }
+    }
   }
   const auto q = tool::makeQuality(ed.sceneInfo.render.lighting);
   const auto& lf = ed.lightRig.frame();
@@ -3072,6 +3079,11 @@ static int runEditorMain(int argc, char** argv) {
   // --ecs N: benchmark sem vsync. Cria N esferas (como "test ECS: N"), mede o tempo de cada quadro depois do nascimento
   // e imprime media, p50, p95 e maximo. Sai sozinho ao fim de benchFrames quadros medidos.
   if (benchNoOcclusion) ed.sceneInfo.render.occlusionCull = false;   // so nesta execucao (headless nao grava a cena)
+  // --occlusion-mode gpu|cpu|off: modo de oclusao so nesta execucao (comparacao A/B; docs/planos/34_OCLUSAO_GPU.md).
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--occlusion-mode") == 0) {
+    const char* m = argv[i + 1];
+    ed.sceneInfo.render.occlusionMode = (std::strcmp(m, "cpu") == 0 || std::strcmp(m, "off") == 0) ? m : "gpu";
+  }
   if (ecsCount > 0) ed.startEcsTest(ecsCount, !ecsMover);   // --ecs-mover: sem fisica
   if (mapSide > 0) ed.generateChunkMap(mapSide);
   long long instancesMade = 0;
@@ -3107,6 +3119,7 @@ static int runEditorMain(int argc, char** argv) {
   std::vector<double> benchMs;
   uint64_t benchUpload0 = 0;   // uploads do BatchCB no primeiro quadro medido
   std::array<double, static_cast<size_t>(editor::Zone::Count)> benchZoneMs{};
+  std::map<std::string, std::pair<double, int>> benchGpuZones;   // zona de GPU -> (soma em ms, quadros): so com TOOL_GPU_TIMERS=1
   // Fases do benchmark: nascimento (spawn) -> aquecimento (descartado) -> janela medida (steady state).
   int benchSpawnFrames = 0, benchWarmupLeft = benchWarmup;
   Uint64 benchSpawnStartNs = 0, benchSpawnEndNs = 0;
@@ -3524,6 +3537,9 @@ static int runEditorMain(int argc, char** argv) {
       int bw = benchRenderW, bh = benchRenderH;
       if (benchResizeN > 0) { const int k = (benchRenderFrame - 1) % benchResizeN; bw = std::max(32, benchRenderW - k * 3); bh = std::max(18, benchRenderH - k * 2); }
       const tool::u8* gameImg = ed.renderView(bc, bw, bh, false, editor::Zone::GameRender, &ed.sceneInfo.render.post);
+      // TOOL_BENCH_SYNC=1: espera a GPU acabar o quadro (leitura sincrona de um buffer pequeno) para o tempo incluir a GPU, nao so a CPU.
+      static const bool benchSyncGpu = std::getenv("TOOL_BENCH_SYNC") != nullptr;
+      if (benchSyncGpu && ed.apiActive != 0) ed.gpu.benchSync();
       // TOOL_BENCH_IMGHASH=1: hash FNV-1a de cada imagem (Game e, com TOOL_BENCH_SCENEVIEW=1, tambem Scene com camera diferente)
       // acumulado nos quadros medidos, para provar "mesma imagem" entre variantes. Fora da medicao de tempo normal.
       static const bool imgHash = std::getenv("TOOL_BENCH_IMGHASH") != nullptr, sceneToo = std::getenv("TOOL_BENCH_SCENEVIEW") != nullptr;
@@ -3913,6 +3929,9 @@ static int runEditorMain(int argc, char** argv) {
         if (ps.steps > 0) { if (!benchPhysHaveStart) { benchPhysStart = ps; benchPhysHaveStart = true; } benchPhysEnd = ps; }
         benchMs.push_back(static_cast<double>(SDL_GetTicksNS() - frameStart) / 1e6);
         for (size_t z = 0; z < benchZoneMs.size(); ++z) benchZoneMs[z] += ed.prof.cur[z];
+        if (ed.gpuDev && ed.gpuDev->gpuTimersEnabled()) {   // zonas de GPU (TOOL_GPU_TIMERS=1): ultimo valor resolvido (~2 quadros de atraso)
+          for (const auto& z : ed.gpuDev->gpuZones()) { auto& acc = benchGpuZones[z.first]; acc.first += z.second; ++acc.second; }
+        }
         benchPhys.integrate += ps.integrateMs; benchPhys.prepare += ps.prepareMs; benchPhys.broad += ps.broadphaseMs;
         benchPhys.narrow += ps.narrowphaseMs; benchPhys.solver += ps.solverMs; benchPhys.ccd += ps.ccdMs; benchPhys.finish += ps.finishMs;
         benchPhys.steps += ps.steps; benchPhys.awake += ps.awake; benchPhys.pairs += ps.pairs; benchPhys.contacts += ps.contacts;
@@ -3933,7 +3952,7 @@ static int runEditorMain(int argc, char** argv) {
           if (benchRenderW > 0) std::printf("ECS bench: render %dx%d (Game view each frame), camera %s, api %s\n", benchRenderW, benchRenderH, benchOrbit ? "orbit" : "fixed", ed.apiStatus.c_str());
           else std::printf("ECS bench: render off (headless without panels draws nothing; use --bench-render WxH)\n");
           std::printf("ECS bench: spawn %d frames, %.0f ms; warm-up %d frames; occlusion %s; game dt %s\n", benchSpawnFrames,
-                      static_cast<double>(benchSpawnEndNs - benchSpawnStartNs) / 1e6, benchWarmup, ed.sceneInfo.render.occlusionCull ? "on" : "off",
+                      static_cast<double>(benchSpawnEndNs - benchSpawnStartNs) / 1e6, benchWarmup, ed.occlusionModeUsed,
                       benchDt > 0.0 ? (std::to_string(benchDt) + " s fixed").c_str() : "real time");
           std::printf("ECS bench: avg %.2f ms (%.1f fps), p50 %.2f ms, p95 %.2f ms, p99 %.2f ms (1%% low %.1f fps), max %.2f ms\n", sum / nf, 1000.0 * nf / sum,
                       s[s.size() / 2], s[s.size() * 95 / 100], p99, p99 > 0 ? 1000.0 / p99 : 0.0, s.back());
@@ -3956,6 +3975,12 @@ static int runEditorMain(int argc, char** argv) {
           if (fxBench > 0) { size_t fxAlive = 0; for (auto& [k, rt] : ed.fxRt) if (rt.sys) fxAlive += rt.sys->alive();
             std::printf("ECS bench:   particles v2: %zu alive, %llu quads submitted last view, render %s, pass available %s, drawn on GPU last frame %u\n", fxAlive,
                         static_cast<unsigned long long>(ed.fxQuadsLast), ed.fxRender ? "on" : "off", ed.gpu.particlesAvailable() ? "yes" : "no", ed.gpu.particlesDrawn()); }
+          // Zonas de tempo de GPU (so com TOOL_GPU_TIMERS=1): media por zona sobre os quadros medidos. Nao imprime nada se desligado.
+          if (!benchGpuZones.empty()) {
+            std::printf("ECS bench: GPU zones, avg ms (occ_depth + hiz + occlusion = oclusao GPU; cull = frustum)\n");
+            for (const auto& z : benchGpuZones) std::printf("ECS bench:   gpu %-14s %7.3f ms\n", z.first.c_str(), z.second.first / std::max(1, z.second.second));
+          }
+          std::printf("ECS bench:   occlusion mode %s (requested %s), GPU occlusion ran last frame: %s\n", ed.occlusionModeUsed, ed.sceneInfo.render.occlusionMode.c_str(), ed.gpu.gpuOcclusionUsedLastFrame() ? "yes" : "no");
           // Culling GPU: instancias visiveis segundo a GPU (readback sincrono, so aqui) x visiveis pelo frustum da CPU do renderer.
           { tool::u32 gpuVis = 0;
             if (ed.gpu.gpuCullUsedLastFrame() && ed.gpu.readGpuVisibleCount(gpuVis))
@@ -3969,10 +3994,10 @@ static int runEditorMain(int argc, char** argv) {
                       ed.worldMatRebuilds_, ed.worldMatMisses_.load(), frame, static_cast<unsigned long long>(ed.scene.world().epochOf<editor::Transform>()),
                       static_cast<unsigned long long>(ed.scene.world().epochOf<editor::Parent>()), static_cast<unsigned long long>(ed.scene.world().epochOf<editor::MeshRenderer>()),
                       static_cast<unsigned long long>(ed.scene.world().structuralEpoch()));
-          std::printf("ECS bench:   gpu-motion: requested %s, live %s, persistent objects %u in %u batches, builds %llu (scene writes %llu, %.1f MB last), per-frame CPU->GPU bytes %llu, non-driven (CPU drawn) %zu\n",
+          std::printf("ECS bench:   gpu-motion: requested %s, live %s, persistent objects %u in %u batches, builds %llu (scene writes %llu, %.1f MB last), per-frame CPU->GPU bytes %llu, CPU-drawn list %zu\n",
                       ed.gpuMotion ? "yes" : "no", ed.gpuMotionLive_ ? "yes" : "no", ed.gpu.persistentCount(), ed.gpu.persistentBatches(), ed.gpuMotionBuilds_,
                       static_cast<unsigned long long>(ed.gpu.persistentBuilds()), static_cast<double>(ed.gpu.persistentBuildBytes()) / (1024.0 * 1024.0),
-                      static_cast<unsigned long long>(ed.gpu.persistentFrameBytes()), ed.gpuMotionNonDriven_);
+                      static_cast<unsigned long long>(ed.gpu.persistentFrameBytes()), ed.gpuCpuList_.size());
           if (std::getenv("TOOL_BENCH_IMGHASH")) std::printf("ECS bench:   image hash game %016llx scene %016llx\n", static_cast<unsigned long long>(benchImgHashGame), static_cast<unsigned long long>(benchImgHashScene));
           { size_t renderables = 0;
             ed.scene.world().each<editor::MeshRenderer, editor::Transform>([&](tool::Entity e, editor::MeshRenderer&, editor::Transform&) { if (!ed.scene.world().has<editor::Inactive>(e)) ++renderables; });

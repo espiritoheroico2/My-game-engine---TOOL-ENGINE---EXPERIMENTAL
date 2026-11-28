@@ -73,6 +73,17 @@ static_assert(sizeof(CullCB) == 96 && sizeof(CullBatchGPU) == 32 && sizeof(rhi::
 // Movimento + culling da cena persistente (motion_cull.hlsl): planos do frustum e o tempo uniforme (time[0]).
 struct MotionCullCB { f32 planes[6][4]; f32 time[4]; };
 static_assert(sizeof(MotionCullCB) == 112, "layout do cbuffer de movimento GPU");
+// Oclusao por GPU (docs/planos/34): lote do passe de oclusores (occluder.hlsl), cbuffer do teste (occlusion_cull.hlsl) e da reducao HiZ.
+// Piramide: no maximo kHizMaxLevels niveis (4096 px -> 13 niveis, o ultimo e cortado; o teste trata o nivel mais alto como conservador).
+struct OccBatchCB { u32 first, pad[3]; f32 sphere[4]; f32 params[4]; };
+struct OccCB { Mat4 view; f32 proj[4]; f32 screen[4]; };
+struct HizCB { u32 dims[4]; };
+inline constexpr u32 kHizMaxLevels = 12;
+// Piramide HiZ de um tamanho de vista: niveis R32F (0 = profundidade linear dos oclusores) e o depth buffer do passe de oclusores.
+// O RHI nao expoe vista de mip nem UAV de textura no compute: cada nivel e uma textura propria, reduzida por pixel shader e lida
+// no compute com Texture2D.Load (setTexture em pipeline de compute). Ver docs/planos/34_OCLUSAO_GPU.md.
+struct HizSet { rhi::TextureId lvl[kHizMaxLevels], depth; u32 n = 0; u64 lastUse = 0; };
+static_assert(sizeof(OccBatchCB) == 48 && sizeof(OccCB) == 96 && sizeof(HizCB) == 16, "layout dos cbuffers da oclusao GPU");
 static_assert(sizeof(FrameCB) == 144 && sizeof(ObjectCB) == 160 && sizeof(ShadowCB) == 64 && sizeof(ShadowInstanceGPU) == 64 && sizeof(BatchCB) == 16 && sizeof(BloomCB) == 32, "layout de cbuffer");
 static_assert(sizeof(InstanceGPU) == sizeof(ObjectCB), "layout de instancia deve bater com ObjectCB");
 
@@ -88,6 +99,21 @@ struct PointShadowLightGPU { f32 posType[4]; f32 params[4]; Mat4 vp[6]; };
 struct PointShadowGPU { u32 count; u32 pad[3]; PointShadowLightGPU lights[kMaxPointShadowLights]; };
 static_assert(sizeof(PointShadowLightGPU) == 416 && sizeof(PointShadowGPU) == 16 + 4 * 416, "layout de PointShadowCB");
 static_assert(sizeof(LightPrism::CsmGPU) == 352 && sizeof(LightPrism::Ibl::IblGPU) == 160, "layout dos cbuffers da Light Prism");
+
+// Zona de tempo de GPU em escopo (RAII): marca o inicio no construtor e o fim no destrutor (ou em stop()). So faz algo com
+// IDevice::setGpuTimers(true) num backend com timestamps; desligado custa uma chamada virtual no construtor e nenhuma depois.
+// A zona vive no dispositivo, entao cobre varias listas de comandos (um passe com varios submits).
+class GpuZoneScope {
+public:
+  GpuZoneScope(rhi::IDevice* dev, const char* name) : dev_(dev && dev->gpuTimersEnabled() ? dev : nullptr) { if (dev_) dev_->gpuZoneBegin(name); }
+  ~GpuZoneScope() { stop(); }
+  // Fecha a zona antes do fim do escopo.
+  void stop() { if (dev_) { dev_->gpuZoneEnd(); dev_ = nullptr; } }
+  GpuZoneScope(const GpuZoneScope&) = delete;
+  GpuZoneScope& operator=(const GpuZoneScope&) = delete;
+private:
+  rhi::IDevice* dev_;
+};
 
 inline const std::vector<std::string>& pbrUniformNames() {
   static const std::vector<std::string> n = {"FrameBuffer", "BatchBuffer", "GlobalLightCB", "SunLightCB", "CsmCB", "IblCB", "ClusterGridCB", "PointShadowCB"};
@@ -299,6 +325,7 @@ public:
         }
         motionCb_ = dev.createBuffer({sizeof(MotionCullCB), rhi::BufferUsage::Uniform, true}, nullptr);
       }
+      initOcclusionGpu(dev, hlslDir);
     }
 
     // FSR 1 (EASU + RCAS em pixel shader). Opcional: em OpenGL (GLSL pre-gerado) ou se o shader/pipeline falhar, fica
@@ -692,6 +719,7 @@ public:
     // ---- 1) sombras CSM ----
     if (shadowOn_ && !shadowSkip_) {
       render::PassTimer timer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::CsmShadow)]};
+      GpuZoneScope gpuZone(dev_, "shadow");   // tempo de GPU (CSM + pontual somam no mesmo nome)
       for (u32 k = 0; k < shadowCount_; ++k) {
         auto cl = dev_->beginCommands();
         cl->begin(shColor_[k], shDepth_, 1.f, 1.f, 1.f, 1.f);
@@ -722,6 +750,7 @@ public:
       for (u32 f = 0; f < pointFaces_[i]; ++f) anyPointFaceDirty = anyPointFaceDirty || pointFaceDirty[i][f];
     if (pointOn_ && anyPointFaceDirty) {
       render::PassTimer timer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::PointShadow)]};
+      GpuZoneScope gpuZone(dev_, "shadow");
       for (u32 i = 0; i < pointCount_; ++i) {
         for (u32 f = 0; f < pointFaces_[i]; ++f) {
           if (!pointFaceDirty[i][f]) continue;
@@ -816,6 +845,7 @@ public:
 
       if (ssaoOn_) {
       render::PassTimer ssaoTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Ssao)]};
+      GpuZoneScope gpuZone(dev_, "ssao");   // SSAO + blur (o prepasso fica fora)
       auto sc = dev_->beginCommands();
       sc->begin(aoRaw_, kNullHandle, 1.f, 1.f, 1.f, 1.f);
       sc->setPipeline(ssaoPipe_);
@@ -896,15 +926,24 @@ public:
     // Fica ativo no quadro se o compute foi criado, ha lotes e o dispatch cabe (gy <= 65535 grupos); senao o quadro usa o
     // caminho CPU (a fila opaca pode ter instancias fora da tela, que a GPU recorta no rasterizador: so perde desempenho).
     gpuCullFrame_ = gpuCullActive() && opaqueCount > 0 && !opaquePlan_.batches.empty() && opaquePlan_.batches.size() <= 65535u;
-    if (gpuCullFrame_) gpuCullFrame_ = runGpuCull(opaqueCount, cameraFrustum);
-    // Cena persistente: movimento + culling por compute, tambem fora do passe de render (o dispatch nao cabe dentro dele).
-    persistFrame_ = persistReady_ && runPersistCull(cameraFrustum);
+    {
+      GpuZoneScope cullZone(dev_, "cull");   // tempo de GPU dos computes de culling (so mede se algum rodar)
+      if (gpuCullFrame_) gpuCullFrame_ = runGpuCull(opaqueCount, cameraFrustum);
+      // Cena persistente: movimento + culling por compute, tambem fora do passe de render (o dispatch nao cabe dentro dele).
+      persistFrame_ = persistReady_ && runPersistCull(cameraFrustum);
+    }
+    // Oclusao por GPU (HiZ): segundo estagio, sobre o que o frustum deixou passar. Zonas proprias: occ_depth, hiz e occlusion.
+    // Sem ela (desligada, camera ortografica ou falta de recurso) o desenho usa a saida do frustum, como antes.
+    gpuOccFrame_ = gpuCullFrame_ && gpuOcc_ && occReady_ && !cam_.ortho && runGpuOcclusion(opaqueCount, view, cam_.projection(static_cast<f32>(w_), static_cast<f32>(h_)));
+    drawCompact_ = gpuOccFrame_ ? occCompactBuf_ : compactBuf_;
+    drawArgs_ = gpuOccFrame_ ? occArgsBuf_ : cullArgsBuf_;
 
+    GpuZoneScope opaqueZone(dev_, "opaque");
     cl_ = dev_->beginCommands();
     cl_->begin(color_, depth_, clear_.x, clear_.y, clear_.z, clearAlpha_);
     bindScene(cl_.get(), pipe_);
     // Caminho GPU: o VS le do buffer compactado (mesma faixa de cada lote, entao BatchCB.first continua valendo).
-    if (opaqueCount > 0) cl_->setStorage(4, gpuCullFrame_ ? compactBuf_ : instBuf_);
+    if (opaqueCount > 0) cl_->setStorage(4, gpuCullFrame_ ? drawCompact_ : instBuf_);
 
     u32 batchIndex = 0;
     rhi::PipelineId curPipe = pipe_;   // pipeline ligado agora (pipe_ ou a variante dupla face)
@@ -920,7 +959,7 @@ public:
         if (want != curPipe) {
           curPipe = want;
           bindScene(cl_.get(), curPipe);
-          cl_->setStorage(4, gpuCullFrame_ ? compactBuf_ : instBuf_);
+          cl_->setStorage(4, gpuCullFrame_ ? drawCompact_ : instBuf_);
           cl_->setUniform(1, batchCb_);   // o rebind zera os slots: religa o BatchCB deste lote (ja gravado acima)
         }
       }
@@ -929,7 +968,7 @@ public:
       cl_->setVertexBuffer(d.mesh->vertex); cl_->setIndexBuffer(d.mesh->index);
       if (gpuCullFrame_) {
         // instanceCount vem da GPU; nas estatisticas entra o total do lote (limite superior, so a GPU sabe o visivel).
-        cl_->drawIndexedIndirect(cullArgsBuf_, batchIndex * static_cast<u32>(sizeof(rhi::DrawIndexedIndirectArgs)));
+        cl_->drawIndexedIndirect(drawArgs_, batchIndex * static_cast<u32>(sizeof(rhi::DrawIndexedIndirectArgs)));
         stats_.passes[static_cast<std::size_t>(render::RenderPassId::Opaque)].recordDraw(d.mesh->count, b.count);
       } else {
         recordDraw(*cl_, render::RenderPassId::Opaque, d.mesh->count, b.count);
@@ -964,6 +1003,7 @@ public:
     }
     cl_->end(); dev_->submit(*cl_); cl_.reset();
     opaqueTimer.stop();
+    opaqueZone.stop();
 
     // Passe de emissao: usa buffer dedicado (emiInstBuf_) para nao sobrescrever instBuf_ do passe opaco no mesmo frame
     if (bloomOn_ && !glow_.isNull()) {
@@ -1009,6 +1049,7 @@ public:
     // Passe transparente: usa buffer dedicado (transInstBuf_) para preservar integridade dos passes anteriores
     if (!tdraws_.empty() && !transPipe_.isNull()) {
       render::PassTimer transparentTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Transparent)]};
+      GpuZoneScope gpuZone(dev_, "transparent");
       const Vec3 eye = cam_.eye;
       auto dist2 = [&](const Draw& d) { const Vec3 p = d.world.transformPoint({0, 0, 0}); const Vec3 q = p - eye; return dot(q, q); };
       std::sort(tdraws_.begin(), tdraws_.end(), [&](const Draw& a, const Draw& b) { return dist2(a) > dist2(b); });
@@ -1064,10 +1105,10 @@ public:
 
     // Passe de particulas: depois do opaco e do transparente, antes do bloom (o brilho das particulas entra no halo).
     partDrawn_ = 0;
-    if (!pdraws_.empty() && partReady_ && partEnabled_) renderParticles();
+    if (!pdraws_.empty() && partReady_ && partEnabled_) { GpuZoneScope gpuZone(dev_, "particles"); renderParticles(); }
 
     out_ = color_;
-    if (bloomOn_ && !bloomA_.isNull() && !bloomThrPipe_.isNull()) { runBloom(); out_ = outFull_; }
+    if (bloomOn_ && !bloomA_.isNull() && !bloomThrPipe_.isNull()) { { GpuZoneScope gpuZone(dev_, "bloom"); runBloom(); } out_ = outFull_; }
     // FSR 1: amplia a imagem renderizada (w_ x h_) para o tamanho de saida pedido; a leitura (readback) passa a vir dela.
     fsrActive_ = false;
     if (fsrWant_ && (fsrOutW_ != w_ || fsrOutH_ != h_)) {
@@ -1118,7 +1159,7 @@ public:
     if (!gpuCullFrame_ || !dev_) return false;
     std::vector<u8> raw;
     const size_t nb = opaquePlan_.batches.size();
-    if (!dev_->readBuffer(cullArgsBuf_, raw) || raw.size() < nb * sizeof(rhi::DrawIndexedIndirectArgs)) return false;
+    if (!dev_->readBuffer(drawArgs_, raw) || raw.size() < nb * sizeof(rhi::DrawIndexedIndirectArgs)) return false;   // args finais (frustum + oclusao)
     for (size_t i = 0; i < nb; ++i) {
       rhi::DrawIndexedIndirectArgs a{};
       std::memcpy(&a, raw.data() + i * sizeof a, sizeof a);
@@ -1126,11 +1167,53 @@ public:
     }
     return true;
   }
+  // Medicao (TOOL_BENCH_SYNC=1): espera a GPU terminar o trabalho enviado, lendo de volta um buffer pequeno (args indiretos do ultimo
+  // quadro; a leitura faz WaitForIdle). Sem isto o tempo por quadro e so o da CPU: com a CPU quase ociosa a GPU fica atras na fila.
+  bool benchSync() {
+    if (!dev_) return false;
+    std::vector<u8> raw;
+    if (persistReady_ && !persistArgs_.isNull()) return dev_->readBuffer(persistArgs_, raw);
+    if (!drawArgs_.isNull()) return dev_->readBuffer(drawArgs_, raw);
+    if (!cullArgsBuf_.isNull()) return dev_->readBuffer(cullArgsBuf_, raw);
+    return false;
+  }
   size_t cachedMeshes() const { return meshes_.size(); }
   const render::RenderViewStats& renderStats() const { return stats_; }
   const LightPrism::ClusterSystem* clusters() const { return clusters_.get(); }
   // Total de uploads do BatchCB desde a criacao (um por lote desenhado). Diferenca entre dois quadros = uploads por quadro.
   u64 batchCbUploads() const { return batchCbUploads_; }
+
+  // ---- Oclusao por GPU (HiZ), docs/planos/34_OCLUSAO_GPU.md ----
+  // Segundo estagio do culling dos opacos: depois do frustum, desenha os oclusores (filtro de 8 px) num alvo R32F de profundidade
+  // linear, reduz a piramide HiZ (maximo por nivel) e testa a esfera de cada instancia contra ela. Conservador: na duvida, visivel.
+  // Precisa do culling GPU ativo no quadro (compute + indirect) e de camera em perspectiva.
+  void setGpuOcclusion(bool on) { gpuOcc_ = on; }
+  // Os shaders e pipelines da oclusao existem (backend com compute + indirect, nao GL).
+  bool gpuOcclusionAvailable() const { return dev_ && occReady_; }
+  // O ultimo quadro rodou o teste de oclusao na GPU.
+  bool gpuOcclusionUsedLastFrame() const { return gpuOccFrame_; }
+  // Le da GPU (espera o fim do quadro: so teste/bench) a posicao mundial (translacao da matriz) de cada instancia que o desenho
+  // indireto final do passe opaco vai desenhar. Serve para conferir a oclusao objeto a objeto.
+  bool readGpuVisiblePositions(std::vector<std::array<f32, 3>>& out) {
+    out.clear();
+    if (!gpuCullFrame_ || !dev_) return false;
+    std::vector<u8> args, inst;
+    const size_t nb = opaquePlan_.batches.size();
+    if (!dev_->readBuffer(drawArgs_, args) || args.size() < nb * sizeof(rhi::DrawIndexedIndirectArgs)) return false;
+    if (!dev_->readBuffer(drawCompact_, inst)) return false;
+    for (size_t i = 0; i < nb; ++i) {
+      rhi::DrawIndexedIndirectArgs a{};
+      std::memcpy(&a, args.data() + i * sizeof a, sizeof a);
+      for (u32 j = 0; j < a.instanceCount; ++j) {
+        const size_t at = (static_cast<size_t>(opaquePlan_.batches[i].first) + j) * sizeof(InstanceGPU);
+        if (at + sizeof(InstanceGPU) > inst.size()) return false;
+        f32 world[16];
+        std::memcpy(world, inst.data() + at, sizeof world);
+        out.push_back({world[12], world[13], world[14]});
+      }
+    }
+    return true;
+  }
 
   // Libera a textura da GPU de um Texture::id que saiu do cache da CPU (recarga/edicao). Sem isso ficava orfa ate o fim.
   void forgetTexture(u64 id) {
@@ -1440,6 +1523,10 @@ private:
     for (auto* h : {&motionPipe_, &motionCs_, &motionCb_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     for (auto* h : {&cullPipe_, &cullCs_, &cullCb_, &cullBatchBuf_, &compactBuf_, &cullArgsBuf_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     cullBatchCap_ = compactCap_ = cullArgsCap_ = 0; gpuCullFrame_ = false;
+    for (auto* h : {&occVs_, &occPs_, &hizPs_, &occCs_, &occDepthPipe_, &hizPipe_, &occPipe_, &occCb_, &occBatchCb_, &occCompactBuf_, &occArgsBuf_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
+    for (auto& h : hizCb_) if (!h.isNull()) { dev_->destroy(h); h = kNullHandle; }
+    for (auto& [k, s] : hizSets_) destroyHiz(s);
+    hizSets_.clear(); occCompactCap_ = occArgsCap_ = 0; occReady_ = false; gpuOccFrame_ = false; drawCompact_ = drawArgs_ = kNullHandle;
     for (auto* h : {&frameCb_, &objCb_, &batchCb_, &instBuf_, &emiInstBuf_, &transInstBuf_, &shadowInstBuf_, &prepassInstBuf_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &brdfTex_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &pointClearPipe_, &vs_, &ps_, &legacyVs_, &legacyPs_, &shVs_, &shPs_, &ptVs_, &ptPs_, &pointClearPs_,
                     &prePipe_, &ssaoPipe_, &blurPipe_, &fsVb_, &fsIb_, &ssaoCb_, &preVs_, &prePs_, &fsVs_, &ssaoPs_, &blurPs_,
                     &emiPipe_, &emiPs_, &transPipe_, &pipeDs_, &transPipeDs_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_,
@@ -1475,6 +1562,14 @@ private:
   std::vector<CullBatchGPU> cullBatchCpu_;
   std::vector<rhi::DrawIndexedIndirectArgs> cullArgsCpu_;
   bool gpuCull_ = true, gpuCullFrame_ = false;
+  // Oclusao GPU (HiZ): pipelines, buffers do estagio 2, piramides por tamanho de vista e os buffers que o passe opaco desenha
+  // (drawCompact_/drawArgs_ = saida do frustum, ou do teste de oclusao quando ele rodou no quadro).
+  bool gpuOcc_ = false, gpuOccFrame_ = false, occReady_ = false;
+  rhi::ShaderId occVs_, occPs_, hizPs_, occCs_;
+  rhi::PipelineId occDepthPipe_, hizPipe_, occPipe_;
+  rhi::BufferId occCb_, occBatchCb_, hizCb_[kHizMaxLevels], occCompactBuf_, occArgsBuf_, drawCompact_, drawArgs_;
+  u32 occCompactCap_ = 0, occArgsCap_ = 0;
+  std::unordered_map<u64, HizSet> hizSets_;
   // Cena persistente (experimento --gpu-motion): pipeline de movimento+culling, buffers imutaveis e lotes fixos.
   struct PersistBatch { const Mesh* mesh = nullptr; rhi::TextureId tex, ntex; bool doubleSided = false; u32 first = 0, count = 0; };
   rhi::ShaderId motionCs_; rhi::PipelineId motionPipe_; rhi::BufferId motionCb_;
@@ -1616,6 +1711,166 @@ private:
     cs->setStorageRW(1, cullArgsBuf_);
     cs->dispatch((maxCount + 63u) / 64u, static_cast<u32>(nb), 1);   // x = instancias do lote (64 por grupo), y = lote
     dev_->submit(*cs);
+    return true;
+  }
+
+  // ---- Oclusao por GPU: recursos ----
+  // Piramide HiZ de um tamanho de vista: niveis R32F (0 = profundidade linear dos oclusores) e o depth buffer do passe de oclusores.
+  // O RHI nao expoe vista de mip nem UAV de textura no compute: cada nivel e uma textura propria, reduzida por pixel shader e lida
+  // no compute com Texture2D.Load (setTexture em pipeline de compute). Ver docs/planos/34_OCLUSAO_GPU.md.
+  // Cria shaders, pipelines e cbuffers da oclusao GPU. Opcional: qualquer falha deixa occReady_ falso (o editor cai na oclusao CPU).
+  void initOcclusionGpu(rhi::IDevice& dev, const std::string& hlslDir) {
+    occReady_ = false;
+    std::string odSrc, hzSrc, ocSrc;
+    if (!loadHlsl(hlslDir, "occluder.hlsl", odSrc) || !loadHlsl(hlslDir, "hiz_reduce.hlsl", hzSrc) || !loadHlsl(hlslDir, "occlusion_cull.hlsl", ocSrc)) {
+      debug().report("TOOL-W147", Severity::Warning, "shaders de oclusao GPU nao encontrados em " + hlslDir + ": oclusao GPU indisponivel");
+      return;
+    }
+    rhi::ShaderDesc ov; ov.stage = rhi::ShaderStage::Vertex; ov.entry = "VSMain"; ov.name = "occluder.vs"; ov.source = odSrc;
+    rhi::ShaderDesc op = ov; op.stage = rhi::ShaderStage::Pixel; op.entry = "PSMain"; op.name = "occluder.ps";
+    occVs_ = dev.createShader(ov); occPs_ = dev.createShader(op);
+    rhi::ShaderDesc hp; hp.stage = rhi::ShaderStage::Pixel; hp.entry = "HizReduce"; hp.name = "hiz_reduce.ps"; hp.source = hzSrc;
+    hizPs_ = dev.createShader(hp);
+    rhi::ShaderDesc oc; oc.stage = rhi::ShaderStage::Compute; oc.entry = "OcclusionCullCS"; oc.name = "occlusion_cull.cs"; oc.source = ocSrc;
+    occCs_ = dev.createShader(oc);
+    if (occVs_.isNull() || occPs_.isNull() || hizPs_.isNull() || occCs_.isNull() || fsVs_.isNull()) { debug().report("TOOL-W147", Severity::Warning, "falha ao compilar os shaders da oclusao GPU"); return; }
+    rhi::PipelineDesc od; od.vs = occVs_; od.ps = occPs_; od.name = "occluder";
+    od.layout = {{3, 0}, {3, 12}, {2, 24}}; od.vertexStride = 32;
+    od.uniformNames = {"FrameBuffer", "OccBatchBuffer"}; od.storageNames = {"Instances"};
+    od.color = rhi::Format::R32F; od.cull = rhi::CullMode::Back;
+    occDepthPipe_ = dev.createPipeline(od);
+    rhi::PipelineDesc hd; hd.vs = fsVs_; hd.ps = hizPs_; hd.name = "hiz_reduce"; hd.layout = {{3, 0}}; hd.vertexStride = 12;
+    hd.uniformNames = {"HizCB"}; hd.textureNames = {"Src"}; hd.color = rhi::Format::R32F; hd.cull = rhi::CullMode::None; hd.depthTest = false; hd.depthWrite = false;
+    hizPipe_ = dev.createPipeline(hd);
+    rhi::PipelineDesc cd; cd.cs = occCs_; cd.name = "occlusion_cull";
+    cd.uniformNames = {"OccCB"}; cd.storageNames = {"CullBatches", "SrcInstances"}; cd.storageRWNames = {"ArgsIn", "DstInstances", "DrawArgs"};
+    for (u32 l = 0; l < kHizMaxLevels; ++l) cd.textureNames.push_back("Hiz" + std::to_string(l));
+    occPipe_ = dev.createPipeline(cd);
+    occCb_ = dev.createBuffer({sizeof(OccCB), rhi::BufferUsage::Uniform, true}, nullptr);
+    occBatchCb_ = dev.createBuffer({sizeof(OccBatchCB), rhi::BufferUsage::Uniform, true}, nullptr);
+    bool cbs = true;
+    for (auto& b : hizCb_) { b = dev.createBuffer({sizeof(HizCB), rhi::BufferUsage::Uniform, true}, nullptr); cbs = cbs && !b.isNull(); }
+    occReady_ = !occDepthPipe_.isNull() && !hizPipe_.isNull() && !occPipe_.isNull() && !occCb_.isNull() && !occBatchCb_.isNull() && cbs;
+    if (!occReady_) debug().report("TOOL-W147", Severity::Warning, "pipelines da oclusao GPU indisponiveis; o editor usa a oclusao por CPU");
+  }
+
+  // Piramide do tamanho atual (cria na primeira vez e guarda por tamanho, como os alvos: Scene e Game alternam tamanhos).
+  HizSet* ensureHiz() {
+    const u64 key = (static_cast<u64>(w_) << 32) | h_;
+    auto it = hizSets_.find(key);
+    if (it == hizSets_.end()) {
+      HizSet s;
+      u32 lw = w_, lh = h_;
+      while (s.n < kHizMaxLevels) {
+        s.lvl[s.n] = dev_->createTexture({lw, lh, 1, rhi::Format::R32F, true}, nullptr);
+        if (s.lvl[s.n].isNull()) break;
+        ++s.n;
+        if (lw == 1 && lh == 1) break;
+        lw = std::max(1u, lw >> 1); lh = std::max(1u, lh >> 1);
+      }
+      s.depth = dev_->createTexture({w_, h_, 1, rhi::Format::D32F, true}, nullptr);
+      if (s.n == 0 || s.depth.isNull()) { destroyHiz(s); return nullptr; }
+      it = hizSets_.emplace(key, s).first;
+    }
+    it->second.lastUse = frame_;
+    for (auto i = hizSets_.begin(); i != hizSets_.end();) {
+      if (frame_ - i->second.lastUse > 120) { destroyHiz(i->second); i = hizSets_.erase(i); } else ++i;
+    }
+    return &it->second;
+  }
+  void destroyHiz(HizSet& s) {
+    for (u32 l = 0; l < kHizMaxLevels; ++l) if (!s.lvl[l].isNull()) { dev_->destroy(s.lvl[l]); s.lvl[l] = kNullHandle; }
+    if (!s.depth.isNull()) { dev_->destroy(s.depth); s.depth = kNullHandle; }
+    s.n = 0;
+  }
+
+  // Oclusao por GPU. Fora de qualquer render pass; roda DEPOIS de runGpuCull (usa compactBuf_, cullArgsBuf_ e cullBatchBuf_ dele).
+  //  1) occ_depth: desenha os oclusores (so opacos, filtro de 8 px no VS) no nivel 0 do HiZ, com o buffer compactado do frustum;
+  //  2) hiz      : reduz os niveis seguintes (maximo por 2x2);
+  //  3) occlusion: compute que testa a esfera de cada instancia e compacta as que sobram em occCompactBuf_ + occArgsBuf_.
+  // Devolve false (sem tocar no desenho) se faltar recurso ou nao houver oclusor: o quadro segue com a saida do frustum.
+  // CONSERVADOR: lote de dupla face, malha densa (> kOccluderMaxTris) e bounds invalidos nao sao oclusores; o teste do compute
+  // deixa visivel tudo que for duvidoso (ver occlusion_cull.hlsl). Nunca esconde um objeto visivel.
+  bool runGpuOcclusion(size_t opaqueCount, const Mat4& view, const Mat4& proj) {
+    constexpr u32 kOccluderMaxTris = 2048;   // igual ao da CPU (editor_state.hpp)
+    constexpr f32 kOccluderMinPx = 8.f;      // idem: raio projetado minimo para um objeto ser oclusor
+    const size_t nb = opaquePlan_.batches.size();
+    if (nb == 0 || opaqueCount == 0) return false;
+    // Lotes oclusores: malha com poucos triangulos, face unica, bounds validos. (O alpha cutoff e por instancia: o VS descarta.)
+    std::vector<u32> occBatches;
+    for (size_t i = 0; i < nb; ++i) {
+      const InstanceBatch& b = opaquePlan_.batches[i];
+      const Draw& d = draws_[renderQueues_.opaque[opaquePlan_.order[b.first]]];
+      if (d.mesh->count / 3 > kOccluderMaxTris || d.mat.doubleSided || !d.mesh->bounds.valid) continue;
+      occBatches.push_back(static_cast<u32>(i));
+    }
+    if (occBatches.empty()) return false;
+    HizSet* hz = ensureHiz();
+    if (!hz) return false;
+    if (!ensureBuffer(occCompactBuf_, occCompactCap_, opaqueCount, sizeof(InstanceGPU), rhi::BufferUsage::StorageRW, false) ||
+        !ensureBuffer(occArgsBuf_, occArgsCap_, nb, sizeof(rhi::DrawIndexedIndirectArgs), rhi::BufferUsage::Indirect, false)) return false;
+    const u32 W = w_, H = h_;
+    {   // 1) profundidade dos oclusores (nivel 0)
+      GpuZoneScope zone(dev_, "occ_depth");
+      auto cl = dev_->beginCommands();
+      cl->begin(hz->lvl[0], hz->depth, 1e30f, 0.f, 0.f, 0.f);   // 1e30 = "sem oclusor" (o maximo do HiZ fica enorme: visivel)
+      cl->setPipeline(occDepthPipe_);
+      cl->setUniform(0, frameCb_);
+      cl->setStorage(0, compactBuf_);
+      for (u32 i : occBatches) {
+        const InstanceBatch& b = opaquePlan_.batches[i];
+        const Draw& d = draws_[renderQueues_.opaque[opaquePlan_.order[b.first]]];
+        OccBatchCB bc{};
+        bc.first = b.first;
+        bc.sphere[0] = cullBatchCpu_[i].sphere[0]; bc.sphere[1] = cullBatchCpu_[i].sphere[1]; bc.sphere[2] = cullBatchCpu_[i].sphere[2]; bc.sphere[3] = cullBatchCpu_[i].sphere[3];
+        bc.params[0] = 0.5f * static_cast<f32>(H) * proj.m[1][1]; bc.params[1] = kOccluderMinPx; bc.params[2] = cam_zNear_;
+        dev_->updateBuffer(occBatchCb_, &bc, sizeof bc);
+        cl->setUniform(1, occBatchCb_);
+        cl->setVertexBuffer(d.mesh->vertex); cl->setIndexBuffer(d.mesh->index);
+        cl->drawIndexedIndirect(cullArgsBuf_, i * static_cast<u32>(sizeof(rhi::DrawIndexedIndirectArgs)));   // instanceCount = o que o frustum deixou
+      }
+      cl->end(); dev_->submit(*cl);
+    }
+    {   // 2) piramide: cada nivel e o maximo 2x2 do anterior
+      GpuZoneScope zone(dev_, "hiz");
+      u32 sw = W, sh = H;
+      for (u32 l = 1; l < hz->n; ++l) {
+        const u32 dw = std::max(1u, sw >> 1), dh = std::max(1u, sh >> 1);
+        HizCB hc{{sw, sh, dw, dh}};
+        dev_->updateBuffer(hizCb_[l], &hc, sizeof hc);
+        auto cl = dev_->beginCommands();
+        cl->begin(hz->lvl[l], kNullHandle, 0.f, 0.f, 0.f, 0.f);
+        cl->setPipeline(hizPipe_);
+        cl->setUniform(0, hizCb_[l]);
+        cl->setTexture(0, hz->lvl[l - 1]);
+        cl->setVertexBuffer(fsVb_); cl->setIndexBuffer(fsIb_);
+        cl->drawIndexed(3, 1);
+        cl->end(); dev_->submit(*cl);
+        sw = dw; sh = dh;
+      }
+    }
+    {   // 3) teste de oclusao no compute
+      GpuZoneScope zone(dev_, "occlusion");
+      OccCB oc{};
+      oc.view = view;
+      oc.proj[0] = proj.m[0][0]; oc.proj[1] = proj.m[1][1]; oc.proj[2] = cam_zNear_; oc.proj[3] = 1e-4f;
+      oc.screen[0] = static_cast<f32>(W); oc.screen[1] = static_cast<f32>(H); oc.screen[2] = static_cast<f32>(hz->n);
+      dev_->updateBuffer(occCb_, &oc, sizeof oc);
+      dev_->updateBuffer(occArgsBuf_, cullArgsCpu_.data(), nb * sizeof(rhi::DrawIndexedIndirectArgs));   // indexCount, instanceCount = 0
+      u32 maxCount = 0;
+      for (size_t i = 0; i < nb; ++i) maxCount = std::max(maxCount, opaquePlan_.batches[i].count);
+      auto cs = dev_->beginCommands();
+      cs->setPipeline(occPipe_);
+      cs->setUniform(0, occCb_);
+      cs->setStorage(0, cullBatchBuf_);
+      cs->setStorage(1, compactBuf_);
+      cs->setStorageRW(0, cullArgsBuf_);
+      cs->setStorageRW(1, occCompactBuf_);
+      cs->setStorageRW(2, occArgsBuf_);
+      for (u32 l = 0; l < kHizMaxLevels; ++l) cs->setTexture(l, hz->lvl[std::min(l, hz->n - 1)]);   // niveis acima do ultimo repetem o ultimo
+      cs->dispatch((maxCount + 63u) / 64u, static_cast<u32>(nb), 1);
+      dev_->submit(*cs);
+    }
     return true;
   }
 

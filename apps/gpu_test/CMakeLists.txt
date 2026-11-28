@@ -18,6 +18,18 @@ target_link_libraries(rhi_compute_test PRIVATE tool::rhi_diligent tool::render)
 add_test(NAME rhi_compute_vulkan COMMAND rhi_compute_test vulkan)
 set_tests_properties(rhi_compute_vulkan PROPERTIES LABELS gpu)
 
+# Tempo de GPU por passe (timestamps): zonas > 0 em Vulkan e 0 no Null. "bench" mede o custo com a flag ligada/desligada.
+add_executable(gpu_time_test gpu_time_test.cpp)
+target_link_libraries(gpu_time_test PRIVATE tool::rhi_diligent tool::render)
+add_test(NAME gpu_time_vulkan COMMAND gpu_time_test vulkan)
+set_tests_properties(gpu_time_vulkan PROPERTIES LABELS gpu)
+
+# Corretude da oclusao por GPU (HiZ) contra a verdade geometrica e contra a oclusao por software (CPU): zero falsos ocultos.
+add_executable(occlusion_test occlusion_test.cpp)
+target_link_libraries(occlusion_test PRIVATE tool::rhi_diligent tool::render)
+add_test(NAME occlusion_gpu_vulkan COMMAND occlusion_test vulkan)
+set_tests_properties(occlusion_gpu_vulkan PROPERTIES LABELS gpu)
+
 # Teste com GPU do FSR 1 (EASU + RCAS): padrao 64x64 ampliado para 128x128, comparado com o bilinear. Vulkan offscreen.
 add_executable(fsr1_test fsr1_test.cpp)
 target_link_libraries(fsr1_test PRIVATE tool::rhi_diligent tool::render)

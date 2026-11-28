@@ -193,6 +193,7 @@ public:
       cpso->CreateShaderResourceBinding(&pd.srb, true);
       pd.compute = true;
       pd.uniformNames = d.uniformNames; pd.storageNames = d.storageNames; pd.storageRWNames = d.storageRWNames;
+      pd.textureNames = d.textureNames;   // texturas lidas no compute (SRV, Texture2D.Load): usadas pela piramide HiZ
       pipelines_[h.index] = std::move(pd);
       return h;
     }
@@ -347,9 +348,54 @@ public:
     if (swapchain && kind != Backend::GLES) swapchain->Present();
     ctx->FinishFrame();
     last_ = stats_; stats_ = {};
+    gpuEndFrame();
   }
   // Estatisticas do quadro atual. Fora do quadro, as do ultimo quadro apresentado.
   DrawStats frameStats() const override { return frameActive_ ? stats_ : last_; }
+
+  // ---- Tempo de GPU: consultas QUERY_TYPE_TIMESTAMP do Diligent (IDeviceContext::EndQuery grava o carimbo no ponto
+  // atual do fluxo de comandos; BeginQuery nao existe para timestamp). Cada zona usa um par de consultas. Os pares ficam
+  // em um anel de kGpuSlots quadros e sao lidos sem bloquear (IQuery::GetData devolve false se a GPU ainda nao chegou la).
+  bool gpuTimersSupported() const override { return gpuSupported_; }
+  bool gpuTimersEnabled() const override { return gpuOn_; }
+  void setGpuTimers(bool on) override {
+    if (!on) { gpuOn_ = false; return; }
+    if (!gpuSupported_) {
+      if (!gpuWarned_) { gpuWarned_ = true; debug().report("TOOL-W205", Severity::Warning, std::string("tempo de GPU: backend ") + toString(kind) + " sem consultas de timestamp neste RHI; zonas devolvem 0"); }
+      gpuOn_ = false; return;
+    }
+    gpuOn_ = true;
+  }
+  void gpuZoneBegin(const char* name) override {
+    if (!gpuOn_ || !name) return;
+    GpuSlot& s = gpuCurrentSlot();
+    if (s.used == s.samples.size()) {
+      GpuSample ns;
+      dl::QueryDesc qd; qd.Name = "tool gpu zone"; qd.Type = dl::QUERY_TYPE_TIMESTAMP;
+      device->CreateQuery(qd, &ns.q0); device->CreateQuery(qd, &ns.q1);
+      if (!ns.q0 || !ns.q1) { gpuOn_ = false; debug().report("TOOL-W205", Severity::Warning, "tempo de GPU: falha ao criar consulta de timestamp; medicao desligada"); return; }
+      s.samples.push_back(std::move(ns));
+    }
+    GpuSample& g = s.samples[s.used];
+    g.name = name; g.ended = false;
+    ctx->EndQuery(g.q0);
+    gpuStack_.push_back(s.used++);
+  }
+  void gpuZoneEnd() override {
+    if (!gpuOn_ || gpuStack_.empty()) return;
+    GpuSlot& s = gpuCurrentSlot();
+    const size_t i = gpuStack_.back(); gpuStack_.pop_back();
+    if (i >= s.samples.size()) return;
+    ctx->EndQuery(s.samples[i].q1);
+    s.samples[i].ended = true;
+  }
+  double gpuZoneMs(const char* name) const override {
+    if (!name) return 0.0;
+    double sum = 0.0;
+    for (const auto& z : gpuResolved_) if (z.first == name) sum += z.second;
+    return sum;
+  }
+  std::vector<std::pair<std::string, double>> gpuZones() const override { return gpuResolved_; }
 
   // Handle do backbuffer da swapchain, criado sob demanda. Nulo se offscreen.
   TextureId backbuffer() override {
@@ -513,6 +559,53 @@ public:
   void err(const char* m) { debug().report("TOOL-E135", Severity::Error, std::string("RHI: ") + m); }
   DrawStats stats_, last_;
   bool frameActive_ = false;
+  // ---- estado do tempo de GPU (ver gpuZoneBegin) ----
+  struct GpuSample { std::string name; dl::RefCntAutoPtr<dl::IQuery> q0, q1; bool ended = false; };
+  struct GpuSlot { std::vector<GpuSample> samples; size_t used = 0; u64 frame = ~0ull; bool resolved = true; };
+  static constexpr u64 kGpuSlots = 4;           // quadros em voo: o resultado de N chega ao fim de N+1 ou N+2
+  GpuSlot gpuSlots_[kGpuSlots];
+  u64 gpuFrame_ = 0, gpuResolvedFrame_ = 0;     // contador de quadros (avanca em present) e quadro do ultimo resultado
+  std::vector<size_t> gpuStack_;                // zonas abertas (indices em samples do slot atual)
+  std::vector<std::pair<std::string, double>> gpuResolved_;
+  bool gpuSupported_ = false, gpuOn_ = false, gpuWarned_ = false;
+
+  // Slot do quadro atual; ao reutilizar um slot antigo, descarta o que a GPU nao entregou a tempo.
+  GpuSlot& gpuCurrentSlot() {
+    GpuSlot& s = gpuSlots_[gpuFrame_ % kGpuSlots];
+    if (s.frame != gpuFrame_) {
+      if (!s.resolved) for (size_t i = 0; i < s.used; ++i) { s.samples[i].q0->Invalidate(); if (s.samples[i].ended) s.samples[i].q1->Invalidate(); }
+      s.used = 0; s.frame = gpuFrame_; s.resolved = false;
+    }
+    return s;
+  }
+  // Tenta ler (sem bloquear) todas as zonas de um slot. Verdadeiro se resolveu.
+  bool gpuResolveSlot(GpuSlot& s) {
+    for (size_t i = 0; i < s.used; ++i) if (!s.samples[i].ended) return false;
+    std::vector<std::pair<std::string, double>> out;
+    for (size_t i = 0; i < s.used; ++i) {
+      dl::QueryDataTimestamp a, b;
+      if (!s.samples[i].q0->GetData(&a, sizeof a, false) || !s.samples[i].q1->GetData(&b, sizeof b, false)) return false; // ainda na GPU
+      const double ms = (a.Frequency && b.Frequency && b.Counter >= a.Counter) ? static_cast<double>(b.Counter - a.Counter) * 1000.0 / static_cast<double>(b.Frequency) : 0.0;
+      bool merged = false;
+      for (auto& z : out) if (z.first == s.samples[i].name) { z.second += ms; merged = true; break; }
+      if (!merged) out.emplace_back(s.samples[i].name, ms);
+    }
+    for (size_t i = 0; i < s.used; ++i) { s.samples[i].q0->Invalidate(); s.samples[i].q1->Invalidate(); }
+    s.resolved = true;
+    if (s.frame >= gpuResolvedFrame_) { gpuResolved_ = std::move(out); gpuResolvedFrame_ = s.frame; }
+    return true;
+  }
+  // Fim de quadro (em present): avanca o contador e resolve, do mais antigo ao mais novo, o que ja chegou.
+  void gpuEndFrame() {
+    gpuStack_.clear();
+    ++gpuFrame_;
+    if (!gpuOn_) return;
+    for (u64 age = kGpuSlots - 1; age >= 1; --age) {
+      if (gpuFrame_ < age) continue;
+      GpuSlot& s = gpuSlots_[(gpuFrame_ - age) % kGpuSlots];
+      if (s.frame == gpuFrame_ - age && !s.resolved && s.used > 0) gpuResolveSlot(s);
+    }
+  }
   // Acesso somente leitura ao alocador de handles.
   const HandleAllocator& ids() const { return ids_; }
 
@@ -643,11 +736,13 @@ public:
   }
   // Liga a textura ao nome do slot no pixel shader. Exige setPipeline antes.
   void setTexture(u32 slot, TextureId t) override {
-    if (!check()) return;
+    if (!okBind()) return;
     auto* tex = d_.obj<dl::ITexture>(t, DiligentDevice::Kind::Texture);
     if (!tex) { d_.err("textura invalida"); return; }
     if (!pipe_ || slot >= pipe_->textureNames.size()) { d_.err("setTexture: slot sem nome (defina PipelineDesc::textureNames e chame setPipeline antes)"); return; }
-    if (auto* var = pipe_->srb->GetVariableByName(dl::SHADER_TYPE_PIXEL, pipe_->textureNames[slot].c_str())) var->Set(tex->GetDefaultView(dl::TEXTURE_VIEW_SHADER_RESOURCE));
+    // Grafico: pixel shader. Compute: o proprio CS (leitura por Load; a textura precisa ser renderTarget/leitura, nao profundidade).
+    const dl::SHADER_TYPE st = pipe_->compute ? dl::SHADER_TYPE_COMPUTE : dl::SHADER_TYPE_PIXEL;
+    if (auto* var = pipe_->srb->GetVariableByName(st, pipe_->textureNames[slot].c_str())) var->Set(tex->GetDefaultView(dl::TEXTURE_VIEW_SHADER_RESOURCE));
   }
   // Liga o buffer como SRV de StructuredBuffer ao nome do slot em VS e PS.
   void setStorage(u32 slot, BufferId b) override {
@@ -746,6 +841,9 @@ public:
   }
   // Fecha a lista e esquece o alvo de profundidade.
   void end() override { if (!open_) d_.err("end() sem begin()"); open_ = false; dsv_ = nullptr; }
+  // Zonas de tempo de GPU: o contexto imediato e unico, entao a zona vive no dispositivo (pode cobrir varias listas).
+  void beginGpuZone(const char* name) override { d_.gpuZoneBegin(name); }
+  void endGpuZone() override { d_.gpuZoneEnd(); }
 
 private:
   // Confirma que a lista esta aberta. Senao gera erro.
@@ -826,6 +924,7 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
     ci.DynamicHeapSize = info.dynamicHeapMB << 20; // o padrao do Diligent e 8 MB; "Space in dynamic heap is exhausted" acontecia aqui
     ci.DynamicHeapPageSize = 1u << 20;
     ci.EnableValidation = info.validation;          // se as camadas nao estiverem instaladas, o Diligent avisa e segue sem elas
+    ci.Features.TimestampQueries = dl::DEVICE_FEATURE_STATE_OPTIONAL; // tempo de GPU (so custa algo se setGpuTimers(true))
     if (!info.validation) debug().report("TOOL-I201", Severity::Info, "Vulkan sem validacao: erros do driver podem passar sem aviso (ligue em Configuracoes > Graficos)");
     dl::IDeviceContext* ctxs[1] = {};
     f->CreateDeviceAndContextsVk(ci, &dev->device, ctxs);
@@ -857,6 +956,7 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
     auto* f = dl::GetEngineFactoryD3D12();
     dl::EngineD3D12CreateInfo ci;
     ci.EnableValidation = info.validation;   // o Diligent nao expoe tamanho total do heap dinamico no D3D12 (so o de pagina)
+    ci.Features.TimestampQueries = dl::DEVICE_FEATURE_STATE_OPTIONAL; // tempo de GPU
     if (!info.validation) debug().report("TOOL-I203", Severity::Info, "D3D12 sem validacao: erros do driver podem passar sem aviso");
     dl::IDeviceContext* ctxs[1] = {};
     f->CreateDeviceAndContextsD3D12(ci, &dev->device, ctxs);
@@ -885,6 +985,10 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
   default: return fail(std::string("backend nao compilado neste binario: ") + toString(info.backend));
   }
   dev->adapter = dev->device->GetAdapterInfo().Description;
+  // Timestamps so em Vulkan/D3D12 (pedidos acima). OpenGL e D3D11: nao pedidos, gpuZoneMs() devolve 0 e setGpuTimers avisa uma vez.
+  dev->gpuSupported_ = (info.backend == Backend::Vulkan || info.backend == Backend::D3D12) &&
+                       dev->device->GetDeviceInfo().Features.TimestampQueries == dl::DEVICE_FEATURE_STATE_ENABLED;
+  if (info.gpuTimers) dev->setGpuTimers(true);
   return dev;
 }
 

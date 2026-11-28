@@ -1519,7 +1519,7 @@ class SettingsPanel {
         const SU::Vec2 p{x - rect_.x, y - rect_.y};
         if (phase == Elm::PointerPhase::Down) blurOutside(p);   // clique fora do campo de texto confirma o texto
         if (colorPopup_.isOpen()) {   // seletor de cor aberto: a caixa dele recebe o ponteiro primeiro
-            if (colorPopup_.contains(p)) {
+            if (colorPopup_.contains(p) || colorPopup_.dragging()) {   // arrasto em curso segue mesmo fora da caixa
                 colorPopup_.pointer(phase, p, window_);
                 return true;
             }

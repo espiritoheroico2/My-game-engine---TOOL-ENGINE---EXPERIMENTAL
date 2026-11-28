@@ -2,7 +2,7 @@
 
 Engine 3D leve, multi-API, em C++20, acompanhada de um editor completo desenhado inteiramente com SpriteUI (sem Dear ImGui). A estrutura do repositório foi pensada para o **Visual Studio Code**, e o núcleo e os testes compilam sem dependências externas.
 
-> **Status:** versão 0.8 beta · Autor: João Vitor Dias da Silva
+> **Status:** versão 0.9 beta · Autor: João Vitor Dias da Silva
 
 ## Capturas de tela
 
@@ -24,18 +24,24 @@ Engine 3D leve, multi-API, em C++20, acompanhada de um editor completo desenhado
 - **RHI multi-backend:** Vulkan, Direct3D 12, Direct3D 11 e OpenGL, via Diligent (`engine/rhi_diligent`), além de um renderizador por CPU (`SoftRenderer`).
 - **Editor 100% em SpriteUI:** inclusive a tela inicial de criar/abrir projeto.
 - **Pool de threads persistente:** `parallelFor` reaproveita as threads entre chamadas, sem criá-las a cada quadro.
-- **Física Newtoon:** solver paralelo por *graph coloring* e CCD por raio (`engine/physics`).
+- **Física Newtoon:** solver paralelo por *graph coloring*, colisão convexa (cascos, cilindros, LOD de colisão por distância), raycast 3D e 2D por BVH e CCD por raio (`engine/physics`, `docs/planos/20`, `22`).
+- **ECS:** entidades com geração, consultas, simulação por distância e versão por componente para o cache de matrizes (`docs/planos/19`, `29`).
+- **Render com culling em GPU e FSR 1.0:** culling por computes, sombras, SSAO, bloom e upscale FSR 1.0 (FSR 4 em teste de suporte).
+- **Partículas v2:** biblioteca em `engine/particles` com formas de emissão, turbulência, empuxo e presets (smoke, fire, fluid), e objeto "Particles" no editor (`docs/planos/28`, `30`).
 - **Light Prism:** sistema de luzes da engine (`engine/render`, estudo em `docs/estudos/LIGHT_PRISM.md`).
+- **Materiais e Canvas:** materiais por objeto (cor, rugosidade, metálico, emissão, opacidade, neblina) e UI de jogo com Canvas.
 - **Suítes de testes:** `tests/` (núcleo) e `apps/editor/tests/` (editor), mais fuzzers em `fuzz/`.
 
 ## Pontos fracos
 
 - 1 milhão de objetos ainda não é possível na GPU: estoura o heap dinâmico do Vulkan.
-- O sistema de partículas é antigo e limitado.
+- O sistema antigo de partículas (`ParticleComp`) ainda convive com o v2; a remoção está prevista (F5 do plano 0.9).
+- O passe de partículas v2 não existe em OpenGL.
 - Ainda não há cena 2D.
 - Ainda não há sistema de assets de material e shader.
 - A fonte é fixa: apenas uma fonte disponível.
-- O occlusion culling da vista Scene roda na CPU.
+- O occlusion culling da vista Scene roda na CPU (a versão em GPU está em desenvolvimento).
+- 1 milhão de objetos ainda não é possível: a medição de 100 mil objetos em movimento deu 221 ms por quadro (`docs/planos/19`).
 - Alguns painéis ainda estão em revisão.
 - O Windows é a plataforma mais testada.
 
@@ -49,6 +55,20 @@ Engine 3D leve, multi-API, em C++20, acompanhada de um editor completo desenhado
 - Popup de cor com alpha nas Configurações.
 - Pool de threads 5x mais rápido na física.
 - CPU do editor parado reduzida de 27% para menos de 1%.
+
+**Feito na versão 0.9** (detalhes em [`CHANGELOG.md`](docs/referencia/CHANGELOG.md))
+- Colisão convexa e LOD de colisão; cilindro; raycast único com BVH (3D e 2D).
+- Cache de matrizes com versão por API; tempo de GPU por passe (`TOOL_GPU_TIMERS=1`).
+- Partículas v2 no editor, com presets e passe de render.
+- Canvas substitui o UiCanvas; janelas soltas; seletor de cor compartilhado; Settings por categorias.
+
+**Em desenvolvimento** (fonte: [`35_PLANO_V09.md`](docs/planos/35_PLANO_V09.md))
+- Oclusão em GPU (HiZ), com modo CPU só para teste e medição.
+- Impostores (atlas por ângulo, billboard e grupo com objeto de referência): [`docs/estudos/IMPOSTORES.md`](docs/estudos/IMPOSTORES.md).
+- LODs por objeto e AutoLOD (simplificação de malha e textura).
+- Entity Manager, com EntityManagerScript editável na pasta do jogo.
+- Ray tracing por GPU (F0 concluída; F1 pendente).
+- FSR 4 além do upscale de teste, motion vectors e frame generation.
 
 **Falta fazer** (fonte: [`13_FUNCIONALIDADES_FUTURAS.md`](docs/planos/13_FUNCIONALIDADES_FUTURAS.md))
 

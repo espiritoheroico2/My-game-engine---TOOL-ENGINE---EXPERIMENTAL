@@ -3,6 +3,7 @@
 // (nunca toca no seu Project/). Retorna 0 se tudo passou. Rodado pelo ctest como "editor_selftest".
 #pragma once
 #include "assets_panel.hpp"
+#include "color_popup.hpp"
 #include "editor_state.hpp"
 #include "fx.hpp"
 #include "fx_particles.hpp"
@@ -1168,6 +1169,12 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(!back.lighting.rayTracing && back.lighting.rtAo && back.lighting.rtAoRays == 24 && std::fabs(back.lighting.rtAoRadius - 1.25f) < 1e-4f, "render settings: ray tracing master and RT AO survive save and load");
     const RenderSettings def = loadRenderSettings(saveRenderSettings(RenderSettings{}));
     check(def.occlusionCull && def.lighting.rayTracing && !def.lighting.rtAo, "render settings: occlusion on, ray tracing master on and RT AO off by default");
+    { // modo de oclusao (gpu/cpu/off): padrao gpu, ida e volta, valor desconhecido volta ao padrao
+      RenderSettings m; m.occlusionMode = "cpu";
+      tool::Json bad = saveRenderSettings(RenderSettings{}); bad.set("occlusionMode", std::string("xyz"));
+      check(def.occlusionMode == "gpu" && loadRenderSettings(saveRenderSettings(m)).occlusionMode == "cpu" && loadRenderSettings(bad).occlusionMode == "gpu",
+            "render settings: occlusion mode defaults to gpu, survives save and load, unknown value falls back to gpu");
+    }
     check(::editor::settings_model::ClampSimplifyAmount(2.f) == ::editor::settings_model::kSimplifyAmountMax &&
           ::editor::settings_model::ClampSimplifyAmount(-1.f) == 0.f && ::editor::settings_model::ClampSimplifyDistance(1.f) == ::editor::settings_model::kSimplifyDistanceMin,
           "simplify settings: amount and distance are clamped to their ranges");
@@ -1201,6 +1208,40 @@ inline int runSelfTest(const std::string& samplesDir) {
     check(!none.fsr4 && !none.frameGen && none.fsrQuality == 1 && std::fabs(none.fsrSharpness - 0.2f) < 1e-6f, "FSR settings: missing keys give the defaults");
     tool::Json old = tool::Json::object(); old.set("fsr1Sharpness", 0.7);
     check(std::fabs(loadRenderSettings(old).fsrSharpness - 0.7f) < 1e-4f, "FSR settings: old fsr1Sharpness key is still read");
+  }
+
+  { // seletor de cor: a faixa de alfa do seletor chega ao float do dono (antes era desenhada e nao tinha arraste)
+    namespace SUw = ToolEngine::SpriteUi;
+    namespace Ew = SUw::Elements;
+    TextAtlasSet atlas; atlas.load("", 1.f);
+    sui::Canvas canvas{atlas}, overlay{atlas};
+    color_popup::ColorPopup popup{canvas, overlay};
+    float rgb[3] = {1.f, 0.f, 0.f}, alpha = 1.f;
+    int changes = 0;
+    popup.onChange([&](const float*) { ++changes; });
+    const SUw::Rect box{{10.f, 10.f}, {232.f, 210.f}};
+    popup.open(1u, rgb, box, &alpha);
+    // mesma conta do popup: area interna = caixa menos 8 px de margem (a altura extra e so das cores comuns)
+    const SUw::Rect inner{{box.position.x + 8.f, box.position.y + 8.f}, {box.size.x - 16.f, box.size.y - 16.f}};
+    const SUw::Widgets::ColorPickerLayout lay = SUw::Widgets::LayoutColorPicker(inner);
+    const float ay = lay.alpha.position.y + lay.alpha.size.y * 0.5f, ax = lay.alpha.position.x, aw = lay.alpha.size.x;
+    popup.pointer(Ew::PointerPhase::Down, SUw::Vec2{ax + aw * 0.25f, ay}, nullptr);
+    check(std::fabs(alpha - 0.25f) < 0.01f && changes == 1 && popup.dragging(), "color picker: pressing the alpha bar writes the alpha to the owner's float");
+    popup.pointer(Ew::PointerPhase::Move, SUw::Vec2{ax + aw * 0.75f, ay + 40.f}, nullptr);
+    check(std::fabs(alpha - 0.75f) < 0.01f && changes == 2, "color picker: dragging the alpha bar follows the mouse (even off the bar vertically)");
+    popup.pointer(Ew::PointerPhase::Up, SUw::Vec2{ax + aw * 0.75f, ay}, nullptr);
+    popup.pointer(Ew::PointerPhase::Move, SUw::Vec2{ax + aw * 0.10f, ay}, nullptr);
+    check(std::fabs(alpha - 0.75f) < 0.01f && !popup.dragging(), "color picker: after the button is released the alpha stops following the mouse");
+    check(rgb[0] == 1.f && rgb[1] == 0.f && rgb[2] == 0.f, "color picker: changing the alpha keeps the RGB");
+    popup.pointer(Ew::PointerPhase::Down, SUw::Vec2{ax - 1000.f, ay}, nullptr);   // fora da faixa: nao mexe no alfa
+    check(std::fabs(alpha - 0.75f) < 0.01f, "color picker: a press outside the bar leaves the alpha alone");
+    popup.pointer(Ew::PointerPhase::Up, SUw::Vec2{0.f, 0.f}, nullptr);
+    popup.close();
+    float opaque = 1.f; changes = 0;
+    popup.open(2u, rgb, box);   // cor sem alfa: a faixa nao existe e nada muda ao clicar nela
+    popup.pointer(Ew::PointerPhase::Down, SUw::Vec2{ax + aw * 0.5f, ay}, nullptr);
+    check(changes == 0 && opaque == 1.f && popup.alphaValue() == 1.f, "color picker: a color without alpha ignores the alpha bar");
+    popup.close();
   }
 
   fs::remove_all(tmp, ec);

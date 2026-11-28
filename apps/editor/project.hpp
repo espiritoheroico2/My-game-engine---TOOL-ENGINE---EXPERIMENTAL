@@ -248,6 +248,9 @@ struct RenderSettings {
   tool::LightingSettings lighting; // Light Prism: qualidade, orcamento de luzes, sombras em cascata, ambiente
   bool frustumCull = true;         // pula objetos fora da visao da camera (sombras continuam corretas)
   bool occlusionCull = true;       // pula objetos inteiramente escondidos atras de objetos grandes (perspectiva; sombras continuam corretas)
+  // Como a oclusao roda: "gpu" (HiZ na GPU; padrao, cai em "cpu" se o backend nao tem compute), "cpu" (software, para teste e
+  // medicao) ou "off". Vale so com occlusionCull ligado. Chave ausente = "gpu". Ver docs/planos/34_OCLUSAO_GPU.md.
+  std::string occlusionMode = "gpu";
   float drawDistance = 0.f;        // distancia de desenho (0 = usa o Far de cada camera); vale para Scene e Game
   tool::PostFx post;               // vale para todas as cameras; cada camera pode somar/substituir com o seu (postfx.hpp)
   // FSR 1 (AMD, upscale na GPU: EASU + RCAS). So age com "Render scale" abaixo de 1 e API GPU (Vulkan/D3D). Chaves
@@ -408,7 +411,7 @@ inline tool::LightingSettings loadLightingSettings(const tool::Json& o) {
 inline tool::Json saveRenderSettings(const RenderSettings& r) {
   tool::Json o = tool::Json::object();
   o.set("lighting", saveLightingSettings(r.lighting)); o.set("post", ser::postFx(r.post));
-  o.set("frustumCull", r.frustumCull); o.set("occlusionCull", r.occlusionCull); o.set("drawDistance", static_cast<double>(r.drawDistance));
+  o.set("frustumCull", r.frustumCull); o.set("occlusionCull", r.occlusionCull); o.set("occlusionMode", r.occlusionMode); o.set("drawDistance", static_cast<double>(r.drawDistance));
   o.set("fsr1", r.fsr1); o.set("fsrSharpness", static_cast<double>(r.fsrSharpness));
   o.set("fsr4", r.fsr4); o.set("frameGen", r.frameGen); o.set("fsrQuality", r.fsrQuality);
   o.set("fsrCustomScale", static_cast<double>(r.fsrCustomScale));
@@ -427,7 +430,9 @@ inline RenderSettings loadRenderSettings(const tool::Json& o) {
     r.lighting.pcfTaps = pcf <= 0 ? 1u : (pcf == 1 ? 4u : 9u);
   }
   if (o.has("post")) r.post = ser::readPostFx(o["post"]);
-  r.frustumCull = ser::flag(o, "frustumCull", true); r.occlusionCull = ser::flag(o, "occlusionCull", true); r.drawDistance = ser::clampNum(o, "drawDistance", 0.f, 0.f, 20000.f);
+  r.frustumCull = ser::flag(o, "frustumCull", true); r.occlusionCull = ser::flag(o, "occlusionCull", true);
+  if (o.has("occlusionMode")) { const std::string& m = o["occlusionMode"].asString(); r.occlusionMode = (m == "cpu" || m == "off") ? m : "gpu"; }   // valor desconhecido = padrao
+  r.drawDistance = ser::clampNum(o, "drawDistance", 0.f, 0.f, 20000.f);
   r.fsr1 = ser::flag(o, "fsr1", false);
   // Nitidez: chave nova "fsrSharpness"; cenas antigas tinham "fsr1Sharpness" (migrada aqui, sem perder o valor).
   r.fsrSharpness = ser::clampNum(o, o.has("fsrSharpness") ? "fsrSharpness" : "fsr1Sharpness", 0.2f, 0.f, 1.f);
