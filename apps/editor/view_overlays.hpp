@@ -131,6 +131,33 @@ inline void buildParticles(Editor& ed, const tool::Camera& cam, sui::Box area, t
       }
     }
   });
+  // Particulas v2 SEM GPU (renderer por software): bolinhas simples, no maximo ~3000 por objeto e sem teste de profundidade.
+  // Com a GPU ativa quem desenha e o passe de particulas do GpuRenderer (profundidade, alfa ordenado, soft particles).
+  if (ed.apiActive == 0) {
+    w.each<ParticleFxComp>([&](tool::Entity e, ParticleFxComp& pc) {
+      if (w.has<Inactive>(e)) return;
+      auto fit = ed.fxRt.find(e.index);
+      if (fit == ed.fxRt.end() || !fit->second.sys) return;
+      const auto& pool = fit->second.sys->pool();
+      const tool::u32 stride = std::max<tool::u32>(1u, pool.alive() / 3000u);
+      tool::u32 k = 0;
+      for (tool::u32 c = 0; c < pool.chunkCount(); ++c) {
+        const auto& ch = pool.chunk(c);
+        for (tool::u32 i = 0; i < ch.count; ++i) {
+          if ((k++ % stride) != 0) continue;
+          const tool::Vec3 p{ch.px[i], ch.py[i], pc.mode2D ? 0.f : ch.pz[i]};
+          vm::Pixel s{}, sr{};
+          if (!toScr(p, s) || !toScr(p + right * (ch.size[i] * 0.5f), sr)) continue;
+          const float r = std::max(1.f, std::hypot(sr.x - s.x, sr.y - s.y));
+          if (s.x + r < area.x || s.x - r > area.x + area.w || s.y + r < area.y || s.y - r > area.y + area.h) continue;
+          const tool::u32 col = ch.color[i];
+          const float a = std::clamp(ch.alpha[i], 0.f, 1.f) * static_cast<float>(col >> 24) / 255.f;
+          if (a <= 0.01f) continue;
+          out.circleFilled(s, r, view::rgbaF(static_cast<float>(col & 255u) / 255.f, static_cast<float>((col >> 8) & 255u) / 255.f, static_cast<float>((col >> 16) & 255u) / 255.f, a * 0.6f));
+        }
+      }
+    });
+  }
 }
 
 // UI do jogo de uma camera: desenha os Canvas que pertencem a camEnt dentro da celula. Cada canvas se posiciona na

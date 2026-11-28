@@ -37,7 +37,10 @@ struct Rng {
 };
 
 // Formato de emissao: de onde nasce a particula.
-enum class EmitShape : u8 { Point, Sphere };
+// Point: ponto; Sphere: volume da esfera; Box: volume da caixa (meias-medidas em boxHalf); Cone: disco de base
+// (raio `radius`, 0 = vertice) perpendicular ao eixo do cone; Disc: area do disco perpendicular ao eixo;
+// Line: segmento de comprimento 2*radius ao longo de um eixo perpendicular ao eixo de init.dir.
+enum class EmitShape : u8 { Point, Sphere, Box, Cone, Disc, Line };
 
 // Rajada: `count` particulas de uma vez quando o tempo do emissor passa de `time`.
 struct Burst { f32 time = 0; u32 count = 0; };
@@ -47,7 +50,8 @@ struct EmitterDesc {
   f32 rate = 0;                 // particulas por segundo (taxa continua)
   std::vector<Burst> bursts;    // rajadas (ordenadas por tempo ao iniciar o sistema)
   EmitShape shape = EmitShape::Point;
-  f32 radius = 1;               // raio da esfera
+  f32 radius = 1;               // raio da esfera / disco / base do cone / meio comprimento da linha
+  f32 boxHalf[3] = {0.5f, 0.5f, 0.5f};   // meias-medidas da caixa
   u64 seed = 1;                 // semente deterministica do emissor
   f32 duration = 0;             // duracao do ciclo em segundos (<= 0: sem fim)
   bool loop = true;             // com duration > 0: repete o ciclo (e as rajadas); senao para de emitir
@@ -83,8 +87,26 @@ struct EmitterState {
 };
 
 // Sorteia um ponto dentro do formato (relativo a origem do emissor).
-inline void samplePosition(const EmitterDesc& d, Rng& r, f32& x, f32& y, f32& z) {
-  if (d.shape == EmitShape::Point) { x = y = z = 0; return; }
+// (t1, t2) sao dois eixos unitarios perpendiculares ao eixo do emissor (disco, cone e linha).
+inline void samplePosition(const EmitterDesc& d, Rng& r, const f32 t1[3], const f32 t2[3], f32& x, f32& y, f32& z) {
+  switch (d.shape) {
+    case EmitShape::Point: x = y = z = 0; return;
+    case EmitShape::Box:
+      x = r.range(-d.boxHalf[0], d.boxHalf[0]); y = r.range(-d.boxHalf[1], d.boxHalf[1]);
+      z = r.range(-d.boxHalf[2], d.boxHalf[2]); return;
+    case EmitShape::Disc: case EmitShape::Cone: {
+      // Disco: raio com raiz quadrada (densidade uniforme na area).
+      const f32 rad = d.radius * std::sqrt(r.f01());
+      const f32 ph = r.range(0.0f, 6.2831853f);
+      const f32 a = rad * std::cos(ph), b = rad * std::sin(ph);
+      x = t1[0] * a + t2[0] * b; y = t1[1] * a + t2[1] * b; z = t1[2] * a + t2[2] * b; return;
+    }
+    case EmitShape::Line: {
+      const f32 a = r.range(-d.radius, d.radius);
+      x = t1[0] * a; y = t1[1] * a; z = t1[2] * a; return;
+    }
+    case EmitShape::Sphere: break;
+  }
   // Esfera cheia: direcao uniforme e raio com raiz cubica (densidade uniforme no volume).
   const f32 cz = r.range(-1.0f, 1.0f);
   const f32 phi = r.range(0.0f, 6.2831853f);

@@ -135,6 +135,7 @@ struct Context {
     std::string uiCanvasName;            // nome do Canvas dono do elemento
     std::vector<std::string> cameraNames;   // cameras da cena (para escolher onde a UI aparece)
     ParticleComp* particles = nullptr;   // particulas do objeto (nullptr: nao tem)
+    ParticleFxComp* particlesFx = nullptr;   // particulas v2 (biblioteca) do objeto (nullptr: nao tem)
     std::vector<int> addable;            // recursos (im::Resource) que o objeto ainda pode receber
     std::vector<int> removable;          // recursos (im::Resource) que o objeto tem
 };
@@ -172,6 +173,9 @@ struct Hooks {
     std::function<std::vector<std::string>()> uiImages;            // imagens do projeto para elementos de UI (so PNG e JPEG)
     std::function<void()> smokePreset;                             // "Smoke preset": valores de fumaca nas particulas
     std::function<void()> removeParticles;                         // tira as particulas do objeto
+    std::function<void(int)> fxPreset;                             // particulas v2: aplica o preset (0 fumaca, 1 fogo, 2 fluido)
+    std::function<void()> fxLoad;                                  // particulas v2: carrega o arquivo de efeito (Effects/*.json)
+    std::function<void()> fxSave;                                  // particulas v2: salva o efeito no arquivo
     std::function<void(int)> addResource;                          // adiciona um recurso (im::Resource)
     std::function<void(int)> removeResource;                       // tira um recurso (im::Resource)
     std::function<std::vector<std::string>()> materialNames;       // materiais do projeto (<projeto>/Materials)
@@ -279,6 +283,7 @@ class InspectorPanel {
         if (ctx.voxel) voxel();
         if (ctx.cv) canvasSection();
         if (ctx.particles) particles();
+        if (ctx.particlesFx) particlesFx();
         resources();
         script();
         tags();
@@ -1222,12 +1227,120 @@ class InspectorPanel {
         endSection();
     }
 
+    // Particulas v2 (biblioteca tool::particles): controle de reproducao, arquivo/presets, emissor com formas volumetricas,
+    // movimento (velocidade, gravidade, arraste, turbulencia, empuxo), vida (tamanho, cor, opacidade) e render (shader,
+    // emissivo, soft particles). Cada campo edita direto o efeito do componente (ponteiros estaveis); os modulos tem uma
+    // caixa "ligado" que cria/remove o modulo no efeito.
+    void particlesFx() {
+        ParticleFxComp& p = *ctx_.particlesFx;
+        tool::particles::Effect& fx = p.fx;
+        namespace fm = editor::fxmod;
+        using MK = tool::particles::ModuleKind;
+        if (!beginSection(im::Section::ParticlesFx, T("Particle FX"))) return;
+        button(innerX_, T("Play effect"), [&p] { p.cmd = 1; }, 84.f);
+        button(innerX_ + 88.f, T("Pause effect"), [&p] { p.cmd = 2; }, 84.f);
+        button(innerX_ + 176.f, T("Stop and clear"), [&p] { p.cmd = 3; }, 100.f);
+        nextRow();
+        button(innerX_, T("Burst now"), [&p] { p.cmd = 4; }, 84.f);
+        nextRow();
+        textRow(T("Effect file"), p.file, sizeof p.file);
+        button(innerX_, T("Load effect"), [this] { hooks_.fxLoad(); }, 84.f);
+        button(innerX_ + 88.f, T("Save effect"), [this] { hooks_.fxSave(); }, 84.f);
+        nextRow();
+        button(innerX_, T("Preset: smoke"), [this] { hooks_.fxPreset(0); }, 90.f);
+        button(innerX_ + 94.f, T("Preset: fire"), [this] { hooks_.fxPreset(1); }, 84.f);
+        button(innerX_ + 182.f, T("Preset: fluid"), [this] { hooks_.fxPreset(2); }, 90.f);
+        nextRow();
+        checkField(T("2D mode (XY plane)"), &p.mode2D);
+        intRow(T("Pool size (max alive)"), &p.maxParticles, 1, 1000000);
+
+        float top = 0.f;
+        if (sub(im::Section::FxEmitter, T("FX emitter"), top)) {
+            drop(T("Emitter shape"), tr({"Single point", "Sphere volume", "Box volume", "Cone base", "Flat disc", "Line segment"}),
+                 static_cast<std::size_t>(std::clamp(static_cast<int>(fx.emitter.shape), 0, 5)),
+                 [&fx](std::size_t i) { fx.emitter.shape = static_cast<tool::particles::EmitShape>(i); });
+            numberRow(T("Spawn rate (per second)"), &fx.emitter.rate, 1, {0.f, 200000.f});
+            numberRow(T("Shape radius"), &fx.emitter.radius, 2, {0.f, 1000.f});
+            vecRow(T("Box half-size"), fx.emitter.boxHalf, 2, {0.f, 1000.f});
+            checkField(T("Loop emitter"), &fx.emitter.loop);
+            numberRow(T("Cycle duration (s)"), &fx.emitter.duration, 2, {0.f, 3600.f});
+            numberRow(T("Lifetime min (s)"), &fx.init.lifeMin, 2, {0.01f, 600.f});
+            numberRow(T("Lifetime max (s)"), &fx.init.lifeMax, 2, {0.01f, 600.f});
+            numberRow(T("Start size min"), &fx.init.sizeMin, 3, {0.001f, 100.f});
+            numberRow(T("Start size max"), &fx.init.sizeMax, 3, {0.001f, 100.f});
+            swatch(T("Start color"), p.ui.start);
+        }
+        endSub(top);
+
+        if (sub(im::Section::FxMotion, T("FX motion"), top)) {
+            drop(T("Velocity mode"), tr({"Cone spread", "Radial (outward)", "Random (all directions)"}),
+                 static_cast<std::size_t>(std::clamp(static_cast<int>(fx.init.velMode), 0, 2)),
+                 [&fx](std::size_t i) { fx.init.velMode = static_cast<tool::particles::VelMode>(i); });
+            numberRow(T("Start speed min"), &fx.init.speedMin, 2, {0.f, 1000.f});
+            numberRow(T("Start speed max"), &fx.init.speedMax, 2, {0.f, 1000.f});
+            vecRow(T("Emit direction"), fx.init.dir, 2, {-100.f, 100.f});
+            numberRow(T("Cone angle (deg)"), &fx.init.coneDeg, 1, {0.f, 180.f});
+            check(T("Gravity force"), fm::find(fx, MK::Gravity) != nullptr, [&fx](bool on) { fm::set(fx, MK::Gravity, on); });
+            if (auto* m = fm::find(fx, MK::Gravity)) vecRow(T("Gravity vector"), m->g, 2, {-1000.f, 1000.f});
+            check(T("Air drag"), fm::find(fx, MK::Drag) != nullptr, [&fx](bool on) { fm::set(fx, MK::Drag, on); });
+            if (auto* m = fm::find(fx, MK::Drag)) numberRow(T("Drag strength"), &m->drag, 2, {0.f, 100.f});
+            check(T("Turbulence"), fm::find(fx, MK::Turbulence) != nullptr, [&fx](bool on) { fm::set(fx, MK::Turbulence, on); });
+            if (auto* m = fm::find(fx, MK::Turbulence)) {
+                numberRow(T("Turbulence strength"), &m->amp, 2, {0.f, 100.f});
+                numberRow(T("Turbulence scale"), &m->freq, 3, {0.001f, 20.f});
+                numberRow(T("Turbulence evolution"), &m->scroll, 2, {0.f, 20.f});
+                intRow(T("Turbulence update every N frames"), &p.ui.every, 1, 64);
+            }
+            check(T("Buoyancy (heat rise)"), fm::find(fx, MK::Buoyancy) != nullptr, [&fx](bool on) { fm::set(fx, MK::Buoyancy, on); });
+            if (auto* m = fm::find(fx, MK::Buoyancy)) {
+                numberRow(T("Buoyancy strength"), &m->amp, 2, {-100.f, 100.f});
+                numberRow(T("Buoyancy cooling"), &m->cooling, 2, {0.f, 50.f});
+            }
+        }
+        endSub(top);
+
+        if (sub(im::Section::FxLife, T("FX over lifetime"), top)) {
+            check(T("Size over lifetime"), fm::find(fx, MK::SizeOverLife) != nullptr, [&fx](bool on) { fm::set(fx, MK::SizeOverLife, on); });
+            if (auto* m = fm::find(fx, MK::SizeOverLife)) {
+                numberRow(T("Size at birth (x)"), &m->s0, 2, {0.f, 100.f});
+                numberRow(T("Size at death (x)"), &m->s1, 2, {0.f, 100.f});
+            }
+            check(T("Color over lifetime"), fm::find(fx, MK::ColorOverLife) != nullptr, [&p, &fx](bool on) {
+                fm::set(fx, MK::ColorOverLife, on);
+                if (on) for (int k = 0; k < 3; ++k) p.ui.from[k] = p.ui.to[k] = p.ui.start[k];
+            });
+            if (fm::find(fx, MK::ColorOverLife)) { swatch(T("Color at birth"), p.ui.from); swatch(T("Color at death"), p.ui.to); }
+            check(T("Opacity over lifetime"), fm::find(fx, MK::AlphaOverLife) != nullptr, [&fx](bool on) { fm::set(fx, MK::AlphaOverLife, on); });
+            if (auto* m = fm::find(fx, MK::AlphaOverLife)) {
+                slider(T("Opacity at birth"), &m->a0, {0.f, 1.f});
+                slider(T("Opacity at death"), &m->a1, {0.f, 1.f});
+            }
+        }
+        endSub(top);
+
+        if (sub(im::Section::FxRender, T("FX rendering"), top)) {
+            drop(T("Blend shader"), tr({"Alpha (sorted)", "Additive", "Bloom (additive + glow)"}),
+                 static_cast<std::size_t>(std::clamp(static_cast<int>(fx.shader), 0, 2)),
+                 [&fx](std::size_t i) { fx.shader = static_cast<tool::particles::ShaderKind>(i); });
+            numberRow(T("Emissive (glow)"), &fx.emissive, 2, {0.f, 1000.f});
+            numberRow(T("Soft particle distance (m)"), &fx.soft, 2, {0.f, 100.f});
+            canvas_.addText(innerX_, y_, T("Drawn with depth test on and depth write off: they never cover objects in front. Glow needs Bloom on in the scene lighting."),
+                            Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+            nextRow();
+        }
+        endSub(top);
+
+        button(ctrlX_, T("Remove Particle FX"), [this] { hooks_.removeResource(static_cast<int>(im::Resource::ParticlesFx)); }, Metrics::kRemoveW);
+        nextRow();
+        endSection();
+    }
+
     // Nomes dos recursos (ordem de im::Resource), como aparecem na lista.
     static const char* resourceLabel(int id) {
         static const char* names[] = {
             "Physics body (Newtoon)", "Tool: Jump", "Tool: Move", "Tool: Follow Target", "Tool: Spin", "Tool: On Collision",
             "Tool: Script library", "Mesh (cube)", "Point Light", "Camera", "Audio Source", "Particle System", "ToolObject Script",
-            "Canvas (game UI)", "Voxel chunk (blocks)", "Tools (all)", "Global Light"};
+            "Canvas (game UI)", "Voxel chunk (blocks)", "Tools (all)", "Global Light", "Particle FX (v2)"};
         const std::size_t i = static_cast<std::size_t>(id);
         return i < std::size(names) ? names[i] : "";
     }

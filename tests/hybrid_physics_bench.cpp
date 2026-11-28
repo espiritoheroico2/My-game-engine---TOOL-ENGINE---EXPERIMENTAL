@@ -370,4 +370,286 @@ uint64_t fnvFloats(const std::vector<float>& a) {
 }
 
 // ---------------- Solver da CPU (compartilhado por A e C) ----------------
-float3Dummy: ;
+// Narrowphase (esfera-esfera sobre a lista de pares) + correcao de posicao (Jacobi, ponto fixo) + chao/paredes por clamp.
+// pos: float4 por esfera, alterada no lugar. Tempos de narrowphase (acumulo dos contatos) e solver (aplicar correcoes) separados.
+struct CpuSolveTime { double narrow = 0, solve = 0; };
+
+CpuSolveTime solveCpu(const Scene& sc, std::vector<float>& pos, const u32* pairs, u32 count, std::vector<int32_t>& acc) {
+  CpuSolveTime t;
+  const float dmin2 = kDiam * kDiam;
+  for (u32 it = 0; it < kIters; ++it) {
+    auto t0 = Clock::now();
+    std::fill(acc.begin(), acc.end(), 0);
+    for (u32 k = 0; k < count; ++k) {
+      const u32 i = pairs[k * 2], j = pairs[k * 2 + 1];
+      const float dx = pos[i * 4] - pos[j * 4], dy = pos[i * 4 + 1] - pos[j * 4 + 1], dz = pos[i * 4 + 2] - pos[j * 4 + 2];
+      const float d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 >= dmin2) continue;
+      const float dist = std::sqrt(d2);
+      float nx = 1.f, ny = 0.f, nz = 0.f; // i<j sempre na lista
+      if (dist > 1e-5f) { nx = dx / dist; ny = dy / dist; nz = dz / dist; }
+      const float m = (kDiam - dist) * 0.5f * kRelax * kFix;
+      const int32_t cx = static_cast<int32_t>(std::lround(nx * m)), cy = static_cast<int32_t>(std::lround(ny * m)), cz = static_cast<int32_t>(std::lround(nz * m));
+      acc[i * 3] += cx; acc[i * 3 + 1] += cy; acc[i * 3 + 2] += cz;
+      acc[j * 3] -= cx; acc[j * 3 + 1] -= cy; acc[j * 3 + 2] -= cz;
+    }
+    t.narrow += msSince(t0);
+    t0 = Clock::now();
+    const float lo = kRadius;
+    const float hx = static_cast<float>(sc.dx) - kRadius, hy = static_cast<float>(sc.dy) - kRadius, hz = static_cast<float>(sc.dz) - kRadius;
+    for (u32 i = 0; i < sc.n; ++i) {
+      float px = static_cast<float>(acc[i * 3]) / kFix, py = static_cast<float>(acc[i * 3 + 1]) / kFix, pz = static_cast<float>(acc[i * 3 + 2]) / kFix;
+      const float l = std::sqrt(px * px + py * py + pz * pz);
+      if (l > 0.25f * kDiam) { const float s = 0.25f * kDiam / l; px *= s; py *= s; pz *= s; }
+      pos[i * 4] = std::clamp(pos[i * 4] + px, lo, hx);
+      pos[i * 4 + 1] = std::clamp(pos[i * 4 + 1] + py, lo, hy); // chao: y >= R (narrowphase esfera-chao por clamp)
+      pos[i * 4 + 2] = std::clamp(pos[i * 4 + 2] + pz, lo, hz);
+    }
+    t.solve += msSince(t0);
+  }
+  return t;
+}
+
+// ---------------- Variante A: CPU pura ----------------
+struct CpuState { std::vector<float> pos, vel, prev; std::vector<u32> cellStart, cellOf, cellList, pairs; std::vector<int32_t> acc; };
+
+inline int cellIdxCpu(const Scene& sc, const float* p, int& cx, int& cy, int& cz) {
+  cx = std::clamp(static_cast<int>(std::floor(p[0] / kDiam)), 0, static_cast<int>(sc.dx) - 1);
+  cy = std::clamp(static_cast<int>(std::floor(p[1] / kDiam)), 0, static_cast<int>(sc.dy) - 1);
+  cz = std::clamp(static_cast<int>(std::floor(p[2] / kDiam)), 0, static_cast<int>(sc.dz) - 1);
+  return (cz * static_cast<int>(sc.dy) + cy) * static_cast<int>(sc.dx) + cx;
+}
+
+// Grade por ordenacao por contagem + lista de pares (mesmo criterio da GPU: i<j, d < corte).
+void buildGridPairsCpu(const Scene& sc, CpuState& s) {
+  std::fill(s.cellStart.begin(), s.cellStart.end(), 0u);
+  for (u32 i = 0; i < sc.n; ++i) { int a, b, c; s.cellOf[i] = static_cast<u32>(cellIdxCpu(sc, &s.pos[i * 4], a, b, c)); ++s.cellStart[s.cellOf[i] + 1]; }
+  for (size_t c = 0; c < sc.ncells; ++c) s.cellStart[c + 1] += s.cellStart[c];
+  std::vector<u32>& cur = s.cellList; // reutiliza: cellList = lista ordenada; cursor em vetor temporario
+  static std::vector<u32> cursor;
+  cursor.assign(s.cellStart.begin(), s.cellStart.end() - 1);
+  for (u32 i = 0; i < sc.n; ++i) cur[cursor[s.cellOf[i]]++] = i;
+  s.pairs.clear();
+  const float cut2 = kPairCut * kDiam * kPairCut * kDiam;
+  for (u32 i = 0; i < sc.n; ++i) {
+    int cx, cy, cz; cellIdxCpu(sc, &s.pos[i * 4], cx, cy, cz);
+    for (int oz = -1; oz <= 1; ++oz) for (int oy = -1; oy <= 1; ++oy) for (int ox = -1; ox <= 1; ++ox) {
+      const int x = cx + ox, y = cy + oy, z = cz + oz;
+      if (x < 0 || y < 0 || z < 0 || x >= static_cast<int>(sc.dx) || y >= static_cast<int>(sc.dy) || z >= static_cast<int>(sc.dz)) continue;
+      const size_t c = (static_cast<size_t>(z) * sc.dy + y) * sc.dx + x;
+      for (u32 k = s.cellStart[c]; k < s.cellStart[c + 1]; ++k) {
+        const u32 j = cur[k]; if (j <= i) continue;
+        const float dx = s.pos[i * 4] - s.pos[j * 4], dy = s.pos[i * 4 + 1] - s.pos[j * 4 + 1], dz = s.pos[i * 4 + 2] - s.pos[j * 4 + 2];
+        if (dx * dx + dy * dy + dz * dz >= cut2) continue;
+        s.pairs.push_back(i); s.pairs.push_back(j);
+      }
+    }
+  }
+}
+
+// ---------------- Estatisticas por fase ----------------
+struct Phases {
+  std::vector<double> gpu, down, narrow, solve, up, total, cpuGrid;
+  double bytesDown = 0, bytesUp = 0, pairsUsed = 0;
+  bool overflow = false;
+  std::vector<float> finalPos;
+  uint64_t hash = 0;
+};
+void pool(std::vector<double>& dst, const std::vector<double>& src) { dst.insert(dst.end(), src.begin(), src.end()); }
+
+bool runCpu(const Scene& sc, Phases& ph) {
+  CpuState s;
+  initialPositions(sc, s.pos);
+  s.vel.assign(s.pos.size(), 0.f); s.prev = s.pos;
+  s.cellStart.assign(sc.ncells + 1, 0); s.cellOf.assign(sc.n, 0); s.cellList.assign(sc.n, 0); s.acc.assign(static_cast<size_t>(sc.n) * 3, 0);
+  const float hx = static_cast<float>(sc.dx) - kRadius, hy = static_cast<float>(sc.dy) - kRadius, hz = static_cast<float>(sc.dz) - kRadius;
+  for (u32 st = 0; st < kSteps; ++st) {
+    const auto t0 = Clock::now();
+    // integrar
+    for (u32 i = 0; i < sc.n; ++i) {
+      for (int k = 0; k < 3; ++k) s.prev[i * 4 + k] = s.pos[i * 4 + k];
+      s.vel[i * 4 + 1] -= kGravity * kDt;
+      s.pos[i * 4] = std::clamp(s.pos[i * 4] + s.vel[i * 4] * kDt, kRadius, hx);
+      s.pos[i * 4 + 1] = std::clamp(s.pos[i * 4 + 1] + s.vel[i * 4 + 1] * kDt, kRadius, hy);
+      s.pos[i * 4 + 2] = std::clamp(s.pos[i * 4 + 2] + s.vel[i * 4 + 2] * kDt, kRadius, hz);
+    }
+    auto tg = Clock::now();
+    buildGridPairsCpu(sc, s);
+    const double gridMs = msSince(tg);
+    const u32 cnt = static_cast<u32>(s.pairs.size() / 2);
+    const CpuSolveTime t = solveCpu(sc, s.pos, s.pairs.data(), cnt, s.acc);
+    // velocidade PBD
+    for (u32 i = 0; i < sc.n; ++i) {
+      float vx = (s.pos[i * 4] - s.prev[i * 4]) / kDt, vy = (s.pos[i * 4 + 1] - s.prev[i * 4 + 1]) / kDt, vz = (s.pos[i * 4 + 2] - s.prev[i * 4 + 2]) / kDt;
+      vx *= 0.995f; vy *= 0.995f; vz *= 0.995f;
+      if (s.pos[i * 4 + 1] <= kRadius + 1e-3f) { vy = std::max(vy, 0.f); vx *= 0.9f; vz *= 0.9f; }
+      const float sp = std::sqrt(vx * vx + vy * vy + vz * vz);
+      if (sp > 30.f) { const float f = 30.f / sp; vx *= f; vy *= f; vz *= f; }
+      s.vel[i * 4] = vx; s.vel[i * 4 + 1] = vy; s.vel[i * 4 + 2] = vz;
+    }
+    ph.total.push_back(msSince(t0)); ph.cpuGrid.push_back(gridMs); ph.narrow.push_back(t.narrow); ph.solve.push_back(t.solve);
+    ph.pairsUsed = cnt;
+  }
+  ph.finalPos = s.pos; ph.hash = fnvFloats(s.pos);
+  return true;
+}
+
+// ---------------- Variante B: GPU pura ----------------
+bool runGpu(GpuSim& g, Phases& ph) {
+  std::vector<float> host; initialPositions(g.sc, host);
+  g.reset(host, false); g.waitGpu();
+  for (u32 st = 0; st < kSteps; ++st) {
+    const auto t0 = Clock::now();
+    auto cl = g.dev->beginCommands();
+    g.recordFull(*cl);
+    g.dev->submit(*cl);
+    g.waitGpu();
+    ph.total.push_back(msSince(t0));
+  }
+  std::vector<u8> pb;
+  if (!g.dev->readBuffer(g.posA, pb) || pb.size() < static_cast<size_t>(g.sc.n) * 16) return false;
+  ph.finalPos.resize(static_cast<size_t>(g.sc.n) * 4);
+  std::memcpy(ph.finalPos.data(), pb.data(), ph.finalPos.size() * 4);
+  ph.hash = fnvFloats(ph.finalPos);
+  return true;
+}
+
+// ---------------- Variante C: hibrida ----------------
+bool runHybrid(GpuSim& g, Phases& ph, double syncBase) {
+  const Scene& sc = g.sc;
+  std::vector<float> pos; initialPositions(sc, pos);
+  g.reset(pos, true); g.waitGpu();
+  std::vector<int32_t> acc(static_cast<size_t>(sc.n) * 3, 0);
+  std::vector<u8> cb, pb, qb;
+  for (u32 st = 0; st < kSteps; ++st) {
+    const auto t0 = Clock::now();
+    // 1. GPU: velocidade, integracao, grade, pares. Espera = readBuffer do contador (WaitForIdle + 4 bytes).
+    auto cl = g.dev->beginCommands();
+    g.recordHybrid(*cl);
+    g.dev->submit(*cl);
+    if (!g.dev->readBuffer(g.pairCount, cb) || cb.size() < 4) return false;
+    const double tGpu = msSince(t0);
+    // 2. GPU->CPU: posicoes e pares (readBuffer sincrono le o buffer inteiro).
+    auto t1 = Clock::now();
+    if (!g.dev->readBuffer(g.posA, pb) || pb.size() < static_cast<size_t>(sc.n) * 16) return false;
+    std::memcpy(pos.data(), pb.data(), static_cast<size_t>(sc.n) * 16);
+    if (!g.dev->readBuffer(g.pairs, qb)) return false;
+    const double tDown = msSince(t1);
+    u32 cnt; std::memcpy(&cnt, cb.data(), 4);
+    if (cnt > sc.cap) { ph.overflow = true; cnt = sc.cap; }
+    // 3. CPU: narrowphase + solver.
+    const CpuSolveTime t = solveCpu(sc, pos, reinterpret_cast<const u32*>(qb.data()), cnt, acc);
+    // 4. CPU->GPU: posicoes corrigidas (mais a espera pela copia, descontada a sincronizacao fixa).
+    auto t2 = Clock::now();
+    g.dev->updateBuffer(g.posA, pos.data(), static_cast<size_t>(sc.n) * 16);
+    g.waitGpu();
+    const double tUp = std::max(0.0, msSince(t2) - syncBase);
+    ph.gpu.push_back(tGpu); ph.down.push_back(tDown); ph.narrow.push_back(t.narrow); ph.solve.push_back(t.solve); ph.up.push_back(tUp);
+    ph.total.push_back(msSince(t0));
+    ph.pairsUsed = cnt;
+  }
+  ph.bytesDown = 4.0 + static_cast<double>(sc.n) * 16 + static_cast<double>(sc.cap) * 8; // o que o readBuffer realmente copia
+  ph.bytesUp = static_cast<double>(sc.n) * 16;
+  ph.finalPos = pos; ph.hash = fnvFloats(pos);
+  return true;
+}
+
+// ---------------- Validacao ----------------
+struct Quality { bool finite = true; float minY = 1e30f, maxY = -1e30f; double meanOverlap = 0; float maxOverlap = 0; u32 overlapping = 0; };
+
+Quality evaluate(const Scene& sc, const std::vector<float>& pos) {
+  Quality q;
+  for (u32 i = 0; i < sc.n; ++i) {
+    for (int k = 0; k < 3; ++k) if (!std::isfinite(pos[i * 4 + k])) q.finite = false;
+    q.minY = std::min(q.minY, pos[i * 4 + 1]); q.maxY = std::max(q.maxY, pos[i * 4 + 1]);
+  }
+  if (!q.finite) return q;
+  CpuState s; s.pos = pos;
+  s.cellStart.assign(sc.ncells + 1, 0); s.cellOf.assign(sc.n, 0); s.cellList.assign(sc.n, 0);
+  buildGridPairsCpu(sc, s);
+  std::vector<char> bad(sc.n, 0); double sum = 0; u64 np = 0;
+  for (size_t k = 0; k + 1 < s.pairs.size(); k += 2) {
+    const u32 i = s.pairs[k], j = s.pairs[k + 1];
+    const float dx = pos[i * 4] - pos[j * 4], dy = pos[i * 4 + 1] - pos[j * 4 + 1], dz = pos[i * 4 + 2] - pos[j * 4 + 2];
+    const float d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 >= kDiam * kDiam) continue;
+    const float pen = (kDiam - std::sqrt(d2)) / kDiam;
+    sum += pen; ++np; q.maxOverlap = std::max(q.maxOverlap, pen);
+    if (pen > 0.1f) bad[i] = bad[j] = 1;
+  }
+  q.meanOverlap = np ? sum / static_cast<double>(np) : 0;
+  for (char b : bad) q.overlapping += b;
+  return q;
+}
+
+void reportQuality(const Scene& sc, const char* tag, const Phases* runs) {
+  const Quality q = evaluate(sc, runs[0].finalPos);
+  std::printf("  [%s] y min=%.4f max=%.3f | sobreposicao media=%.4f max=%.3f, esferas >10%%: %u (%.1f%%)\n", tag, q.minY, q.maxY, q.meanOverlap, q.maxOverlap, q.overlapping, 100.0 * q.overlapping / sc.n);
+  char m[160];
+  std::snprintf(m, sizeof m, "%s (b) sem NaN/inf", tag); check(q.finite, m);
+  std::snprintf(m, sizeof m, "%s (a) nenhuma esfera atravessa o chao", tag); check(q.minY >= kRadius - 1e-3f, m);
+  bool det = true;
+  for (u32 r = 1; r < kRuns; ++r) det = det && runs[r].hash == runs[0].hash;
+  std::printf("  [%s] hashes %016llx %016llx %016llx\n", tag, static_cast<unsigned long long>(runs[0].hash), static_cast<unsigned long long>(runs[1].hash), static_cast<unsigned long long>(runs[2].hash));
+  std::snprintf(m, sizeof m, "%s (c) deterministico entre as 3 execucoes", tag); check(det, m);
+}
+
+double med(const std::vector<double>& v) { return percentile(v, 0.5); }
+double p95(const std::vector<double>& v) { return percentile(v, 0.95); }
+
+} // namespace
+
+int main(int argc, char** argv) {
+  const std::string which = argc > 1 ? argv[1] : "vulkan";
+  rhi::DeviceInfo info; info.width = 64; info.height = 64;
+  if (which == "vulkan") info.backend = rhi::Backend::Vulkan;
+  else if (which == "d3d12") info.backend = rhi::Backend::D3D12;
+  else { std::fprintf(stderr, "backend nao suportado: %s\n", which.c_str()); return 2; }
+  std::string err;
+  auto dev = rhi::createDiligentDevice(info, &err);
+  if (!dev) { std::fprintf(stderr, "FALHA ao criar o dispositivo: %s\n", err.c_str()); return 1; }
+  std::printf("backend=%s adaptador=%s compute=%d\n", rhi::toString(dev->backend()), dev->deviceName().c_str(), dev->supportsCompute() ? 1 : 0);
+  if (!dev->supportsCompute()) return 1;
+  std::printf("config: passos=%u iteracoes=%u relax=%.2f corte de par=%.2f D execucoes=%u (mediana/p95 sobre os %u passos das execucoes)\n", kSteps, kIters, kRelax, kPairCut, kRuns, kSteps * kRuns);
+
+  const Scene scenes[2] = {makeScene(25, 25, 16), makeScene(50, 50, 40)};
+  for (const Scene& sc : scenes) {
+    std::printf("\n=== %u esferas, grade %ux%ux%u = %u celulas, capacidade de pares %u ===\n", sc.n, sc.dx, sc.dy, sc.dz, sc.ncells, sc.cap);
+    GpuSim g;
+    if (!g.init(dev.get(), sc)) { check(false, "pipelines/buffers criados"); continue; }
+    check(true, "pipelines/buffers criados");
+    std::vector<double> sb;
+    for (u32 i = 0; i < 50; ++i) { const auto t0 = Clock::now(); g.waitGpu(); sb.push_back(msSince(t0)); }
+    const double syncBase = med(sb);
+    std::printf("sincronizacao vazia (readBuffer 16 B): %.3f ms\n", syncBase);
+
+    Phases A[kRuns], B[kRuns], C[kRuns];
+    bool ok = true;
+    for (u32 r = 0; r < kRuns; ++r) ok = runCpu(sc, A[r]) && ok;
+    for (u32 r = 0; r < kRuns; ++r) ok = runGpu(g, B[r]) && ok;
+    for (u32 r = 0; r < kRuns; ++r) ok = runHybrid(g, C[r], syncBase) && ok;
+    check(ok, "execucoes concluidas");
+    if (!ok) continue;
+    Phases a, b, c;
+    for (u32 r = 0; r < kRuns; ++r) {
+      pool(a.total, A[r].total); pool(a.cpuGrid, A[r].cpuGrid); pool(a.narrow, A[r].narrow); pool(a.solve, A[r].solve);
+      pool(b.total, B[r].total);
+      pool(c.total, C[r].total); pool(c.gpu, C[r].gpu); pool(c.down, C[r].down); pool(c.narrow, C[r].narrow); pool(c.solve, C[r].solve); pool(c.up, C[r].up);
+    }
+    std::printf("A CPU pura : total mediana=%.3f p95=%.3f ms | integ+grade+pares=%.3f, narrowphase=%.3f, solver=%.3f | pares=%.0f\n",
+                med(a.total), p95(a.total), med(a.cpuGrid), med(a.narrow), med(a.solve), A[0].pairsUsed);
+    std::printf("B GPU pura : total mediana=%.3f p95=%.3f ms (sincronizado)\n", med(b.total), p95(b.total));
+    std::printf("C Hibrida  : total mediana=%.3f p95=%.3f ms\n", med(c.total), p95(c.total));
+    std::printf("   GPU=%.3f/%.3f | GPU->CPU=%.3f/%.3f (%.2f MB copiados, %.2f MB uteis) | narrowphase=%.3f/%.3f | solver=%.3f/%.3f | CPU->GPU=%.3f/%.3f (%.2f MB)  [mediana/p95 ms]\n",
+                med(c.gpu), p95(c.gpu), med(c.down), p95(c.down), C[0].bytesDown / 1e6, (4.0 + sc.n * 16.0 + C[0].pairsUsed * 8.0) / 1e6,
+                med(c.narrow), p95(c.narrow), med(c.solve), p95(c.solve), med(c.up), p95(c.up), C[0].bytesUp / 1e6);
+    std::printf("   pares usados=%.0f de %u; overflow=%d\n", C[0].pairsUsed, sc.cap, C[0].overflow ? 1 : 0);
+    check(!C[0].overflow && !C[1].overflow && !C[2].overflow, "buffer de pares nao estourou");
+    const double g_ = med(c.gpu), d_ = med(c.down), cp = med(c.narrow) + med(c.solve), u_ = med(c.up);
+    std::printf("   projecao (nao medida) readback assincrono: 1 quadro ~ %.3f ms (max(GPU+up, down+CPU)); 2 quadros ~ %.3f ms (max(GPU, down+up, CPU))\n",
+                std::max(g_ + u_, d_ + cp), std::max({g_, d_ + u_, cp}));
+    reportQuality(sc, "A", A); reportQuality(sc, "B", B); reportQuality(sc, "C", C);
+  }
+  std::printf(failures == 0 ? "\nRESULTADO: OK\n" : "\nRESULTADO: %d falha(s)\n", failures);
+  return failures == 0 ? 0 : 1;
+}

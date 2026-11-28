@@ -28,6 +28,7 @@
 #include "theme.hpp"
 #include "undo.hpp"
 #include "tool/audio/decode.hpp"
+#include "tool/particles/quads.hpp"   // particulas v2: sistema CPU + quads de billboard
 #if defined(TOOL_HAS_MINIAUDIO)
 #include "tool/audio/miniaudio_device.hpp"
 #endif
@@ -294,6 +295,22 @@ struct Editor {
   int particleBudget = 100000;                         // maximo de particulas vivas somando todos os emissores
   std::unordered_map<uint32_t, ParticleSim> particles;   // por indice de entidade
   void updateParticles(float dt);
+  // Particulas v2 (biblioteca tool::particles, componente ParticleFxComp): sistema CPU por entidade + quads do ultimo quadro.
+  // updateFx avanca a simulacao; submitFx entrega os quads ao GpuRenderer (ver fx_particles.hpp).
+  struct FxRuntime {
+    std::unique_ptr<tool::particles::ParticleSystem> sys;
+    tool::u32 cap = 0;                         // capacidade do pool com que o sistema foi criado
+    uint32_t touched = 0;                      // ultimo fxFrame em que a entidade existia (limpeza)
+    tool::particles::QuadBatch batch;          // quads do ultimo desenho (billboards da camera da vista)
+    std::vector<tool::particles::QuadInstance> sorted;   // copia ordenada de tras para frente (alfa)
+    tool::particles::QuadSortScratch scratch;
+  };
+  std::unordered_map<uint32_t, FxRuntime> fxRt;          // por indice de entidade
+  uint32_t fxFrame = 0;
+  bool fxRender = true;                                  // false: so simula, sem entregar quads ao renderer (medicao A/B)
+  tool::u64 fxQuadsLast = 0;                             // quads entregues ao renderer no ultimo submitFx
+  void updateFx(float dt);
+  void submitFx(const tool::Camera& cam);
   // Narrative Controller em execucao (so durante o Play) + codigo da cena
   struct NarrRun { tool::narr::Program prog; std::unique_ptr<tool::narr::Runtime> rt; };
   std::unique_ptr<NarrRun> narrRun;
@@ -330,6 +347,17 @@ struct Editor {
   // subir 160 B cada) e custou +1 a +1,5 ms por quadro. --gpu-cull-drop-cpu-frustum deixa SO a GPU como fonte do frustum.
   bool gpuCullKeepCpuFrustum = true;
   bool gpuFrustumActive = false;      // este quadro: GPU ativa e culling GPU de objetos valendo (calculado em renderView)
+  // Experimento --gpu-motion (docs/planos/31): objetos opacos viram uma cena PERSISTENTE na GPU (buffer gravado uma vez), o movimento dos
+  // MoverComp roda no compute (motion_cull.hlsl) a partir do tempo uniforme e o desenho e indireto. A CPU nao calcula posicao nem monta Draw
+  // por objeto. Sem a flag nada muda. Limites: so passe opaco (sem sombra projetada, prepasso/SSAO e emissao dessa cena), so Vulkan/D3D12.
+  bool gpuMotion = false;             // pedido (--gpu-motion)
+  bool gpuMotionLive_ = false;        // a cena persistente esta valendo na ultima vista
+  double gpuMotionTime_ = 0.0;        // tempo uniforme T (s) enviado ao compute; avanca em tickMovers
+  std::array<std::uint64_t, 9> gpuMotionKey_{};   // versoes/estado que geraram a cena persistente atual
+  bool gpuMotionKeyValid_ = false;
+  std::vector<std::uint8_t> gpuDriven_;           // por e.index: 1 = a entidade esta na cena persistente (a CPU nao a desenha)
+  size_t gpuMotionNonDriven_ = 0;                 // entidades desenhaveis que NAO entraram (translucidas, selecionada): a CPU ainda as desenha
+  unsigned long long gpuMotionBuilds_ = 0;        // quantas vezes a cena persistente foi regravada
   int apiPendingFrames = 0;           // quadros desenhados com o aviso "Trocando" antes de aplicar
   float renderScale = 0.5f;
   bool renderScaleSet = false; // o usuario mexeu na escala: nao sobrescrever ao trocar de API
@@ -1166,9 +1194,56 @@ private:
     if (apiActive != 0) gpu.setGpuCulling(gpuCullEnabled);
     const bool objFrustumOnCpu = doCull && (gpuCullKeepCpuFrustum || !(apiActive != 0 && gpuCullEnabled && gpu.gpuCullActive()));
     gpuFrustumActive = doCull && !objFrustumOnCpu;
+    // --gpu-motion: cena persistente na GPU. Regrava (O(N), so quando algo ESTRUTURAL muda: criacao/destruicao, troca de malha/material,
+    // Transform/Parent editados, selecao) e, nos quadros estaveis, so envia o tempo uniforme. As entidades que entram ficam marcadas
+    // em gpuDriven_ e os lacos por objeto abaixo (oclusao e lista de desenho) as pulam, ou sao pulados por inteiro quando todas entraram.
+    bool gpuAllDriven = false;
+    if (gpuMotion && apiActive != 0 && gpu.persistentSupported()) {
+      const auto& cw = std::as_const(scene.world());
+      const std::array<std::uint64_t, 9> key = {cw.structuralEpoch(), cw.epochOf<MeshRenderer>(), cw.epochOf<Transform>(), cw.epochOf<Parent>(), cw.epochOf<MoverComp>(),
+                                                cw.epochOf<Inactive>(), (static_cast<std::uint64_t>(selected.index) << 32) | selected.generation,
+                                                highlight ? 1ull : 0ull, static_cast<std::uint64_t>(vi)};
+      if (!gpuMotionKeyValid_ || key != gpuMotionKey_ || (gpuMotionLive_ && !gpu.persistentReady())) {
+        std::vector<tool::GpuRenderer::PersistentItem> items;
+        items.reserve(cw.count<MeshRenderer>());
+        gpuDriven_.assign(1, 0);
+        gpuMotionNonDriven_ = 0;
+        scene.world().eachRead<MeshRenderer, Transform>([&](tool::Entity e, const MeshRenderer& mr, const Transform& tr) {
+          if (cw.has<Inactive>(e) || hiddenInView(e)) return;
+          if (mr.opacity < 1.f || (highlight && e == selected)) { ++gpuMotionNonDriven_; return; }   // translucido/selecionado: a CPU desenha
+          tool::Mat4 wm = worldMat(e);
+          float motion[4] = {0.f, 0.f, 0.f, 0.f};
+          if (const MoverComp* mv = cw.get<MoverComp>(e)) {
+            // A matriz grava a posicao BASE (o Transform pode ter sido movido pela CPU antes da cena persistente existir). Supoe pai sem
+            // rotacao/escala (ECScall), como no teste "test ecs".
+            for (int k = 0; k < 3; ++k) wm.m[3][k] += mv->base[k] - tr.pos[k];
+            motion[0] = mv->amp; motion[1] = mv->freq; motion[2] = mv->phase; motion[3] = mv->t;
+          }
+          bool any = false;
+          pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) {
+            tool::GpuRenderer::PersistentItem it;
+            it.mesh = &m; it.world = wm; it.mat = mat;
+            std::memcpy(it.motion, motion, sizeof motion);
+            items.push_back(std::move(it));
+            any = true;
+          });
+          if (any) {
+            if (e.index >= gpuDriven_.size()) gpuDriven_.resize(std::max<size_t>(static_cast<size_t>(e.index) + 1, gpuDriven_.size() * 2), 0);
+            gpuDriven_[e.index] = 1;
+          } else ++gpuMotionNonDriven_;
+        });
+        const bool ok = !items.empty() && gpu.setPersistentScene(items);
+        if (!ok) { gpuDriven_.assign(1, 0); gpuMotionNonDriven_ = items.size() + 1; }   // nada na GPU: a CPU desenha tudo
+        gpuMotionKey_ = key; gpuMotionKeyValid_ = true; ++gpuMotionBuilds_;
+      }
+      gpu.setPersistentTime(static_cast<float>(gpuMotionTime_));
+      gpuMotionLive_ = gpu.persistentReady();
+      gpuAllDriven = gpuMotionLive_ && gpuMotionNonDriven_ == 0;
+    } else gpuMotionLive_ = false;
+    auto gpuDriven = [&](tool::Entity e) { return gpuMotionLive_ && e.index < gpuDriven_.size() && gpuDriven_[e.index] != 0; };
     // Buffer de oclusao do quadro. Fica inativo (sem begin) se a oclusao estiver desligada.
     tool::render::OcclusionBuffer occ;
-    if (sceneInfo.render.occlusionCull && !cam.ortho) {
+    if (sceneInfo.render.occlusionCull && !cam.ortho && !gpuAllDriven) {   // cena toda persistente: sem oclusores na CPU (a GPU recorta por frustum)
       ZoneTimer occlusionTimer(prof, Zone::ScenePrepOcclusion);
       // Oclusores: triangulos de todos os objetos visiveis. Malhas muito densas ficam de fora (custo por quadro).
       constexpr size_t kOccluderMaxTris = 2048;
@@ -1320,12 +1395,13 @@ private:
         }
         {
           ZoneTimer drawListTimer(prof, Zone::DrawList);
-          scene.world().eachRead<MeshRenderer, Transform>([&](tool::Entity e, const MeshRenderer& mr, const Transform&) {
-            if ((scene.world().has<Inactive>(e) || hiddenInView(e))) return;
+          if (!gpuAllDriven) scene.world().eachRead<MeshRenderer, Transform>([&](tool::Entity e, const MeshRenderer& mr, const Transform&) {
+            if ((scene.world().has<Inactive>(e) || hiddenInView(e)) || gpuDriven(e)) return;   // gpuDriven: ja esta na cena persistente da GPU
             pieces(e, mr, [&](const tool::Mesh& m, const tool::Material& mat) { if (skipCulled(e, m, mr)) return; count(m, mat); gpu.draw(m, worldMat(e), mat); });
           });
           drawChunks(gpu);
         }
+        submitFx(cam);   // particulas v2: quads do frame, desenhados pelo passe de particulas do GpuRenderer
         gpu.setBloom(sceneInfo.render.lighting.bloom, sceneInfo.render.lighting.bloomThreshold, sceneInfo.render.lighting.bloomStrength);
         gpu.end();
         // Tamanho da imagem que a GPU entrega: com o FSR 1 ativo e a ampliada (fsrOutW x fsrOutH); senao o tamanho de render.

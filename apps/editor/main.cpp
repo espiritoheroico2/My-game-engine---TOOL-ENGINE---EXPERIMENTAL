@@ -14,6 +14,7 @@
 #include "frame_input.hpp"
 #include "extra_ui.hpp"
 #include "fx.hpp"
+#include "fx_particles.hpp"   // particulas v2 (biblioteca tool::particles)
 #include "i18n.hpp"
 #include "profiler_model.hpp"
 #include "project_start.hpp"
@@ -142,7 +143,7 @@ editor::hierarchy_model::Kind hierarchyKindOf(tool::World& w, tool::Entity e) {
   if (w.has<ed_::CameraComp>(e)) return K::Camera;
   if (w.has<ed_::GlobalLight>(e) || w.has<ed_::LightComp>(e)) return K::Light;
   if (w.has<ed_::AudioSource>(e)) return K::Audio;
-  if (w.has<ed_::ParticleComp>(e)) return K::Particles;
+  if (w.has<ed_::ParticleComp>(e) || w.has<ed_::ParticleFxComp>(e)) return K::Particles;
   if (w.has<ed_::CanvasComp>(e)) return K::Canvas;
   return K::Object;
 }
@@ -759,6 +760,7 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   if (c.voxel) c.voxelSolid = editor::solidCount(*c.voxel);
   // Particulas do objeto (componente direto: o painel le e grava nos campos, como nas outras secoes).
   c.particles = w.get<ed_::ParticleComp>(e);
+  c.particlesFx = w.get<ed_::ParticleFxComp>(e);   // particulas v2 (biblioteca)
   // Recursos: o que o objeto ainda pode receber e o que ele tem (listas do Add / Remove Resource).
   using R = editor::inspector_model::Resource;
   const auto addR = [&c](R r) { c.addable.push_back(static_cast<int>(r)); };
@@ -772,6 +774,7 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   if (!w.has<ed_::CameraComp>(e)) addR(R::Camera); else remR(R::Camera);
   if (!w.has<ed_::AudioSource>(e)) addR(R::Audio); else remR(R::Audio);
   if (!w.has<ed_::ParticleComp>(e)) addR(R::Particles); else remR(R::Particles);
+  if (!w.has<ed_::ParticleFxComp>(e)) addR(R::ParticlesFx); else remR(R::ParticlesFx);
   if (!w.has<ed_::ScriptComp>(e)) addR(R::Script); else remR(R::Script);
   if (!w.has<ed_::CanvasComp>(e)) addR(R::Canvas); else remR(R::Canvas);
   if (!w.has<ed_::VoxelChunk>(e)) addR(R::Voxel); else remR(R::Voxel);
@@ -922,6 +925,9 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
       w.add<ed_::AudioSource>(sel);
     } else if (r == R::Particles) {
       w.add<ed_::ParticleComp>(sel);
+    } else if (r == R::ParticlesFx) {
+      auto& pf = w.add<ed_::ParticleFxComp>(sel);   // fumaca por padrao; grava Effects/*.json se ainda nao existem
+      editor::fxlib::applyPreset(ed, pf, 0);
     } else if (r == R::Script) {
       ed.attachScript(sel);
     } else if (r == R::Canvas) {
@@ -969,6 +975,7 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
         w.remove<ed_::AudioSource>(sel);
         break;
       case R::Particles: w.remove<ed_::ParticleComp>(sel); break;
+      case R::ParticlesFx: w.remove<ed_::ParticleFxComp>(sel); break;
       case R::Canvas: w.remove<ed_::CanvasComp>(sel); break;
       case R::Voxel: w.remove<ed_::VoxelChunk>(sel); break;
       case R::Script: w.remove<ed_::ScriptComp>(sel); break;
@@ -979,6 +986,14 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
     if (auto* p = ed.scene.world().get<ed_::ParticleComp>(ed.selected)) editor::applySmokePreset(*p);
   };
   h.removeParticles = [&ed] { ed.scene.world().remove<ed_::ParticleComp>(ed.selected); };
+  h.fxPreset = [&ed](int i) { if (auto* p = ed.scene.world().get<ed_::ParticleFxComp>(ed.selected)) editor::fxlib::applyPreset(ed, *p, i); };
+  h.fxLoad = [&ed] { if (auto* p = ed.scene.world().get<ed_::ParticleFxComp>(ed.selected)) editor::fxlib::loadFile(ed, *p, p->file); };
+  h.fxSave = [&ed] {   // grava o efeito atual (cores do Inspector incluidas) no arquivo indicado no componente
+    if (auto* p = ed.scene.world().get<ed_::ParticleFxComp>(ed.selected)) {
+      ed_::fxPush(*p);
+      if (editor::fxlib::saveFile(ed, *p, p->file)) tool::logInfo(std::string("Efeito salvo em ") + p->file);
+    }
+  };
   h.uiImages = [&ed] {   // imagens do projeto aceitas pelos elementos de UI: so PNG e JPEG
     std::vector<std::string> out;
     for (const std::string& rel : assetsOfKind(ed, ed_::AssetKind::Image)) {
@@ -2978,6 +2993,9 @@ static int runEditorMain(int argc, char** argv) {
   // --no-gpu-cull: desliga o culling de frustum por compute (so para comparar A/B no bench; o caminho CPU volta a valer).
   for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--no-gpu-cull") == 0) ed.gpuCullEnabled = false;
   for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--gpu-cull-drop-cpu-frustum") == 0) ed.gpuCullKeepCpuFrustum = false;
+  // --gpu-motion (experimento, docs/planos/31): cena opaca persistente na GPU; movimento dos MoverComp calculado no compute; draw indireto.
+  // Exige Vulkan/D3D12. Sem a flag o caminho de sempre. Para comparar imagem/tempo use TOOL_MOVER_NOSHADOW=1 nos dois lados.
+  for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--gpu-motion") == 0) ed.gpuMotion = true;
   editor::I18n::get().scan("assets/lang");
   editor::I18n::get().select(editor::kDefaultLanguage);   // ingles sem configuracao salva
   ed.theme.scan("assets/themes");
@@ -3058,6 +3076,21 @@ static int runEditorMain(int argc, char** argv) {
   if (mapSide > 0) ed.generateChunkMap(mapSide);
   long long instancesMade = 0;
   if (instanceCount > 0) instancesMade = editor::createInstanceScene(ed, instanceCount, instanceShape);   // tudo antes do laco
+  // --fx-bench N: um emissor de particulas v2 (preset de fumaca, N particulas vivas e paradas em numero, vida longa) no centro da cena.
+  // --fx-norender: simula mas NAO entrega os quads ao renderer (mede o custo do passe de particulas: compare com e sem).
+  long long fxBench = 0;
+  for (int i = 1; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--fx-bench") == 0) fxBench = std::clamp<long long>(std::atoll(argv[i + 1]), 0, 1000000);
+  for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--fx-norender") == 0) ed.fxRender = false;
+  if (fxBench > 0) {
+    tool::Entity fe = ed.make("FxBench");
+    ed_::ParticleFxComp& pf = ed.scene.world().add<ed_::ParticleFxComp>(fe);
+    pf.maxParticles = static_cast<int>(fxBench);
+    pf.fx.emitter.rate = 0.f; pf.fx.emitter.bursts.clear(); pf.fx.emitter.bursts.push_back({0.f, static_cast<tool::u32>(fxBench)});
+    pf.fx.emitter.boxHalf[0] = 10.f; pf.fx.emitter.boxHalf[1] = 4.f; pf.fx.emitter.boxHalf[2] = 8.f;
+    pf.fx.init.lifeMin = pf.fx.init.lifeMax = 100000.f;   // nenhuma morre durante a medicao: N vivas e constante
+    pf.fx.init.sizeMin = 0.15f; pf.fx.init.sizeMax = 0.25f;
+    std::fprintf(stdout, "fx bench: %lld particles (smoke preset, alpha shader, turbulence every %u frame)\n", fxBench, 1u);
+  }
   if (voxelCount > 0) {   // chunks em grade quadrada, todos com terreno
     const long long side = static_cast<long long>(std::ceil(std::sqrt(static_cast<double>(voxelCount))));
     for (long long i = 0; i < voxelCount; ++i) ed.makeVoxel("Chunk", static_cast<int>(i % side), static_cast<int>(i / side), true);
@@ -3432,7 +3465,11 @@ static int runEditorMain(int argc, char** argv) {
     ed.uiTyping = SDL_TextInputActive(window);
     ed.tick(benchDt > 0.0 ? benchDt : static_cast<double>(tool::debug().lastFrameMs()) / 1000.0);
     ed.beginRenderStatsFrame();
-    if (!ed.paused) ed.updateParticles(static_cast<float>(tool::debug().lastFrameMs()) / 1000.f);
+    if (!ed.paused) {
+      const float partDt = static_cast<float>(tool::debug().lastFrameMs()) / 1000.f;
+      ed.updateParticles(partDt);
+      ed.updateFx(benchDt > 0.0 ? static_cast<float>(benchDt) : partDt);   // particulas v2 (no bench, passo fixo = reproduzivel)
+    }
     editor::processImports(ed);
     { // navegacao livre (Alt): o mouse fica preso na janela (modo relativo) e a UI ignora o mouse ate sair
       if (ed.flyChanged) {
@@ -3916,6 +3953,9 @@ static int runEditorMain(int argc, char** argv) {
                       benchPhysStart.steps, pe.steps, benchPhysStart.awake, pe.awake, benchPhysStart.pairs, pe.pairs, benchPhysStart.contacts, pe.contacts,
                       benchPhysStart.colorsUsed, pe.colorsUsed, benchPhysStart.largestColorBucket, pe.largestColorBucket);
           std::printf("ECS bench:   last frame: %llu draws, %llu triangles, %llu culled\n", static_cast<unsigned long long>(ed.prof.last.draws), static_cast<unsigned long long>(ed.prof.last.tris), static_cast<unsigned long long>(ed.prof.last.culled));
+          if (fxBench > 0) { size_t fxAlive = 0; for (auto& [k, rt] : ed.fxRt) if (rt.sys) fxAlive += rt.sys->alive();
+            std::printf("ECS bench:   particles v2: %zu alive, %llu quads submitted last view, render %s, pass available %s, drawn on GPU last frame %u\n", fxAlive,
+                        static_cast<unsigned long long>(ed.fxQuadsLast), ed.fxRender ? "on" : "off", ed.gpu.particlesAvailable() ? "yes" : "no", ed.gpu.particlesDrawn()); }
           // Culling GPU: instancias visiveis segundo a GPU (readback sincrono, so aqui) x visiveis pelo frustum da CPU do renderer.
           { tool::u32 gpuVis = 0;
             if (ed.gpu.gpuCullUsedLastFrame() && ed.gpu.readGpuVisibleCount(gpuVis))
@@ -3929,6 +3969,10 @@ static int runEditorMain(int argc, char** argv) {
                       ed.worldMatRebuilds_, ed.worldMatMisses_.load(), frame, static_cast<unsigned long long>(ed.scene.world().epochOf<editor::Transform>()),
                       static_cast<unsigned long long>(ed.scene.world().epochOf<editor::Parent>()), static_cast<unsigned long long>(ed.scene.world().epochOf<editor::MeshRenderer>()),
                       static_cast<unsigned long long>(ed.scene.world().structuralEpoch()));
+          std::printf("ECS bench:   gpu-motion: requested %s, live %s, persistent objects %u in %u batches, builds %llu (scene writes %llu, %.1f MB last), per-frame CPU->GPU bytes %llu, non-driven (CPU drawn) %zu\n",
+                      ed.gpuMotion ? "yes" : "no", ed.gpuMotionLive_ ? "yes" : "no", ed.gpu.persistentCount(), ed.gpu.persistentBatches(), ed.gpuMotionBuilds_,
+                      static_cast<unsigned long long>(ed.gpu.persistentBuilds()), static_cast<double>(ed.gpu.persistentBuildBytes()) / (1024.0 * 1024.0),
+                      static_cast<unsigned long long>(ed.gpu.persistentFrameBytes()), ed.gpuMotionNonDriven_);
           if (std::getenv("TOOL_BENCH_IMGHASH")) std::printf("ECS bench:   image hash game %016llx scene %016llx\n", static_cast<unsigned long long>(benchImgHashGame), static_cast<unsigned long long>(benchImgHashScene));
           { size_t renderables = 0;
             ed.scene.world().each<editor::MeshRenderer, editor::Transform>([&](tool::Entity e, editor::MeshRenderer&, editor::Transform&) { if (!ed.scene.world().has<editor::Inactive>(e)) ++renderables; });

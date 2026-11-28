@@ -28,7 +28,16 @@ public:
   // Pede `count` particulas extras no proximo update (rajada manual).
   void burst(u32 count) { pending_ += count; }
   // Reinicia o emissor e mata todas as particulas.
-  void reset() { state_.restart(); pool_.clear(); pending_ = 0; }
+  void reset() { state_.restart(); pool_.clear(); pending_ = 0; simTime_ = 0; frame_ = 0; }
+  // Troca o efeito em execucao (edicao ao vivo no editor): as particulas vivas continuam, os modulos novos valem do
+  // proximo quadro. A capacidade do pool nao muda (para isso, crie outro sistema).
+  void setEffect(const Effect& fx) {
+    fx_ = fx;
+    std::stable_sort(fx_.emitter.bursts.begin(), fx_.emitter.bursts.end(),
+                     [](const Burst& a, const Burst& b) { return a.time < b.time; });
+  }
+  // Origem atual do emissor (x, y, z).
+  const f32* origin() const { return origin_; }
 
   // Avanca dt segundos: emite (taxa + rajadas) e atualiza todos os chunks. `parallel=false` roda tudo na thread
   // chamadora (mesmo resultado, util para teste e comparacao).
@@ -54,8 +63,10 @@ public:
     }
     // 3) Atualizacao por chunk (cada chunk e independente).
     runRange(pool_.chunkCount(), parallel, [&](size_t b, size_t e) {
-      for (size_t c = b; c < e; ++c) updateChunk(pool_.chunk(static_cast<u32>(c)), dt);
+      for (size_t c = b; c < e; ++c) updateChunk(pool_.chunk(static_cast<u32>(c)), dt, static_cast<u32>(c));
     });
+    simTime_ += dt;
+    ++frame_;
     // 4) Os chunks compactaram: refaz a lista de livres e o contador de vivas.
     pool_.rebuildFreeList();
   }
@@ -76,16 +87,24 @@ private:
   }
 
   // Atualiza um chunk: modulos de velocidade, integracao, modulos de vida e compactacao dos mortos.
-  void updateChunk(Chunk& c, f32 dt) const {
+  void updateChunk(Chunk& c, f32 dt, u32 chunkIndex) const {
     if (c.count == 0) return;
     for (const Module& m : fx_.modules) {
       if (m.kind == ModuleKind::Gravity) modGravity(c, m.g, dt);
       else if (m.kind == ModuleKind::Drag) modDrag(c, m.drag, dt);
+      else if (m.kind == ModuleKind::Turbulence) {
+        // Taxa de amostragem: com every = N o ruido so e avaliado a cada N quadros (com o dt acumulado das N), e cada
+        // chunk tem uma fase propria ((quadro + indice) % N) para o custo ficar espalhado. N = 1 (padrao): todo quadro.
+        if (m.every <= 1) modTurbulence(c, m, simTime_, dt);
+        else if ((frame_ + chunkIndex) % m.every == 0) modTurbulence(c, m, simTime_, dt * static_cast<f32>(m.every));
+      }
+      else if (m.kind == ModuleKind::Buoyancy) modBuoyancy(c, m.amp, m.cooling, dt);
     }
     modIntegrate(c, dt);
     for (const Module& m : fx_.modules) {
       if (m.kind == ModuleKind::ColorOverLife) modColorOverLife(c, m.c0, m.c1);
       else if (m.kind == ModuleKind::SizeOverLife) modSizeOverLife(c, m.s0, m.s1);
+      else if (m.kind == ModuleKind::AlphaOverLife) modAlphaOverLife(c, m.a0, m.a1);
     }
     c.compactDead();
   }
@@ -96,6 +115,8 @@ private:
   SystemStats stats_;
   f32 origin_[3] = {0, 0, 0};
   u32 pending_ = 0;
+  f32 simTime_ = 0;            // tempo simulado acumulado (anima o campo de turbulencia)
+  u64 frame_ = 0;              // quadros simulados (fase da taxa de amostragem da turbulencia)
   std::vector<Span> spans_;    // reutilizados a cada quadro (sem alocar)
   std::vector<u64> bases_;
 };

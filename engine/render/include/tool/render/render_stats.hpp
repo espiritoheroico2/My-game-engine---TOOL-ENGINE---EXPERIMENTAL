@@ -17,6 +17,7 @@ enum class RenderPassId : std::uint8_t {
   Opaque,
   Emission,
   Transparent,
+  Particles,
   BloomExtract,
   BloomBlurH,
   BloomBlurV,
@@ -43,6 +44,7 @@ inline const char* renderPassName(RenderPassId pass) {
     case RenderPassId::Opaque: return "Opaque";
     case RenderPassId::Emission: return "Emission";
     case RenderPassId::Transparent: return "Transparent";
+    case RenderPassId::Particles: return "Particles";
     case RenderPassId::BloomExtract: return "Bloom extract";
     case RenderPassId::BloomBlurH: return "Bloom blur H";
     case RenderPassId::BloomBlurV: return "Bloom blur V";

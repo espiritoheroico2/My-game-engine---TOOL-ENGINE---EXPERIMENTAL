@@ -25,15 +25,18 @@ namespace editor::inspector_model {
 // PostFx e o subgrupo "Post-processing (this camera)" dentro da Camera.
 enum class Section : std::uint8_t {
     Transform, MeshRenderer, Light, GlobalLight, Camera, Audio, PostFx, Tags, Script, Physics, Tools, Voxel, Canvas,
-    Particles, ParticleShape, ParticleColors, ParticleRoute, ParticleTornado, Resources
+    Particles, ParticleShape, ParticleColors, ParticleRoute, ParticleTornado, Resources,
+    // Particulas v2 (biblioteca): secao principal e subgrupos (emissor, velocidade, modulos, render).
+    ParticlesFx, FxEmitter, FxMotion, FxLife, FxRender
 };
-inline constexpr std::size_t kSectionCount = 19;
+inline constexpr std::size_t kSectionCount = 24;
 
 // Recursos que o menu Add / Remove Resource adiciona e tira do objeto. As ferramentas tem uma entrada por tipo, na
 // mesma ordem de ToolKind (Jump, Move, Follow Target, Spin, On Collision, Script library).
 enum class Resource : std::uint8_t {
     Physics, ToolJump, ToolMove, ToolFollow, ToolSpin, ToolOnCollision, ToolScriptLib,
-    Mesh, PointLight, Camera, Audio, Particles, Script, Canvas, Voxel, ToolsAll, GlobalLight
+    Mesh, PointLight, Camera, Audio, Particles, Script, Canvas, Voxel, ToolsAll, GlobalLight,
+    ParticlesFx   // particulas v2 (no fim para nao mudar os ids existentes)
 };
 
 // Estado de aberto e fechado de cada secao.

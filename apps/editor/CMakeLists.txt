@@ -1,6 +1,6 @@
 add_executable(tool_editor main.cpp image_io.cpp)
 target_include_directories(tool_editor PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
-target_link_libraries(tool_editor PRIVATE tool::scene tool::canvas tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod SDL3::SDL3-static)
+target_link_libraries(tool_editor PRIVATE tool::scene tool::canvas tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod tool::particles SDL3::SDL3-static)
 if(TOOL_WITH_MINIAUDIO)
   target_link_libraries(tool_editor PRIVATE tool::audio_miniaudio)
 endif()

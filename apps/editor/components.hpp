@@ -23,6 +23,8 @@
 #include "tool/core/json.hpp"
 #include "tool/core/parallel.hpp"
 #include "tool/math/math.hpp"
+#include "tool/particles/effect.hpp"
+#include "tool/particles/presets.hpp"
 #include "tool/render/lighting.hpp"
 #include "tool/render/postfx.hpp"
 #include "tool/render/soft_renderer.hpp"
@@ -286,6 +288,65 @@ struct ParticleComp {
   bool tornado = false;
   float tornadoSpeed = 1.5f, tornadoRadius = 0.6f, tornadoHeight = 2.f;
 };
+
+// Particulas v2 (biblioteca tool::particles): objeto colocavel na cena, 3D (billboards) ou 2D (plano XY do objeto).
+// O efeito (emissor com formas volumetricas, velocidade, turbulencia, empuxo, cor/tamanho ao longo da vida, shader, emissivo)
+// fica NO componente e vai junto na cena; `file` so lembra de qual Effects/<nome>.json ele foi carregado.
+// O ParticleComp antigo (acima) continua existindo e abrindo: os dois convivem na mesma cena.
+struct ParticleFxComp {
+  tool::particles::Effect fx = tool::particles::effectFromText(tool::particles::kPresetSmoke).value_or(tool::particles::Effect{});
+  char file[160] = "Effects/smoke.json";   // arquivo de origem (relativo ao projeto); vazio = efeito feito a mao
+  bool playing = true;                      // simulando e emitindo (Pause = false)
+  bool mode2D = false;                      // quads no plano XY do objeto (2D) em vez de billboards virados para a camera (3D)
+  int maxParticles = 4000;                  // capacidade do pool deste objeto (1 a 1.000.000)
+  int cmd = 0;                              // pedido pendente (consumido por Editor::updateFx): 1 Play, 2 Pause, 3 Stop (limpa), 4 Burst
+  // Campos que o Inspector edita por ponteiro estavel e que NAO existem assim no efeito (cores sao RGBA8 la; `every` e u32):
+  // fxPull copia efeito -> ui (quando !synced) e fxPush copia ui -> efeito (todo quadro, em Editor::updateFx). Nao serializado.
+  struct Ui { float start[3] = {1.f, 1.f, 1.f}, from[3] = {1.f, 1.f, 1.f}, to[3] = {1.f, 1.f, 1.f}; int every = 1; bool synced = false; } ui;
+};
+
+// Modulos do efeito: achar, ligar e desligar por tipo (o Inspector mostra uma caixa "ligado" por modulo).
+namespace fxmod {
+using tool::particles::Effect;
+using tool::particles::Module;
+using tool::particles::ModuleKind;
+// Modulo do tipo k, ou nullptr se o efeito nao o tem.
+inline Module* find(Effect& fx, ModuleKind k) { for (Module& m : fx.modules) if (m.kind == k) return &m; return nullptr; }
+// Liga (cria com valores padrao seguros) ou desliga (remove) o modulo k. Devolve o modulo, ou nullptr se ficou desligado.
+inline Module* set(Effect& fx, ModuleKind k, bool on) {
+  if (!on) { fx.modules.erase(std::remove_if(fx.modules.begin(), fx.modules.end(), [k](const Module& m) { return m.kind == k; }), fx.modules.end()); return nullptr; }
+  if (Module* m = find(fx, k)) return m;
+  Module m; m.kind = k;
+  if (k == ModuleKind::Drag) m.drag = 0.5f;
+  if (k == ModuleKind::Turbulence) { m.amp = 1.f; m.freq = 0.5f; m.scroll = 0.3f; m.every = 1; }
+  if (k == ModuleKind::Buoyancy) { m.amp = 1.f; m.cooling = 0.f; }
+  if (k == ModuleKind::AlphaOverLife) { m.a0 = 1.f; m.a1 = 0.f; }
+  fx.modules.push_back(m);
+  return &fx.modules.back();
+}
+} // namespace fxmod
+
+// RGBA8 (R no byte baixo) <-> rgb float 0..1 (o alfa fica como esta no efeito).
+inline void fxUnpackRgb(std::uint32_t c, float rgb[3]) { for (int k = 0; k < 3; ++k) rgb[k] = static_cast<float>((c >> (8 * k)) & 0xFFu) / 255.f; }
+inline std::uint32_t fxPackRgb(const float rgb[3], std::uint32_t keepAlphaFrom) {
+  auto q = [](float v) { return static_cast<std::uint32_t>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f); };
+  return q(rgb[0]) | (q(rgb[1]) << 8) | (q(rgb[2]) << 16) | (keepAlphaFrom & 0xFF000000u);
+}
+// Efeito -> campos do Inspector (cores e taxa de amostragem da turbulencia).
+inline void fxPull(ParticleFxComp& p) {
+  fxUnpackRgb(p.fx.init.color, p.ui.start);
+  if (auto* m = fxmod::find(p.fx, fxmod::ModuleKind::ColorOverLife)) { fxUnpackRgb(m->c0, p.ui.from); fxUnpackRgb(m->c1, p.ui.to); }
+  else for (int k = 0; k < 3; ++k) p.ui.from[k] = p.ui.to[k] = p.ui.start[k];
+  p.ui.every = 1;
+  if (auto* m = fxmod::find(p.fx, fxmod::ModuleKind::Turbulence)) p.ui.every = static_cast<int>(m->every);
+  p.ui.synced = true;
+}
+// Campos do Inspector -> efeito.
+inline void fxPush(ParticleFxComp& p) {
+  p.fx.init.color = fxPackRgb(p.ui.start, p.fx.init.color);
+  if (auto* m = fxmod::find(p.fx, fxmod::ModuleKind::ColorOverLife)) { m->c0 = fxPackRgb(p.ui.from, m->c0); m->c1 = fxPackRgb(p.ui.to, m->c1); }
+  if (auto* m = fxmod::find(p.fx, fxmod::ModuleKind::Turbulence)) m->every = static_cast<std::uint32_t>(std::clamp(p.ui.every, 1, 64));
+}
 
 // Fonte de som: arquivo, volume, loop, 3D (spatial) com distancias minima/maxima; voice e o som tocando agora.
 struct AudioSource {
@@ -615,6 +676,11 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     o.set("tornado", p->tornado); o.set("tornadoSpeed", static_cast<double>(p->tornadoSpeed)); o.set("tornadoRadius", static_cast<double>(p->tornadoRadius)); o.set("tornadoHeight", static_cast<double>(p->tornadoHeight));
     j.set("particles", o);
   }
+  if (auto* p = w.get<ParticleFxComp>(e)) {   // particulas v2: o efeito vai inteiro na cena (formato da biblioteca)
+    Json o = Json::object(); o.set("file", std::string(p->file)); o.set("playing", p->playing); o.set("mode2D", p->mode2D);
+    o.set("max", p->maxParticles); o.set("effect", tool::particles::effectToJson(p->fx));
+    j.set("particlesFx", o);
+  }
   return j;
 }
 
@@ -760,6 +826,16 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     p.tornado = ser::flag(o, "tornado", false); p.tornadoSpeed = ser::clampNum(o, "tornadoSpeed", 1.5f, -20.f, 20.f);
     p.tornadoRadius = ser::clampNum(o, "tornadoRadius", 0.6f, 0.f, 50.f); p.tornadoHeight = ser::clampNum(o, "tornadoHeight", 2.f, -100.f, 100.f);
     w.add<ParticleComp>(e, p);
+  }
+  if (j.has("particlesFx")) {   // particulas v2; efeito invalido na cena: aviso e fica o padrao (fumaca)
+    ParticleFxComp p; const auto& o = j["particlesFx"];
+    ser::copyStr(p.file, sizeof p.file, o["file"].asString()); p.playing = ser::flag(o, "playing", true); p.mode2D = ser::flag(o, "mode2D", false);
+    p.maxParticles = std::clamp(static_cast<int>(o["max"].asNumber(4000)), 1, 1000000);
+    if (o.has("effect")) {
+      if (auto fx = tool::particles::effectFromJson(o["effect"])) p.fx = std::move(*fx);
+      else tool::logWarn("Particulas: efeito invalido na cena (formato/modulo/valor desconhecido); usando o padrao.");
+    }
+    w.add<ParticleFxComp>(e, std::move(p));
   }
   return e;
 }

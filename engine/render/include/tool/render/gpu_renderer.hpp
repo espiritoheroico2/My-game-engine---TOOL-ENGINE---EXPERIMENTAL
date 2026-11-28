@@ -70,8 +70,19 @@ struct BloomCB { f32 srcSize[2]; f32 haloSize[2]; f32 dir[2]; f32 threshold, str
 struct CullCB { f32 planes[6][4]; };
 struct CullBatchGPU { u32 first, count, indexCount, argsIndex; f32 sphere[4]; };
 static_assert(sizeof(CullCB) == 96 && sizeof(CullBatchGPU) == 32 && sizeof(rhi::DrawIndexedIndirectArgs) == 20, "layout do culling GPU");
+// Movimento + culling da cena persistente (motion_cull.hlsl): planos do frustum e o tempo uniforme (time[0]).
+struct MotionCullCB { f32 planes[6][4]; f32 time[4]; };
+static_assert(sizeof(MotionCullCB) == 112, "layout do cbuffer de movimento GPU");
 static_assert(sizeof(FrameCB) == 144 && sizeof(ObjectCB) == 160 && sizeof(ShadowCB) == 64 && sizeof(ShadowInstanceGPU) == 64 && sizeof(BatchCB) == 16 && sizeof(BloomCB) == 32, "layout de cbuffer");
 static_assert(sizeof(InstanceGPU) == sizeof(ObjectCB), "layout de instancia deve bater com ObjectCB");
+
+// Particulas (particles.hlsl): um quad por particula (igual a tool::particles::QuadInstance, 32 B) e o pedido de desenho.
+struct ParticleQuadGPU { f32 c[3]; f32 size; f32 rot; u32 color; u32 material; f32 temp; };
+// Um lote de particulas de um efeito. `quads` fica valido ate o fim de GpuRenderer::end() (o renderer nao copia na chamada).
+// shader: 0 = alfa (quads ja ordenados de tras para frente), 1 = aditivo, 2 = bloom (aditivo + brilho para o bloom).
+struct ParticleDraw { const ParticleQuadGPU* quads = nullptr; u32 count = 0; u32 shader = 0; f32 emissive = 0; f32 soft = 0; bool is2D = false; };
+struct PartCB { u32 first, is2D, pad[2]; f32 soft[4]; };
+static_assert(sizeof(ParticleQuadGPU) == 32 && sizeof(PartCB) == 32, "layout das particulas na GPU");
 
 struct PointShadowLightGPU { f32 posType[4]; f32 params[4]; Mat4 vp[6]; };
 struct PointShadowGPU { u32 count; u32 pad[3]; PointShadowLightGPU lights[kMaxPointShadowLights]; };
@@ -231,6 +242,36 @@ public:
       bloomCbComp_ = dev.createBuffer({sizeof(BloomCB), rhi::BufferUsage::Uniform, true}, nullptr);
     }
 
+    // Particulas (particles.hlsl). Opcional: sem o shader (ou em OpenGL, que usa GLSL pre-gerado) o renderer segue sem elas.
+    partReady_ = false;
+    if (!gl) {
+      std::string partSrc;
+      if (!loadHlsl(hlslDir, "particles.hlsl", partSrc)) {
+        debug().report("TOOL-W146", Severity::Warning, "nao achei particles.hlsl em " + hlslDir + ": particulas desligadas");
+      } else {
+        rhi::ShaderDesc pv; pv.stage = rhi::ShaderStage::Vertex; pv.entry = "VSMain"; pv.name = "particles.vs"; pv.source = partSrc;
+        rhi::ShaderDesc pp = pv; pp.stage = rhi::ShaderStage::Pixel;
+        pp.entry = "PSAlpha"; pp.name = "particles.alpha"; partPsAlpha_ = mk(pp);
+        pp.entry = "PSAdditive"; pp.name = "particles.add"; partPsAdd_ = mk(pp);
+        pp.entry = "PSGlow"; pp.name = "particles.glow"; partPsGlow_ = mk(pp);
+        partVs_ = mk(pv);
+        // Teste de profundidade ligado, escrita desligada, sem cull (billboards). Slot 0 = FrameBuffer, 1 = PartBuffer.
+        rhi::PipelineDesc q; q.vs = partVs_; q.name = "particles"; q.depthTest = true; q.depthWrite = false; q.cull = rhi::CullMode::None;
+        q.layout = {{3, 0}}; q.vertexStride = 12; q.uniformNames = {"FrameBuffer", "PartBuffer"}; q.textureNames = {"GBuf"}; q.storageNames = {"Quads"};
+        q.color = colorFmt_;
+        q.ps = partPsAlpha_; q.blend = true; partPipeAlpha_ = dev.createPipeline(q);
+        q.ps = partPsAdd_; q.blend = false; q.blendAdditive = true; q.name = "particles_add"; partPipeAdd_ = dev.createPipeline(q);
+        q.ps = partPsGlow_; q.color = rhi::Format::RGBA16F; q.name = "particles_glow"; partPipeGlow_ = dev.createPipeline(q);
+        static const float qv[12] = {-1.f, -1.f, 0.f, 1.f, -1.f, 0.f, 1.f, 1.f, 0.f, -1.f, 1.f, 0.f};
+        static const u32 qi[6] = {0, 1, 2, 0, 2, 3};
+        partVb_ = dev.createBuffer({sizeof qv, rhi::BufferUsage::Vertex, false}, qv);
+        partIb_ = dev.createBuffer({sizeof qi, rhi::BufferUsage::Index, false}, qi);
+        partCb_ = dev.createBuffer({sizeof(PartCB), rhi::BufferUsage::Uniform, true}, nullptr);
+        partReady_ = !partPipeAlpha_.isNull() && !partPipeAdd_.isNull() && !partPipeGlow_.isNull() && !partVb_.isNull() && !partIb_.isNull() && !partCb_.isNull();
+        if (!partReady_) debug().report("TOOL-W146", Severity::Warning, "pipelines de particulas indisponiveis: particulas desligadas");
+      }
+    }
+
     // Culling de frustum por compute (fase 1, so o passe opaco). Opcional: se o backend nao tem compute/indirect ou o
     // shader falhar, o renderer segue no caminho CPU de sempre.
     if (dev.supportsCompute() && dev.supportsIndirect() && !gl) {
@@ -246,6 +287,18 @@ public:
         cullCb_ = dev.createBuffer({sizeof(CullCB), rhi::BufferUsage::Uniform, true}, nullptr);
       }
       if (cullPipe_.isNull() || cullCb_.isNull()) debug().report("TOOL-W143", Severity::Warning, "culling de frustum na GPU indisponivel; usando o caminho CPU");
+      // Movimento + culling da cena persistente (experimento --gpu-motion). Opcional: sem ele persistentSupported() e falso.
+      std::string motionSrc;
+      if (loadHlsl(hlslDir, "motion_cull.hlsl", motionSrc)) {
+        rhi::ShaderDesc ms; ms.stage = rhi::ShaderStage::Compute; ms.entry = "MotionCullCS"; ms.name = "motion_cull.cs"; ms.source = motionSrc;
+        motionCs_ = dev.createShader(ms);
+        if (!motionCs_.isNull()) {
+          rhi::PipelineDesc md; md.cs = motionCs_; md.name = "motion_cull";
+          md.uniformNames = {"MotionCullCB"}; md.storageNames = {"CullBatches", "SrcInstances", "Motion"}; md.storageRWNames = {"DstInstances", "DrawArgs"};
+          motionPipe_ = dev.createPipeline(md);
+        }
+        motionCb_ = dev.createBuffer({sizeof(MotionCullCB), rhi::BufferUsage::Uniform, true}, nullptr);
+      }
     }
 
     // FSR 1 (EASU + RCAS em pixel shader). Opcional: em OpenGL (GLSL pre-gerado) ou se o shader/pipeline falhar, fica
@@ -391,7 +444,7 @@ public:
     ++frame_;
     cam_ = cam; clear_ = clear; clearAlpha_ = clearAlpha;
     cam_zNear_ = cam.nearZ; cam_zFar_ = cam.farZ;
-    draws_.clear(); tdraws_.clear(); shadowOn_ = false; shadowSkip_ = false; open_ = true;
+    draws_.clear(); tdraws_.clear(); pdraws_.clear(); shadowOn_ = false; shadowSkip_ = false; open_ = true;
     stats_ = {};
     stats_.valid = true;
     if ((frame_ & 63) == 0) for (auto it = meshes_.begin(); it != meshes_.end();) {
@@ -406,11 +459,118 @@ public:
     addDraw(makeDraw(&g, world, mat));
   }
 
+  // Pede o desenho de um lote de particulas neste quadro (entre begin() e end()). Sem pipelines de particulas (OpenGL, shader
+  // ausente) ou com o passe desligado (setParticlesEnabled), o pedido e ignorado.
+  void drawParticles(const ParticleDraw& d) {
+    if (!open_ || !partReady_ || !partEnabled_ || !d.quads || d.count == 0) return;
+    pdraws_.push_back(d);
+  }
+  // Liga/desliga o passe de particulas (medicao A/B). Ligado por padrao.
+  void setParticlesEnabled(bool on) { partEnabled_ = on; }
+  bool particlesAvailable() const { return partReady_; }
+  // Particulas desenhadas no ultimo quadro (soma dos lotes).
+  u32 particlesDrawn() const { return partDrawn_; }
+
   void draw(const Mesh& m, const Mat4& world, const Material& mat) {
     if (!open_) return;
     GpuMesh& g = upload(m);
     if (g.index.isNull()) return;
     addDraw(makeDraw(&g, world, mat));
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Cena PERSISTENTE (experimento --gpu-motion, docs/planos/31). Os objetos opacos entram aqui UMA vez (criacao,
+  // destruicao, troca de malha/material) e ficam na GPU: o buffer de instancias e imutavel, o movimento (seno/cosseno,
+  // mesma formula de Editor::tickMovers) e o culling de frustum rodam no compute motion_cull.hlsl e o desenho e indireto.
+  // Por quadro a CPU so grava o tempo uniforme, os argumentos indiretos zerados (20 B por lote) e o BatchCB de cada lote.
+  // Limites: so passe opaco principal (sem sombras, prepasso/SSAO, emissao), sem destaque de selecao, malha/bounds lidos na gravacao.
+  struct PersistentItem {
+    const Mesh* mesh = nullptr;   // malha da instancia (o editor mantem o ponteiro vivo)
+    Mat4 world;                   // matriz mundial na posicao BASE
+    Material mat;
+    f32 motion[4] = {0.f, 0.f, 0.f, 0.f};   // amplitude, frequencia, fase, t0; amplitude 0 = parado
+  };
+
+  // Verdadeiro se o backend roda o compute de movimento+culling (Vulkan/D3D12; nao o GL nem o Null).
+  bool persistentSupported() const { return dev_ && !motionPipe_.isNull() && !motionCb_.isNull(); }
+  bool persistentReady() const { return persistReady_; }
+  u32 persistentCount() const { return persistCount_; }
+  u32 persistentBatches() const { return static_cast<u32>(persistBatches_.size()); }
+  // Tempo uniforme T (s) do movimento; chamado a cada quadro (unico dado por quadro, 4 B uteis).
+  void setPersistentTime(f32 t) { persistTime_ = t; }
+  // Bytes gravados na GPU na ultima gravacao da cena persistente e quantas gravacoes houve (deve ficar em 1 com cena estavel).
+  u64 persistentBuildBytes() const { return persistBuildBytes_; }
+  u64 persistentBuilds() const { return persistBuilds_; }
+  // Bytes que a CPU grava por quadro no modo persistente (cbuffer + args indiretos + BatchCB por lote).
+  u64 persistentFrameBytes() const { return persistReady_ ? sizeof(MotionCullCB) + persistBatches_.size() * (sizeof(rhi::DrawIndexedIndirectArgs) + sizeof(BatchCB)) : 0u; }
+  // Instancias visiveis pela GPU no ultimo quadro persistente nao e lido (leitura sincrona); o editor usa o que ja mede.
+
+  // Grava a cena persistente (substitui a anterior). Devolve false (e deixa o modo desligado) se o backend nao suporta.
+  bool setPersistentScene(const std::vector<PersistentItem>& items) {
+    clearPersistentScene();
+    if (!persistentSupported() || items.empty()) return false;
+    if (white_.isNull()) white_ = makeWhite();
+    struct Key { const Mesh* mesh; u64 tex; u32 idx; };
+    std::vector<Key> keys;
+    keys.reserve(items.size());
+    for (size_t i = 0; i < items.size(); ++i) {
+      const PersistentItem& it = items[i];
+      if (!it.mesh || it.mesh->idx.empty()) continue;
+      GpuMesh& g = upload(*it.mesh);
+      if (g.index.isNull()) continue;
+      keys.push_back({it.mesh, textureKey(makeDraw(&g, it.world, it.mat)), static_cast<u32>(i)});
+    }
+    if (keys.empty()) return false;
+    // Agrupa por (malha, textura) como o planejador de lotes; ordem estavel preserva a ordem da cena dentro do lote.
+    std::stable_sort(keys.begin(), keys.end(), [](const Key& a, const Key& b) { return a.mesh != b.mesh ? std::less<const Mesh*>()(a.mesh, b.mesh) : a.tex < b.tex; });
+    const size_t n = keys.size();
+    std::vector<InstanceGPU> inst(n);
+    std::vector<f32> motion(n * 4);
+    persistBatches_.clear();
+    for (size_t k = 0; k < n; ++k) {
+      const PersistentItem& it = items[keys[k].idx];
+      GpuMesh& g = upload(*it.mesh);
+      const Draw d = makeDraw(&g, it.world, it.mat);
+      inst[k] = makeInstanceGPU(d, 1.f);
+      std::memcpy(&motion[k * 4], it.motion, sizeof it.motion);
+      const bool fresh = persistBatches_.empty() || keys[k].mesh != keys[k - 1].mesh || keys[k].tex != keys[k - 1].tex || persistBatches_.back().count >= 4096u;
+      if (fresh) {
+        PersistBatch pb;
+        pb.mesh = it.mesh; pb.tex = d.tex; pb.ntex = d.ntex; pb.doubleSided = d.mat.doubleSided; pb.first = static_cast<u32>(k);
+        persistBatches_.push_back(pb);
+      }
+      ++persistBatches_.back().count;
+    }
+    const size_t nb = persistBatches_.size();
+    if (nb > 65535u) { persistBatches_.clear(); return false; }
+    std::vector<CullBatchGPU> cb(nb);
+    persistArgsCpu_.assign(nb, rhi::DrawIndexedIndirectArgs{});
+    persistMaxCount_ = 0;
+    for (size_t b = 0; b < nb; ++b) {
+      const PersistBatch& pb = persistBatches_[b];
+      const GpuMesh& g = upload(*pb.mesh);
+      cb[b].first = pb.first; cb[b].count = pb.count; cb[b].indexCount = g.count; cb[b].argsIndex = static_cast<u32>(b);
+      cb[b].sphere[0] = g.bounds.center[0]; cb[b].sphere[1] = g.bounds.center[1]; cb[b].sphere[2] = g.bounds.center[2];
+      cb[b].sphere[3] = g.bounds.valid ? g.bounds.radius : -1.f;
+      persistArgsCpu_[b].indexCount = g.count;
+      persistMaxCount_ = std::max(persistMaxCount_, pb.count);
+    }
+    persistInst_ = dev_->createBuffer({n * sizeof(InstanceGPU), rhi::BufferUsage::Storage, false, static_cast<u32>(sizeof(InstanceGPU))}, inst.data());
+    persistMotion_ = dev_->createBuffer({n * 4 * sizeof(f32), rhi::BufferUsage::Storage, false, 16u}, motion.data());
+    persistBatchBuf_ = dev_->createBuffer({nb * sizeof(CullBatchGPU), rhi::BufferUsage::Storage, false, static_cast<u32>(sizeof(CullBatchGPU))}, cb.data());
+    persistCompact_ = dev_->createBuffer({n * sizeof(InstanceGPU), rhi::BufferUsage::StorageRW, false, static_cast<u32>(sizeof(InstanceGPU))}, nullptr);
+    persistArgs_ = dev_->createBuffer({nb * sizeof(rhi::DrawIndexedIndirectArgs), rhi::BufferUsage::Indirect, false, 0u}, nullptr);
+    if (persistInst_.isNull() || persistMotion_.isNull() || persistBatchBuf_.isNull() || persistCompact_.isNull() || persistArgs_.isNull()) { clearPersistentScene(); return false; }
+    persistCount_ = static_cast<u32>(n);
+    persistBuildBytes_ = n * (sizeof(InstanceGPU) + 16u) + nb * sizeof(CullBatchGPU);
+    ++persistBuilds_;
+    persistReady_ = true;
+    return true;
+  }
+
+  void clearPersistentScene() {
+    if (dev_) for (auto* h : {&persistInst_, &persistMotion_, &persistBatchBuf_, &persistCompact_, &persistArgs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
+    persistBatches_.clear(); persistArgsCpu_.clear(); persistReady_ = false; persistFrame_ = false; persistCount_ = 0; persistMaxCount_ = 0;
   }
 
   rhi::TextureId textureFor(const Texture* t, f32& tw, f32& th) {
@@ -615,8 +775,12 @@ public:
     FrameCB fc; fc.viewProj = vp; fc.view = view; fc.camera[0] = cam_.eye.x; fc.camera[1] = cam_.eye.y; fc.camera[2] = cam_.eye.z;
     dev_->updateBuffer(frameCb_, &fc, sizeof fc);
 
-    // ---- 1c) SSAO ----
-    if (ssaoOn_) {
+    // ---- 1c) SSAO (e prepasso de profundidade tambem quando ha particulas com fade suave: "soft particles") ----
+    bool softWanted = false;
+    for (const ParticleDraw& pd : pdraws_) softWanted = softWanted || pd.soft > 0.f;
+    softWanted = softWanted && !gbuf_.isNull();
+    softReady_ = false;
+    if (ssaoOn_ || softWanted) {
       planQueuedBatches(renderQueues_.prepass, prepassItemsScratch_, prepassPlan_, [&](u32 index) {
         return BatchItem{reinterpret_cast<u64>(draws_[index].mesh), 0u};
       }, 4096);
@@ -648,7 +812,9 @@ public:
       }
       pl->end(); dev_->submit(*pl);
       prepassTimer.stop();
+      softReady_ = true;   // GBuf (w = profundidade linear de view) vale neste quadro
 
+      if (ssaoOn_) {
       render::PassTimer ssaoTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Ssao)]};
       auto sc = dev_->beginCommands();
       sc->begin(aoRaw_, kNullHandle, 1.f, 1.f, 1.f, 1.f);
@@ -670,6 +836,11 @@ public:
       bl->setVertexBuffer(fsVb_); bl->setIndexBuffer(fsIb_);
       recordDraw(*bl, render::RenderPassId::SsaoBlur, 3, 1);
       bl->end(); dev_->submit(*bl);
+      } else {   // so o prepasso (particulas): sem oclusao ambiente, o AO fica em 1 (branco)
+        auto cl = dev_->beginCommands();
+        cl->begin(ao_, kNullHandle, 1.f, 1.f, 1.f, 1.f);
+        cl->end(); dev_->submit(*cl);
+      }
     } else {
       auto cl = dev_->beginCommands();
       cl->begin(ao_, kNullHandle, 1.f, 1.f, 1.f, 1.f);
@@ -726,6 +897,8 @@ public:
     // caminho CPU (a fila opaca pode ter instancias fora da tela, que a GPU recorta no rasterizador: so perde desempenho).
     gpuCullFrame_ = gpuCullActive() && opaqueCount > 0 && !opaquePlan_.batches.empty() && opaquePlan_.batches.size() <= 65535u;
     if (gpuCullFrame_) gpuCullFrame_ = runGpuCull(opaqueCount, cameraFrustum);
+    // Cena persistente: movimento + culling por compute, tambem fora do passe de render (o dispatch nao cabe dentro dele).
+    persistFrame_ = persistReady_ && runPersistCull(cameraFrustum);
 
     cl_ = dev_->beginCommands();
     cl_->begin(color_, depth_, clear_.x, clear_.y, clear_.z, clearAlpha_);
@@ -762,6 +935,32 @@ public:
         recordDraw(*cl_, render::RenderPassId::Opaque, d.mesh->count, b.count);
       }
       ++batchIndex;
+    }
+    // Cena persistente: um draw indireto por lote (instanceCount vem do compute); sem nenhum Draw montado na CPU.
+    if (persistFrame_) {
+      bindScene(cl_.get(), pipe_);
+      cl_->setStorage(4, persistCompact_);
+      curPipe = pipe_;
+      for (size_t pbi = 0; pbi < persistBatches_.size(); ++pbi) {
+        const PersistBatch& pb = persistBatches_[pbi];
+        const GpuMesh& g = upload(*pb.mesh);
+        BatchCB bc{};
+        bc.first = pb.first;
+        uploadBatchCb(bc);
+        cl_->setUniform(1, batchCb_);
+        const rhi::PipelineId want = (pb.doubleSided && !pipeDs_.isNull()) ? pipeDs_ : pipe_;
+        if (want != curPipe) {
+          curPipe = want;
+          bindScene(cl_.get(), curPipe);
+          cl_->setStorage(4, persistCompact_);
+          cl_->setUniform(1, batchCb_);
+        }
+        cl_->setTexture(0, pb.tex.isNull() ? white_ : pb.tex);
+        if (normalSlot_) cl_->setTexture(kNormalMapSlot, pb.ntex.isNull() ? white_ : pb.ntex);
+        cl_->setVertexBuffer(g.vertex); cl_->setIndexBuffer(g.index);
+        cl_->drawIndexedIndirect(persistArgs_, static_cast<u32>(pbi * sizeof(rhi::DrawIndexedIndirectArgs)));
+        stats_.passes[static_cast<std::size_t>(render::RenderPassId::Opaque)].recordDraw(g.count, pb.count);
+      }
     }
     cl_->end(); dev_->submit(*cl_); cl_.reset();
     opaqueTimer.stop();
@@ -862,6 +1061,10 @@ public:
       }
       tl->end(); dev_->submit(*tl);
     }
+
+    // Passe de particulas: depois do opaco e do transparente, antes do bloom (o brilho das particulas entra no halo).
+    partDrawn_ = 0;
+    if (!pdraws_.empty() && partReady_ && partEnabled_) renderParticles();
 
     out_ = color_;
     if (bloomOn_ && !bloomA_.isNull() && !bloomThrPipe_.isNull()) { runBloom(); out_ = outFull_; }
@@ -1051,6 +1254,61 @@ private:
     const u64 lu = g.lastUse; g = GpuMesh{}; g.lastUse = lu;
   }
 
+  // Desenha os lotes de particulas pedidos no quadro. Teste de profundidade ligado e escrita desligada (nao tapam nada que
+  // esta na frente e nao escondem outras particulas); alfa ja chega ordenado. Lotes "bloom" tambem somam (cor * emissive)
+  // no alvo de brilho, que o bloom da engine borra e compoe.
+  void renderParticles() {
+    render::PassTimer timer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Particles)]};
+    size_t total = 0;
+    for (const ParticleDraw& d : pdraws_) total += d.count;
+    if (!ensureBuffer(partBuf_, partCap_, total, sizeof(ParticleQuadGPU))) { lastError_ = "storage buffer de particulas indisponivel"; return; }
+    // Um unico upload: com um lote so, direto da memoria do chamador; com varios, junta em partCpu_.
+    if (pdraws_.size() == 1) {
+      dev_->updateBuffer(partBuf_, pdraws_[0].quads, total * sizeof(ParticleQuadGPU));
+    } else {
+      partCpu_.resize(total);
+      size_t at = 0;
+      for (const ParticleDraw& d : pdraws_) { std::memcpy(partCpu_.data() + at, d.quads, d.count * sizeof(ParticleQuadGPU)); at += d.count; }
+      dev_->updateBuffer(partBuf_, partCpu_.data(), total * sizeof(ParticleQuadGPU));
+    }
+    // Liga tudo que o pipeline precisa (o setPipeline zera os slots) e desenha o lote.
+    auto drawBatch = [&](rhi::ICommandList& c, const ParticleDraw& d, u32 first, rhi::PipelineId pipe, bool glow) {
+      c.setPipeline(pipe);
+      c.setUniform(0, frameCb_);
+      c.setStorage(0, partBuf_);
+      c.setTexture(0, gbuf_);
+      PartCB pc{};
+      pc.first = first; pc.is2D = d.is2D ? 1u : 0u;
+      pc.soft[0] = d.soft; pc.soft[1] = glow ? d.emissive : 1.f; pc.soft[2] = softReady_ ? 1.f : 0.f;
+      dev_->updateBuffer(partCb_, &pc, sizeof pc);
+      c.setUniform(1, partCb_);
+      c.setVertexBuffer(partVb_); c.setIndexBuffer(partIb_);
+      recordDraw(c, render::RenderPassId::Particles, 6, d.count);
+    };
+    {
+      auto c = dev_->beginCommands();
+      c->beginKeep(color_, depth_);
+      u32 first = 0;
+      for (const ParticleDraw& d : pdraws_) {
+        drawBatch(*c, d, first, d.shader == 0 ? partPipeAlpha_ : partPipeAdd_, false);
+        first += d.count; partDrawn_ += d.count;
+      }
+      c->end(); dev_->submit(*c);
+    }
+    bool anyGlow = false;
+    for (const ParticleDraw& d : pdraws_) anyGlow = anyGlow || (d.shader == 2 && d.emissive > 0.f);
+    if (anyGlow && bloomOn_ && !glow_.isNull()) {
+      auto c = dev_->beginCommands();
+      c->beginKeep(glow_, depth_);
+      u32 first = 0;
+      for (const ParticleDraw& d : pdraws_) {
+        if (d.shader == 2 && d.emissive > 0.f) drawBatch(*c, d, first, partPipeGlow_, true);
+        first += d.count;
+      }
+      c->end(); dev_->submit(*c);
+    }
+  }
+
   void runBloom() {
     BloomCB base{};
     base.srcSize[0] = static_cast<f32>(w_); base.srcSize[1] = static_cast<f32>(h_);
@@ -1178,11 +1436,15 @@ private:
     for (auto& [k, t] : texs_) dev_->destroy(t);
     texs_.clear();
     if (!white_.isNull()) { dev_->destroy(white_); white_ = kNullHandle; }
+    clearPersistentScene();
+    for (auto* h : {&motionPipe_, &motionCs_, &motionCb_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     for (auto* h : {&cullPipe_, &cullCs_, &cullCb_, &cullBatchBuf_, &compactBuf_, &cullArgsBuf_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     cullBatchCap_ = compactCap_ = cullArgsCap_ = 0; gpuCullFrame_ = false;
     for (auto* h : {&frameCb_, &objCb_, &batchCb_, &instBuf_, &emiInstBuf_, &transInstBuf_, &shadowInstBuf_, &prepassInstBuf_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &brdfTex_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &pointClearPipe_, &vs_, &ps_, &legacyVs_, &legacyPs_, &shVs_, &shPs_, &ptVs_, &ptPs_, &pointClearPs_,
                     &prePipe_, &ssaoPipe_, &blurPipe_, &fsVb_, &fsIb_, &ssaoCb_, &preVs_, &prePs_, &fsVs_, &ssaoPs_, &blurPs_,
-                    &emiPipe_, &emiPs_, &transPipe_, &pipeDs_, &transPipeDs_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
+                    &emiPipe_, &emiPs_, &transPipe_, &pipeDs_, &transPipeDs_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_,
+                    &partVs_, &partPsAlpha_, &partPsAdd_, &partPsGlow_, &partPipeAlpha_, &partPipeAdd_, &partPipeGlow_, &partVb_, &partIb_, &partCb_, &partBuf_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
+    partCap_ = 0; partReady_ = false; pdraws_.clear(); partCpu_.clear();
     for (auto& t : shColor_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     for (auto& t : pointStrip_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     pointW_ = 0; pointOn_ = false; pointCount_ = 0; pointFaceCache_ = {};
@@ -1213,6 +1475,16 @@ private:
   std::vector<CullBatchGPU> cullBatchCpu_;
   std::vector<rhi::DrawIndexedIndirectArgs> cullArgsCpu_;
   bool gpuCull_ = true, gpuCullFrame_ = false;
+  // Cena persistente (experimento --gpu-motion): pipeline de movimento+culling, buffers imutaveis e lotes fixos.
+  struct PersistBatch { const Mesh* mesh = nullptr; rhi::TextureId tex, ntex; bool doubleSided = false; u32 first = 0, count = 0; };
+  rhi::ShaderId motionCs_; rhi::PipelineId motionPipe_; rhi::BufferId motionCb_;
+  rhi::BufferId persistInst_, persistMotion_, persistBatchBuf_, persistCompact_, persistArgs_;
+  std::vector<PersistBatch> persistBatches_;
+  std::vector<rhi::DrawIndexedIndirectArgs> persistArgsCpu_;
+  bool persistReady_ = false, persistFrame_ = false;
+  u32 persistCount_ = 0, persistMaxCount_ = 0;
+  f32 persistTime_ = 0.f;
+  u64 persistBuildBytes_ = 0, persistBuilds_ = 0;
   u32 cpuVisibleOpaque_ = 0;
   std::vector<InstanceGPU> instCpu_, emiCpu_, transCpu_;
   std::vector<ShadowInstanceGPU> prepassCpu_;
@@ -1228,6 +1500,14 @@ private:
   rhi::TextureId pointStrip_[kMaxPointShadowLights], pointDepth_;
   u32 pointW_ = 0, pointCount_ = 0, pointRes_ = 512;
   bool pointOn_ = false, ssaoOn_ = false;
+  // Particulas: pedidos do quadro, copia de juncao, shaders/pipelines e buffers (quads, quad unitario, indices, cbuffer).
+  std::vector<ParticleDraw> pdraws_;
+  std::vector<ParticleQuadGPU> partCpu_;
+  rhi::ShaderId partVs_, partPsAlpha_, partPsAdd_, partPsGlow_;
+  rhi::PipelineId partPipeAlpha_, partPipeAdd_, partPipeGlow_;
+  rhi::BufferId partVb_, partIb_, partCb_, partBuf_;
+  u32 partCap_ = 0, partDrawn_ = 0;
+  bool partReady_ = false, partEnabled_ = true, softReady_ = false;
   std::array<std::array<PointFaceCache, kMaxPointShadowFaces>, kMaxPointShadowLights> pointFaceCache_{};
   u32 pointFaces_[kMaxPointShadowLights] = {};
   ShadowLight pointLights_[kMaxPointShadowLights];
@@ -1335,6 +1615,30 @@ private:
     cs->setStorageRW(0, compactBuf_);
     cs->setStorageRW(1, cullArgsBuf_);
     cs->dispatch((maxCount + 63u) / 64u, static_cast<u32>(nb), 1);   // x = instancias do lote (64 por grupo), y = lote
+    dev_->submit(*cs);
+    return true;
+  }
+
+  // Movimento + culling da cena persistente: grava o tempo e os args zerados e despacha o compute (1 dispatch para todos os lotes).
+  // Fora de qualquer render pass. Devolve false se algo faltar (o quadro simplesmente nao desenha a cena persistente).
+  bool runPersistCull(const render::Frustum& fr) {
+    const size_t nb = persistBatches_.size();
+    if (nb == 0 || motionPipe_.isNull()) return false;
+    for (size_t b = 0; b < nb; ++b) persistArgsCpu_[b].indexCount = upload(*persistBatches_[b].mesh).count;   // upload tambem renova lastUse da malha
+    MotionCullCB cc{};
+    for (int p = 0; p < 6; ++p) { cc.planes[p][0] = fr.p[p].n[0]; cc.planes[p][1] = fr.p[p].n[1]; cc.planes[p][2] = fr.p[p].n[2]; cc.planes[p][3] = fr.p[p].d; }
+    cc.time[0] = persistTime_;
+    dev_->updateBuffer(motionCb_, &cc, sizeof cc);
+    dev_->updateBuffer(persistArgs_, persistArgsCpu_.data(), nb * sizeof(rhi::DrawIndexedIndirectArgs));
+    auto cs = dev_->beginCommands();
+    cs->setPipeline(motionPipe_);
+    cs->setUniform(0, motionCb_);
+    cs->setStorage(0, persistBatchBuf_);
+    cs->setStorage(1, persistInst_);
+    cs->setStorage(2, persistMotion_);
+    cs->setStorageRW(0, persistCompact_);
+    cs->setStorageRW(1, persistArgs_);
+    cs->dispatch((persistMaxCount_ + 63u) / 64u, static_cast<u32>(nb), 1);
     dev_->submit(*cs);
     return true;
   }

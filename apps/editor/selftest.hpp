@@ -5,6 +5,7 @@
 #include "assets_panel.hpp"
 #include "editor_state.hpp"
 #include "fx.hpp"
+#include "fx_particles.hpp"
 #include "viewport_tools.hpp"
 
 #include <cmath>
@@ -1009,6 +1010,73 @@ inline int runSelfTest(const std::string& samplesDir) {
       check(inside, "spawn area: random sphere points stay inside the sphere");
     }
     w.destroy(fxA); ed.particles.clear(); ed.particleBudget = 100000;
+  }
+  { // particulas v2 (biblioteca): objeto com o preset de fumaca, simulacao, quads, Stop, JSON invalido, cena e cena antiga
+    tool::World& w = ed.scene.world();
+    const tool::Entity fe = ed.make("FxSmoke");
+    ParticleFxComp& pf = w.add<ParticleFxComp>(fe);
+    check(fxlib::applyPreset(ed, pf, 0) && pf.fx.shader == tool::particles::ShaderKind::Alpha && fxmod::find(pf.fx, tool::particles::ModuleKind::Turbulence) != nullptr,
+          "particle fx: the smoke preset loads (alpha shader, turbulence module)");
+    check(fs::exists(ed.project.root / "Effects" / "smoke.json") && fs::exists(ed.project.root / "Effects" / "fire.json") && fs::exists(ed.project.root / "Effects" / "fluid.json"),
+          "particle fx: the presets are written to <project>/Effects");
+    check(fxmod::find(pf.fx, tool::particles::ModuleKind::Turbulence)->every == 1, "particle fx: turbulence updates every frame by default (every = 1)");
+    for (int i = 0; i < 60; ++i) ed.updateFx(1.f / 30.f);
+    auto itFx = ed.fxRt.find(fe.index);
+    check(itFx != ed.fxRt.end() && itFx->second.sys && itFx->second.sys->alive() > 0, "particle fx: after N frames there are live particles");
+    tool::particles::QuadBatch qb;
+    const float R[3] = {1, 0, 0}, U[3] = {0, 1, 0}, F[3] = {0, 0, -1};
+    tool::particles::buildQuads(*itFx->second.sys, tool::particles::QuadView::billboard(R, U, F), qb);
+    check(qb.quads.size() == itFx->second.sys->alive() && qb.shader == tool::particles::ShaderKind::Alpha && qb.soft > 0.f, "particle fx: one quad per live particle, with the effect's shader and soft distance");
+    { // ordenacao de tras para frente: o quad mais longe da camera vem primeiro
+      std::vector<tool::particles::QuadInstance> in(3), out; tool::particles::QuadSortScratch sc;
+      const float zs[3] = {-1.f, -9.f, -4.f};
+      for (int i = 0; i < 3; ++i) { in[static_cast<size_t>(i)] = {}; in[static_cast<size_t>(i)].cz = zs[i]; }
+      const float eye[3] = {0, 0, 0};
+      tool::particles::sortQuadsBackToFront(in, eye, F, out, sc);
+      check(out.size() == 3 && out[0].cz == -9.f && out[1].cz == -4.f && out[2].cz == -1.f, "particle fx: alpha quads are sorted back to front");
+    }
+    // Turbulencia: so a taxa de amostragem muda quando pedido; o padrao nao muda o resultado.
+    pf.cmd = 2; ed.updateFx(0.f);
+    check(!pf.playing, "particle fx: Pause stops the simulation");
+    const tool::u32 aliveBefore = itFx->second.sys->alive();
+    ed.updateFx(1.f / 30.f);
+    check(itFx->second.sys->alive() == aliveBefore, "particle fx: paused particles do not move or die");
+    pf.cmd = 1; ed.updateFx(1.f / 30.f);
+    check(pf.playing, "particle fx: Play resumes");
+    pf.cmd = 3; ed.updateFx(0.f);
+    check(!pf.playing && itFx->second.sys->alive() == 0, "particle fx: Stop clears every particle");
+    tool::particles::buildQuads(*itFx->second.sys, tool::particles::QuadView::billboard(R, U, F), qb);
+    check(qb.quads.empty(), "particle fx: no quads after Stop");
+    // JSON invalido: rejeitado com aviso, o componente nao muda
+    const std::string before = tool::particles::effectToJson(pf.fx).dump();
+    check(!tool::particles::effectFromText("{\"modules\":[{\"type\":\"nao_existe\"}]}") && !tool::particles::effectFromText("{\"shader\":\"xyz\"}") &&
+          !tool::particles::effectFromText("{\"emitter\":{\"shape\":\"cubo\"}}") && !tool::particles::effectFromText("{\"soft\":-1}") && !tool::particles::effectFromText("nao e json"),
+          "particle fx: invalid effect JSON is rejected (module, shader, shape, soft distance, malformed)");
+    { std::ofstream bad(ed.project.root / "Effects" / "ruim.json", std::ios::binary); bad << "{\"emitter\":{\"shape\":\"cubo\"}}"; }
+    check(!fxlib::loadFile(ed, pf, "Effects/ruim.json") && tool::particles::effectToJson(pf.fx).dump() == before, "particle fx: loading an invalid effect file is refused and the component is unchanged");
+    check(!fxlib::loadFile(ed, pf, "../fora.json") && !fxlib::loadFile(ed, pf, "Effects/nao_existe.json"), "particle fx: a path outside the project or a missing file is refused");
+    check(fxlib::loadFile(ed, pf, "Effects/fire.json") && pf.fx.shader == tool::particles::ShaderKind::Bloom && pf.fx.emissive > 0.f, "particle fx: a valid effect file loads (fire: bloom shader with emissive)");
+    // Cena: ida e volta do componente (efeito completo) e cena antiga so com ParticleComp
+    pf.maxParticles = 1234; pf.mode2D = true;
+    fxmod::find(pf.fx, tool::particles::ModuleKind::Turbulence)->every = 3;
+    const tool::Json saved = saveEntity(ed.scene, fe);
+    check(saved.has("particlesFx") && !saved.has("particles"), "particle fx: the scene saves the component under particlesFx");
+    const tool::Entity fe2 = loadEntity(ed.scene, saved);
+    ParticleFxComp* back = w.get<ParticleFxComp>(fe2);
+    check(back && back->maxParticles == 1234 && back->mode2D && back->fx.shader == tool::particles::ShaderKind::Bloom &&
+              fxmod::find(back->fx, tool::particles::ModuleKind::Turbulence)->every == 3,
+          "particle fx: the component survives save and load (shader, 2D mode, pool size, turbulence rate)");
+    tool::Json old = tool::Json::object(); old.set("name", "Velho"); old.set("particles", tool::Json::object());
+    const tool::Entity fe3 = loadEntity(ed.scene, old);
+    check(w.has<ParticleComp>(fe3) && !w.has<ParticleFxComp>(fe3), "particle fx: an old scene object with the previous ParticleComp still loads as before");
+    w.destroy(fe); w.destroy(fe2); w.destroy(fe3); ed.fxRt.clear();
+    // Taxa de amostragem: every = 4 aplica a turbulencia em 1 de cada 4 quadros (por chunk); o padrao (1) e o de sempre.
+    tool::particles::Effect e1 = *tool::particles::effectFromText(tool::particles::kPresetSmoke);
+    tool::particles::Effect e4 = e1; fxmod::find(e4, tool::particles::ModuleKind::Turbulence)->every = 4;
+    tool::particles::ParticleSystem s1(e1, 2000), s4(e4, 2000), s1b(e1, 2000);
+    for (int i = 0; i < 40; ++i) { s1.update(1.f / 30.f, false); s4.update(1.f / 30.f, false); s1b.update(1.f / 30.f, false); }
+    auto sumX = [](const tool::particles::ParticleSystem& s) { double t = 0; for (tool::u32 c = 0; c < s.pool().chunkCount(); ++c) for (tool::u32 i = 0; i < s.pool().chunk(c).count; ++i) t += s.pool().chunk(c).px[i]; return t; };
+    check(sumX(s1) == sumX(s1b) && sumX(s1) != sumX(s4), "particle fx: default turbulence rate is deterministic; every = 4 changes the result");
   }
   { // objetos inativos, acao send e culling
     tool::World& w = ed.scene.world();

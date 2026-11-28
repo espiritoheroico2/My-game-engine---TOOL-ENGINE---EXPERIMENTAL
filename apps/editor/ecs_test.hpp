@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <new>
 #include <string>
 
@@ -68,7 +69,10 @@ inline void Editor::tickSpawners(float) {
       MeshRenderer mr; mr.shape = 1;
       // As esferas projetam sombra (como em qualquer objeto da cena): o teste mede o custo real, com sombras ligadas.
       // Para medir sem sombras, desmarque "Cast shadows" no MeshRenderer ou use a cena de --instances.
-      mr.castShadow = true;
+      // TOOL_MOVER_NOSHADOW=1 (so medicao A/B do --gpu-motion): as esferas nao projetam sombra, nos dois caminhos, porque a cena persistente
+      // ainda nao entra no passe de sombras. Sem a variavel nada muda.
+      static const bool noShadow = std::getenv("TOOL_MOVER_NOSHADOW") != nullptr;
+      mr.castShadow = !noShadow;
       mr.color[0] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f; mr.color[1] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f; mr.color[2] = 0.3f + ecs_detail::frand(sp->seed) * 0.7f;
       mr.roughness = 0.4f;
       w.add<MeshRenderer>(s, mr);
@@ -85,6 +89,9 @@ inline void Editor::tickSpawners(float) {
         mv.amp = 2.f + ecs_detail::frand(sp->seed) * 6.f;
         mv.freq = 0.2f + ecs_detail::frand(sp->seed) * 0.6f;
         mv.phase = ecs_detail::frand(sp->seed) * 6.2831853f;
+        // --gpu-motion: o tempo do mover e (T - T_nascimento); guarda -T_nascimento em `t` (o compute soma o T uniforme). No caminho
+        // de sempre `t` comeca em 0 e tickMovers o acumula, o que da o mesmo tempo relativo.
+        if (gpuMotion) mv.t = -static_cast<float>(gpuMotionTime_);
         w.add<MoverComp>(s, mv);
       }
     }
@@ -109,6 +116,12 @@ inline void Editor::tickSpawners(float) {
 // Roda so no Play (o Stop restaura a cena e os componentes somem junto com as instancias).
 inline void Editor::tickMovers(float dt) {
   if (!playing) return;
+  // --gpu-motion com a cena persistente valendo: a posicao de cada mover e calculada no compute (motion_cull.hlsl) a partir do
+  // tempo uniforme; a CPU so avanca esse tempo (O(1), nenhum acesso por objeto). Fora disso o caminho de sempre abaixo.
+  if (gpuMotion) {
+    gpuMotionTime_ += static_cast<double>(dt);
+    if (gpuMotionLive_) return;
+  }
   scene.world().each<MoverComp, Transform>([&](tool::Entity, MoverComp& m, Transform& tr) {
     m.t += dt;
     const float a = m.t * m.freq + m.phase;   // fase do caminho

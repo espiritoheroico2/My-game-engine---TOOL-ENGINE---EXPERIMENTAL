@@ -39,9 +39,14 @@ target_link_libraries(tool_particles_tests PRIVATE tool::particles)
 add_test(NAME Particles.Core COMMAND tool_particles_tests)
 add_executable(tool_particles_bench particles_bench.cpp)
 target_link_libraries(tool_particles_bench PRIVATE tool::particles)
+add_executable(tool_particles_bench_v2 particles_bench_v2.cpp)
+target_link_libraries(tool_particles_bench_v2 PRIVATE tool::particles)
 
 # PROTOTIPO de fisica de esferas na GPU (compute, Vulkan offscreen): so mede custo/viabilidade, sem add_test (rodar manualmente).
 if(TOOL_WITH_DILIGENT)
   add_executable(tool_gpu_sphere_physics_bench gpu_sphere_physics_bench.cpp)
   target_link_libraries(tool_gpu_sphere_physics_bench PRIVATE tool::rhi_diligent)
+  # EXPERIMENTO hibrido (GPU integra + pares, CPU narrowphase + solver): ver docs/planos/27_FISICA_HIBRIDA.md.
+  add_executable(tool_hybrid_physics_bench hybrid_physics_bench.cpp)
+  target_link_libraries(tool_hybrid_physics_bench PRIVATE tool::rhi_diligent)
 endif()

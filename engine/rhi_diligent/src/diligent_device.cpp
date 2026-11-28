@@ -217,7 +217,11 @@ public:
     // Scissor sempre ligado, para o recorte por lote do SpriteUI funcionar. Quem chama precisa de um scissor definido
     // em begin()/beginKeep() (ver defineScissorDoAlvo): o Diligent nao o define em SetViewports.
     gp.RasterizerDesc.ScissorEnable = true;
-    if (d.blendPremultiplied) {
+    if (d.blendAdditive) {
+      auto& rt = gp.BlendDesc.RenderTargets[0];
+      rt.BlendEnable = true; rt.SrcBlend = dl::BLEND_FACTOR_ONE; rt.DestBlend = dl::BLEND_FACTOR_ONE;
+      rt.SrcBlendAlpha = dl::BLEND_FACTOR_ZERO; rt.DestBlendAlpha = dl::BLEND_FACTOR_ONE;   // o alfa do alvo nao muda
+    } else if (d.blendPremultiplied) {
       auto& rt = gp.BlendDesc.RenderTargets[0];
       rt.BlendEnable = true; rt.SrcBlend = dl::BLEND_FACTOR_ONE; rt.DestBlend = dl::BLEND_FACTOR_INV_SRC_ALPHA;
     } else if (d.blend) {

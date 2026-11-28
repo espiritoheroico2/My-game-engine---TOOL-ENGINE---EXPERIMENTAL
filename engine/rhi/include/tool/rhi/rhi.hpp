@@ -80,6 +80,8 @@ struct PipelineDesc {
   bool depthTest = true, depthWrite = true, blend = false;
   // Blend premultiplicado (ONE, INV_SRC_ALPHA) para UI e sprites com cor ja multiplicada por alfa. Tem prioridade sobre `blend`.
   bool blendPremultiplied = false;
+  // Blend aditivo (ONE, ONE): soma a cor do pixel ao alvo (fogo, brilho, particulas aditivas). Tem prioridade sobre os outros.
+  bool blendAdditive = false;
   Format color = Format::RGBA8_SRGB, depth = Format::D32F;
   CullMode cull = CullMode::Back;
   std::vector<VertexAttrib> layout; u32 vertexStride = 0;
