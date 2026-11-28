@@ -47,6 +47,8 @@ editor::script_window::Panel* gScriptPanel = nullptr;   // janela de script (Spr
 #include "sui_palette.hpp"
 #include "panel_router.hpp"
 #include "scene_view_panel.hpp"
+#include "ui_gpu_backend.hpp"   // UI desenhada pelo Diligent (opt-in: TOOL_UI_GPU=1 / --ui-gpu)
+#include "view_painter.hpp"
 #include "canvas_division.hpp"
 #include "canvas_regions.hpp"
 #include "game_view_panel.hpp"
@@ -1264,7 +1266,7 @@ void canvas_regions_refresh(ed_::CanvasComp& c) {
   }
 }
 
-void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img, SDL_Texture* tex, int tw, int th) {
+void buildSceneValues(Editor& ed, const tool::Camera& cam, editor::sui::Box img, editor::sui::ViewImage tex, int tw, int th) {
   scene_panel::Values v;
   v.shown = true;
   v.cam = cam;
@@ -1495,31 +1497,29 @@ void sceneKeysAndNavigation(Editor& ed, bool hovered) {
 }
 
 // Textura da Scene: renderiza (ou reusa, com a cena ociosa) no tamanho da imagem.
-SDL_Texture* updateSceneTexture(Editor& ed, SDL_Renderer* sdl, const tool::Camera& cam, int w, int h, int& tw, int& th) {
+editor::sui::ViewImage updateSceneTexture(Editor& ed, SDL_Renderer* sdl, const tool::Camera& cam, int w, int h, int& tw, int& th) {
   const float scaleNow = ed.renderScaleNow();   // escala efetiva: slider, ou a do modo de qualidade do FSR
   const int rw = std::max(64, static_cast<int>(static_cast<float>(w) * scaleNow));
   const int rh = std::max(36, static_cast<int>(static_cast<float>(h) * scaleNow));
   const bool soft = ed.softScaling();   // upscaling/AA por software: a textura tem o tamanho da janela
   tw = soft ? w : rw;
   th = soft ? h : rh;
-  const bool reuse = ed.viewsIdle() && ed.sceneTex.tex && ed.sceneTex.w == tw && ed.sceneTex.h == th;
+  const bool reuse = ed.viewsIdle() && ed.sceneTex.valid() && ed.sceneTex.w == tw && ed.sceneTex.h == th;
   if (!reuse) {
     // FSR 1 (GPU): a imagem volta ja ampliada para w x h; viewOutW/H diz o tamanho real do buffer devolvido.
     ed.fsrOutW = soft && ed.fsr1Usable() ? w : 0; ed.fsrOutH = soft && ed.fsr1Usable() ? h : 0;
     const tool::u8* raw = ed.renderView(cam, rw, rh, true, editor::Zone::SceneRender, ed.showPostInScene ? &ed.sceneInfo.render.post : nullptr);
     ed.fsrOutW = ed.fsrOutH = 0;
     const tool::u8* pixels = soft ? ed.finishView(ed.sceneUp, raw, ed.viewOutW, ed.viewOutH, w, h) : raw;
-    ed.sceneTex.ensure(sdl, tw, th);
-    if (ed.sceneTex.tex) SDL_UpdateTexture(ed.sceneTex.tex, nullptr, pixels, tw * 4);
+    ed.sceneTex.upload(sdl, pixels, tw, th);   // SDL_Texture, ou textura dinamica do Diligent no modo UI GPU
   }
-  if (ed.sceneTex.tex) SDL_SetTextureScaleMode(ed.sceneTex.tex, soft ? SDL_SCALEMODE_NEAREST : (ed.pixelFilter ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR));
-  return ed.sceneTex.tex;
+  return ed.sceneTex.image(soft || ed.pixelFilter);   // filtro: vizinho mais proximo (pixel filter / ampliacao por software) ou linear
 }
 
 void drawSceneSui(Editor& ed, SDL_Renderer* sdl) {
   // A janela (moldura, titulo, X, "?") e do painel SpriteUI: aqui so pegamos a area da cena e montamos os Values.
   int winW = 0, winH = 0;
-  SDL_GetWindowSize(SDL_GetRenderWindow(sdl), &winW, &winH);
+  SDL_GetWindowSize(editor::sui::UiWindowOf(sdl), &winW, &winH);
   if (winW <= 0 || winH <= 0) return;
   gSceneFrame = true;
   gSceneRect = gScenePanel->prepare(static_cast<float>(winW), static_cast<float>(winH));
@@ -1527,26 +1527,24 @@ void drawSceneSui(Editor& ed, SDL_Renderer* sdl) {
   const tool::Camera cam = ed.sceneCamera();
   sceneKeysAndNavigation(ed, gScenePanel->hovered());
   int tw = 0, th = 0;
-  SDL_Texture* tex = updateSceneTexture(ed, sdl, cam, std::clamp(static_cast<int>(img.w), 64, 1920), std::clamp(static_cast<int>(img.h), 64, 1080), tw, th);
+  editor::sui::ViewImage tex = updateSceneTexture(ed, sdl, cam, std::clamp(static_cast<int>(img.w), 64, 1920), std::clamp(static_cast<int>(img.h), 64, 1080), tw, th);
   buildSceneValues(ed, cam, img, tex, tw, th);
 }
 
 // Textura de uma camera do jogo: renderiza (ou reusa) e sobe para o SDL_Texture da celula.
-SDL_Texture* updateGameTexture(Editor& ed, SDL_Renderer* sdl, std::size_t i, const tool::Camera& cam, const tool::PostFx& fx,
+editor::sui::ViewImage updateGameTexture(Editor& ed, SDL_Renderer* sdl, std::size_t i, const tool::Camera& cam, const tool::PostFx& fx,
                                int w, int h, int rw, int rh, bool soft, int& tw, int& th) {
   tw = soft ? w : rw;
   th = soft ? h : rh;
-  const bool reuse = ed.viewsIdle() && ed.gameTex[i].tex && ed.gameTex[i].w == tw && ed.gameTex[i].h == th;
+  const bool reuse = ed.viewsIdle() && ed.gameTex[i].valid() && ed.gameTex[i].w == tw && ed.gameTex[i].h == th;
   if (!reuse) {
     ed.fsrOutW = soft && ed.fsr1Usable() ? w : 0; ed.fsrOutH = soft && ed.fsr1Usable() ? h : 0;   // FSR 1 (GPU), ver updateSceneTexture
     const tool::u8* raw = ed.renderView(cam, rw, rh, false, editor::Zone::GameRender, &fx, i);
     ed.fsrOutW = ed.fsrOutH = 0;
     const tool::u8* pixels = soft ? ed.finishView(ed.gameUp[i], raw, ed.viewOutW, ed.viewOutH, w, h) : raw;
-    ed.gameTex[i].ensure(sdl, tw, th);
-    if (ed.gameTex[i].tex) SDL_UpdateTexture(ed.gameTex[i].tex, nullptr, pixels, tw * 4);
+    ed.gameTex[i].upload(sdl, pixels, tw, th);
   }
-  if (ed.gameTex[i].tex) SDL_SetTextureScaleMode(ed.gameTex[i].tex, soft ? SDL_SCALEMODE_NEAREST : (ed.pixelFilter ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR));
-  return ed.gameTex[i].tex;
+  return ed.gameTex[i].image(soft || ed.pixelFilter);
 }
 
 // Uma celula (uma camera principal): imagem, grade e sobreposicoes. Com resolucao fixa, a imagem ocupa so o
@@ -1578,13 +1576,13 @@ void drawGameSui(Editor& ed, SDL_Renderer* sdl, bool player) {
   editor::sui::Box rect{};
   if (player) {   // jogo exportado (--player): janela cheia, sem barra e sem moldura
     int winW = 0, winH = 0;
-    SDL_GetWindowSize(SDL_GetRenderWindow(sdl), &winW, &winH);
+    SDL_GetWindowSize(editor::sui::UiWindowOf(sdl), &winW, &winH);
     if (winW <= 0 || winH <= 0) return;
     rect = {0.f, 0.f, static_cast<float>(winW), static_cast<float>(winH)};
     gGamePanel->setBody(rect);
   } else {   // janela SpriteUI com moldura (dock, arraste e X): o painel devolve a area do corpo
     int winW = 0, winH = 0;
-    SDL_GetWindowSize(SDL_GetRenderWindow(sdl), &winW, &winH);
+    SDL_GetWindowSize(editor::sui::UiWindowOf(sdl), &winW, &winH);
     if (winW <= 0 || winH <= 0) return;
     rect = gGamePanel->prepare(static_cast<float>(winW), static_cast<float>(winH));
   }
@@ -2847,25 +2845,37 @@ int loadSettings(Editor& ed, std::string& lastScene, std::string& lastProject) {
 // Renderer SDL da interface (SpriteUI). E independente da API da Cena e do Jogo (Diligent).
 // No Windows, Direct3D vem antes de OpenGL para evitar que o contexto OpenGL oculto da cena
 // substitua o contexto usado pelo SDL_Renderer da interface. Vulkan fica de fora porque a cena ja o usa.
-SDL_Renderer* createEditorRenderer(SDL_Window* window, bool forceSoftware) {
+// avoidGl: modo UI no Diligent. A janela principal vai receber a swapchain do Diligent (e, no OpenGL, o contexto dele): o SDL nao
+// pode te-la preparado para OpenGL (o formato de pixel so se define uma vez por janela), entao os drivers GL ficam de fora.
+SDL_Renderer* createEditorRenderer(SDL_Window* window, bool forceSoftware, bool avoidGl = false) {
   if (!window) return nullptr;
-  if (forceSoftware) return SDL_CreateRenderer(window, "software");
+  // TOOL_UI_DRIVER tem prioridade ate sobre o modo headless (--frames usa software): serve para capturar a interface com o
+  // driver real do SDL e compara-la com a UI desenhada pelo Diligent.
+  const char* forcedDriver = std::getenv("TOOL_UI_DRIVER");
+  if (forceSoftware && !(forcedDriver && *forcedDriver)) return SDL_CreateRenderer(window, "software");
 #if defined(_WIN32)
   static constexpr const char* kPreferred[] = {"direct3d11", "direct3d12", "opengl", "opengles2"};
 #else
   static constexpr const char* kPreferred[] = {"opengl", "metal", "opengles2", "direct3d11", "direct3d12"};
 #endif
   auto accept = [&](const char* driver) -> SDL_Renderer* {
+    if (avoidGl && std::strncmp(driver, "opengl", 6) == 0) return nullptr;   // opengl e opengles2
     SDL_Renderer* renderer = SDL_CreateRenderer(window, driver);
     if (renderer) tool::logInfo(std::string("Interface SpriteUI: driver de render ") + SDL_GetRendererName(renderer));
     return renderer;
   };
+  // TOOL_UI_DRIVER=<driver do SDL> (direct3d11, direct3d12, vulkan, opengl...): testa a interface em outro driver
+  // (medicao da disputa entre a API da interface e a da cena, docs/planos/38). Se falhar, segue a lista normal.
+  if (const char* forced = std::getenv("TOOL_UI_DRIVER"); forced && *forced) {
+    if (SDL_Renderer* renderer = accept(forced)) return renderer;
+  }
   for (const char* driver : kPreferred) {
     if (SDL_Renderer* renderer = accept(driver)) return renderer;
   }
   for (int i = 0; i < SDL_GetNumRenderDrivers(); ++i) {
     const char* driver = SDL_GetRenderDriver(i);
     if (!driver || std::strcmp(driver, "vulkan") == 0 || std::strcmp(driver, "software") == 0) continue;
+    if (avoidGl && std::strncmp(driver, "opengl", 6) == 0) continue;
     if (SDL_Renderer* renderer = accept(driver)) return renderer;
   }
   tool::logWarn("Interface SpriteUI: nenhum driver de GPU abriu; usando software (CPU)");
@@ -2993,11 +3003,74 @@ static int runEditorMain(int argc, char** argv) {
   enterProjectRoot();
   if (selfTest) { const int rc = editor::runSelfTest("assets/samples"); SDL_Quit(); return rc; } // sem janela
   SDL_Window* window = SDL_CreateWindow("ToolEngine Editor", 1600, 900, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-  SDL_Renderer* renderer = createEditorRenderer(window, maxFrames > 0);
+  // UI no Diligent (docs/planos/38, etapa 3): opt-in por enquanto (TOOL_UI_GPU=1 ou --ui-gpu). Precisa de janela real (HWND) e
+  // vale so com uma API de GPU ativa; com a CPU (apiActive == 0), falha da GPU ou driver de video "dummy", o caminho SDL de sempre.
+  bool uiGpuWanted = false;
+  if (const char* e = std::getenv("TOOL_UI_GPU"); e && e[0] == '1') uiGpuWanted = true;
+  for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--ui-gpu") == 0) uiGpuWanted = true;
+#if !defined(_WIN32)
+  uiGpuWanted = false;   // por enquanto so Windows (swapchain pelo HWND)
+#endif
+  if (uiGpuWanted) {
+    const char* vd = SDL_GetCurrentVideoDriver();
+    if (!vd || std::strcmp(vd, "dummy") == 0) { std::fprintf(stderr, "--ui-gpu: o driver de video 'dummy' nao tem janela nativa; usando a UI no SDL\n"); uiGpuWanted = false; }
+  }
+  // mainSdl = SDL_Renderer real da janela principal (nulo enquanto a janela pertence ao Diligent). `renderer` e o ponteiro que os
+  // paineis recebem todo quadro: o real, ou um renderizador-fantasma (software, superficie 1x1) no modo UI GPU, para chamadas
+  // SDL soltas (ex.: spriteui_diagnostics, que nao desenha no modo GPU) serem inofensivas.
+  SDL_Renderer* mainSdl = window ? createEditorRenderer(window, maxFrames > 0, uiGpuWanted) : nullptr;
+  SDL_Renderer* renderer = mainSdl;
   if (!window || !renderer) { std::fprintf(stderr, "window/renderer: %s\n", SDL_GetError()); return 1; }
   SDL_SetRenderVSync(renderer, 0); // o limite so e ativado se o usuario selecionar VSync ou um FPS fixo
+  SDL_Surface* dummySurface = uiGpuWanted ? SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32) : nullptr;
+  SDL_Renderer* dummyRenderer = dummySurface ? SDL_CreateSoftwareRenderer(dummySurface) : nullptr;
+  editor::sui::UiMainWindow() = window;
+  // Renderizador de UI unico das janelas SpriteUI (a tela de inicio tem o dela). Declarado aqui, antes do dispositivo de GPU,
+  // porque o hook de troca de API (abaixo) o liga e desliga do backend.
+  editor::sui::SpriteUiSdlRenderer uiRenderer;
+  std::unique_ptr<editor::sui::UiGpuBackend> uiGpu;   // backend de UI no Diligent (nulo = UI no SDL)
 
   Editor ed;
+  ed.mainWindow = window;
+  ed.uiGpuWanted = uiGpuWanted;
+  // Hook do Editor::applyApi para a UI no Diligent: acompanha o ciclo de vida do dispositivo (ver Editor::UiPhase).
+  ed.uiHook = [&](Editor::UiPhase phase) -> bool {
+    using P = Editor::UiPhase;
+    switch (phase) {
+      case P::DetachGpu:   // dispositivo vai morrer: libera tudo que o backend criou nele
+        ed.sceneTex.destroy(); ed.gameTex[0].destroy(); ed.gameTex[1].destroy();   // ids dinamicos (o backend ainda existe)
+        uiRenderer.detachGpu();
+        editor::sui::ActiveUiGpu() = nullptr;
+        uiGpu.reset();
+        return true;
+      case P::ReleaseWindow:   // a janela vai para o Diligent: o SDL_Renderer sai (com as texturas dele)
+        ed.sceneTex.destroy(); ed.gameTex[0].destroy(); ed.gameTex[1].destroy();
+        editor::view::ImageCache::get().clear();
+        uiRenderer.destroy();
+        if (mainSdl) { SDL_DestroyRenderer(mainSdl); mainSdl = nullptr; }
+        renderer = dummyRenderer;
+        return true;
+      case P::GpuReady: {   // dispositivo pronto na janela principal: cria o backend e o liga a ponte da SpriteUI
+        auto backend = std::make_unique<editor::sui::UiGpuBackend>(*ed.gpuDev);
+        if (!backend->init()) return false;
+        { int pw = 0, ph = 0; SDL_GetWindowSizeInPixels(window, &pw, &ph); backend->setInitialSwapchainSize(pw, ph); }   // tamanho da criacao da swapchain
+        uiGpu = std::move(backend);
+        editor::sui::ActiveUiGpu() = uiGpu.get();
+        uiRenderer.attachGpu(uiGpu.get());
+        renderer = dummyRenderer;
+        return true;
+      }
+      case P::UseSdl:   // modo CPU ou falha: a janela volta a ter um SDL_Renderer
+        if (!mainSdl) {
+          mainSdl = createEditorRenderer(window, maxFrames > 0, uiGpuWanted);
+          if (mainSdl) SDL_SetRenderVSync(mainSdl, 0);
+          ed.fpsDirty = true;   // reaplica o vsync escolhido
+        }
+        renderer = mainSdl ? mainSdl : dummyRenderer;
+        return mainSdl != nullptr;
+    }
+    return false;
+  };
   // --no-gpu-cull: desliga o culling de frustum por compute (so para comparar A/B no bench; o caminho CPU volta a valer).
   for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--no-gpu-cull") == 0) ed.gpuCullEnabled = false;
   for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--gpu-cull-drop-cpu-frustum") == 0) ed.gpuCullKeepCpuFrustum = false;
@@ -3026,7 +3099,9 @@ static int runEditorMain(int argc, char** argv) {
   });
   tool::logInfo("Editor started.");
   if (startApi < 0) startApi = savedApi;
-  if (startApi > 0) ed.applyApi(startApi);
+  // UI no Diligent: o dispositivo nasce na janela principal, que a tela de inicio ainda usa com o SDL_Renderer; entao ele so e
+  // criado depois dela (logo abaixo). No caminho de sempre, a API sobe aqui.
+  if (startApi > 0 && !uiGpuWanted) ed.applyApi(startApi);
   tool::logInfo("Graphics API: " + ed.apiStatus);
 
   // projeto: cria Project/Assets e Project/Scenes; abre a ultima cena (ou cria "Main" na primeira vez)
@@ -3054,11 +3129,15 @@ static int runEditorMain(int argc, char** argv) {
     editor::start::Model model(lastProject, editor::defaultProjectsFolder(lastProject));
     startDone = editor::start::RunStartScreen(window, renderer, model, startText, editor::defaultProjectsFolder(lastProject), closed);
     if (!startDone) { // fechou na tela de inicio: nada foi criado
-      SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
+      SDL_DestroyRenderer(mainSdl); SDL_DestroyWindow(window); SDL_Quit();
       return 0;
     }
     ed.project.root = model.result();
     saveSettings(ed); // lembra o projeto para o proximo "Abrir ultimo projeto"
+  }
+  if (startApi > 0 && uiGpuWanted) {   // UI no Diligent: agora a janela pode passar para o dispositivo (ver ed.uiHook)
+    ed.applyApi(startApi);
+    tool::logInfo("Graphics API: " + ed.apiStatus + (ed.uiGpuActive ? " (editor UI drawn by the GPU device)" : ""));
   }
   ed.project.ensure();
   ed.projSettings.load(ed.project);
@@ -3143,7 +3222,6 @@ static int runEditorMain(int argc, char** argv) {
   editor::SpriteUiDiagnostics spriteUiDiagnostics;
   // Fonte e renderizador unicos das janelas SpriteUI.
   editor::sui::TextAtlasSet uiText;   // atlas de glifos por tamanho (texto nitido em qualquer tamanho)
-  editor::sui::SpriteUiSdlRenderer uiRenderer;
   // O modo --player tambem carrega a fonte: a janela do jogo desenha o texto da UI com ela (mesma fonte do editor).
   // Em --frames as janelas SpriteUI nao aparecem, salvo com --screenshot (print com as janelas reais).
   const bool fontReady = (!headless || !screenshotPath.empty()) &&
@@ -3302,6 +3380,7 @@ static int runEditorMain(int argc, char** argv) {
     const Uint64 frameStart = SDL_GetTicksNS();
     ed.applyPendingApi();   // troca de API pedida no quadro anterior (com o aviso ja desenhado)
     if (ed.fpsDirty && renderer) { SDL_SetRenderVSync(renderer, ed.fpsMode == 0 && !headless ? 1 : 0); ed.fpsDirty = false; }
+    if (ed.gpuDev) ed.gpuDev->setPresentVsync(ed.fpsMode == 0 && !headless);   // vsync do swapchain segue o Frame rate (barato: todo quadro)
     tool::debug().beginFrame();
     ed.prof.beginFrame();
     // Areas dos paineis SpriteUI para o roteador: vem do quadro anterior (o layout so muda ao redimensionar).
@@ -3577,8 +3656,15 @@ static int runEditorMain(int argc, char** argv) {
     zone.restart(editor::Zone::Ui);
     if (!headless && !playerMode && (ed.themeDirty || ed.langDirty || ed.settingsDirty) && !mouseHeld) { saveSettings(ed); ed.themeDirty = ed.langDirty = ed.settingsDirty = false; }
 
-    { const auto bg = editor::palette::active().panel; SDL_SetRenderDrawColor(renderer, static_cast<Uint8>(bg.r * 255), static_cast<Uint8>(bg.g * 255), static_cast<Uint8>(bg.b * 255), 255); }
-    SDL_RenderClear(renderer);
+    if (uiGpu) {   // UI no Diligent: comeca a gravar o quadro (o fundo e limpo no flush, junto com o desenho)
+      int pw = 0, ph = 0, lw = 0, lh = 0;
+      SDL_GetWindowSizeInPixels(window, &pw, &ph);
+      SDL_GetWindowSize(window, &lw, &lh);
+      uiGpu->beginFrame(pw, ph, lw, lh);
+    } else {
+      const auto bg = editor::palette::active().panel; SDL_SetRenderDrawColor(renderer, static_cast<Uint8>(bg.r * 255), static_cast<Uint8>(bg.g * 255), static_cast<Uint8>(bg.b * 255), 255);
+      SDL_RenderClear(renderer);
+    }
     drawViewPanels(ed, renderer);   // Scene e Jogo em SpriteUI
     const double nowSec = static_cast<double>(SDL_GetTicksNS()) * 1e-9;
     // Duas passadas: janelas acopladas primeiro, soltas por ultimo (uma soltra fica por cima do dock).
@@ -3877,25 +3963,50 @@ static int runEditorMain(int argc, char** argv) {
     }
     if (gDock && !playerMode) gDock->overlay(renderer);   // faixas de abas e guias do arraste: por cima de tudo
     if (gScriptPanel && !gScriptPanel->render(renderer, window, ed, SDL_GetTicks() / 1000.0)) tool::logError(std::string("Script render failed: ") + SDL_GetError());   // janela flutuante: por cima das docadas
-    if (!screenshotPath.empty() && maxFrames > 0 && frame + 1 >= maxFrames) {
-      if (SDL_Surface* shot = SDL_RenderReadPixels(renderer, nullptr)) {
-        if (SDL_Surface* rgb = SDL_ConvertSurface(shot, SDL_PIXELFORMAT_RGB24)) {
+    const bool wantShot = !screenshotPath.empty() && maxFrames > 0 && frame + 1 >= maxFrames;
+    if (uiGpu) {   // UI no Diligent: um unico envio com a UI inteira; depois o Present da swapchain (dentro do endFrame do dispositivo)
+      const auto bg = editor::palette::active().panel;
+      const float cr = static_cast<float>(static_cast<Uint8>(bg.r * 255)) / 255.f, cg = static_cast<float>(static_cast<Uint8>(bg.g * 255)) / 255.f,
+                  cb = static_cast<float>(static_cast<Uint8>(bg.b * 255)) / 255.f;
+      uiGpu->flush(cr, cg, cb);
+      if (wantShot) {   // captura: repete o quadro num alvo fora da tela, le de volta e grava o mesmo PPM do caminho SDL
+        std::vector<tool::u8> px; tool::u32 sw = 0, sh = 0;
+        if (uiGpu->captureOffscreen(cr, cg, cb, px, sw, sh)) {
           if (FILE* f = std::fopen(screenshotPath.c_str(), "wb")) {
-            std::fprintf(f, "P6\n%d %d\n255\n", rgb->w, rgb->h);
-            const auto* base = static_cast<const unsigned char*>(rgb->pixels);
-            for (int y = 0; y < rgb->h; ++y)
-              std::fwrite(base + static_cast<std::size_t>(y) * static_cast<std::size_t>(rgb->pitch), 1,
-                          static_cast<std::size_t>(rgb->w) * 3, f);
+            std::fprintf(f, "P6\n%u %u\n255\n", sw, sh);
+            std::vector<unsigned char> row(static_cast<std::size_t>(sw) * 3);
+            for (tool::u32 y = 0; y < sh; ++y) {
+              for (tool::u32 x = 0; x < sw; ++x) for (int c = 0; c < 3; ++c) row[static_cast<std::size_t>(x) * 3 + static_cast<std::size_t>(c)] = px[(static_cast<std::size_t>(y) * sw + x) * 4 + static_cast<std::size_t>(c)];
+              std::fwrite(row.data(), 1, row.size(), f);
+            }
             std::fclose(f);
           }
-          SDL_DestroySurface(rgb);
         }
-        SDL_DestroySurface(shot);
       }
+      zone.restart(editor::Zone::Present);
+      ed.endRenderStatsFrame();   // Flush + Present da swapchain do dispositivo
+      uiGpu->endFrame();
+    } else {
+      if (wantShot) {
+        if (SDL_Surface* shot = SDL_RenderReadPixels(renderer, nullptr)) {
+          if (SDL_Surface* rgb = SDL_ConvertSurface(shot, SDL_PIXELFORMAT_RGB24)) {
+            if (FILE* f = std::fopen(screenshotPath.c_str(), "wb")) {
+              std::fprintf(f, "P6\n%d %d\n255\n", rgb->w, rgb->h);
+              const auto* base = static_cast<const unsigned char*>(rgb->pixels);
+              for (int y = 0; y < rgb->h; ++y)
+                std::fwrite(base + static_cast<std::size_t>(y) * static_cast<std::size_t>(rgb->pitch), 1,
+                            static_cast<std::size_t>(rgb->w) * 3, f);
+              std::fclose(f);
+            }
+            SDL_DestroySurface(rgb);
+          }
+          SDL_DestroySurface(shot);
+        }
+      }
+      ed.endRenderStatsFrame();
+      zone.restart(editor::Zone::Present);
+      SDL_RenderPresent(renderer);
     }
-    ed.endRenderStatsFrame();
-    zone.restart(editor::Zone::Present);
-    SDL_RenderPresent(renderer);
     editor::frameInput().endFrame();   // bordas do quadro (pressed, clicked, roda) valem so aqui
     zone.stop();
     tool::debug().endFrame();
@@ -4033,7 +4144,11 @@ static int runEditorMain(int argc, char** argv) {
   testMapPanel.reset();
   if (spriteTextCursor) SDL_DestroyCursor(spriteTextCursor);
   uiRenderer.destroy();   // a textura do atlas e destruida antes do renderer SDL
-  SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
+  editor::view::ImageCache::get().clear();
+  if (mainSdl) SDL_DestroyRenderer(mainSdl);
+  if (dummyRenderer) SDL_DestroyRenderer(dummyRenderer);
+  if (dummySurface) SDL_DestroySurface(dummySurface);
+  SDL_DestroyWindow(window); SDL_Quit();
   std::printf("editor exited after %d frames\n", frame);
   {
     const auto calls = editor::sui::SpriteUiDrawCalls();

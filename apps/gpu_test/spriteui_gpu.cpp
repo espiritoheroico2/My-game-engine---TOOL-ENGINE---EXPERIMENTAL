@@ -74,13 +74,20 @@ int main(int argc, char** argv) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    win = SDL_CreateWindow("spriteui", 320, 180, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL);
+    // Janela comum (sem SDL_WINDOW_OPENGL): o Diligent escolhe o pixel format e cria o contexto GL nela.
+    win = SDL_CreateWindow("spriteui", 320, 180, SDL_WINDOW_HIDDEN);
     if (!win) { std::fprintf(stderr, "janela: %s\n", SDL_GetError()); return 1; }
-    if (!SDL_GL_CreateContext(win)) std::fprintf(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError());
+    // Sem SDL_GL_CreateContext: o SDL ja definiria o pixel format da janela e o Diligent falharia ao definir de novo.
+    // Janela nativa (oculta) obrigatoria para o contexto GL: HWND no Windows, X11 no Linux.
     const SDL_PropertiesID props = SDL_GetWindowProperties(win);
     info.backend = rhi::Backend::GLES;
+#if defined(_WIN32)
+    info.nativeWindow = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+    info.nativeDisplay = nullptr;
+#else
     info.nativeWindow = reinterpret_cast<void*>(static_cast<uintptr_t>(SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)));
     info.nativeDisplay = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
+#endif
   } else {
     info.backend = rhi::Backend::Vulkan;   // offscreen: sem janela
   }

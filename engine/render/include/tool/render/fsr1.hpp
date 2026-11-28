@@ -54,6 +54,7 @@ public:
     cbEasu_ = dev.createBuffer({sizeof(Fsr1CB), rhi::BufferUsage::Uniform, true}, nullptr);
     cbRcas_ = dev.createBuffer({sizeof(Fsr1CB), rhi::BufferUsage::Uniform, true}, nullptr);
     rhi::PipelineDesc pd; pd.vs = vs_; pd.ps = easuPs_; pd.name = "fsr1.easu"; pd.layout = {{3, 0}}; pd.vertexStride = 12;
+    pd.depth = rhi::Format::None;   // passe de tela cheia: sem profundidade (rcas herda)
     pd.uniformNames = {"FsrCB"}; pd.textureNames = {"Src"}; pd.color = colorFormat; pd.cull = rhi::CullMode::None;
     pd.depthTest = false; pd.depthWrite = false;
     easuPipe_ = dev.createPipeline(pd);

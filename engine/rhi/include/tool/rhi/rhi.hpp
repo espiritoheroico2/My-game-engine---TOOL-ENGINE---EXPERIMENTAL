@@ -50,7 +50,8 @@ inline Backend chooseBackend(Platform p, const std::vector<Backend>& available, 
 }
 
 // Formatos de textura do RHI: cor (RGBA/BGRA), ponto flutuante e profundidade.
-enum class Format : u8 { RGBA8, RGBA8_SRGB, BGRA8, RGBA16F, R32F, D32F, D24S8 };
+// None = sem attachment de profundidade (PSO de passes so de cor, como o HiZ): sem isso o Diligent avisa que o DSV nao confere.
+enum class Format : u8 { RGBA8, RGBA8_SRGB, BGRA8, RGBA16F, R32F, D32F, D24S8, None };
 // Descarte de faces: None, Back (padrao) ou Front.
 enum class CullMode : u8 { None, Back, Front };
 // Uso de um buffer: vertices, indices, uniform (cbuffer) ou storage (StructuredBuffer).
@@ -82,6 +83,10 @@ struct PipelineDesc {
   bool blendPremultiplied = false;
   // Blend aditivo (ONE, ONE): soma a cor do pixel ao alvo (fogo, brilho, particulas aditivas). Tem prioridade sobre os outros.
   bool blendAdditive = false;
+  // Blend "por baixo" (cor: INV_DEST_ALPHA, DEST_ALPHA; alfa: INV_DEST_ALPHA, ONE): so pinta onde o alvo ainda tem alfa 0
+  // (substitui a cor de limpeza) e completa o alfa. Usado pelo skybox,
+  // que preenche o fundo depois da cena sem tocar na geometria. Tem prioridade sobre blendPremultiplied e blend.
+  bool blendUnder = false;
   Format color = Format::RGBA8_SRGB, depth = Format::D32F;
   CullMode cull = CullMode::Back;
   std::vector<VertexAttrib> layout; u32 vertexStride = 0;
@@ -191,6 +196,10 @@ public:
   virtual PipelineId createPipeline(const PipelineDesc&) = 0;
   // Libera o recurso do handle. Handle obsoleto gera aviso e nao faz nada.
   virtual void destroy(Handle h) = 0;
+  // Substitui o conteudo inteiro (nivel 0) de uma textura RGBA8 criada com createTexture: `rgba` tem w*h*4 bytes, e w e h
+  // devem ser as dimensoes da textura (outra dimensao e recusada com erro). Para texturas que mudam todo quadro (a UI do
+  // editor sobe as vistas Scene/Game e os atlas por aqui). Padrao: no-op (Null).
+  virtual void updateTexture(TextureId, const void* /*rgba*/, u32 /*w*/, u32 /*h*/) {}
   // Escreve `size` bytes de data no inicio do buffer. size nao pode passar do tamanho do buffer.
   virtual void updateBuffer(BufferId b, const void* data, size_t size) = 0;
   // Escreve `size` bytes de data a partir do byte `offset` do buffer e preserva o resto do conteudo.
@@ -211,8 +220,14 @@ public:
   virtual void endFrame() { present(); }
   // Apresenta o quadro (swapchain) e fecha as estatisticas do frame.
   virtual void present() = 0;
+  // Vsync da apresentacao (SyncInterval 1 = espera o monitor; 0 = so o limite do Frame rate). Sem efeito no Null/CPU.
+  // Sem isso, o Present do Diligent espera o vsync sempre: em 60 Hz, qualquer quadro acima de 16,7 ms cai para 30 FPS.
+  virtual void setPresentVsync(bool) {}
   // Backbuffer da janela (nulo se o dispositivo for offscreen) e leitura de textura para a CPU (RGBA8, origem no topo-esquerdo).
   virtual TextureId backbuffer() { return kNullHandle; }
+  // Formato real do backbuffer (a swapchain pode trocar RGBA8 por BGRA8 conforme o driver). Pipelines que desenham nele
+  // precisam usar este formato em PipelineDesc::color. RGBA8 se nao houver swapchain.
+  virtual Format backbufferFormat() const { return Format::RGBA8; }
   // Redimensiona a swapchain. Devolve false se o dispositivo for offscreen.
   virtual bool resizeSwapchain(u32, u32) { return false; }
   // Le a textura para a CPU como RGBA8, esperando a GPU. rgba recebe os pixels; w e h, as dimensoes.
@@ -278,6 +293,12 @@ struct DeviceInfo {
   u32 width = 1280, height = 720;
   bool validation = false;        // camadas de validacao (Vulkan/D3D12) e depuracao GL. Custam CPU: ligue so para depurar
   u32 dynamicHeapMB = TOOL_DYNAMIC_HEAP_MB;
+  // Swapchain em formato sRGB (padrao: o 3D escreve em linear e o hardware converte). A UI do editor usa false (UNORM) para
+  // misturar em sRGB como o SDL_Renderer fazia.
+  bool srgbSwapchain = true;
+  // A swapchain e mostrada ao usuario (janela principal do editor): present() troca os buffers tambem no OpenGL. Falso = janela
+  // oculta so para criar o contexto (a cena e lida por textura).
+  bool presentToWindow = false;
   bool gpuTimers = false;         // tempo de GPU por zona (timestamps). Desligado: sem custo. Ver IDevice::setGpuTimers
 };
 

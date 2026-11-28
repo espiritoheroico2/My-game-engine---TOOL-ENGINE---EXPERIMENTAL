@@ -95,6 +95,21 @@ struct ParticleDraw { const ParticleQuadGPU* quads = nullptr; u32 count = 0; u32
 struct PartCB { u32 first, is2D, pad[2]; f32 soft[4]; };
 static_assert(sizeof(ParticleQuadGPU) == 32 && sizeof(PartCB) == 32, "layout das particulas na GPU");
 
+// Constantes do skybox (skybox.hlsl, cbuffer SkyCB). Base da camera igual a do applySkybox da CPU.
+struct SkyCB {
+  f32 fwd[4];     // frente (unitario); w = tan(fovY / 2)
+  f32 right[4];   // direita (unitario); w = aspecto do alvo
+  f32 up[4];      // cima (unitario)
+  f32 solid[4];   // cor dos lados sem imagem (0..1, bytes sRGB / 255)
+  f32 size[4];    // xy = tamanho do alvo em pixels
+  u32 hasA[4];    // lados 0..3 com imagem
+  u32 hasB[4];    // lados 4..5 com imagem (x, y)
+};
+static_assert(sizeof(SkyCB) == 112, "layout do SkyCB na GPU");
+
+// Pedido de skybox para o proximo end(): imagens dos 6 lados (+X, -X, +Y, -Y, +Z, -Z; nullptr = cor solida) e a cor solida.
+struct SkyboxDraw { const Texture* faces[6] = {}; f32 solid[4] = {0.25f, 0.40f, 0.60f, 1.f}; };
+
 struct PointShadowLightGPU { f32 posType[4]; f32 params[4]; Mat4 vp[6]; };
 struct PointShadowGPU { u32 count; u32 pad[3]; PointShadowLightGPU lights[kMaxPointShadowLights]; };
 static_assert(sizeof(PointShadowLightGPU) == 416 && sizeof(PointShadowGPU) == 16 + 4 * 416, "layout de PointShadowCB");
@@ -243,6 +258,7 @@ public:
     pointClearPipe_ = dev.createPipeline(clearDesc);
 
     rhi::PipelineDesc sp; sp.vs = fsVs_; sp.ps = ssaoPs_; sp.name = "ssao"; sp.layout = {{3, 0}}; sp.vertexStride = 12;
+    sp.depth = rhi::Format::None;   // passe de tela cheia sem profundidade (o blur herda)
     sp.uniformNames = {"SsaoCB"}; sp.textureNames = {"GBuf"}; sp.color = rhi::Format::R32F; sp.cull = rhi::CullMode::None;
     ssaoPipe_ = dev.createPipeline(sp);
     rhi::PipelineDesc bp = sp; bp.ps = blurPs_; bp.name = "ssaoblur"; bp.textureNames = {"GBuf", "RawAo"};
@@ -256,6 +272,7 @@ public:
       bs.name = "bloom.blur"; bs.entry = "BloomBlur"; bloomBlurPs_ = mk(bs);
       bs.name = "bloom.comp"; bs.entry = "BloomComposite"; bloomCompPs_ = mk(bs);
       rhi::PipelineDesc tp; tp.vs = fsVs_; tp.ps = bloomThrPs_; tp.name = "bloomthr"; tp.layout = {{3, 0}}; tp.vertexStride = 12;
+      tp.depth = rhi::Format::None;   // bloom: passes de tela cheia sem profundidade (blur e composicao herdam)
       tp.uniformNames = {"BloomCB"}; tp.textureNames = {"Src"}; tp.color = rhi::Format::RGBA16F; tp.cull = rhi::CullMode::None;
       bloomThrPipe_ = dev.createPipeline(tp);
       rhi::PipelineDesc bb = tp; bb.ps = bloomBlurPs_; bb.name = "bloomblur"; bb.textureNames = {"Halo"};
@@ -268,11 +285,12 @@ public:
       bloomCbComp_ = dev.createBuffer({sizeof(BloomCB), rhi::BufferUsage::Uniform, true}, nullptr);
     }
 
-    // Particulas (particles.hlsl). Opcional: sem o shader (ou em OpenGL, que usa GLSL pre-gerado) o renderer segue sem elas.
+    // Particulas (particles.hlsl; no OpenGL, os GLSL particles.*.430.glsl gerados por tools/shaders/build_glsl.py).
+    // Opcional: sem o shader o renderer segue sem elas. Antes o OpenGL ficava sempre sem particulas (faltava o GLSL).
     partReady_ = false;
-    if (!gl) {
+    {
       std::string partSrc;
-      if (!loadHlsl(hlslDir, "particles.hlsl", partSrc)) {
+      if (!gl && !loadHlsl(hlslDir, "particles.hlsl", partSrc)) {
         debug().report("TOOL-W146", Severity::Warning, "nao achei particles.hlsl em " + hlslDir + ": particulas desligadas");
       } else {
         rhi::ShaderDesc pv; pv.stage = rhi::ShaderStage::Vertex; pv.entry = "VSMain"; pv.name = "particles.vs"; pv.source = partSrc;
@@ -296,6 +314,30 @@ public:
         partReady_ = !partPipeAlpha_.isNull() && !partPipeAdd_.isNull() && !partPipeGlow_.isNull() && !partVb_.isNull() && !partIb_.isNull() && !partCb_.isNull();
         if (!partReady_) debug().report("TOOL-W146", Severity::Warning, "pipelines de particulas indisponiveis: particulas desligadas");
       }
+    }
+
+    // Skybox de 6 imagens na GPU (skybox.hlsl; no OpenGL, skybox.ps.430.glsl). Opcional: sem o shader o editor segue
+    // com o skybox da CPU (apps/editor/skybox.hpp). VS = o triangulo de tela cheia do SSAO (fsVs_).
+    skyReady_ = false;
+    {
+      std::string skySrc;
+      bool have = false;
+      if (gl) { std::ifstream f(shaderDir + "/glsl/skybox.ps.430.glsl", std::ios::binary); have = static_cast<bool>(f); }
+      else have = loadHlsl(hlslDir, "skybox.hlsl", skySrc);
+      if (have) {
+        rhi::ShaderDesc sps2; sps2.stage = rhi::ShaderStage::Pixel; sps2.entry = "PSMain"; sps2.name = "skybox.ps"; sps2.source = skySrc;
+        skyPs_ = mk(sps2);
+        if (!skyPs_.isNull()) {
+          rhi::PipelineDesc k; k.vs = fsVs_; k.ps = skyPs_; k.name = "skybox"; k.layout = {{3, 0}}; k.vertexStride = 12;
+          k.depth = rhi::Format::None; k.depthTest = false; k.depthWrite = false; k.cull = rhi::CullMode::None;
+          k.color = colorFmt_; k.blendUnder = true;   // so o fundo (alfa 0) recebe o ceu
+          k.uniformNames = {"SkyCB"}; k.textureNames = {"Face0", "Face1", "Face2", "Face3", "Face4", "Face5"};
+          skyPipe_ = dev.createPipeline(k);
+        }
+        skyCb_ = dev.createBuffer({sizeof(SkyCB), rhi::BufferUsage::Uniform, true}, nullptr);
+        skyReady_ = !skyPipe_.isNull() && !skyCb_.isNull();
+      }
+      if (!skyReady_) debug().report("TOOL-I147", Severity::Info, "skybox na GPU indisponivel neste backend: o editor usa o skybox da CPU");
     }
 
     // Culling de frustum por compute (fase 1, so o passe opaco). Opcional: se o backend nao tem compute/indirect ou o
@@ -472,6 +514,7 @@ public:
     cam_ = cam; clear_ = clear; clearAlpha_ = clearAlpha;
     cam_zNear_ = cam.nearZ; cam_zFar_ = cam.farZ;
     draws_.clear(); tdraws_.clear(); pdraws_.clear(); shadowOn_ = false; shadowSkip_ = false; open_ = true;
+    skyWanted_ = false;   // o skybox vale por quadro (drawSkybox)
     stats_ = {};
     stats_.valid = true;
     if ((frame_ & 63) == 0) for (auto it = meshes_.begin(); it != meshes_.end();) {
@@ -495,6 +538,16 @@ public:
   // Liga/desliga o passe de particulas (medicao A/B). Ligado por padrao.
   void setParticlesEnabled(bool on) { partEnabled_ = on; }
   bool particlesAvailable() const { return partReady_; }
+
+  // ---- Skybox de 6 imagens na GPU ----
+  // Pede o skybox no proximo end() (vale so para esse quadro: begin() limpa o pedido). Devolve false se o passe nao
+  // existe neste backend: nesse caso o chamador aplica o skybox da CPU na imagem lida. Cameras ortograficas: nao chame.
+  bool drawSkybox(const SkyboxDraw& s) {
+    if (!open_ || !skyReady_) return false;
+    sky_ = s; skyWanted_ = true;
+    return true;
+  }
+  bool skyboxAvailable() const { return skyReady_; }
   // Particulas desenhadas no ultimo quadro (soma dos lotes).
   u32 particlesDrawn() const { return partDrawn_; }
 
@@ -1046,6 +1099,12 @@ public:
       gl->end(); dev_->submit(*gl);
     }
 
+    // Skybox: preenche o fundo (alfa 0) logo depois dos opacos, ANTES de transparentes e particulas. Ele mistura "por baixo"
+    // (pesado pelo alfa do destino); particulas aditivas nao gravam alfa, entao um skybox depois delas as cobria por inteiro
+    // e elas so apareciam na frente de malhas (bug visto em 2026-11-28). Antes era feito na CPU depois da leitura
+    // (~1,8 ms por quadro a 1280x720) e, com bloom ligado, nem aparecia (a composicao do bloom grava alfa 1 em tudo).
+    if (skyWanted_ && skyReady_) { GpuZoneScope gpuZone(dev_, "skybox"); renderSkybox(); }
+
     // Passe transparente: usa buffer dedicado (transInstBuf_) para preservar integridade dos passes anteriores
     if (!tdraws_.empty() && !transPipe_.isNull()) {
       render::PassTimer transparentTimer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Transparent)]};
@@ -1340,6 +1399,43 @@ private:
   // Desenha os lotes de particulas pedidos no quadro. Teste de profundidade ligado e escrita desligada (nao tapam nada que
   // esta na frente e nao escondem outras particulas); alfa ja chega ordenado. Lotes "bloom" tambem somam (cor * emissive)
   // no alvo de brilho, que o bloom da engine borra e compoe.
+  // Passe do skybox (ver skybox.hlsl): um triangulo de tela cheia sobre color_, blend "por baixo", sem profundidade.
+  // Base da camera = a do applySkybox da CPU (frente, direita = frente x up, cima = direita x frente).
+  void renderSkybox() {
+    render::PassTimer timer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Skybox)]};
+    auto unit = [](Vec3 v) { const f32 l = std::sqrt(dot(v, v)); return l > 0.f ? Vec3{v.x / l, v.y / l, v.z / l} : Vec3{0.f, 0.f, -1.f}; };
+    auto crs = [](Vec3 a, Vec3 b) { return Vec3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; };
+    const Vec3 f = unit(cam_.target - cam_.eye);
+    const Vec3 r = unit(crs(f, cam_.up));
+    const Vec3 u = crs(r, f);
+    SkyCB cb{};
+    cb.fwd[0] = f.x; cb.fwd[1] = f.y; cb.fwd[2] = f.z; cb.fwd[3] = std::tan(cam_.fovY * 0.5f);
+    cb.right[0] = r.x; cb.right[1] = r.y; cb.right[2] = r.z; cb.right[3] = static_cast<f32>(w_) / static_cast<f32>(std::max(1u, h_));
+    cb.up[0] = u.x; cb.up[1] = u.y; cb.up[2] = u.z;
+    for (int i = 0; i < 4; ++i) cb.solid[i] = std::clamp(sky_.solid[i], 0.f, 1.f);
+    // A CPU arredonda a cor solida para byte (x * 255 + 0,5): o mesmo aqui, para o byte final bater.
+    for (int i = 0; i < 3; ++i) cb.solid[i] = std::floor(cb.solid[i] * 255.f + 0.5f) / 255.f;
+    cb.size[0] = static_cast<f32>(w_); cb.size[1] = static_cast<f32>(h_);
+    rhi::TextureId faces[6];
+    for (int i = 0; i < 6; ++i) {
+      f32 tw = 0.f, th = 0.f;
+      const Texture* t = sky_.faces[i];
+      const bool has = t && t->valid() && t->id != 0;
+      faces[i] = has ? textureFor(t, tw, th) : white_;
+      const u32 flag = (has && faces[i] != white_) ? 1u : 0u;   // falha no upload: cor solida
+      if (i < 4) cb.hasA[i] = flag; else cb.hasB[i - 4] = flag;
+    }
+    dev_->updateBuffer(skyCb_, &cb, sizeof cb);
+    auto c = dev_->beginCommands();
+    c->beginKeep(color_, kNullHandle);
+    c->setPipeline(skyPipe_);
+    c->setUniform(0, skyCb_);
+    for (u32 i = 0; i < 6; ++i) c->setTexture(i, faces[i]);
+    c->setVertexBuffer(fsVb_); c->setIndexBuffer(fsIb_);
+    recordDraw(*c, render::RenderPassId::Skybox, 3, 1);
+    c->end(); dev_->submit(*c);
+  }
+
   void renderParticles() {
     render::PassTimer timer{stats_.passes[static_cast<std::size_t>(render::RenderPassId::Particles)]};
     size_t total = 0;
@@ -1530,8 +1626,10 @@ private:
     for (auto* h : {&frameCb_, &objCb_, &batchCb_, &instBuf_, &emiInstBuf_, &transInstBuf_, &shadowInstBuf_, &prepassInstBuf_, &shCb_, &csmCb_, &iblCb_, &pointCb_, &brdfTex_, &shDepth_, &pointDepth_, &pipe_, &shPipe_, &ptPipe_, &pointClearPipe_, &vs_, &ps_, &legacyVs_, &legacyPs_, &shVs_, &shPs_, &ptVs_, &ptPs_, &pointClearPs_,
                     &prePipe_, &ssaoPipe_, &blurPipe_, &fsVb_, &fsIb_, &ssaoCb_, &preVs_, &prePs_, &fsVs_, &ssaoPs_, &blurPs_,
                     &emiPipe_, &emiPs_, &transPipe_, &pipeDs_, &transPipeDs_, &bloomThrPipe_, &bloomBlurPipe_, &bloomCompPipe_, &bloomCbThr_, &bloomCbH_, &bloomCbV_, &bloomCbComp_, &bloomThrPs_, &bloomBlurPs_, &bloomCompPs_,
-                    &partVs_, &partPsAlpha_, &partPsAdd_, &partPsGlow_, &partPipeAlpha_, &partPipeAdd_, &partPipeGlow_, &partVb_, &partIb_, &partCb_, &partBuf_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
+                    &partVs_, &partPsAlpha_, &partPsAdd_, &partPsGlow_, &partPipeAlpha_, &partPipeAdd_, &partPipeGlow_, &partVb_, &partIb_, &partCb_, &partBuf_,
+                    &skyPs_, &skyPipe_, &skyCb_}) if (!h->isNull()) { dev_->destroy(*h); *h = kNullHandle; }
     partCap_ = 0; partReady_ = false; pdraws_.clear(); partCpu_.clear();
+    skyReady_ = false; skyWanted_ = false;
     for (auto& t : shColor_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     for (auto& t : pointStrip_) if (!t.isNull()) { dev_->destroy(t); t = kNullHandle; }
     pointW_ = 0; pointOn_ = false; pointCount_ = 0; pointFaceCache_ = {};
@@ -1603,6 +1701,12 @@ private:
   rhi::BufferId partVb_, partIb_, partCb_, partBuf_;
   u32 partCap_ = 0, partDrawn_ = 0;
   bool partReady_ = false, partEnabled_ = true, softReady_ = false;
+  // Skybox na GPU (renderSkybox): shader, pipeline, constantes e o pedido do quadro (drawSkybox).
+  rhi::ShaderId skyPs_;
+  rhi::PipelineId skyPipe_;
+  rhi::BufferId skyCb_;
+  SkyboxDraw sky_{};
+  bool skyReady_ = false, skyWanted_ = false;
   std::array<std::array<PointFaceCache, kMaxPointShadowFaces>, kMaxPointShadowLights> pointFaceCache_{};
   u32 pointFaces_[kMaxPointShadowLights] = {};
   ShadowLight pointLights_[kMaxPointShadowLights];
@@ -1740,7 +1844,7 @@ private:
     od.color = rhi::Format::R32F; od.cull = rhi::CullMode::Back;
     occDepthPipe_ = dev.createPipeline(od);
     rhi::PipelineDesc hd; hd.vs = fsVs_; hd.ps = hizPs_; hd.name = "hiz_reduce"; hd.layout = {{3, 0}}; hd.vertexStride = 12;
-    hd.uniformNames = {"HizCB"}; hd.textureNames = {"Src"}; hd.color = rhi::Format::R32F; hd.cull = rhi::CullMode::None; hd.depthTest = false; hd.depthWrite = false;
+    hd.uniformNames = {"HizCB"}; hd.textureNames = {"Src"}; hd.color = rhi::Format::R32F; hd.depth = rhi::Format::None; hd.cull = rhi::CullMode::None; hd.depthTest = false; hd.depthWrite = false;
     hizPipe_ = dev.createPipeline(hd);
     rhi::PipelineDesc cd; cd.cs = occCs_; cd.name = "occlusion_cull";
     cd.uniformNames = {"OccCB"}; cd.storageNames = {"CullBatches", "SrcInstances"}; cd.storageRWNames = {"ArgsIn", "DstInstances", "DrawArgs"};

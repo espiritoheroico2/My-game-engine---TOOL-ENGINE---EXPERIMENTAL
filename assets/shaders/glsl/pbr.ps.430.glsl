@@ -12,6 +12,85 @@
 #define SPIRV_CROSS_LOOP
 #endif
 
+struct SurfaceData
+{
+    vec3 N;
+    vec3 V;
+    vec3 albedo;
+    float metallic;
+    float roughness;
+};
+
+struct PointLight
+{
+    vec3 position;
+    float radius;
+    vec3 color;
+    float intensity;
+    uint flags;
+    uint layerMask;
+    uint shadowIndex;
+    float cullRadius;
+};
+
+struct SpotLight
+{
+    vec3 position;
+    float radius;
+    vec3 color;
+    float intensity;
+    vec3 direction;
+    float spotScale;
+    float spotOffset;
+    uint flags;
+    uint layerMask;
+    uint shadowIndex;
+};
+
+struct DirectionalLight
+{
+    vec3 direction;
+    float intensity;
+    vec3 color;
+    uint flags;
+};
+
+struct ClusterGrid
+{
+    uint gridX;
+    uint gridY;
+    uint gridZ;
+    uint tileSizePx;
+    float zNear;
+    float zFar;
+    float sliceScale;
+    float sliceBias;
+    vec2 projScale;
+    vec2 screenSize;
+    uint numPointLights;
+    uint numSpotLights;
+    uint maxLightsPerCluster;
+    uint maxIndices;
+};
+
+struct VSOut
+{
+    vec4 clip;
+    vec3 worldPos;
+    vec3 normal;
+    vec2 uv;
+    vec3 toCam;
+    float viewDepth;
+    vec4 baseColor;
+    vec4 material;
+    vec4 texInfo;
+    vec3 emissive;
+    vec4 fogColor;
+    vec4 fogParams;
+    vec4 uvXform;
+    vec2 normalInfo;
+};
+
 struct CsmCascade
 {
     mat4 viewProj;
@@ -50,62 +129,10 @@ struct GlobalLighting
     float preExposure;
 };
 
-struct DirectionalLight
-{
-    vec3 direction;
-    float intensity;
-    vec3 color;
-    uint flags;
-};
-
 struct ClusterCell
 {
     uint offset;
     uint count;
-};
-
-struct ClusterGrid
-{
-    uint gridX;
-    uint gridY;
-    uint gridZ;
-    uint tileSizePx;
-    float zNear;
-    float zFar;
-    float sliceScale;
-    float sliceBias;
-    vec2 projScale;
-    vec2 screenSize;
-    uint numPointLights;
-    uint numSpotLights;
-    uint maxLightsPerCluster;
-    uint maxIndices;
-};
-
-struct PointLight
-{
-    vec3 position;
-    float radius;
-    vec3 color;
-    float intensity;
-    uint flags;
-    uint layerMask;
-    uint shadowIndex;
-    float cullRadius;
-};
-
-struct SpotLight
-{
-    vec3 position;
-    float radius;
-    vec3 color;
-    float intensity;
-    vec3 direction;
-    float spotScale;
-    float spotOffset;
-    uint flags;
-    uint layerMask;
-    uint shadowIndex;
 };
 
 struct IblData
@@ -117,7 +144,19 @@ struct IblData
     float _pad;
 };
 
-float _5963;
+struct InstanceData
+{
+    mat4 world;
+    vec4 baseColor;
+    float metallic;
+    float roughness;
+    float receiveShadow;
+    float _pad1;
+    vec4 texInfo;
+    vec4 emissive;
+    vec4 fogColor;
+    vec4 fogParams;
+};
 
 layout(binding = 2, std140) uniform CsmCB
 {
@@ -173,7 +212,26 @@ layout(binding = 3, std140) uniform IblCB
     IblData Ibl;
 } _1606;
 
+layout(binding = 4, std140) uniform FrameBuffer
+{
+    layout(row_major) mat4 viewProj;
+    layout(row_major) mat4 view;
+    vec3 cameraPos;
+    float _pad0;
+} _2329;
+
+layout(binding = 17, std430) readonly buffer Instances
+{
+    layout(row_major) InstanceData _data[];
+} Instances_1;
+
+layout(binding = 6, std140) uniform BatchBuffer
+{
+    uvec4 batchInfo;
+} _2338;
+
 uniform sampler2D AlbedoMap;
+uniform sampler2D NormalMap;
 uniform sampler2D AoMap;
 uniform sampler2D IblBrdfLut;
 uniform sampler2D CsmMap0;
@@ -196,768 +254,598 @@ layout(location = 7) flat in vec4 i_texInfo;
 layout(location = 8) flat in vec3 i_emissive;
 layout(location = 9) flat in vec4 i_fogColor;
 layout(location = 10) flat in vec4 i_fogParams;
+layout(location = 11) flat in vec4 i_uvXform;
+layout(location = 12) flat in vec2 i_normalInfo;
 layout(location = 0) out vec4 _entryPointOutput;
 
 PointShadowLight spvWorkaroundRowMajor(PointShadowLight wrap) { return wrap; }
 
-void main()
+vec2 BrdfLutBilinear(float NoV, float rough)
 {
-    vec3 _5794;
-    if (i_texInfo.z > 0.5)
+    float fx = clamp((clamp(NoV, 0.0, 1.0) * 32.0) - 0.5, 0.0, 31.0);
+    float fy = clamp((clamp(rough, 0.0, 1.0) * 32.0) - 0.5, 0.0, 31.0);
+    int x0 = int(fx);
+    int y0 = int(fy);
+    int x1 = min((x0 + 1), 31);
+    int y1 = min((y0 + 1), 31);
+    float tx = fx - float(x0);
+    float ty = fy - float(y0);
+    vec2 p00 = vec2(texelFetch(IblBrdfLut, ivec3(x0, y0, 0).xy, ivec3(x0, y0, 0).z).xy);
+    vec2 p10 = vec2(texelFetch(IblBrdfLut, ivec3(x1, y0, 0).xy, ivec3(x1, y0, 0).z).xy);
+    vec2 p01 = vec2(texelFetch(IblBrdfLut, ivec3(x0, y1, 0).xy, ivec3(x0, y1, 0).z).xy);
+    vec2 p11 = vec2(texelFetch(IblBrdfLut, ivec3(x1, y1, 0).xy, ivec3(x1, y1, 0).z).xy);
+    return mix(mix(p00, p10, vec2(tx)), mix(p01, p11, vec2(tx)), vec2(ty));
+}
+
+float IblDominantDirFactor(float roughness)
+{
+    float a = roughness * roughness;
+    float s = clamp(1.0 - a, 0.0, 1.0);
+    return s * (sqrt(s) + a);
+}
+
+vec3 IblEvaluateIrradiance(vec3 n)
+{
+    vec3 _1689 = (((((((_1606.Ibl.sh[0].xyz + (_1606.Ibl.sh[1].xyz * n.y)) + (_1606.Ibl.sh[2].xyz * n.z)) + (_1606.Ibl.sh[3].xyz * n.x)) + (_1606.Ibl.sh[4].xyz * (n.x * n.y))) + (_1606.Ibl.sh[5].xyz * (n.y * n.z))) + (_1606.Ibl.sh[6].xyz * (((3.0 * n.z) * n.z) - 1.0))) + (_1606.Ibl.sh[7].xyz * (n.x * n.z))) + (_1606.Ibl.sh[8].xyz * ((n.x * n.x) - (n.y * n.y)));
+    vec3 r = _1689;
+    return max(r, vec3(0.0));
+}
+
+vec3 F_Schlick(float VoH, vec3 F0)
+{
+    float m = clamp(1.0 - VoH, 0.0, 1.0);
+    float m2 = m * m;
+    return F0 + ((vec3(1.0) - F0) * ((m2 * m2) * m));
+}
+
+float D_GGX(float NoH, float roughness)
+{
+    float r = max(roughness, 0.04500000178813934326171875);
+    float a = r * r;
+    float a2 = a * a;
+    float d = max(((NoH * NoH) * (a2 - 1.0)) + 1.0, 9.9999997473787516355514526367188e-06);
+    return a2 / ((3.1415927410125732421875 * d) * d);
+}
+
+float V_SmithGGXCorrelated(float NoV, float NoL, float roughness)
+{
+    float r = max(roughness, 0.04500000178813934326171875);
+    float a2 = ((r * r) * r) * r;
+    float ggxV = NoL * sqrt(((NoV * NoV) * (1.0 - a2)) + a2);
+    float ggxL = NoV * sqrt(((NoL * NoL) * (1.0 - a2)) + a2);
+    return 0.5 / max(ggxV + ggxL, 9.9999997473787516355514526367188e-06);
+}
+
+vec3 EvaluateBRDF(SurfaceData s, vec3 L, vec3 radiance)
+{
+    float NoL = clamp(dot(s.N, L), 0.0, 1.0);
+    if (NoL <= 0.0)
     {
-        _5794 = i_baseColor.xyz * texelFetch(AlbedoMap, ivec3(clamp(int(fract(i_uv.x) * i_texInfo.x), 0, int(i_texInfo.x) - 1), clamp(int(fract(i_uv.y) * i_texInfo.y), 0, int(i_texInfo.y) - 1), 0).xy, 0).xyz;
+        return vec3(0.0);
+    }
+    vec3 H = normalize(s.V + L);
+    float NoV = max(dot(s.N, s.V), 9.9999997473787516355514526367188e-05);
+    float NoH = clamp(dot(s.N, H), 0.0, 1.0);
+    float VoH = clamp(dot(s.V, H), 0.0, 1.0);
+    vec3 F0 = mix(vec3(0.039999999105930328369140625), s.albedo, vec3(s.metallic));
+    float param = VoH;
+    vec3 param_1 = F0;
+    vec3 F = F_Schlick(param, param_1);
+    float param_2 = NoH;
+    float param_3 = s.roughness;
+    float param_4 = NoV;
+    float param_5 = NoL;
+    float param_6 = s.roughness;
+    vec3 specular = F * (D_GGX(param_2, param_3) * V_SmithGGXCorrelated(param_4, param_5, param_6));
+    vec3 kD = (vec3(1.0) - F) * (1.0 - s.metallic);
+    vec3 diffuse = (kD * s.albedo) / vec3(3.1415927410125732421875);
+    return ((diffuse + specular) * radiance) * NoL;
+}
+
+vec3 EvaluateDirectionalLight(DirectionalLight l, SurfaceData s)
+{
+    SurfaceData param = s;
+    vec3 param_1 = -l.direction;
+    vec3 param_2 = l.color * l.intensity;
+    return EvaluateBRDF(param, param_1, param_2);
+}
+
+float CsmTexel(uint k, ivec2 p)
+{
+    if (k == 0u)
+    {
+        return texelFetch(CsmMap0, ivec3(p, 0).xy, ivec3(p, 0).z).x;
+    }
+    if (k == 1u)
+    {
+        return texelFetch(CsmMap1, ivec3(p, 0).xy, ivec3(p, 0).z).x;
+    }
+    if (k == 2u)
+    {
+        return texelFetch(CsmMap2, ivec3(p, 0).xy, ivec3(p, 0).z).x;
+    }
+    return texelFetch(CsmMap3, ivec3(p, 0).xy, ivec3(p, 0).z).x;
+}
+
+float CsmSampleCascade(uint k, vec3 worldPos, vec3 N)
+{
+    CsmCascade c;
+    c.viewProj = _662.Csm.cascades[k].viewProj;
+    c.splitNear = _662.Csm.cascades[k].splitNear;
+    c.splitFar = _662.Csm.cascades[k].splitFar;
+    c.texelWorldSize = _662.Csm.cascades[k].texelWorldSize;
+    c.depthRange = _662.Csm.cascades[k].depthRange;
+    vec3 p = worldPos + (N * (_662.Csm.normalBias * c.texelWorldSize));
+    vec3 clip = (vec4(p, 1.0) * c.viewProj).xyz;
+    if (any(greaterThan(abs(clip.xy), vec2(1.0))) || (clip.z > 1.0))
+    {
+        return 1.0;
+    }
+    float depth = clip.z - (_662.Csm.depthBias / c.depthRange);
+    float size = _662.Csm.shadowMapSize;
+    vec2 t = vec2((clip.x * 0.5) + 0.5, 0.5 - (clip.y * 0.5)) * size;
+    int maxIdx = int(size) - 1;
+    float lit = 0.0;
+    float n = 1.0;
+    if (_662.Csm.pcfTaps >= 9u)
+    {
+        n = 9.0;
+        SPIRV_CROSS_UNROLL
+        for (int j = -1; j <= 1; j++)
+        {
+            SPIRV_CROSS_UNROLL
+            for (int i = -1; i <= 1; i++)
+            {
+                ivec2 q = clamp(ivec2(floor(t + vec2(float(i), float(j)))), ivec2(0), ivec2(maxIdx));
+                uint param = k;
+                ivec2 param_1 = q;
+                lit += float(depth <= CsmTexel(param, param_1));
+            }
+        }
     }
     else
     {
-        _5794 = i_baseColor.xyz;
-    }
-    vec3 _2275 = normalize(i_normal);
-    vec3 _2280 = normalize(i_toCam);
-    float _2287 = max(i_material.y, 0.04500000178813934326171875);
-    float _2439 = clamp((clamp(max(dot(_2275, _2280), 9.9999997473787516355514526367188e-05), 0.0, 1.0) * 32.0) - 0.5, 0.0, 31.0);
-    float _2444 = clamp((clamp(_2287, 0.0, 1.0) * 32.0) - 0.5, 0.0, 31.0);
-    int _2446 = int(_2439);
-    int _2448 = int(_2444);
-    int _2451 = min((_2446 + 1), 31);
-    int _2454 = min((_2448 + 1), 31);
-    float _2458 = _2439 - float(_2446);
-    vec2 _2527 = mix(mix(vec2(texelFetch(IblBrdfLut, ivec3(_2446, _2448, 0).xy, 0).xy), vec2(texelFetch(IblBrdfLut, ivec3(_2451, _2448, 0).xy, 0).xy), vec2(_2458)), mix(vec2(texelFetch(IblBrdfLut, ivec3(_2446, _2454, 0).xy, 0).xy), vec2(texelFetch(IblBrdfLut, ivec3(_2451, _2454, 0).xy, 0).xy), vec2(_2458)), vec2(_2444 - float(_2448)));
-    vec3 _2328 = (mix(vec3(0.039999999105930328369140625), _5794, vec3(i_material.x)) * _2527.x) + vec3(_2527.y);
-    float _2534 = _2287 * _2287;
-    float _2537 = clamp(1.0 - _2534, 0.0, 1.0);
-    vec3 _2352 = normalize(mix(_2275, (_2275 * (2.0 * dot(_2275, _2280))) - _2280, vec3(_2537 * (sqrt(_2537) + _2534))));
-    vec3 _2630 = max((((((((_1606.Ibl.sh[0].xyz + (_1606.Ibl.sh[1].xyz * _2275.y)) + (_1606.Ibl.sh[2].xyz * _2275.z)) + (_1606.Ibl.sh[3].xyz * _2275.x)) + (_1606.Ibl.sh[4].xyz * (_2275.x * _2275.y))) + (_1606.Ibl.sh[5].xyz * (_2275.y * _2275.z))) + (_1606.Ibl.sh[6].xyz * (((3.0 * _2275.z) * _2275.z) - 1.0))) + (_1606.Ibl.sh[7].xyz * (_2275.x * _2275.z))) + (_1606.Ibl.sh[8].xyz * ((_2275.x * _2275.x) - (_2275.y * _2275.y))), vec3(0.0));
-    vec3 _2717 = max((((((((_1606.Ibl.sh[0].xyz + (_1606.Ibl.sh[1].xyz * _2352.y)) + (_1606.Ibl.sh[2].xyz * _2352.z)) + (_1606.Ibl.sh[3].xyz * _2352.x)) + (_1606.Ibl.sh[4].xyz * (_2352.x * _2352.y))) + (_1606.Ibl.sh[5].xyz * (_2352.y * _2352.z))) + (_1606.Ibl.sh[6].xyz * (((3.0 * _2352.z) * _2352.z) - 1.0))) + (_1606.Ibl.sh[7].xyz * (_2352.x * _2352.z))) + (_1606.Ibl.sh[8].xyz * ((_2352.x * _2352.x) - (_2352.y * _2352.y))), vec3(0.0));
-    vec3 _5912;
-    if (_1353.Globals.hasSun != 0u)
-    {
-        vec3 _2932 = -_1363.SunLight.direction;
-        vec3 _5795;
-        do
+        if (_662.Csm.pcfTaps >= 4u)
         {
-            float _2966 = clamp(dot(_2275, _2932), 0.0, 1.0);
-            if (_2966 <= 0.0)
+            n = 4.0;
+            SPIRV_CROSS_UNROLL
+            for (int j_1 = 0; j_1 < 2; j_1++)
             {
-                _5795 = vec3(0.0);
-                break;
+                SPIRV_CROSS_UNROLL
+                for (int i_1 = 0; i_1 < 2; i_1++)
+                {
+                    ivec2 q_1 = clamp(ivec2(floor(t + (vec2(float(i_1), float(j_1)) - vec2(0.5)))), ivec2(0), ivec2(maxIdx));
+                    uint param_2 = k;
+                    ivec2 param_3 = q_1;
+                    lit += float(depth <= CsmTexel(param_2, param_3));
+                }
             }
-            vec3 _2975 = normalize(_2280 + _2932);
-            float _2981 = max(dot(_2275, _2280), 9.9999997473787516355514526367188e-05);
-            float _2986 = clamp(dot(_2275, _2975), 0.0, 1.0);
-            vec3 _2997 = mix(vec3(0.039999999105930328369140625), _5794, vec3(i_material.x));
-            float _3041 = clamp(1.0 - clamp(dot(_2280, _2975), 0.0, 1.0), 0.0, 1.0);
-            float _3044 = _3041 * _3041;
-            vec3 _3055 = _2997 + ((vec3(1.0) - _2997) * ((_3044 * _3044) * _3041));
-            float _3063 = max(_2287, 0.04500000178813934326171875);
-            float _3066 = _3063 * _3063;
-            float _3069 = _3066 * _3066;
-            float _3077 = max(((_2986 * _2986) * (_3069 - 1.0)) + 1.0, 9.9999997473787516355514526367188e-06);
-            float _3091 = max(_2287, 0.04500000178813934326171875);
-            float _3098 = ((_3091 * _3091) * _3091) * _3091;
-            _5795 = ((((((vec3(1.0) - _3055) * (1.0 - i_material.x)) * _5794) * vec3(0.3183098733425140380859375)) + (_3055 * ((_3069 / ((3.1415927410125732421875 * _3077) * _3077)) * (0.5 / max((_2966 * sqrt(((_2981 * _2981) * (1.0 - _3098)) + _3098)) + (_2981 * sqrt(((_2966 * _2966) * (1.0 - _3098)) + _3098)), 9.9999997473787516355514526367188e-06))))) * (_1363.SunLight.color * _1363.SunLight.intensity)) * _2966;
-            break;
-        } while(false);
-        float _5862;
-        do
-        {
-            uint _5796;
-            _5796 = 0u;
-            for (; (_5796 < _662.Csm.cascadeCount) && (i_viewDepth > _662.Csm.cascades[_5796].splitFar); )
-            {
-                _5796++;
-                continue;
-            }
-            if (_5796 >= _662.Csm.cascadeCount)
-            {
-                _5862 = 1.0;
-                break;
-            }
-            float _5823;
-            do
-            {
-                vec4 _3283 = vec4(i_worldPos + (_2275 * (_662.Csm.normalBias * _662.Csm.cascades[_5796].texelWorldSize)), 1.0) * _662.Csm.cascades[_5796].viewProj;
-                if (any(greaterThan(abs(_3283.xy), vec2(1.0))) || (_3283.z > 1.0))
-                {
-                    _5823 = 1.0;
-                    break;
-                }
-                float _3303 = _3283.z - (_662.Csm.depthBias / _662.Csm.cascades[_5796].depthRange);
-                vec2 _3316 = vec2((_3283.x * 0.5) + 0.5, 0.5 - (_3283.y * 0.5)) * _662.Csm.shadowMapSize;
-                int _3319 = int(_662.Csm.shadowMapSize) - 1;
-                float _5807;
-                float _5810;
-                if (_662.Csm.pcfTaps >= 9u)
-                {
-                    float _5808;
-                    _5808 = 0.0;
-                    float _5821;
-                    SPIRV_CROSS_UNROLL
-                    for (int _5806 = -1; _5806 <= 1; _5808 = _5821, _5806++)
-                    {
-                        _5821 = _5808;
-                        float _3353;
-                        SPIRV_CROSS_UNROLL
-                        for (int _5817 = -1; _5817 <= 1; _5821 = _3353, _5817++)
-                        {
-                            ivec2 _3345 = clamp(ivec2(floor(_3316 + vec2(float(_5817), float(_5806)))), ivec2(0), ivec2(_3319));
-                            float _5819;
-                            do
-                            {
-                                if (_5796 == 0u)
-                                {
-                                    _5819 = texelFetch(CsmMap0, ivec3(_3345, 0).xy, 0).x;
-                                    break;
-                                }
-                                if (_5796 == 1u)
-                                {
-                                    _5819 = texelFetch(CsmMap1, ivec3(_3345, 0).xy, 0).x;
-                                    break;
-                                }
-                                if (_5796 == 2u)
-                                {
-                                    _5819 = texelFetch(CsmMap2, ivec3(_3345, 0).xy, 0).x;
-                                    break;
-                                }
-                                _5819 = texelFetch(CsmMap3, ivec3(_3345, 0).xy, 0).x;
-                                break;
-                            } while(false);
-                            _3353 = _5821 + float(_3303 <= _5819);
-                        }
-                    }
-                    _5810 = 9.0;
-                    _5807 = _5808;
-                }
-                else
-                {
-                    bool _3365 = _662.Csm.pcfTaps >= 4u;
-                    float _5809;
-                    if (_3365)
-                    {
-                        float _5804;
-                        _5804 = 0.0;
-                        float _5803;
-                        SPIRV_CROSS_UNROLL
-                        for (int _5798 = 0; _5798 < 2; _5798++, _5804 = _5803)
-                        {
-                            _5803 = _5804;
-                            float _3398;
-                            SPIRV_CROSS_UNROLL
-                            for (int _5799 = 0; _5799 < 2; _5803 = _3398, _5799++)
-                            {
-                                ivec2 _3390 = clamp(ivec2(floor(_3316 + (vec2(float(_5799), float(_5798)) - vec2(0.5)))), ivec2(0), ivec2(_3319));
-                                float _5801;
-                                do
-                                {
-                                    if (_5796 == 0u)
-                                    {
-                                        _5801 = texelFetch(CsmMap0, ivec3(_3390, 0).xy, 0).x;
-                                        break;
-                                    }
-                                    if (_5796 == 1u)
-                                    {
-                                        _5801 = texelFetch(CsmMap1, ivec3(_3390, 0).xy, 0).x;
-                                        break;
-                                    }
-                                    if (_5796 == 2u)
-                                    {
-                                        _5801 = texelFetch(CsmMap2, ivec3(_3390, 0).xy, 0).x;
-                                        break;
-                                    }
-                                    _5801 = texelFetch(CsmMap3, ivec3(_3390, 0).xy, 0).x;
-                                    break;
-                                } while(false);
-                                _3398 = _5803 + float(_3303 <= _5801);
-                            }
-                        }
-                        _5809 = _5804;
-                    }
-                    else
-                    {
-                        ivec2 _3413 = clamp(ivec2(floor(_3316)), ivec2(0), ivec2(_3319));
-                        float _5797;
-                        do
-                        {
-                            if (_5796 == 0u)
-                            {
-                                _5797 = texelFetch(CsmMap0, ivec3(_3413, 0).xy, 0).x;
-                                break;
-                            }
-                            if (_5796 == 1u)
-                            {
-                                _5797 = texelFetch(CsmMap1, ivec3(_3413, 0).xy, 0).x;
-                                break;
-                            }
-                            if (_5796 == 2u)
-                            {
-                                _5797 = texelFetch(CsmMap2, ivec3(_3413, 0).xy, 0).x;
-                                break;
-                            }
-                            _5797 = texelFetch(CsmMap3, ivec3(_3413, 0).xy, 0).x;
-                            break;
-                        } while(false);
-                        _5809 = float(_3303 <= _5797);
-                    }
-                    _5810 = _3365 ? 4.0 : 1.0;
-                    _5807 = _5809;
-                }
-                _5823 = _5807 / _5810;
-                break;
-            } while(false);
-            float _3189 = _662.Csm.blendFraction * (_662.Csm.cascades[_5796].splitFar - _662.Csm.cascades[_5796].splitNear);
-            float _5861;
-            if ((((_5796 + 1u) < _662.Csm.cascadeCount) && (_3189 > 0.0)) && (i_viewDepth > (_662.Csm.cascades[_5796].splitFar - _3189)))
-            {
-                uint _3217 = _5796 + 1u;
-                float _5860;
-                do
-                {
-                    vec4 _3696 = vec4(i_worldPos + (_2275 * (_662.Csm.normalBias * _662.Csm.cascades[_3217].texelWorldSize)), 1.0) * _662.Csm.cascades[_3217].viewProj;
-                    if (any(greaterThan(abs(_3696.xy), vec2(1.0))) || (_3696.z > 1.0))
-                    {
-                        _5860 = 1.0;
-                        break;
-                    }
-                    float _3716 = _3696.z - (_662.Csm.depthBias / _662.Csm.cascades[_3217].depthRange);
-                    vec2 _3729 = vec2((_3696.x * 0.5) + 0.5, 0.5 - (_3696.y * 0.5)) * _662.Csm.shadowMapSize;
-                    int _3732 = int(_662.Csm.shadowMapSize) - 1;
-                    float _5844;
-                    float _5847;
-                    if (_662.Csm.pcfTaps >= 9u)
-                    {
-                        float _5845;
-                        _5845 = 0.0;
-                        float _5858;
-                        SPIRV_CROSS_UNROLL
-                        for (int _5843 = -1; _5843 <= 1; _5845 = _5858, _5843++)
-                        {
-                            _5858 = _5845;
-                            float _3766;
-                            SPIRV_CROSS_UNROLL
-                            for (int _5854 = -1; _5854 <= 1; _5858 = _3766, _5854++)
-                            {
-                                ivec2 _3758 = clamp(ivec2(floor(_3729 + vec2(float(_5854), float(_5843)))), ivec2(0), ivec2(_3732));
-                                float _5856;
-                                do
-                                {
-                                    if (_3217 == 0u)
-                                    {
-                                        _5856 = texelFetch(CsmMap0, ivec3(_3758, 0).xy, 0).x;
-                                        break;
-                                    }
-                                    if (_3217 == 1u)
-                                    {
-                                        _5856 = texelFetch(CsmMap1, ivec3(_3758, 0).xy, 0).x;
-                                        break;
-                                    }
-                                    if (_3217 == 2u)
-                                    {
-                                        _5856 = texelFetch(CsmMap2, ivec3(_3758, 0).xy, 0).x;
-                                        break;
-                                    }
-                                    _5856 = texelFetch(CsmMap3, ivec3(_3758, 0).xy, 0).x;
-                                    break;
-                                } while(false);
-                                _3766 = _5858 + float(_3716 <= _5856);
-                            }
-                        }
-                        _5847 = 9.0;
-                        _5844 = _5845;
-                    }
-                    else
-                    {
-                        bool _3778 = _662.Csm.pcfTaps >= 4u;
-                        float _5846;
-                        if (_3778)
-                        {
-                            float _5841;
-                            _5841 = 0.0;
-                            float _5840;
-                            SPIRV_CROSS_UNROLL
-                            for (int _5835 = 0; _5835 < 2; _5835++, _5841 = _5840)
-                            {
-                                _5840 = _5841;
-                                float _3811;
-                                SPIRV_CROSS_UNROLL
-                                for (int _5836 = 0; _5836 < 2; _5840 = _3811, _5836++)
-                                {
-                                    ivec2 _3803 = clamp(ivec2(floor(_3729 + (vec2(float(_5836), float(_5835)) - vec2(0.5)))), ivec2(0), ivec2(_3732));
-                                    float _5838;
-                                    do
-                                    {
-                                        if (_3217 == 0u)
-                                        {
-                                            _5838 = texelFetch(CsmMap0, ivec3(_3803, 0).xy, 0).x;
-                                            break;
-                                        }
-                                        if (_3217 == 1u)
-                                        {
-                                            _5838 = texelFetch(CsmMap1, ivec3(_3803, 0).xy, 0).x;
-                                            break;
-                                        }
-                                        if (_3217 == 2u)
-                                        {
-                                            _5838 = texelFetch(CsmMap2, ivec3(_3803, 0).xy, 0).x;
-                                            break;
-                                        }
-                                        _5838 = texelFetch(CsmMap3, ivec3(_3803, 0).xy, 0).x;
-                                        break;
-                                    } while(false);
-                                    _3811 = _5840 + float(_3716 <= _5838);
-                                }
-                            }
-                            _5846 = _5841;
-                        }
-                        else
-                        {
-                            ivec2 _3826 = clamp(ivec2(floor(_3729)), ivec2(0), ivec2(_3732));
-                            float _5834;
-                            do
-                            {
-                                if (_3217 == 0u)
-                                {
-                                    _5834 = texelFetch(CsmMap0, ivec3(_3826, 0).xy, 0).x;
-                                    break;
-                                }
-                                if (_3217 == 1u)
-                                {
-                                    _5834 = texelFetch(CsmMap1, ivec3(_3826, 0).xy, 0).x;
-                                    break;
-                                }
-                                if (_3217 == 2u)
-                                {
-                                    _5834 = texelFetch(CsmMap2, ivec3(_3826, 0).xy, 0).x;
-                                    break;
-                                }
-                                _5834 = texelFetch(CsmMap3, ivec3(_3826, 0).xy, 0).x;
-                                break;
-                            } while(false);
-                            _5846 = float(_3716 <= _5834);
-                        }
-                        _5847 = _3778 ? 4.0 : 1.0;
-                        _5844 = _5846;
-                    }
-                    _5860 = _5844 / _5847;
-                    break;
-                } while(false);
-                _5861 = mix(_5823, _5860, clamp((i_viewDepth - (_662.Csm.cascades[_5796].splitFar - _3189)) / _3189, 0.0, 1.0));
-            }
-            else
-            {
-                _5861 = _5823;
-            }
-            _5862 = _5861;
-            break;
-        } while(false);
-        _5912 = _5795 * ((i_material.z > 0.5) ? _5862 : 1.0);
-    }
-    else
-    {
-        _5912 = vec3(0.0);
-    }
-    uvec2 _4073 = min((uvec2(gl_FragCoord.xy) / uvec2(_1406.ClusterGridData.tileSizePx)), uvec2(_1406.ClusterGridData.gridX - 1u, _1406.ClusterGridData.gridY - 1u));
-    uint _4123 = (_4073.x + (_4073.y * _1406.ClusterGridData.gridX)) + ((uint(clamp(floor((log2(max(i_viewDepth, _1406.ClusterGridData.zNear)) * _1406.ClusterGridData.sliceScale) + _1406.ClusterGridData.sliceBias), 0.0, float(_1406.ClusterGridData.gridZ - 1u))) * _1406.ClusterGridData.gridX) * _1406.ClusterGridData.gridY);
-    vec3 _5911;
-    _5911 = _5912;
-    mat4 _5394[6];
-    mat4 _5412[6];
-    vec3 _6111;
-    float _6139;
-    float _6157;
-    float _5960;
-    float _6030;
-    for (uint _5910 = 0u; _5910 < LightGrid_1._data[_4123].count; _6030 = _6157, _5960 = _6139, _5911 = _6111, _5910++)
-    {
-        uint _2833 = LightGrid_1._data[_4123].offset + _5910;
-        if (LightIndexList_1._data[_2833] < _1406.ClusterGridData.numPointLights)
-        {
-            vec3 _4138 = PointLightsBuffer_1._data[LightIndexList_1._data[_2833]].position - i_worldPos;
-            float _4140 = length(_4138);
-            vec3 _4145 = _4138 / vec3(max(_4140, 9.9999997473787516355514526367188e-05));
-            float _4167 = _4140 / PointLightsBuffer_1._data[LightIndexList_1._data[_2833]].radius;
-            float _4170 = _4167 * _4167;
-            float _4175 = clamp(1.0 - (_4170 * _4170), 0.0, 1.0);
-            vec3 _6010;
-            do
-            {
-                float _4210 = clamp(dot(_2275, _4145), 0.0, 1.0);
-                if (_4210 <= 0.0)
-                {
-                    _6010 = vec3(0.0);
-                    break;
-                }
-                vec3 _4219 = normalize(_2280 + _4145);
-                float _4225 = max(dot(_2275, _2280), 9.9999997473787516355514526367188e-05);
-                float _4230 = clamp(dot(_2275, _4219), 0.0, 1.0);
-                vec3 _4241 = mix(vec3(0.039999999105930328369140625), _5794, vec3(i_material.x));
-                float _4285 = clamp(1.0 - clamp(dot(_2280, _4219), 0.0, 1.0), 0.0, 1.0);
-                float _4288 = _4285 * _4285;
-                vec3 _4299 = _4241 + ((vec3(1.0) - _4241) * ((_4288 * _4288) * _4285));
-                float _4307 = max(_2287, 0.04500000178813934326171875);
-                float _4310 = _4307 * _4307;
-                float _4313 = _4310 * _4310;
-                float _4321 = max(((_4230 * _4230) * (_4313 - 1.0)) + 1.0, 9.9999997473787516355514526367188e-06);
-                float _4335 = max(_2287, 0.04500000178813934326171875);
-                float _4342 = ((_4335 * _4335) * _4335) * _4335;
-                _6010 = ((((((vec3(1.0) - _4299) * (1.0 - i_material.x)) * _5794) * vec3(0.3183098733425140380859375)) + (_4299 * ((_4313 / ((3.1415927410125732421875 * _4321) * _4321)) * (0.5 / max((_4210 * sqrt(((_4225 * _4225) * (1.0 - _4342)) + _4342)) + (_4225 * sqrt(((_4210 * _4210) * (1.0 - _4342)) + _4342)), 9.9999997473787516355514526367188e-06))))) * ((PointLightsBuffer_1._data[LightIndexList_1._data[_2833]].color * PointLightsBuffer_1._data[LightIndexList_1._data[_2833]].intensity) * ((_4175 * _4175) / max(_4140 * _4140, 9.9999997473787516355514526367188e-05)))) * _4210;
-                break;
-            } while(false);
-            float _6026;
-            do
-            {
-                bool _6024;
-                float _6027;
-                uint _6011 = 0u;
-                SPIRV_CROSS_LOOP
-                for (;;)
-                {
-                    if (_6011 < _1055.pointShadowCount)
-                    {
-                        if (uint(_1055.PointShadows[_6011].posType.w) != 0u)
-                        {
-                            uint _4415 = _6011 + uint(1);
-                            _6011 = _4415;
-                            continue;
-                        }
-                        vec3 _4401 = _1055.PointShadows[_6011].posType.xyz - PointLightsBuffer_1._data[LightIndexList_1._data[_2833]].position;
-                        if (dot(_4401, _4401) > 9.9999999392252902907785028219223e-09)
-                        {
-                            uint _4415 = _6011 + uint(1);
-                            _6011 = _4415;
-                            continue;
-                        }
-                        float _6023;
-                        do
-                        {
-                            if (i_material.z < 0.5)
-                            {
-                                _6023 = 1.0;
-                                break;
-                            }
-                            _5412[0] = spvWorkaroundRowMajor(_1055.PointShadows[_6011]).vp[0];
-                            _5412[1] = spvWorkaroundRowMajor(_1055.PointShadows[_6011]).vp[1];
-                            _5412[2] = spvWorkaroundRowMajor(_1055.PointShadows[_6011]).vp[2];
-                            _5412[3] = spvWorkaroundRowMajor(_1055.PointShadows[_6011]).vp[3];
-                            _5412[4] = spvWorkaroundRowMajor(_1055.PointShadows[_6011]).vp[4];
-                            _5412[5] = spvWorkaroundRowMajor(_1055.PointShadows[_6011]).vp[5];
-                            vec3 _4478 = i_worldPos - spvWorkaroundRowMajor(_1055.PointShadows[_6011]).posType.xyz;
-                            uint _6012;
-                            if (spvWorkaroundRowMajor(_1055.PointShadows[_6011]).posType.w < 0.5)
-                            {
-                                vec3 _4484 = abs(_4478);
-                                uint _6013;
-                                if ((_4484.x >= _4484.y) && (_4484.x >= _4484.z))
-                                {
-                                    _6013 = (_4478.x > 0.0) ? 0u : 1u;
-                                }
-                                else
-                                {
-                                    uint _6014;
-                                    if (_4484.y >= _4484.z)
-                                    {
-                                        _6014 = (_4478.y > 0.0) ? 2u : 3u;
-                                    }
-                                    else
-                                    {
-                                        _6014 = (_4478.z > 0.0) ? 4u : 5u;
-                                    }
-                                    _6013 = _6014;
-                                }
-                                _6012 = _6013;
-                            }
-                            else
-                            {
-                                _6012 = 0u;
-                            }
-                            if (_6012 >= uint(spvWorkaroundRowMajor(_1055.PointShadows[_6011]).params.y))
-                            {
-                                _6023 = 1.0;
-                                break;
-                            }
-                            vec4 _4544 = vec4(i_worldPos + (_2275 * (0.00999999977648258209228515625 + (0.00200000009499490261077880859375 * length(_4478)))), 1.0) * _5412[_6012];
-                            if (_4544.w <= spvWorkaroundRowMajor(_1055.PointShadows[_6011]).params.x)
-                            {
-                                _6023 = 1.0;
-                                break;
-                            }
-                            float _4556 = _4544.x / _4544.w;
-                            float _4561 = _4544.y / _4544.w;
-                            if ((abs(_4556) > 1.0) || (abs(_4561) > 1.0))
-                            {
-                                _6023 = 1.0;
-                                break;
-                            }
-                            int _4573 = int(spvWorkaroundRowMajor(_1055.PointShadows[_6011]).params.z);
-                            int _4585 = clamp(int(roundEven((((_4556 * 0.5) + 0.5) * float(_4573)) - 0.5)), 0, _4573 - 1);
-                            int _4597 = clamp(int(roundEven(((0.5 - (_4561 * 0.5)) * float(_4573)) - 0.5)), 0, _4573 - 1);
-                            int _4601 = int(_6012) * _4573;
-                            int _4605 = (_4601 + _4573) - 1;
-                            float _4607 = _4544.w;
-                            float _4610 = 0.0199999995529651641845703125 + (0.00150000001303851604461669921875 * _4607);
-                            float _6016;
-                            _6016 = 0.0;
-                            float _6021;
-                            SPIRV_CROSS_UNROLL
-                            for (int _6015 = -1; _6015 <= 1; _6016 = _6021, _6015++)
-                            {
-                                _6021 = _6016;
-                                float _4650;
-                                SPIRV_CROSS_UNROLL
-                                for (int _6017 = -1; _6017 <= 1; _6021 = _4650, _6017++)
-                                {
-                                    int _4626 = clamp(_4585 + _6017, 0, _4573 - 1);
-                                    int _4638 = clamp(clamp(_4597 + _6015, 0, _4573 - 1) + _4601, _4601, _4605);
-                                    float _6019;
-                                    do
-                                    {
-                                        if (_6011 == 0u)
-                                        {
-                                            _6019 = texelFetch(PointShadowMap0, ivec3(_4626, _4638, 0).xy, 0).x;
-                                            break;
-                                        }
-                                        if (_6011 == 1u)
-                                        {
-                                            _6019 = texelFetch(PointShadowMap1, ivec3(_4626, _4638, 0).xy, 0).x;
-                                            break;
-                                        }
-                                        if (_6011 == 2u)
-                                        {
-                                            _6019 = texelFetch(PointShadowMap2, ivec3(_4626, _4638, 0).xy, 0).x;
-                                            break;
-                                        }
-                                        _6019 = texelFetch(PointShadowMap3, ivec3(_4626, _4638, 0).xy, 0).x;
-                                        break;
-                                    } while(false);
-                                    _4650 = _6021 + float(_6019 >= (_4607 - _4610));
-                                }
-                            }
-                            _6023 = _6016 * 0.111111111938953399658203125;
-                            break;
-                        } while(false);
-                        _6027 = _6023;
-                        _6024 = true;
-                        break;
-                    }
-                    else
-                    {
-                        _6027 = _6030;
-                        _6024 = false;
-                        break;
-                    }
-                }
-                if (_6024)
-                {
-                    _6026 = _6027;
-                    break;
-                }
-                _6026 = 1.0;
-                break;
-            } while(false);
-            _6157 = _6026;
-            _6139 = _5960;
-            _6111 = _5911 + (_6010 * _6026);
         }
         else
         {
-            uint _2878 = LightIndexList_1._data[_2833] - _1406.ClusterGridData.numPointLights;
-            vec3 _4752 = SpotLightsBuffer_1._data[_2878].position - i_worldPos;
-            float _4754 = length(_4752);
-            vec3 _4759 = _4752 / vec3(max(_4754, 9.9999997473787516355514526367188e-05));
-            float _4793 = _4754 / SpotLightsBuffer_1._data[_2878].radius;
-            float _4796 = _4793 * _4793;
-            float _4801 = clamp(1.0 - (_4796 * _4796), 0.0, 1.0);
-            float _4818 = clamp((dot(-_4759, SpotLightsBuffer_1._data[_2878].direction) * SpotLightsBuffer_1._data[_2878].spotScale) + SpotLightsBuffer_1._data[_2878].spotOffset, 0.0, 1.0);
-            vec3 _5940;
-            do
-            {
-                float _4848 = clamp(dot(_2275, _4759), 0.0, 1.0);
-                if (_4848 <= 0.0)
-                {
-                    _5940 = vec3(0.0);
-                    break;
-                }
-                vec3 _4857 = normalize(_2280 + _4759);
-                float _4863 = max(dot(_2275, _2280), 9.9999997473787516355514526367188e-05);
-                float _4868 = clamp(dot(_2275, _4857), 0.0, 1.0);
-                vec3 _4879 = mix(vec3(0.039999999105930328369140625), _5794, vec3(i_material.x));
-                float _4923 = clamp(1.0 - clamp(dot(_2280, _4857), 0.0, 1.0), 0.0, 1.0);
-                float _4926 = _4923 * _4923;
-                vec3 _4937 = _4879 + ((vec3(1.0) - _4879) * ((_4926 * _4926) * _4923));
-                float _4945 = max(_2287, 0.04500000178813934326171875);
-                float _4948 = _4945 * _4945;
-                float _4951 = _4948 * _4948;
-                float _4959 = max(((_4868 * _4868) * (_4951 - 1.0)) + 1.0, 9.9999997473787516355514526367188e-06);
-                float _4973 = max(_2287, 0.04500000178813934326171875);
-                float _4980 = ((_4973 * _4973) * _4973) * _4973;
-                _5940 = ((((((vec3(1.0) - _4937) * (1.0 - i_material.x)) * _5794) * vec3(0.3183098733425140380859375)) + (_4937 * ((_4951 / ((3.1415927410125732421875 * _4959) * _4959)) * (0.5 / max((_4848 * sqrt(((_4863 * _4863) * (1.0 - _4980)) + _4980)) + (_4863 * sqrt(((_4848 * _4848) * (1.0 - _4980)) + _4980)), 9.9999997473787516355514526367188e-06))))) * ((SpotLightsBuffer_1._data[_2878].color * SpotLightsBuffer_1._data[_2878].intensity) * (((_4801 * _4801) / max(_4754 * _4754, 9.9999997473787516355514526367188e-05)) * (_4818 * _4818)))) * _4848;
-                break;
-            } while(false);
-            uint _2906 = LightIndexList_1._data[_2833] - _1406.ClusterGridData.numPointLights;
-            float _5956;
-            do
-            {
-                bool _5954;
-                float _5957;
-                uint _5941 = 0u;
-                SPIRV_CROSS_LOOP
-                for (;;)
-                {
-                    if (_5941 < _1055.pointShadowCount)
-                    {
-                        if (uint(_1055.PointShadows[_5941].posType.w) != 1u)
-                        {
-                            uint _5053 = _5941 + uint(1);
-                            _5941 = _5053;
-                            continue;
-                        }
-                        vec3 _5039 = _1055.PointShadows[_5941].posType.xyz - SpotLightsBuffer_1._data[_2906].position;
-                        if (dot(_5039, _5039) > 9.9999999392252902907785028219223e-09)
-                        {
-                            uint _5053 = _5941 + uint(1);
-                            _5941 = _5053;
-                            continue;
-                        }
-                        float _5953;
-                        do
-                        {
-                            if (i_material.z < 0.5)
-                            {
-                                _5953 = 1.0;
-                                break;
-                            }
-                            _5394[0] = spvWorkaroundRowMajor(_1055.PointShadows[_5941]).vp[0];
-                            _5394[1] = spvWorkaroundRowMajor(_1055.PointShadows[_5941]).vp[1];
-                            _5394[2] = spvWorkaroundRowMajor(_1055.PointShadows[_5941]).vp[2];
-                            _5394[3] = spvWorkaroundRowMajor(_1055.PointShadows[_5941]).vp[3];
-                            _5394[4] = spvWorkaroundRowMajor(_1055.PointShadows[_5941]).vp[4];
-                            _5394[5] = spvWorkaroundRowMajor(_1055.PointShadows[_5941]).vp[5];
-                            vec3 _5116 = i_worldPos - spvWorkaroundRowMajor(_1055.PointShadows[_5941]).posType.xyz;
-                            uint _5942;
-                            if (spvWorkaroundRowMajor(_1055.PointShadows[_5941]).posType.w < 0.5)
-                            {
-                                vec3 _5122 = abs(_5116);
-                                uint _5943;
-                                if ((_5122.x >= _5122.y) && (_5122.x >= _5122.z))
-                                {
-                                    _5943 = (_5116.x > 0.0) ? 0u : 1u;
-                                }
-                                else
-                                {
-                                    uint _5944;
-                                    if (_5122.y >= _5122.z)
-                                    {
-                                        _5944 = (_5116.y > 0.0) ? 2u : 3u;
-                                    }
-                                    else
-                                    {
-                                        _5944 = (_5116.z > 0.0) ? 4u : 5u;
-                                    }
-                                    _5943 = _5944;
-                                }
-                                _5942 = _5943;
-                            }
-                            else
-                            {
-                                _5942 = 0u;
-                            }
-                            if (_5942 >= uint(spvWorkaroundRowMajor(_1055.PointShadows[_5941]).params.y))
-                            {
-                                _5953 = 1.0;
-                                break;
-                            }
-                            vec4 _5182 = vec4(i_worldPos + (_2275 * (0.00999999977648258209228515625 + (0.00200000009499490261077880859375 * length(_5116)))), 1.0) * _5394[_5942];
-                            if (_5182.w <= spvWorkaroundRowMajor(_1055.PointShadows[_5941]).params.x)
-                            {
-                                _5953 = 1.0;
-                                break;
-                            }
-                            float _5194 = _5182.x / _5182.w;
-                            float _5199 = _5182.y / _5182.w;
-                            if ((abs(_5194) > 1.0) || (abs(_5199) > 1.0))
-                            {
-                                _5953 = 1.0;
-                                break;
-                            }
-                            int _5211 = int(spvWorkaroundRowMajor(_1055.PointShadows[_5941]).params.z);
-                            int _5223 = clamp(int(roundEven((((_5194 * 0.5) + 0.5) * float(_5211)) - 0.5)), 0, _5211 - 1);
-                            int _5235 = clamp(int(roundEven(((0.5 - (_5199 * 0.5)) * float(_5211)) - 0.5)), 0, _5211 - 1);
-                            int _5239 = int(_5942) * _5211;
-                            int _5243 = (_5239 + _5211) - 1;
-                            float _5245 = _5182.w;
-                            float _5248 = 0.0199999995529651641845703125 + (0.00150000001303851604461669921875 * _5245);
-                            float _5946;
-                            _5946 = 0.0;
-                            float _5951;
-                            SPIRV_CROSS_UNROLL
-                            for (int _5945 = -1; _5945 <= 1; _5946 = _5951, _5945++)
-                            {
-                                _5951 = _5946;
-                                float _5288;
-                                SPIRV_CROSS_UNROLL
-                                for (int _5947 = -1; _5947 <= 1; _5951 = _5288, _5947++)
-                                {
-                                    int _5264 = clamp(_5223 + _5947, 0, _5211 - 1);
-                                    int _5276 = clamp(clamp(_5235 + _5945, 0, _5211 - 1) + _5239, _5239, _5243);
-                                    float _5949;
-                                    do
-                                    {
-                                        if (_5941 == 0u)
-                                        {
-                                            _5949 = texelFetch(PointShadowMap0, ivec3(_5264, _5276, 0).xy, 0).x;
-                                            break;
-                                        }
-                                        if (_5941 == 1u)
-                                        {
-                                            _5949 = texelFetch(PointShadowMap1, ivec3(_5264, _5276, 0).xy, 0).x;
-                                            break;
-                                        }
-                                        if (_5941 == 2u)
-                                        {
-                                            _5949 = texelFetch(PointShadowMap2, ivec3(_5264, _5276, 0).xy, 0).x;
-                                            break;
-                                        }
-                                        _5949 = texelFetch(PointShadowMap3, ivec3(_5264, _5276, 0).xy, 0).x;
-                                        break;
-                                    } while(false);
-                                    _5288 = _5951 + float(_5949 >= (_5245 - _5248));
-                                }
-                            }
-                            _5953 = _5946 * 0.111111111938953399658203125;
-                            break;
-                        } while(false);
-                        _5957 = _5953;
-                        _5954 = true;
-                        break;
-                    }
-                    else
-                    {
-                        _5957 = _5960;
-                        _5954 = false;
-                        break;
-                    }
-                }
-                if (_5954)
-                {
-                    _5956 = _5957;
-                    break;
-                }
-                _5956 = 1.0;
-                break;
-            } while(false);
-            _6157 = _6030;
-            _6139 = _5956;
-            _6111 = _5911 + (_5940 * _5956);
+            ivec2 q_2 = clamp(ivec2(floor(t)), ivec2(0), ivec2(maxIdx));
+            uint param_4 = k;
+            ivec2 param_5 = q_2;
+            lit = float(depth <= CsmTexel(param_4, param_5));
         }
     }
-    vec3 _2382 = (((((((vec3(1.0) - min(_2328, vec3(1.0))) * (1.0 - i_material.x)) * _5794) * _2630) + (_2328 * _2717)) * texelFetch(AoMap, ivec3(ivec2(gl_FragCoord.xy), 0).xy, 0).x) + _5911) + i_emissive;
-    vec3 _5939;
-    if (i_fogParams.z > 0.0)
+    return lit / n;
+}
+
+float CsmVisibility(vec3 worldPos, vec3 N, float viewDepth)
+{
+    uint k = 0u;
+    while ((k < _662.Csm.cascadeCount) && (viewDepth > _662.Csm.cascades[k].splitFar))
     {
-        _5939 = mix(_2382, i_fogColor.xyz, vec3(clamp((length(i_toCam) - i_fogParams.x) / max(i_fogParams.y - i_fogParams.x, 0.001000000047497451305389404296875), 0.0, 1.0) * i_fogParams.z));
+        k++;
     }
-    else
+    if (k >= _662.Csm.cascadeCount)
     {
-        _5939 = _2382;
+        return 1.0;
     }
-    _entryPointOutput = vec4(clamp((_5939 * ((_5939 * 2.5099999904632568359375) + vec3(0.02999999932944774627685546875))) / ((_5939 * ((_5939 * 2.4300000667572021484375) + vec3(0.589999973773956298828125))) + vec3(0.14000000059604644775390625)), vec3(0.0), vec3(1.0)), i_baseColor.w);
+    uint param = k;
+    vec3 param_1 = worldPos;
+    vec3 param_2 = N;
+    float vis = CsmSampleCascade(param, param_1, param_2);
+    CsmCascade c;
+    c.viewProj = _662.Csm.cascades[k].viewProj;
+    c.splitNear = _662.Csm.cascades[k].splitNear;
+    c.splitFar = _662.Csm.cascades[k].splitFar;
+    c.texelWorldSize = _662.Csm.cascades[k].texelWorldSize;
+    c.depthRange = _662.Csm.cascades[k].depthRange;
+    float blendWidth = _662.Csm.blendFraction * (c.splitFar - c.splitNear);
+    if ((((k + 1u) < _662.Csm.cascadeCount) && (blendWidth > 0.0)) && (viewDepth > (c.splitFar - blendWidth)))
+    {
+        float t = clamp((viewDepth - (c.splitFar - blendWidth)) / blendWidth, 0.0, 1.0);
+        uint param_3 = k + 1u;
+        vec3 param_4 = worldPos;
+        vec3 param_5 = N;
+        vis = mix(vis, CsmSampleCascade(param_3, param_4, param_5), t);
+    }
+    return vis;
+}
+
+uint SliceFromDepth(ClusterGrid g, float depth)
+{
+    float s = floor((log2(max(depth, g.zNear)) * g.sliceScale) + g.sliceBias);
+    return uint(clamp(s, 0.0, float(g.gridZ - 1u)));
+}
+
+uint ClusterIndexOf(ClusterGrid g, uvec3 c)
+{
+    return (c.x + (c.y * g.gridX)) + ((c.z * g.gridX) * g.gridY);
+}
+
+uint ClusterIndexForPixel(ClusterGrid g, vec2 pixelPos, float depth)
+{
+    uvec2 tile = min((uvec2(pixelPos) / uvec2(g.tileSizePx)), uvec2(g.gridX - 1u, g.gridY - 1u));
+    ClusterGrid param = g;
+    float param_1 = depth;
+    ClusterGrid param_2 = g;
+    uvec3 param_3 = uvec3(tile, SliceFromDepth(param, param_1));
+    return ClusterIndexOf(param_2, param_3);
+}
+
+float DistanceAttenuation(float d, float R)
+{
+    float r = d / R;
+    float r2 = r * r;
+    float w = clamp(1.0 - (r2 * r2), 0.0, 1.0);
+    return (w * w) / max(d * d, 9.9999997473787516355514526367188e-05);
+}
+
+vec3 EvaluatePointLight(PointLight l, SurfaceData s, vec3 worldPos)
+{
+    vec3 toLight = l.position - worldPos;
+    float d = length(toLight);
+    vec3 L = toLight / vec3(max(d, 9.9999997473787516355514526367188e-05));
+    float param = d;
+    float param_1 = l.radius;
+    vec3 radiance = (l.color * l.intensity) * DistanceAttenuation(param, param_1);
+    SurfaceData param_2 = s;
+    vec3 param_3 = L;
+    vec3 param_4 = radiance;
+    return EvaluateBRDF(param_2, param_3, param_4);
+}
+
+float PointShadowTexel(uint slot, ivec2 p)
+{
+    if (slot == 0u)
+    {
+        return texelFetch(PointShadowMap0, ivec3(p, 0).xy, ivec3(p, 0).z).x;
+    }
+    if (slot == 1u)
+    {
+        return texelFetch(PointShadowMap1, ivec3(p, 0).xy, ivec3(p, 0).z).x;
+    }
+    if (slot == 2u)
+    {
+        return texelFetch(PointShadowMap2, ivec3(p, 0).xy, ivec3(p, 0).z).x;
+    }
+    return texelFetch(PointShadowMap3, ivec3(p, 0).xy, ivec3(p, 0).z).x;
+}
+
+float PointShadowVisibility(uint slot, vec3 worldPos, vec3 N, float receive)
+{
+    if (receive < 0.5)
+    {
+        return 1.0;
+    }
+    PointShadowLight L;
+    L.posType = spvWorkaroundRowMajor(_1055.PointShadows[slot]).posType;
+    L.params = spvWorkaroundRowMajor(_1055.PointShadows[slot]).params;
+    L.vp[0] = spvWorkaroundRowMajor(_1055.PointShadows[slot]).vp[0];
+    L.vp[1] = spvWorkaroundRowMajor(_1055.PointShadows[slot]).vp[1];
+    L.vp[2] = spvWorkaroundRowMajor(_1055.PointShadows[slot]).vp[2];
+    L.vp[3] = spvWorkaroundRowMajor(_1055.PointShadows[slot]).vp[3];
+    L.vp[4] = spvWorkaroundRowMajor(_1055.PointShadows[slot]).vp[4];
+    L.vp[5] = spvWorkaroundRowMajor(_1055.PointShadows[slot]).vp[5];
+    vec3 d = worldPos - L.posType.xyz;
+    uint f = 0u;
+    if (L.posType.w < 0.5)
+    {
+        vec3 a = abs(d);
+        if ((a.x >= a.y) && (a.x >= a.z))
+        {
+            f = (d.x > 0.0) ? 0u : 1u;
+        }
+        else
+        {
+            if (a.y >= a.z)
+            {
+                f = (d.y > 0.0) ? 2u : 3u;
+            }
+            else
+            {
+                f = (d.z > 0.0) ? 4u : 5u;
+            }
+        }
+    }
+    if (f >= uint(L.params.y))
+    {
+        return 1.0;
+    }
+    float dist = length(d);
+    vec3 pb = worldPos + (N * (0.00999999977648258209228515625 + (0.00200000009499490261077880859375 * dist)));
+    vec4 c = vec4(pb, 1.0) * L.vp[f];
+    if (c.w <= L.params.x)
+    {
+        return 1.0;
+    }
+    float nx = c.x / c.w;
+    float ny = c.y / c.w;
+    if ((abs(nx) > 1.0) || (abs(ny) > 1.0))
+    {
+        return 1.0;
+    }
+    int R = int(L.params.z);
+    int cx = clamp(int(roundEven((((nx * 0.5) + 0.5) * float(R)) - 0.5)), 0, R - 1);
+    int cy = clamp(int(roundEven(((0.5 - (ny * 0.5)) * float(R)) - 0.5)), 0, R - 1);
+    int y0 = int(f) * R;
+    int y1 = (y0 + R) - 1;
+    float depth = c.w;
+    float bias = 0.0199999995529651641845703125 + (0.00150000001303851604461669921875 * depth);
+    float lit = 0.0;
+    SPIRV_CROSS_UNROLL
+    for (int dy = -1; dy <= 1; dy++)
+    {
+        SPIRV_CROSS_UNROLL
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            int x = clamp(cx + dx, 0, R - 1);
+            int y = clamp(cy + dy, 0, R - 1) + y0;
+            y = clamp(y, y0, y1);
+            uint param = slot;
+            ivec2 param_1 = ivec2(x, y);
+            lit += float(PointShadowTexel(param, param_1) >= (depth - bias));
+        }
+    }
+    return lit / 9.0;
+}
+
+float PointShadowForLight(vec3 lightPos, uint type, vec3 worldPos, vec3 N, float receive)
+{
+    SPIRV_CROSS_LOOP
+    for (uint k = 0u; k < _1055.pointShadowCount; k++)
+    {
+        if (uint(_1055.PointShadows[k].posType.w) != type)
+        {
+            continue;
+        }
+        vec3 e = _1055.PointShadows[k].posType.xyz - lightPos;
+        if (dot(e, e) > 9.9999999392252902907785028219223e-09)
+        {
+            continue;
+        }
+        uint param = k;
+        vec3 param_1 = worldPos;
+        vec3 param_2 = N;
+        float param_3 = receive;
+        return PointShadowVisibility(param, param_1, param_2, param_3);
+    }
+    return 1.0;
+}
+
+float SpotAttenuation(float cosAngle, float scale, float offset)
+{
+    float t = clamp((cosAngle * scale) + offset, 0.0, 1.0);
+    return t * t;
+}
+
+vec3 EvaluateSpotLight(SpotLight l, SurfaceData s, vec3 worldPos)
+{
+    vec3 toLight = l.position - worldPos;
+    float d = length(toLight);
+    vec3 L = toLight / vec3(max(d, 9.9999997473787516355514526367188e-05));
+    float cosAngle = dot(-L, l.direction);
+    float param = d;
+    float param_1 = l.radius;
+    float param_2 = cosAngle;
+    float param_3 = l.spotScale;
+    float param_4 = l.spotOffset;
+    float att = DistanceAttenuation(param, param_1) * SpotAttenuation(param_2, param_3, param_4);
+    SurfaceData param_5 = s;
+    vec3 param_6 = L;
+    vec3 param_7 = (l.color * l.intensity) * att;
+    return EvaluateBRDF(param_5, param_6, param_7);
+}
+
+vec3 EvaluateClusteredLights(SurfaceData s, vec3 worldPos, vec2 pixelPos, float viewDepth, float receiveShadow)
+{
+    vec3 total = vec3(0.0);
+    if (_1353.Globals.hasSun != 0u)
+    {
+        DirectionalLight param;
+        param.direction = _1363.SunLight.direction;
+        param.intensity = _1363.SunLight.intensity;
+        param.color = _1363.SunLight.color;
+        param.flags = _1363.SunLight.flags;
+        SurfaceData param_1 = s;
+        vec3 sun = EvaluateDirectionalLight(param, param_1);
+        vec3 param_2 = worldPos;
+        vec3 param_3 = s.N;
+        float param_4 = viewDepth;
+        sun *= ((receiveShadow > 0.5) ? CsmVisibility(param_2, param_3, param_4) : 1.0);
+        total += sun;
+    }
+    ClusterGrid param_5;
+    param_5.gridX = _1406.ClusterGridData.gridX;
+    param_5.gridY = _1406.ClusterGridData.gridY;
+    param_5.gridZ = _1406.ClusterGridData.gridZ;
+    param_5.tileSizePx = _1406.ClusterGridData.tileSizePx;
+    param_5.zNear = _1406.ClusterGridData.zNear;
+    param_5.zFar = _1406.ClusterGridData.zFar;
+    param_5.sliceScale = _1406.ClusterGridData.sliceScale;
+    param_5.sliceBias = _1406.ClusterGridData.sliceBias;
+    param_5.projScale = _1406.ClusterGridData.projScale;
+    param_5.screenSize = _1406.ClusterGridData.screenSize;
+    param_5.numPointLights = _1406.ClusterGridData.numPointLights;
+    param_5.numSpotLights = _1406.ClusterGridData.numSpotLights;
+    param_5.maxLightsPerCluster = _1406.ClusterGridData.maxLightsPerCluster;
+    param_5.maxIndices = _1406.ClusterGridData.maxIndices;
+    vec2 param_6 = pixelPos;
+    float param_7 = viewDepth;
+    uint _1449 = ClusterIndexForPixel(param_5, param_6, param_7);
+    ClusterCell cell;
+    cell.offset = LightGrid_1._data[_1449].offset;
+    cell.count = LightGrid_1._data[_1449].count;
+    uint np = _1406.ClusterGridData.numPointLights;
+    PointLight param_8;
+    SpotLight param_16;
+    for (uint i = 0u; i < cell.count; i++)
+    {
+        uint li = LightIndexList_1._data[cell.offset + i];
+        if (li < np)
+        {
+            param_8.position = PointLightsBuffer_1._data[li].position;
+            param_8.radius = PointLightsBuffer_1._data[li].radius;
+            param_8.color = PointLightsBuffer_1._data[li].color;
+            param_8.intensity = PointLightsBuffer_1._data[li].intensity;
+            param_8.flags = PointLightsBuffer_1._data[li].flags;
+            param_8.layerMask = PointLightsBuffer_1._data[li].layerMask;
+            param_8.shadowIndex = PointLightsBuffer_1._data[li].shadowIndex;
+            param_8.cullRadius = PointLightsBuffer_1._data[li].cullRadius;
+            SurfaceData param_9 = s;
+            vec3 param_10 = worldPos;
+            vec3 c = EvaluatePointLight(param_8, param_9, param_10);
+            vec3 param_11 = PointLightsBuffer_1._data[li].position;
+            uint param_12 = 0u;
+            vec3 param_13 = worldPos;
+            vec3 param_14 = s.N;
+            float param_15 = receiveShadow;
+            c *= PointShadowForLight(param_11, param_12, param_13, param_14, param_15);
+            total += c;
+        }
+        else
+        {
+            uint _1546 = li - np;
+            param_16.position = SpotLightsBuffer_1._data[_1546].position;
+            param_16.radius = SpotLightsBuffer_1._data[_1546].radius;
+            param_16.color = SpotLightsBuffer_1._data[_1546].color;
+            param_16.intensity = SpotLightsBuffer_1._data[_1546].intensity;
+            param_16.direction = SpotLightsBuffer_1._data[_1546].direction;
+            param_16.spotScale = SpotLightsBuffer_1._data[_1546].spotScale;
+            param_16.spotOffset = SpotLightsBuffer_1._data[_1546].spotOffset;
+            param_16.flags = SpotLightsBuffer_1._data[_1546].flags;
+            param_16.layerMask = SpotLightsBuffer_1._data[_1546].layerMask;
+            param_16.shadowIndex = SpotLightsBuffer_1._data[_1546].shadowIndex;
+            SurfaceData param_17 = s;
+            vec3 param_18 = worldPos;
+            vec3 c_1 = EvaluateSpotLight(param_16, param_17, param_18);
+            vec3 param_19 = SpotLightsBuffer_1._data[li - np].position;
+            uint param_20 = 1u;
+            vec3 param_21 = worldPos;
+            vec3 param_22 = s.N;
+            float param_23 = receiveShadow;
+            c_1 *= PointShadowForLight(param_19, param_20, param_21, param_22, param_23);
+            total += c_1;
+        }
+    }
+    return total;
+}
+
+vec3 ToneMapACESFilm(vec3 x)
+{
+    return clamp((x * ((x * 2.5099999904632568359375) + vec3(0.02999999932944774627685546875))) / ((x * ((x * 2.4300000667572021484375) + vec3(0.589999973773956298828125))) + vec3(0.14000000059604644775390625)), vec3(0.0), vec3(1.0));
+}
+
+vec4 _PSMain(VSOut i)
+{
+    vec2 tiling = vec2((abs(i.uvXform.x) > 9.9999999747524270787835121154785e-07) ? i.uvXform.x : 1.0, (abs(i.uvXform.y) > 9.9999999747524270787835121154785e-07) ? i.uvXform.y : 1.0);
+    vec2 uv = (i.uv * tiling) + i.uvXform.zw;
+    vec3 dp1 = dFdx(i.worldPos);
+    vec3 dp2 = dFdy(i.worldPos);
+    vec2 duv1 = dFdx(uv);
+    vec2 duv2 = dFdy(uv);
+    vec3 albedo = i.baseColor.xyz;
+    float texA = 1.0;
+    if (i.texInfo.z > 0.5)
+    {
+        ivec2 tp = ivec2(clamp(int(fract(uv.x) * i.texInfo.x), 0, int(i.texInfo.x) - 1), clamp(int(fract(uv.y) * i.texInfo.y), 0, int(i.texInfo.y) - 1));
+        vec4 tex = texelFetch(AlbedoMap, ivec3(tp, 0).xy, ivec3(tp, 0).z);
+        albedo *= tex.xyz;
+        texA = tex.w;
+    }
+    if ((i.normalInfo.y > 0.0) && ((i.baseColor.w * texA) < i.normalInfo.y))
+    {
+        discard;
+    }
+    float metal = i.material.x;
+    float rough = i.material.y;
+    float receive = i.material.z;
+    vec3 N = normalize(i.normal);
+    if (i.normalInfo.x > 0.0)
+    {
+        uvec2 sizeQueryTemp = uvec2(textureSize(NormalMap, 0));
+        uint nw = sizeQueryTemp.x;
+        uint nh = sizeQueryTemp.y;
+        ivec2 np = ivec2(clamp(int(fract(uv.x) * float(nw)), 0, int(nw) - 1), clamp(int(fract(uv.y) * float(nh)), 0, int(nh) - 1));
+        vec3 tn = (texelFetch(NormalMap, ivec3(np, 0).xy, ivec3(np, 0).z).xyz * 2.0) - vec3(1.0);
+        tn.y = -tn.y;
+        vec3 dp2perp = cross(dp2, N);
+        vec3 dp1perp = cross(N, dp1);
+        vec3 T = (dp2perp * duv1.x) + (dp1perp * duv2.x);
+        vec3 B = (dp2perp * duv1.y) + (dp1perp * duv2.y);
+        float invmax = inversesqrt(max(max(dot(T, T), dot(B, B)), 9.9999999600419720025001879548654e-13));
+        vec3 Np = normalize(((T * (tn.x * invmax)) + (B * (tn.y * invmax))) + (N * tn.z));
+        N = normalize(mix(N, Np, vec3(i.normalInfo.x)));
+    }
+    SurfaceData s;
+    s.N = N;
+    s.V = normalize(i.toCam);
+    s.albedo = albedo;
+    s.metallic = metal;
+    s.roughness = max(rough, 0.04500000178813934326171875);
+    float ao = texelFetch(AoMap, ivec3(ivec2(i.clip.xy), 0).xy, ivec3(ivec2(i.clip.xy), 0).z).x;
+    float NoV = max(dot(N, s.V), 9.9999997473787516355514526367188e-05);
+    vec3 F0 = mix(vec3(0.039999999105930328369140625), albedo, vec3(metal));
+    float param = NoV;
+    float param_1 = s.roughness;
+    vec2 ab = BrdfLutBilinear(param, param_1);
+    vec3 Fss = (F0 * ab.x) + vec3(ab.y);
+    vec3 kD = (vec3(1.0) - min(Fss, vec3(1.0))) * (1.0 - metal);
+    float param_2 = s.roughness;
+    vec3 R = normalize(mix(N, (N * (2.0 * dot(N, s.V))) - s.V, vec3(IblDominantDirFactor(param_2))));
+    vec3 param_3 = N;
+    vec3 param_4 = R;
+    vec3 ambient = ((kD * albedo) * IblEvaluateIrradiance(param_3)) + (Fss * IblEvaluateIrradiance(param_4));
+    vec3 color = ambient * ao;
+    SurfaceData param_5 = s;
+    vec3 param_6 = i.worldPos;
+    vec2 param_7 = i.clip.xy;
+    float param_8 = i.viewDepth;
+    float param_9 = receive;
+    color += EvaluateClusteredLights(param_5, param_6, param_7, param_8, param_9);
+    color += i.emissive;
+    if (i.fogParams.z > 0.0)
+    {
+        float d = length(i.toCam);
+        float f = clamp((d - i.fogParams.x) / max(i.fogParams.y - i.fogParams.x, 0.001000000047497451305389404296875), 0.0, 1.0) * i.fogParams.z;
+        color = mix(color, i.fogColor.xyz, vec3(f));
+    }
+    vec3 param_10 = color;
+    return vec4(ToneMapACESFilm(param_10), i.baseColor.w);
+}
+
+void main()
+{
+    VSOut i;
+    i.clip = gl_FragCoord;
+    i.worldPos = i_worldPos;
+    i.normal = i_normal;
+    i.uv = i_uv;
+    i.toCam = i_toCam;
+    i.viewDepth = i_viewDepth;
+    i.baseColor = i_baseColor;
+    i.material = i_material;
+    i.texInfo = i_texInfo;
+    i.emissive = i_emissive;
+    i.fogColor = i_fogColor;
+    i.fogParams = i_fogParams;
+    i.uvXform = i_uvXform;
+    i.normalInfo = i_normalInfo;
+    VSOut param = i;
+    vec4 _2320 = _PSMain(param);
+    _entryPointOutput = _2320;
 }
 

@@ -153,7 +153,6 @@ class Host {
     model_.setArea(area);
     if (model_.empty()) buildDefault();
     applyPendingGestures();
-    selectSceneAtStartup();
     for (Window& w : windows_) {
       if (!w.open()) {
         if (model_.contains(w.id)) model_.remove(w.id);
@@ -164,6 +163,12 @@ class Host {
       // usuario, feita arrastando; uma janela que ja estava aberta e fora do dock continua onde esta.
       if (!w.wasOpen && !model_.contains(w.id)) model_.attach(w.id, lastActive_);
       w.wasOpen = true;
+    }
+    // Depois dos attach acima: no primeiro quadro, janelas abertas fora do layout salvo (ex.: Narrative Controller)
+    // entravam como aba ativa e escondiam a Scene. Selecionando por ultimo, a Scene e a aba que aparece ao abrir.
+    selectSceneAtStartup();
+    for (Window& w : windows_) {
+      if (!w.open()) continue;
       if (!model_.contains(w.id)) {
         w.setDock(std::nullopt);
         continue;

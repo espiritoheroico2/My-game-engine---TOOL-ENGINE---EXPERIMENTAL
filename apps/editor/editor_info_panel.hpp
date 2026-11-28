@@ -69,7 +69,7 @@ class Panel {
   // Calcula e desenha um quadro. `actions` recebe o que foi clicado neste quadro (Save, Close).
   bool draw(SDL_Renderer* renderer, float windowW, float windowH, std::vector<View::Action>& actions) {
     // Texto so chega com a entrada de texto ligada: liga quando um campo ganha foco e desliga quando perde.
-    if (SDL_Window* win = renderer ? SDL_GetRenderWindow(renderer) : nullptr; win && model_.focused() != textInputOn_) {
+    if (SDL_Window* win = renderer ? sui::UiWindowOf(renderer) : nullptr; win && model_.focused() != textInputOn_) {
       if (model_.focused()) SDL_StartTextInput(win);
       else SDL_StopTextInput(win);
       textInputOn_ = model_.focused();

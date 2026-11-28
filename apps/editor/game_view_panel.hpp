@@ -81,7 +81,7 @@ struct UiHit {
 // Uma camera principal: retangulo da celula, textura, modo de ajuste e as formas e botoes dela.
 struct Cell {
   gm::Rect box{};
-  SDL_Texture* texture = nullptr;
+  sui::ViewImage texture;   // imagem da camera (vazia: erro); SDL_Texture ou textura do Diligent
   float texW = 1.f, texH = 1.f;
   Elm::ImageFit fit = Elm::ImageFit::Stretch;
   view::ShapeList overlay;
@@ -298,7 +298,7 @@ private:
     Elm::ImageSource src;
     src.textureSlice = sui::kViewSliceBase + kFirstCellSlot + static_cast<std::uint32_t>(index);
     src.textureSize = {c.texW, c.texH};
-    src.loaded = c.texture != nullptr;
+    src.loaded = static_cast<bool>(c.texture);
     src.fit = c.fit;
     const SU::Rect content{{c.box.x, c.box.y}, {c.box.w, c.box.h}};
     const std::vector<SR::UIRenderItem> built =

@@ -53,6 +53,7 @@ dl::TEXTURE_FORMAT toDl(Format f) {
   case Format::R32F: return dl::TEX_FORMAT_R32_FLOAT;
   case Format::D32F: return dl::TEX_FORMAT_D32_FLOAT;
   case Format::D24S8: return dl::TEX_FORMAT_D24_UNORM_S8_UINT;
+  case Format::None: return dl::TEX_FORMAT_UNKNOWN;
   }
   return dl::TEX_FORMAT_UNKNOWN;
 }
@@ -66,6 +67,8 @@ public:
   dl::RefCntAutoPtr<dl::IRenderDevice> device;
   dl::RefCntAutoPtr<dl::IDeviceContext> ctx;
   dl::RefCntAutoPtr<dl::ISwapChain> swapchain;
+  bool presentToWindow_ = false;   // a swapchain aparece na tela (UI do editor): o OpenGL tambem apresenta
+  bool vsync_ = true;   // SyncInterval do Present: 1 espera o monitor; o editor desliga ao usar limite de FPS
   dl::RefCntAutoPtr<dl::ITexture> staging_;   // textura de leitura reaproveitada (readTexture)
   dl::Uint32 stagingW_ = 0, stagingH_ = 0; dl::TEXTURE_FORMAT stagingFmt_ = dl::TEX_FORMAT_UNKNOWN;
   // Leitura assincrona (readTextureAsync): uma copia em voo por slot. O fence_ marca quando a GPU terminou a copia.
@@ -73,7 +76,27 @@ public:
   std::vector<AsyncSlot> asyncSlots_;
   dl::RefCntAutoPtr<dl::IFence> fence_;
   dl::Uint64 fenceNext_ = 1;
+  // Limite de quadros em voo (ver present): sem swapchain nada segura a CPU, que enfileirava quadros mais rapido do que a
+  // GPU executa; a memoria dinamica (Vulkan) e o heap de descritores (D3D12) so voltam quando a GPU termina o quadro.
+  static constexpr dl::Uint64 kMaxFramesInFlight = 2;
+  dl::RefCntAutoPtr<dl::IFence> frameFence_;
+  dl::Uint64 frameFenceValue_ = 0;
   std::string adapter;
+
+  // Destroi na ordem certa: termina o que esta na fila, solta os recursos e SO ENTAO a swapchain, o contexto e o dispositivo.
+  // Com a swapchain na janela principal do editor (UI no Diligent), a troca de API cria a nova swapchain na MESMA janela logo
+  // depois: se a anterior ainda estivesse viva (DXGI), o Vulkan falhava com ERROR_FORMAT_NOT_SUPPORTED.
+  ~DiligentDevice() override {
+    if (ctx) { ctx->Flush(); ctx->WaitForIdle(); }
+    graveyard_.clear(); pipelines_.clear(); objs_.clear();
+    staging_.Release(); asyncSlots_.clear(); fence_.Release(); frameFence_.Release();
+    if (device) device->IdleGPU();
+    swapchain.Release();
+    if (ctx) ctx->Flush();
+    if (device) device->ReleaseStaleResources(true);
+    ctx.Release();
+    device.Release();
+  }
 
   // Backend escolhido na criacao.
   Backend backend() const override { return kind; }
@@ -152,6 +175,17 @@ public:
     return h;
   }
 
+  // Substitui o conteudo inteiro da textura (nivel 0, RGBA8/BGRA8 de 4 bytes por pixel). Dimensao diferente da textura e erro.
+  void updateTexture(TextureId t, const void* rgba, u32 w, u32 h) override {
+    auto* tex = obj<dl::ITexture>(t, Kind::Texture);
+    if (!tex || !rgba) { debug().report(diag::kStaleHandle, Severity::Error, "updateTexture em handle invalido"); return; }
+    const auto& td = tex->GetDesc();
+    if (td.Width != w || td.Height != h) { debug().report("TOOL-E131", Severity::Error, "updateTexture com dimensoes diferentes da textura"); return; }
+    dl::Box box; box.MinX = 0; box.MaxX = w; box.MinY = 0; box.MaxY = h; box.MinZ = 0; box.MaxZ = 1;
+    dl::TextureSubResData sub; sub.pData = rgba; sub.Stride = w * 4; sub.DepthStride = 0;
+    ctx->UpdateTexture(tex, 0, 0, box, sub, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  }
+
   // Compila o shader a partir do HLSL (ou GLSL) em d.source. Bytecode pre-compilado ainda nao e suportado.
   ShaderId createShader(const ShaderDesc& d) override {
     if (d.source.empty()) { debug().report("TOOL-E132", Severity::Error, "shader sem codigo-fonte HLSL (bytecode pre-compilado ainda nao suportado)"); return kNullHandle; }
@@ -222,6 +256,11 @@ public:
       auto& rt = gp.BlendDesc.RenderTargets[0];
       rt.BlendEnable = true; rt.SrcBlend = dl::BLEND_FACTOR_ONE; rt.DestBlend = dl::BLEND_FACTOR_ONE;
       rt.SrcBlendAlpha = dl::BLEND_FACTOR_ZERO; rt.DestBlendAlpha = dl::BLEND_FACTOR_ONE;   // o alfa do alvo nao muda
+    } else if (d.blendUnder) {   // cor = fonte * (1 - alfa do destino) + destino * alfa do destino: o fundo (alfa 0) vira a fonte
+      // DestBlend = DEST_ALPHA (e nao ONE): com ONE a cor de limpeza do fundo (alfa 0, mas RGB != 0) somava ao ceu.
+      auto& rt = gp.BlendDesc.RenderTargets[0];
+      rt.BlendEnable = true; rt.SrcBlend = dl::BLEND_FACTOR_INV_DEST_ALPHA; rt.DestBlend = dl::BLEND_FACTOR_DEST_ALPHA;
+      rt.SrcBlendAlpha = dl::BLEND_FACTOR_INV_DEST_ALPHA; rt.DestBlendAlpha = dl::BLEND_FACTOR_ONE;
     } else if (d.blendPremultiplied) {
       auto& rt = gp.BlendDesc.RenderTargets[0];
       rt.BlendEnable = true; rt.SrcBlend = dl::BLEND_FACTOR_ONE; rt.DestBlend = dl::BLEND_FACTOR_INV_SRC_ALPHA;
@@ -308,11 +347,12 @@ public:
 
   // Cria uma DiligentCommands para gravar comandos neste dispositivo.
   std::unique_ptr<ICommandList> beginCommands() override;
-  // Envia os comandos gravados: Flush do contexto imediato.
+  // Fecha um lote de comandos. Os comandos ja estao gravados no contexto imediato (ordem garantida), entao NAO faz
+  // Flush aqui: antes cada passe fazia um Flush = um envio a fila da GPU (vkQueueSubmit / ExecuteCommandLists / glFlush),
+  // ~20 por quadro numa cena de 2 objetos. O envio acontece uma vez em endFrame(), e quem precisa do resultado antes
+  // (leitura assincrona, leitura sincrona, FidelityFX) ja faz o proprio Flush.
   void submit(ICommandList&) override {
     ++stats_.submitCount;
-    ++stats_.flushCount;
-    ctx->Flush();
   }
   // Zera as estatisticas e marca o quadro como ativo.
   void beginFrame() override {
@@ -325,7 +365,7 @@ public:
   // Finaliza o quadro: chama present() e desativa a acumulacao.
   // Antes de apresentar, envia os comandos pendentes do contexto imediato (copias de buffer, destroys adiados).
   // Sem isso o Diligent acusa TOOL-E150 em todo quadro: o antigo WaitForIdle de destroy() fazia esse Flush por acaso.
-  void endFrame() override { ctx->Flush(); present(); frameActive_ = false; }
+  void endFrame() override { present(); frameActive_ = false; }   // o Flush unico do quadro fica em present()
 
   // Buffer criado fora (LightPrism): o handle guarda uma referencia a mais; destruir o handle nao apaga o buffer original.
   BufferId importBuffer(void* native) override {
@@ -344,10 +384,27 @@ public:
   // MAP_FLAG_DISCARD) de quadros ja concluidos. Sem ele o "dynamic heap" enche e o log mostra
   // "Space in dynamic heap is exhausted". Rodamos offscreen (resultado lido de volta), entao no OpenGL nem
   // trocamos buffers da janela oculta (evita travar esperando vsync de uma janela invisivel).
+  // Vsync escolhido pelo editor (Frame rate: VSync = ligado; limites e Unlimited = desligado).
+  void setPresentVsync(bool on) override { vsync_ = on; }
   void present() override {
-    if (swapchain && kind != Backend::GLES) swapchain->Present();
+    // Flush unico do quadro (submit() nao faz mais Flush): envia tudo antes de apresentar e de FinishFrame. Sem isso o
+    // Diligent acusa "outstanding commands in the immediate device context when finishing the frame" (TOOL-E150).
+    if (!frameFence_) { dl::FenceDesc fd; fd.Name = "tool frame fence"; device->CreateFence(fd, &frameFence_); }
+    if (frameFence_) ctx->EnqueueSignal(frameFence_, ++frameFenceValue_);   // marca o fim deste quadro na GPU
+    ctx->Flush(); ++stats_.flushCount;
+    // OpenGL com janela oculta (cena lida por textura) nao troca buffers; com a janela do editor (presentToWindow_) troca.
+    if (swapchain && (kind != Backend::GLES || presentToWindow_)) {
+      swapchain->Present(vsync_ ? 1u : 0u);
+      // O Present do Vulkan ja adquire a proxima imagem e grava a transicao dela (so na primeira vez de cada imagem): sem este
+      // Flush o FinishFrame abaixo acusa "outstanding commands" (TOOL-E150) nos primeiros quadros.
+      ctx->Flush();
+    }
+    // No maximo kMaxFramesInFlight quadros na fila: espera a GPU terminar o quadro N-2 (normalmente ja terminou: custo zero).
+    if (frameFence_ && frameFenceValue_ > kMaxFramesInFlight) frameFence_->Wait(frameFenceValue_ - kMaxFramesInFlight);
     ctx->FinishFrame();
-    last_ = stats_; stats_ = {};
+    // Sem swapchain (editor offscreen): o Present da swapchain e quem chama ReleaseStaleResources no Diligent. Sem esta
+    // chamada o D3D12 nao devolve o espaco do heap de descritores dinamicos e trava ("GPU descriptor heap is exhausted").
+    if (!swapchain) device->ReleaseStaleResources();    last_ = stats_; stats_ = {};
     gpuEndFrame();
   }
   // Estatisticas do quadro atual. Fora do quadro, as do ultimo quadro apresentado.
@@ -402,6 +459,15 @@ public:
     if (!swapchain) return kNullHandle;
     if (backbufferHandle_.isNull()) { backbufferHandle_ = ids_.create(); kinds_[backbufferHandle_.index] = Kind::Backbuffer; }
     return backbufferHandle_;
+  }
+  // Formato real da swapchain (o Vulkan pode trocar RGBA8 por BGRA8). Sem swapchain: RGBA8.
+  Format backbufferFormat() const override {
+    if (!swapchain) return Format::RGBA8;
+    switch (swapchain->GetDesc().ColorBufferFormat) {
+    case dl::TEX_FORMAT_BGRA8_UNORM: case dl::TEX_FORMAT_BGRA8_UNORM_SRGB: return Format::BGRA8;
+    case dl::TEX_FORMAT_RGBA8_UNORM_SRGB: return Format::RGBA8_SRGB;
+    default: return Format::RGBA8;
+    }
   }
   // Redimensiona a swapchain. Devolve false se nao houver swapchain.
   bool resizeSwapchain(u32 w, u32 h) override { if (!swapchain) return false; swapchain->Resize(w, h); return true; }
@@ -458,8 +524,11 @@ public:
   // Copia assincrona: nunca espera a GPU. Cada chamada (1) le a copia que a GPU ja terminou, se houver, e (2) se o slot
   // esta livre, enfileira uma copia nova do alvo e sinaliza o fence. Com isso o quadro exibido fica 1 ou 2 quadros atras,
   // mas a CPU nao para esperando a GPU (era o principal causador de frame time instavel no editor).
+  // OpenGL tambem usa este caminho: o Diligent GL implementa o fence com glFenceSync/glClientWaitSync (sem bloquear)
+  // e a textura STAGING como um PBO (a copia vira glReadPixels para o PBO, assincrona). Antes o GL lia de forma
+  // sincrona (CopyTexture + WaitForIdle): a CPU parava ~5 ms por quadro esperando a GPU (medido no --instances 2).
   int readTextureAsync(TextureId t, int slot, std::vector<u8>& rgba, u32& w, u32& h) override {
-    if (kind == Backend::GLES || slot < 0 || slot > 7) return readTexture(t, rgba, w, h) ? 1 : -1; // GL: sem fence aqui
+    if (slot < 0 || slot > 7) return readTexture(t, rgba, w, h) ? 1 : -1;
     if (asyncSlots_.size() <= static_cast<size_t>(slot)) asyncSlots_.resize(static_cast<size_t>(slot) + 1);
     if (!fence_) device->CreateFence(dl::FenceDesc{}, &fence_);
     if (!fence_) return -1;
@@ -467,7 +536,8 @@ public:
     int result = 0;
     if (s.inFlight && fence_->GetCompletedValue() >= s.value) { // a copia deste slot ja terminou: le sem esperar
       dl::MappedTextureSubresource m;
-      ctx->MapTextureSubresource(s.staging, 0, 0, dl::MAP_READ, dl::MAP_FLAG_DO_NOT_WAIT, nullptr, m);
+      // GL: mapeia o PBO sem flag (a copia ja terminou pelo fence, entao nao espera); demais APIs: DO_NOT_WAIT.
+      ctx->MapTextureSubresource(s.staging, 0, 0, dl::MAP_READ, kind == Backend::GLES ? dl::MAP_FLAG_NONE : dl::MAP_FLAG_DO_NOT_WAIT, nullptr, m);
       if (m.pData) {
         rgba.resize(static_cast<size_t>(s.w) * s.h * 4);
         for (u32 y = 0; y < s.h; ++y) {
@@ -909,9 +979,10 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
   dl::SetDebugMessageCallback(messageCallback);
   auto dev = std::make_unique<DiligentDevice>();
   dev->kind = info.backend;
+  dev->presentToWindow_ = info.presentToWindow;
   dl::SwapChainDesc scd;
   scd.Width = info.width; scd.Height = info.height;
-  scd.ColorBufferFormat = dl::TEX_FORMAT_RGBA8_UNORM_SRGB;
+  scd.ColorBufferFormat = info.srgbSwapchain ? dl::TEX_FORMAT_RGBA8_UNORM_SRGB : dl::TEX_FORMAT_RGBA8_UNORM;
   scd.DepthBufferFormat = dl::TEX_FORMAT_D32_FLOAT;
   dl::NativeWindow win; fillWindow(win, info);
   const bool wantSwap = info.nativeWindow != nullptr;
@@ -957,6 +1028,11 @@ std::unique_ptr<IDevice> createDiligentDevice(const DeviceInfo& info, std::strin
     dl::EngineD3D12CreateInfo ci;
     ci.EnableValidation = info.validation;   // o Diligent nao expoe tamanho total do heap dinamico no D3D12 (so o de pagina)
     ci.Features.TimestampQueries = dl::DEVICE_FEATURE_STATE_OPTIONAL; // tempo de GPU
+    // Heap de descritores da GPU (CBV/SRV/UAV). O padrao do Diligent (16384 estaticos, 8192 dinamicos somando TODOS os
+    // quadros em voo) ficou pequeno: com a CPU rapida (1 Flush por quadro, sem swapchain) o D3D12 esgotava a parte dinamica
+    // e travava em ~300 quadros. 64k dinamicos = ~2 MB de VRAM (32 B por descritor). Com swapchain nao esgota; a folga fica.
+    ci.GPUDescriptorHeapSize[0] = 32768;
+    ci.GPUDescriptorHeapDynamicSize[0] = 65536;
     if (!info.validation) debug().report("TOOL-I203", Severity::Info, "D3D12 sem validacao: erros do driver podem passar sem aviso");
     dl::IDeviceContext* ctxs[1] = {};
     f->CreateDeviceAndContextsD3D12(ci, &dev->device, ctxs);

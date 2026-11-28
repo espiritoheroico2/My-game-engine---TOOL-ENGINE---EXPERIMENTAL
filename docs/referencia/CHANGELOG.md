@@ -15,6 +15,23 @@
 - Estudos de física na GPU (não substituem o Newtoon): protótipo de esferas em compute, 100 mil esferas em 2,74 ms por passo (`26_FISICA_GPU_PROTOTIPO.md`); híbrido CPU/GPU medido sem ganho a favor (`27_FISICA_HIBRIDA.md`).
 
 **ECS e render**
+- Pipeline gráfica com menos CPU (`38_PIPELINE_GRAFICA.md`; cena de 2 objetos a 1280x720, Release, 15.000 quadros sem erro). Vulkan foi de 4,07 para 1,06 ms por quadro, D3D12 de 4,62 para 2,20 ms e OpenGL de 7,45 para 1,07 ms. As mudanças:
+  - um Flush por quadro, em vez de um por passe;
+  - leitura assíncrona também no OpenGL (antes a CPU esperava a GPU);
+  - limite de 2 quadros em voo (antes a CPU enchia a memória dinâmica da GPU);
+  - skybox de imagens na GPU, idêntico pixel a pixel ao da CPU;
+  - partículas no OpenGL;
+  - oclusão só com 64 ou mais objetos.
+- Item aberto: o D3D12 ainda usa uma swapchain oculta (~1,2 ms por quadro), porque sem ela o heap de descritores vaza.
+- Interface do editor no mesmo dispositivo Diligent da cena (fase 3a/3b de `38_PIPELINE_GRAFICA.md`). Por enquanto é opcional: `TOOL_UI_GPU=1` ou `--ui-gpu`.
+  - A UI usa a mesma API da cena (Vulkan, D3D12 ou OpenGL) e é apresentada pela swapchain da janela principal.
+  - O quadro inteiro vai num envio só para a GPU.
+  - O SDL continua como reserva: modo CPU e falha da GPU.
+- Correção: partículas não apareciam contra o céu, só na frente de malhas. O skybox da GPU agora roda antes dos transparentes e das partículas.
+- Correção: o editor abre na aba Scene, e não mais no Narrative Controller.
+- Correção (OpenGL): o GLSL do PBR e do skybox estava desatualizado em relação ao HLSL (o PBR desde 27/11). Foi regenerado, e o OpenGL agora bate com o Vulkan.
+- Correção (D3D12): no editor com Scene e Game abertas, o quadro caiu de 13,8 para 4,41 ms (~72 para ~227 fps). Os clusters de luz da Light Prism recriavam os buffers a cada vista, porque as duas têm tamanhos diferentes. Agora os buffers só crescem. Vulkan e OpenGL também ganharam um pouco.
+- D3D12/D3D11 com tearing (patch no Diligent): com vsync desligado, o D3D12 numa janela real não fica mais preso em ~60 fps (14,4 ms caiu para 1,63 ms por quadro).
 - Cache de matrizes mundiais com versão por API (`29_ITEM3_VERSAO_API.md`): assinatura de sombra com 100 mil objetos em movimento caiu de 2,78 ms para 0,01 ms. O quadro de movimento não foi medido de novo com máquina ociosa, então não há prova de ganho no quadro.
 - Medição de escala (`19_ESCALA_ECS.md`, RX 6500 XT, Vulkan, 1280x720, mediana de 3 execuções): movers 10 mil 24,71 ms, 50 mil 104,04 ms, 100 mil 221,09 ms por quadro; física (ecsf) 100 mil 222,80 ms, com 56,9 ms de física. Meta de 1 milhão não atingida (extrapolação de cerca de 2,2 s por quadro).
 - Tempo de GPU por passe com consultas de timestamp (`33_TEMPO_GPU.md`): zonas shadow, ssao, cull, opaque, transparent, particles e bloom. Desligado por padrão; ligar com `TOOL_GPU_TIMERS=1` (só Vulkan). Com a flag ligada custa cerca de 0,12 ms por quadro (cerca de 9%) na cena de teste.

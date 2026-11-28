@@ -49,6 +49,7 @@
 #include "tool/rhi/null_device.hpp"
 #include "tool/scene/scene.hpp"
 
+#include "ui_gpu_sink.hpp"
 #include <SDL3/SDL.h>
 
 #include <atomic>
@@ -68,17 +69,61 @@
 
 namespace editor {
 
+// Textura de uma vista (Scene ou Game): no caminho SDL e um SDL_Texture; com a UI desenhada pelo Diligent (ui_gpu_sink.hpp)
+// e uma textura dinamica do backend GPU. `gen` e a geracao do backend que criou `gpu`: se o backend mudou (troca de API),
+// o id morreu junto e a textura e recriada no proximo upload.
 struct ViewTex {
   SDL_Texture* tex = nullptr;
+  std::uint32_t gpu = 0, gen = 0;
   int w = 0, h = 0;
-  void ensure(SDL_Renderer* r, int nw, int nh) {
-    if (tex && w == nw && h == nh) return;
-    if (tex) SDL_DestroyTexture(tex);
-    tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, nw, nh);
-    if (tex) SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR); // o modo e reaplicado todo quadro (opcao "pixel filter")
-    w = nw; h = nh;
+  // true se ha uma imagem valida no backend atual (SDL ou GPU).
+  bool valid() const {
+    if (tex) return true;
+    const sui::UiGpuSink* g = sui::ActiveUiGpu();
+    return g && gpu != 0 && gen == g->generation();
   }
-  void destroy() { if (tex) SDL_DestroyTexture(tex); tex = nullptr; w = h = 0; }
+  // Garante a textura no tamanho pedido e sobe os pixels (RGBA8, nw*nh*4 bytes).
+  void upload(SDL_Renderer* r, const tool::u8* pixels, int nw, int nh) {
+    if (sui::UiGpuSink* g = sui::ActiveUiGpu()) {   // UI no Diligent: textura dinamica do backend
+      if (tex) { SDL_DestroyTexture(tex); tex = nullptr; }
+      const bool alive = gpu != 0 && gen == g->generation();
+      if (!alive || w != nw || h != nh) {
+        if (alive) g->destroyDynamic(gpu);
+        gpu = g->createDynamic(nw, nh, pixels);
+        gen = g->generation();
+        w = nw; h = nh;
+        return;   // createDynamic ja subiu os pixels
+      }
+      g->updateDynamic(gpu, pixels);
+      return;
+    }
+    if (!tex || w != nw || h != nh) {
+      if (tex) SDL_DestroyTexture(tex);
+      tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, nw, nh);
+      if (tex) SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR); // o modo e reaplicado todo quadro (opcao "pixel filter")
+      w = nw; h = nh;
+    }
+    if (tex) SDL_UpdateTexture(tex, nullptr, pixels, nw * 4);
+  }
+  // Handle para o painel desenhar. `nearest` = filtro de pixel (vizinho mais proximo); no SDL aplica no SDL_Texture.
+  sui::ViewImage image(bool nearest) const {
+    sui::ViewImage v;
+    if (tex) {
+      SDL_SetTextureScaleMode(tex, nearest ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR);
+      v.sdl = tex;
+    } else if (valid()) {
+      v.gpu = gpu;
+    }
+    v.linear = !nearest;
+    return v;
+  }
+  void destroy() {
+    if (tex) SDL_DestroyTexture(tex);
+    tex = nullptr;
+    if (const sui::UiGpuSink* g = sui::ActiveUiGpu(); g && gpu != 0 && gen == g->generation()) const_cast<sui::UiGpuSink*>(g)->destroyDynamic(gpu);
+    gpu = 0;
+    w = h = 0;
+  }
 };
 
 // Elemento de UI selecionado (linha de acesso na Hierarchy): o canvas e o indice na lista dele. index -1 = nenhum.
@@ -444,9 +489,23 @@ struct Editor {
   std::unique_ptr<tool::rhi::IDevice> gpuDev;
   tool::GpuRenderer gpu;
   SDL_Window* gpuWin = nullptr;
+  // ---- Interface desenhada pelo Diligent (docs/planos/38, etapa 3): o dispositivo da GPU usa a janela principal e
+  // apresenta a UI; o SDL_Renderer sai. O main liga uiHook para criar/destruir o backend junto com o dispositivo.
+  enum class UiPhase {
+    DetachGpu,       // antes de destruir o dispositivo: libera os recursos do backend de UI (ele usa o dispositivo)
+    ReleaseWindow,   // antes de criar o dispositivo na janela principal: o SDL_Renderer precisa soltar a janela
+    GpuReady,        // dispositivo criado na janela principal: cria e liga o backend (devolve false se falhar)
+    UseSdl           // modo CPU ou falha da GPU: a janela volta a ter um SDL_Renderer
+  };
+  bool uiGpuWanted = false;               // opt-in: TOOL_UI_GPU=1 ou --ui-gpu
+  bool uiGpuActive = false;               // a UI esta no Diligent agora (a janela principal pertence ao dispositivo)
+  SDL_Window* mainWindow = nullptr;
+  bool windowHadD3d12 = false;            // a janela principal ja recebeu uma swapchain D3D12 (ver applyApi)
+  std::function<bool(UiPhase)> uiHook;
   SDL_GLContext glCtx = nullptr; // so Linux/OpenGL: contexto criado pelo SDL, ativado apenas durante o desenho da GPU
   std::vector<tool::u8> gpuPixels[2];          // ultimo quadro lido da GPU, por vista (0 = Scene, 1 = Game)
   int gpuPixW[2] = {0, 0}, gpuPixH[2] = {0, 0};
+  bool skyOnGpu_[2] = {false, false};          // o skybox desta vista foi desenhado na GPU neste quadro (sem skybox da CPU)
   std::vector<tool::u8> gpuScaled;             // auxiliar da reamostragem do ultimo quadro da GPU durante um resize
 
   // aparencia/idioma
@@ -462,6 +521,7 @@ struct Editor {
 
   // ---------------------------------------------------------------- API grafica
   void shutdownGpu() {
+    if (uiHook && uiGpuActive) { uiHook(UiPhase::DetachGpu); uiGpuActive = false; }   // o backend de UI usa o dispositivo: sai antes
     if (glCtx && gpuWin) SDL_GL_MakeCurrent(gpuWin, glCtx); // o OpenGL precisa do contexto ativo para liberar recursos
     gpu.shutdown();  // libera recursos antes do dispositivo
 #if defined(TOOL_EDITOR_GPU)
@@ -513,15 +573,48 @@ struct Editor {
     shutdownGpu();
     apiRequested = choice;
     apiChoice = choice;
-    if (choice == 0) { apiStatus = "Software (CPU)"; if (!renderScaleSet) renderScale = 0.5f; return; }
+    if (choice == 0) {
+      apiStatus = "Software (CPU)"; if (!renderScaleSet) renderScale = 0.5f;
+      if (uiHook && uiGpuWanted) uiHook(UiPhase::UseSdl);   // a janela volta ao SDL_Renderer (o modo CPU nao tem dispositivo)
+      return;
+    }
 #ifdef TOOL_EDITOR_GPU
+    // UI no Diligent (so Windows por enquanto): o dispositivo nasce na janela principal, sem a janela oculta.
+#if defined(_WIN32)
+    // Limitacao medida (AMD): depois de uma swapchain D3D12 na janela principal, o Vulkan nao consegue criar a dele nela
+    // (ERROR_FORMAT_NOT_SUPPORTED, nem passando por um SDL_Renderer). Nesse caso a UI fica no SDL ate a proxima troca
+    // (D3D12 -> OpenGL -> Vulkan funciona); o Vulkan roda sem swapchain, como antes da etapa 3.
+    const bool vulkanBlocked = choice == 1 && windowHadD3d12;
+    const bool uiOnDevice = uiGpuWanted && uiHook && mainWindow != nullptr && !vulkanBlocked;
+    if (uiGpuWanted && uiHook && vulkanBlocked) {
+      tool::logWarn("UI on the GPU: Vulkan cannot present on a window that used Direct3D 12 in this session; the editor UI stays on SDL for Vulkan (switch to OpenGL first, or restart)");
+      uiHook(UiPhase::UseSdl);   // a janela volta ao SDL_Renderer (o dispositivo Vulkan nasce sem swapchain)
+    }
+#else
+    const bool uiOnDevice = false;
+#endif
+    // Falha do dispositivo: a janela precisa de um SDL_Renderer de novo (no modo UI GPU ela foi entregue ao Diligent).
+    const auto failToSdl = [&] { if (uiHook && uiGpuWanted) uiHook(UiPhase::UseSdl); };
     tool::rhi::DeviceInfo info; info.width = 640; info.height = 360;
     info.validation = std::getenv("TOOL_GPU_VALIDATION") != nullptr; // depuracao: TOOL_GPU_VALIDATION=1 liga as camadas de validacao (mais lento)
     info.backend = choice == 1 ? tool::rhi::Backend::Vulkan
                   : choice == 2 ? tool::rhi::Backend::GLES
                   : choice == 3 ? tool::rhi::Backend::D3D12
                                 : tool::rhi::Backend::D3D11;
-    if (info.backend == tool::rhi::Backend::GLES) {
+    if (uiOnDevice) {
+      // O SDL_Renderer da janela principal precisa sair antes (uma janela so aceita uma swapchain). A janela tambem NAO pode
+      // ter sido preparada para OpenGL pelo SDL: o main nao cria renderer OpenGL no modo UI GPU.
+      uiHook(UiPhase::ReleaseWindow);
+      if (info.backend == tool::rhi::Backend::D3D12) windowHadD3d12 = true;
+      else if (info.backend == tool::rhi::Backend::GLES) windowHadD3d12 = false;   // o OpenGL deixa a janela limpa para o Vulkan (testado)
+      int pw = 0, ph = 0;
+      SDL_GetWindowSizeInPixels(mainWindow, &pw, &ph);
+      info.width = static_cast<tool::u32>(std::max(pw, 1)); info.height = static_cast<tool::u32>(std::max(ph, 1));
+      info.srgbSwapchain = false;      // UNORM: a UI mistura em sRGB como o SDL_Renderer
+      info.presentToWindow = true;     // a swapchain aparece (o OpenGL tambem troca os buffers)
+      info.nativeWindow = SDL_GetPointerProperty(SDL_GetWindowProperties(mainWindow), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+      if (!info.nativeWindow) { apiStatus = "UI on GPU: main window has no native handle"; apiChoice = 0; failToSdl(); return; }
+    } else if (info.backend == tool::rhi::Backend::GLES) {
 #if defined(_WIN32)
       // Windows: o Diligent cria o contexto OpenGL sozinho a partir do HWND. A janela NAO pode ter sido
       // preparada para OpenGL pelo SDL (o formato de pixel so pode ser definido uma vez por janela).
@@ -535,6 +628,11 @@ struct Editor {
 #endif
       if (!gpuWin) { apiStatus = std::string("OpenGL: could not create the context window: ") + SDL_GetError(); apiChoice = 0; return; }
     }
+    if (uiOnDevice) { /* sem janela oculta: usa a principal (HWND acima) */ }
+    else
+    // D3D12 e D3D11: janela oculta com swapchain. O Present dela custa ~1,2 ms por quadro no D3D12 sem ninguem ver (a cena
+    // e lida por textura), mas SEM ela o D3D12 vaza o heap de descritores dinamicos e trava (medido: ~300 quadros com o heap
+    // padrao, ~8000 com 64k). Investigacao e o que ja foi descartado: docs/planos/38_PIPELINE_GRAFICA.md (item aberto).
     if (info.backend == tool::rhi::Backend::D3D12 || info.backend == tool::rhi::Backend::D3D11) {
 #if defined(_WIN32)
       gpuWin = SDL_CreateWindow("gpu", 64, 64, SDL_WINDOW_HIDDEN);
@@ -555,7 +653,16 @@ struct Editor {
     if (!gpuDev || !gpu.init(*gpuDev, tool::rhi::createLightPrismDevice(*gpuDev), "assets/shaders", 640, 360)) {
       apiStatus = "FAILED (" + (err.empty() ? std::string("shaders/pipeline") : err) + "): using CPU";
       tool::logError("Graphics API " + std::string(apiName(choice)) + " failed: " + apiStatus);
-      shutdownGpu(); apiChoice = 0; return;
+      shutdownGpu(); apiChoice = 0; failToSdl(); return;
+    }
+    if (uiOnDevice) {
+      // Backend de UI sobre o dispositivo novo (shaders, pipelines, atlas). Falhou: volta para a CPU com a UI no SDL.
+      if (!uiHook(UiPhase::GpuReady)) {
+        apiStatus = "FAILED (UI renderer on the GPU device): using CPU";
+        tool::logError("Graphics API " + std::string(apiName(choice)) + " failed: " + apiStatus);
+        shutdownGpu(); apiChoice = 0; failToSdl(); return;
+      }
+      uiGpuActive = true;
     }
     if (glCtx) SDL_GL_MakeCurrent(gpuWin, nullptr); // solta o contexto: ele so e usado dentro de renderView
     probeFsr4();   // consulta real de suporte ao FSR 4 (so Vulkan); o toggle de Settings le o resultado
@@ -1103,7 +1210,9 @@ struct Editor {
     }
     // Tamanho real do buffer devolvido (o FSR 1 amplia na GPU antes da leitura).
     const int ow = viewOutW, oh = viewOutH;
-    if (out && sceneInfo.sky.enabled && !cam.ortho) { // skybox de imagens: preenche so o fundo (alfa 0), antes do pos-processamento
+    // Imagem que veio da GPU com o skybox ja desenhado la: nada a fazer na CPU.
+    const bool skyDoneOnGpu = apiActive != 0 && out == gpuPixels[vi].data() && skyOnGpu_[vi];
+    if (out && sceneInfo.sky.enabled && !cam.ortho && !skyDoneOnGpu) { // skybox de imagens (CPU): preenche so o fundo (alfa 0), antes do pos-processamento
       ZoneTimer zt(prof, Zone::Sky);
       tool::u8* px = (apiActive != 0 && out == gpuPixels[vi].data()) ? gpuPixels[vi].data() : renderer.pixelsMutable();
       SkyTextures skyTex{};
@@ -1301,7 +1410,11 @@ private:
     // GPU, camera em perspectiva); "cpu" = buffer por software (teste e medicao); "off". "gpu" sem suporte cai em "cpu".
     // A mesma interface para os dois: quem decide se o objeto aparece e o teste conservador de esfera/caixa contra os oclusores
     // (so opacos, raio projetado >= 8 px); a CPU o aplica em skipCulled, a GPU no compute (gpu.setGpuOcclusion).
-    const bool occWanted = sceneInfo.render.occlusionCull && sceneInfo.render.occlusionMode != "off" && !cam.ortho && !gpuMotionLive_;
+    // Cena pequena (menos de kOcclusionMinObjects renderizaveis): sem oclusao. Montar o buffer/HiZ custa mais do que ele
+    // economiza (medido com 2 objetos: HiZ = 0,49 ms de GPU e ~10 draws a mais por quadro para nao esconder nada).
+    static constexpr std::size_t kOcclusionMinObjects = 64;
+    const bool occWorth = std::as_const(scene.world()).count<MeshRenderer>() >= kOcclusionMinObjects;
+    const bool occWanted = sceneInfo.render.occlusionCull && sceneInfo.render.occlusionMode != "off" && !cam.ortho && !gpuMotionLive_ && occWorth;
     const bool occGpu = occWanted && sceneInfo.render.occlusionMode == "gpu" && apiActive != 0 && gpu.gpuOcclusionAvailable() && gpu.gpuCullActive();
     const bool occCpu = occWanted && !occGpu;
     occlusionModeUsed = occGpu ? "gpu" : (occCpu ? "cpu" : "off");
@@ -1477,6 +1590,16 @@ private:
           drawChunks(gpu);
         }
         submitFx(cam);   // particulas v2: quads do frame, desenhados pelo passe de particulas do GpuRenderer
+        // Skybox na GPU (passe de tela cheia no GpuRenderer). Se o backend nao tem o passe, renderView aplica o da CPU.
+        skyOnGpu_[vi] = false;
+        // TOOL_SKY_CPU=1: forca o skybox antigo da CPU (comparacao A/B de imagem e de tempo com o da GPU).
+        static const bool skyCpuForced = std::getenv("TOOL_SKY_CPU") != nullptr;
+        if (sceneInfo.sky.enabled && !cam.ortho && gpu.skyboxAvailable() && !skyCpuForced) {
+          tool::SkyboxDraw sd;
+          for (int i = 0; i < 4; ++i) sd.solid[i] = sceneInfo.sky.solid[i];
+          for (size_t i = 0; i < 6; ++i) if (sceneInfo.sky.face[i][0]) sd.faces[i] = lib.texture(sceneInfo.sky.face[i]);   // cache no AssetLib
+          skyOnGpu_[vi] = gpu.drawSkybox(sd);
+        }
         gpu.setBloom(sceneInfo.render.lighting.bloom, sceneInfo.render.lighting.bloomThreshold, sceneInfo.render.lighting.bloomStrength);
         gpu.end();
         // Tamanho da imagem que a GPU entrega: com o FSR 1 ativo e a ampliada (fsrOutW x fsrOutH); senao o tamanho de render.

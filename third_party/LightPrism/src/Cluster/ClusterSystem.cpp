@@ -109,15 +109,21 @@ struct ClusterSystem::Impl {
             if (!gridCB || !viewCB || !stats || !readback) return false;
             bindingsDirty = true;
         }
-        if (allocClusters != clusters || allocMaxIndices != grid.maxIndices || !counts) {
-            const uint32_t groups = DivUp(clusters, kClusterScanGroupSize);
-            counts = Make(dev, BufferKind::StructuredRW, clusters, 4, "LP_ClusterCounts");
+        // So cresce: com duas vistas de tamanhos diferentes no mesmo quadro (Scene e Game do editor), o numero de
+        // clusters alterna a cada vista. Antes isso recriava os 4 buffers (varios MB) duas vezes por quadro; no D3D12
+        // criar/liberar recurso custa caro (medido: ~7,7 ms de CPU por quadro so aqui; no Vulkan, ~0,6 ms).
+        // Buffers maiores que o grid sao seguros: os shaders usam Grid.clusterCount/maxIndices do constant buffer.
+        if (allocClusters < clusters || allocMaxIndices < grid.maxIndices || !counts) {
+            const uint32_t capClusters = std::max(allocClusters, clusters);
+            const uint32_t capIndices = std::max(allocMaxIndices, grid.maxIndices);
+            const uint32_t groups = DivUp(capClusters, kClusterScanGroupSize);
+            counts = Make(dev, BufferKind::StructuredRW, capClusters, 4, "LP_ClusterCounts");
             groupSums = Make(dev, BufferKind::StructuredRW, groups, 4, "LP_ClusterGroupSums");
-            lightGrid = Make(dev, BufferKind::StructuredRW, clusters, sizeof(ClusterCell), "LP_LightGrid");
-            lightIndex = Make(dev, BufferKind::StructuredRW, grid.maxIndices, 4, "LP_LightIndexList");
+            lightGrid = Make(dev, BufferKind::StructuredRW, capClusters, sizeof(ClusterCell), "LP_LightGrid");
+            lightIndex = Make(dev, BufferKind::StructuredRW, capIndices, 4, "LP_LightIndexList");
             if (!counts || !groupSums || !lightGrid || !lightIndex) return false;
-            allocClusters = clusters;
-            allocMaxIndices = grid.maxIndices;
+            allocClusters = capClusters;
+            allocMaxIndices = capIndices;
             zeroGridUploaded = false;
             bindingsDirty = true;
         }
@@ -146,7 +152,8 @@ struct ClusterSystem::Impl {
             aabbs.clear(); // reconstruído sob demanda no modo CPU
             lastCamera = cam;
             haveGrid = true;
-            zeroGridUploaded = false;
+            // Nao zera zeroGridUploaded aqui: o LightGrid zerado continua valido para qualquer grid que caiba nele
+            // (ver o fast-path sem luzes em RunGpu). Antes, cada troca de vista reenviava MBs de zeros.
         }
         grid.numPointLights = np;
         grid.numSpotLights = ns;
@@ -259,7 +266,9 @@ struct ClusterSystem::Impl {
 
         // Fast-path: cena sem luzes locais (apenas luz direcional/ambiente) -> pula os 5 dispatches de compute.
         if (total == 0) {
-            if (!zeroGridUploaded || zeroGridClusters != clusters) {
+            // Ja zerado com capacidade suficiente: nada a enviar (o LightGrid so e escrito pela GPU no caminho com luzes,
+            // que desliga zeroGridUploaded).
+            if (!zeroGridUploaded || zeroGridClusters < clusters) {
                 cpuResult.cells.assign(clusters, ClusterCell{0u, 0u});
                 if (!lightGrid->Update(cpuResult.cells.data(), uint64_t(clusters) * sizeof(ClusterCell)))
                     return Fail("falha ao zerar LightGrid");

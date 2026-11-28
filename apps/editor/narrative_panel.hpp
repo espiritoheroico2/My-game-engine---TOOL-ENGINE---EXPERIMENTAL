@@ -115,7 +115,7 @@ public:
     const sui::Box body = chrome_.prepare(winW, winH, kWindowW, kWindowH);
     if (body.w <= 0.f || body.h <= 0.f) return true;   // minimizada
     body_ = body;
-    if (SDL_Window* win = renderer ? SDL_GetRenderWindow(renderer) : nullptr; win && (focus_ != Focus::None) != textInputOn_) {
+    if (SDL_Window* win = renderer ? sui::UiWindowOf(renderer) : nullptr; win && (focus_ != Focus::None) != textInputOn_) {
       if (focus_ != Focus::None) SDL_StartTextInput(win);
       else SDL_StopTextInput(win);
       textInputOn_ = focus_ != Focus::None;

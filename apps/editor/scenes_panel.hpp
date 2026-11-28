@@ -94,7 +94,7 @@ class Panel {
   bool draw(SDL_Renderer* renderer, float windowW, float windowH, std::vector<View::Action>& actions) {
     // O SDL so envia SDL_EVENT_TEXT_INPUT com a entrada de texto ligada. Liga quando o campo de nome ganha foco
     // (criar ou renomear) e desliga quando perde; sem isso, nada que se digita entra no nome.
-    if (SDL_Window* win = renderer ? SDL_GetRenderWindow(renderer) : nullptr; win && model_.nameFocus != textInputOn_) {
+    if (SDL_Window* win = renderer ? sui::UiWindowOf(renderer) : nullptr; win && model_.nameFocus != textInputOn_) {
       if (model_.nameFocus) SDL_StartTextInput(win);
       else SDL_StopTextInput(win);
       textInputOn_ = model_.nameFocus;

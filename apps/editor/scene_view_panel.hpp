@@ -130,7 +130,7 @@ struct Selection {
 struct Values {
   bool shown = false;
   tool::Camera cam{};
-  SDL_Texture* texture = nullptr;   // imagem renderizada da cena (nullptr: marcador de erro)
+  sui::ViewImage texture;   // imagem renderizada da cena (vazia: marcador de erro); SDL_Texture ou textura do Diligent
   float texW = 1.f, texH = 1.f;
   bool playing = false, paused = false, freeFly = false, ctrlDown = false;
   bool showGrid = false, showGizmos = false, showCulled = false, showPostFx = false;
@@ -816,7 +816,7 @@ private:
     Elm::ImageSource src;
     src.textureSlice = sui::kViewSliceBase + kSceneSlot;
     src.textureSize = {v.texW, v.texH};
-    src.loaded = v.texture != nullptr;
+    src.loaded = static_cast<bool>(v.texture);
     src.fit = Elm::ImageFit::Stretch;
     const SU::Rect content{{img.x, img.y}, {img.w, img.h}};
     const std::vector<SR::UIRenderItem> built =

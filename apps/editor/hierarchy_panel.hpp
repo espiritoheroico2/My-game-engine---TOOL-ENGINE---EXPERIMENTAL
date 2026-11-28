@@ -116,6 +116,10 @@ struct Metrics {
     static constexpr float kMenuZ = 0.95f;       // fundo do menu: acima de linhas, selecao e texto da lista
     static constexpr float kMenuHoverZ = 0.955f; // destaque da linha: acima do fundo do menu
     static constexpr float kMenuTextZ = 0.97f;   // texto do menu: acima do fundo e do destaque
+    // Submenu (tipos de UI): canvas proprio com z acima do menu principal, para cobrir o texto dele.
+    static constexpr float kSubZ = 0.975f;       // fundo do submenu
+    static constexpr float kSubHoverZ = 0.977f;  // destaque da linha do submenu
+    static constexpr float kSubTextZ = 0.98f;    // texto do submenu
     static constexpr float kFont = 12.f;
     static constexpr float kSmallFont = 11.f;
     static constexpr float kWheelRows = 3.f;      // linhas por giro da roda
@@ -161,10 +165,11 @@ inline constexpr const char* kLockPath = "assets/icons/lock.png";
 class HierarchyPanel {
  public:
     HierarchyPanel(const sui::TextAtlasSet& text, sui::SpriteUiSdlRenderer& sdl)
-        : toolbar_{text}, list_{text}, overlay_{text}, chrome_{text}, sdl_{sdl} {
+        : toolbar_{text}, list_{text}, overlay_{text}, subOverlay_{text}, chrome_{text}, sdl_{sdl} {
         // Menus (+ Create e o do botao direito) ficam acima do texto da lista. Sem isso, o texto das linhas
         // aparecia por cima do menu e as duas listas se misturavam.
         overlay_.setTextZ(Metrics::kMenuTextZ);
+        subOverlay_.setTextZ(Metrics::kSubTextZ);
         // Moldura: mesmo visual do Console e do Profiler.
     }
     HierarchyPanel(const HierarchyPanel&) = delete;
@@ -238,6 +243,7 @@ class HierarchyPanel {
         toolbar_.setFontScale(textScale);
         list_.setFontScale(textScale);
         overlay_.setFontScale(textScale);
+        subOverlay_.setFontScale(textScale);
         chrome_.setFontScale(textScale);
         visible_ = visible;
         window_ = window;
@@ -278,6 +284,7 @@ class HierarchyPanel {
         list_.appendItems(items, rect_.x, rect_.y, 0.f, list.y + rect_.y, list.y + rect_.y + list.h, owner, 1u, paint);
         appendIcons(items, paint);
         overlay_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, rect_.y + rect_.h, owner, 0u, paint);
+        subOverlay_.appendItems(items, rect_.x, rect_.y, 0.f, rect_.y, rect_.y + rect_.h, owner, 0u, paint);
 
         packet_ = extractor_.Build(++frameId_, items, nullptr, clips);
         if (!SR::IsFramePacketValid(packet_)) return true;
@@ -1081,17 +1088,18 @@ class HierarchyPanel {
                 overlay_.addText(menu.x + Metrics::kPad, textY, text, Metrics::kFont, theme_.text, menu.w - 2.f * Metrics::kPad);
             }
         }
-        if (subOpen_ != 0 && (menuOpen_ || contextOpen_)) {   // submenu com os tipos de elemento de UI
+        subOverlay_.clear();
+        if (subOpen_ != 0 && (menuOpen_ || contextOpen_)) {   // submenu com os tipos de elemento de UI (canvas proprio)
             const sui::Box sub = subMenuBox();
-            overlay_.addSolid(sub.x, sub.y, sub.w, sub.h, colors_.menu, Metrics::kMenuZ);
+            subOverlay_.addSolid(sub.x, sub.y, sub.w, sub.h, colors_.menu, Metrics::kSubZ);
             for (int i = 0; i < hm::kElemKindCount; ++i) {
                 const float y = sub.y + static_cast<float>(i) * Metrics::kRowH;
                 if (i == hoverSub_) {
-                    overlay_.addSolid(sub.x + 2.f, y + 1.f, sub.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, Metrics::kMenuHoverZ);
+                    subOverlay_.addSolid(sub.x + 2.f, y + 1.f, sub.w - 4.f, Metrics::kRowH - 2.f, colors_.rowHover, Metrics::kSubHoverZ);
                 }
-                const float textY = y + (Metrics::kRowH - overlay_.lineHeight(Metrics::kFont)) * 0.5f;
-                overlay_.addText(sub.x + Metrics::kPad, textY, T(hm::kElemKindNames[i]), Metrics::kFont, theme_.text,
-                                 sub.w - 2.f * Metrics::kPad);
+                const float textY = y + (Metrics::kRowH - subOverlay_.lineHeight(Metrics::kFont)) * 0.5f;
+                subOverlay_.addText(sub.x + Metrics::kPad, textY, T(hm::kElemKindNames[i]), Metrics::kFont, theme_.text,
+                                    sub.w - 2.f * Metrics::kPad);
             }
         }
     }
@@ -1109,6 +1117,7 @@ class HierarchyPanel {
     sui::Canvas toolbar_;
     sui::Canvas list_;
     sui::Canvas overlay_;
+    sui::Canvas subOverlay_;   // submenu de tipos de UI, acima do overlay_
     sui::Canvas chrome_;   // titulo da moldura
     sui::SpriteUiSdlRenderer& sdl_;
     sui::Theme theme_;

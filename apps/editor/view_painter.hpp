@@ -78,7 +78,26 @@ public:
   // true se ja ha decodificador ligado.
   bool hasLoader() const { return static_cast<bool>(loader_); }
   // Esquece tudo e destroi as texturas (o renderizador ainda deve existir).
-  void clear() { for (auto& [k, e] : map_) if (e.tex) SDL_DestroyTexture(e.tex); map_.clear(); }
+  void clear() { for (auto& [k, e] : map_) if (e.tex) SDL_DestroyTexture(e.tex); map_.clear(); gpuMap_.clear(); gpuGen_ = 0; }
+
+  // Textura de uma imagem no backend GPU (Diligent): id dinamico + tamanho, ou id 0 (falhou: placeholder). O cache vale
+  // para a geracao do backend; backend novo (troca de API) descarta a tabela (as texturas morreram com o antigo).
+  struct GpuImage { std::uint32_t id = 0; int w = 0, h = 0; };
+  GpuImage gpuTexture(sui::UiGpuSink& sink, const std::string& path) {
+    if (sink.generation() != gpuGen_) { gpuMap_.clear(); gpuGen_ = sink.generation(); }
+    auto it = gpuMap_.find(path);
+    if (it != gpuMap_.end()) return it->second;
+    GpuImage e;
+    ImagePixels px;
+    std::string err;
+    if (!loader_ || !loader_(path, px, &err) || px.w <= 0 || px.h <= 0) {
+      if (warn_) warn_("canvas image not loaded: '" + path + "' (" + (err.empty() ? "no decoder" : err) + ")");
+    } else if ((e.id = sink.createDynamic(px.w, px.h, px.rgba.data())) != 0) {
+      e.w = px.w; e.h = px.h;
+    }
+    gpuMap_[path] = e;
+    return e;
+  }
 
   // Textura da imagem, ou nullptr (arquivo ausente, formato ruim ou sem decodificador): o chamador desenha o placeholder.
   SDL_Texture* texture(SDL_Renderer* renderer, const std::string& path) {
@@ -103,6 +122,8 @@ private:
   // Uma imagem do cache (textura nula = falhou, nao tenta de novo).
   struct Entry { SDL_Texture* tex = nullptr; };
   std::unordered_map<std::string, Entry> map_;
+  std::unordered_map<std::string, GpuImage> gpuMap_;   // caminho GPU (ver gpuTexture)
+  std::uint32_t gpuGen_ = 0;
   SDL_Renderer* owner_ = nullptr;
   Loader loader_;
   Warn warn_;
@@ -312,12 +333,64 @@ inline bool drawTriRun(SDL_Renderer* renderer, const std::vector<SR::ClipRectGPU
   return ok;
 }
 
+// Linha fina como um quadrilatero (o backend GPU nao tem SDL_RenderLine): espessura em pixels.
+inline void appendLineQuad(std::vector<sui::UiVertex>& out, float x0, float y0, float x1, float y1, float thickness, SDL_FColor c) {
+  const float dx = x1 - x0, dy = y1 - y0, len = std::sqrt(dx * dx + dy * dy);
+  if (len <= 0.f) return;
+  const float nx = -dy / len * thickness * 0.5f, ny = dx / len * thickness * 0.5f;
+  const sui::UiVertex a{x0 + nx, y0 + ny, 0.f, 0.f, c.r, c.g, c.b, c.a}, b{x1 + nx, y1 + ny, 0.f, 0.f, c.r, c.g, c.b, c.a};
+  const sui::UiVertex d{x1 - nx, y1 - ny, 0.f, 0.f, c.r, c.g, c.b, c.a}, e{x0 - nx, y0 - ny, 0.f, 0.f, c.r, c.g, c.b, c.a};
+  out.insert(out.end(), {a, b, d, a, d, e});
+}
+
+// Como drawTriRun, mas para o backend GPU (Diligent): triangulos coloridos e imagens do Canvas viram geometria avulsa do
+// mesmo quadro, na ordem de pintura. As cores ja sao retas em sRGB (como no SDL).
+inline bool drawTriRunGpu(sui::UiGpuSink& gpu, const std::vector<SR::ClipRectGPU>& clips, const TriRun& run) {
+  if (run.verts.empty()) return true;
+  const SR::ClipRectGPU* clip = run.clip < clips.size() ? &clips[run.clip] : nullptr;
+  const auto conv = [](const SDL_Vertex& v) {
+    return sui::UiVertex{v.position.x, v.position.y, v.tex_coord.x, v.tex_coord.y, v.color.r, v.color.g, v.color.b, v.color.a};
+  };
+  std::vector<sui::UiVertex> vs;
+  if (run.image.empty()) {   // triangulos puros (setas do gizmo, particulas)
+    vs.reserve(run.verts.size());
+    for (const SDL_Vertex& v : run.verts) vs.push_back(conv(v));
+    return gpu.drawGeometry(vs.data(), static_cast<int>(vs.size()), nullptr, 0, 0, false, clip);
+  }
+  const ImageCache::GpuImage img = run.image == "?" ? ImageCache::GpuImage{} : ImageCache::get().gpuTexture(gpu, run.image);
+  if (run.verts.size() < 4) return true;
+  if (img.id == 0) {   // placeholder: caixa magenta translucida, contorno e X brancos (igual ao SDL)
+    const SDL_FPoint a = run.verts[0].position, b = run.verts[2].position;
+    const SDL_FColor fill{200.f / 255.f, 40.f / 255.f, 200.f / 255.f, 110.f / 255.f}, line{1.f, 1.f, 1.f, 220.f / 255.f};
+    appendLineQuad(vs, a.x, (a.y + b.y) * 0.5f, b.x, (a.y + b.y) * 0.5f, std::fabs(b.y - a.y), fill);
+    appendLineQuad(vs, a.x, a.y, b.x, a.y, 1.f, line);
+    appendLineQuad(vs, a.x, b.y, b.x, b.y, 1.f, line);
+    appendLineQuad(vs, a.x, a.y, a.x, b.y, 1.f, line);
+    appendLineQuad(vs, b.x, a.y, b.x, b.y, 1.f, line);
+    appendLineQuad(vs, a.x, a.y, b.x, b.y, 1.f, line);
+    appendLineQuad(vs, b.x, a.y, a.x, b.y, 1.f, line);
+    return gpu.drawGeometry(vs.data(), static_cast<int>(vs.size()), nullptr, 0, 0, false, clip);
+  }
+  for (int k = 0; k < 4; ++k) vs.push_back(conv(run.verts[static_cast<std::size_t>(k)]));
+  if (run.fit) {   // proporcao mantida: so os vertices mudam (UV inteira)
+    const FitRect f = fitAspect(vs[2].x - vs[0].x, vs[2].y - vs[0].y, static_cast<float>(img.w), static_cast<float>(img.h));
+    const float x0 = vs[0].x, y0 = vs[0].y;
+    vs[0].x = x0 + f.x;       vs[0].y = y0 + f.y;
+    vs[1].x = x0 + f.x + f.w; vs[1].y = y0 + f.y;
+    vs[2].x = x0 + f.x + f.w; vs[2].y = y0 + f.y + f.h;
+    vs[3].x = x0 + f.x;       vs[3].y = y0 + f.y + f.h;
+  }
+  const int idx[6] = {0, 1, 2, 0, 2, 3};
+  return gpu.drawGeometry(vs.data(), 4, idx, 6, img.id, true, clip);
+}
+
 inline bool drawPaintList(SDL_Renderer* renderer, sui::SpriteUiSdlRenderer& sdl, SR::RenderExtractor& extractor, SR::FramePacket& packet,
                           std::uint64_t& frameId, const std::vector<SR::ClipRectGPU>& clips, const PaintList& list) {
   std::size_t from = 0;
   for (const TriRun& run : list.runs) {
     if (!drawItemRange(renderer, sdl, extractor, packet, frameId, clips, list.items, from, run.before)) return false;
-    if (!drawTriRun(renderer, clips, run)) return false;
+    if (sui::UiGpuSink* gpu = sdl.gpu()) { if (!drawTriRunGpu(*gpu, clips, run)) return false; }
+    else if (!drawTriRun(renderer, clips, run)) return false;
     from = run.before;
   }
   return drawItemRange(renderer, sdl, extractor, packet, frameId, clips, list.items, from, list.items.size());

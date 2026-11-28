@@ -43,6 +43,17 @@ JOBS = [
     ("bloom.hlsl", "frag", "BloomComposite", "bloom.comp"),
     ("spriteui.hlsl", "vert", "VSMain", "spriteui.vs"),
     ("spriteui.hlsl", "frag", "PSMain", "spriteui.ps"),
+    # UI do editor desenhada pelo Diligent (apps/editor/ui_gpu_backend.hpp)
+    ("editor_ui.hlsl", "vert", "VSMain", "editor_ui.vs"),
+    ("editor_ui.hlsl", "frag", "PSMain", "editor_ui.ps"),
+    # Skybox na GPU (o VS e o do SSAO, triangulo de tela cheia) e particulas v2 (antes o OpenGL ficava sem particulas).
+    # Gerados com glslang/SPIRV-Cross compilados das fontes em third_party/DiligentCore/ThirdParty (versao mais nova que
+    # a dos arquivos acima: a saida declara tambem recursos nao usados, o que o GL ignora).
+    ("skybox.hlsl", "frag", "PSMain", "skybox.ps"),
+    ("particles.hlsl", "vert", "VSMain", "particles.vs"),
+    ("particles.hlsl", "frag", "PSAlpha", "particles.alpha"),
+    ("particles.hlsl", "frag", "PSAdditive", "particles.add"),
+    ("particles.hlsl", "frag", "PSGlow", "particles.glow"),
 ]
 
 # compute da Light Prism (cluster): saem em assets/shaders/lightprism/glsl/<arquivo>.<entry>.430.glsl

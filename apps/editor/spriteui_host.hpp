@@ -12,6 +12,7 @@
 #include "SpriteUi/Text/TextLayout.hpp"
 #include "SpriteUi/Text/TruetypeAtlas.hpp"
 #include "text_atlas_set.hpp"
+#include "ui_gpu_sink.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -19,6 +20,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -56,42 +58,76 @@ class SpriteUiSdlRenderer {
  public:
   ~SpriteUiSdlRenderer() { destroy(); }
 
+  // Backend GPU (Diligent): quando anexado, tudo que o SDL desenhava (pacotes, atlas, icones, miniaturas, vistas) vai para o
+  // sink. As copias em CPU abaixo (glifos, icones, miniaturas) existem para recriar as texturas depois de uma troca de
+  // API/backend sem que os paineis precisem reenviar nada. Sem backend, o caminho SDL de sempre.
+  void attachGpu(UiGpuSink* sink) {
+    destroy();   // texturas SDL (se havia renderer) saem; as copias em CPU ficam
+    gpu_ = sink;
+    cacheValid_ = false;
+    if (!gpu_) return;
+    if (glyphW_ > 0) gpu_->setSlice(1u, glyphW_, glyphH_, glyphRgba_.data(), true);
+    if (iconsW_ > 0) gpu_->setSlice(kIconSlice, iconsW_, iconsH_, iconsRgba_.data(), true);
+    if (!materialsRgba_.empty()) gpu_->setSlice(kMaterialSlice, kMaterialCols * kMaterialCell, kMaterialCols * kMaterialCell, materialsRgba_.data(), true);
+    // texto por tamanho e vistas: recriados sob demanda / religados pelos paineis a cada quadro
+  }
+  void detachGpu() { gpu_ = nullptr; cacheValid_ = false; }
+  [[nodiscard]] UiGpuSink* gpu() const { return gpu_; }
+
   // Sobe o atlas de glifos como textura RGBA (cor branca, alfa = cobertura).
   bool uploadAtlas(SDL_Renderer* renderer, const ST::TruetypeAtlas& atlas) {
     if (atlas_) SDL_DestroyTexture(atlas_);   // so o de glifos: o atlas de icones (uploadIcons) fica
     atlas_ = nullptr;
+    cacheValid_ = false;   // o conteudo do atlas mudou sem mudar o pacote: a imagem em cache nao serve mais
+    glyphW_ = glyphH_ = 0;
+    glyphRgba_.clear();
+    if (atlas.IsValid()) {
+      glyphRgba_ = glyphRgba(atlas);
+      glyphW_ = static_cast<int>(atlas.width);
+      glyphH_ = static_cast<int>(atlas.height);
+    }
+    if (gpu_) return glyphW_ > 0 && gpu_->setSlice(1u, glyphW_, glyphH_, glyphRgba_.data(), true);
     if (!renderer) return false;
     atlas_ = createGlyphTexture(renderer, atlas);
     return atlas_ != nullptr;
   }
 
   // Conjunto de atlas por tamanho: as texturas sobem sob demanda, uma por slice de texto.
-  void setTextSet(const TextAtlasSet* set) { textSet_ = set; }
+  void setTextSet(const TextAtlasSet* set) {
+    textSet_ = set;
+    cacheValid_ = false;   // outro conjunto de fontes: a imagem em cache nao vale mais
+  }
 
   // Sobe o atlas de icones (RGBA, ja com alfa) como segunda textura, usada pelo textureSlice kIconSlice.
   bool uploadIcons(SDL_Renderer* renderer, int width, int height, const std::uint8_t* rgba) {
     if (icons_) SDL_DestroyTexture(icons_);
     icons_ = nullptr;
-    if (!renderer || width <= 0 || height <= 0 || !rgba) return false;
-    icons_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, width, height);
-    if (!icons_) return false;
-    SDL_SetTextureBlendMode(icons_, SDL_BLENDMODE_BLEND);
-    SDL_SetTextureScaleMode(icons_, SDL_SCALEMODE_LINEAR);
-    return SDL_UpdateTexture(icons_, nullptr, rgba, width * 4);
+    cacheValid_ = false;   // icones novos: a imagem em cache precisa ser refeita
+    iconsW_ = iconsH_ = 0;
+    iconsRgba_.clear();
+    if (width <= 0 || height <= 0 || !rgba) return false;
+    iconsRgba_.assign(rgba, rgba + static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u);
+    iconsW_ = width;
+    iconsH_ = height;
+    if (gpu_) return gpu_->setSlice(kIconSlice, width, height, iconsRgba_.data(), true);
+    if (!renderer) return false;
+    return createIconsTexture(renderer);
   }
 
   // Envia uma miniatura de material (kMaterialCell x kMaterialCell RGBA) para o slot `slot` do atlas de materiais.
   // Cria o atlas (estatico, vazio) na primeira chamada. Slot fora da grade e ignorado.
   bool uploadMaterialThumb(SDL_Renderer* renderer, int slot, const std::uint8_t* rgba) {
-    if (!renderer || !rgba || slot < 0 || slot >= kMaterialCols * kMaterialCols) return false;
-    if (!materials_) {
-      materials_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
-                                     kMaterialCols * kMaterialCell, kMaterialCols * kMaterialCell);
-      if (!materials_) return false;
-      SDL_SetTextureBlendMode(materials_, SDL_BLENDMODE_BLEND);
-      SDL_SetTextureScaleMode(materials_, SDL_SCALEMODE_LINEAR);
+    if ((!renderer && !gpu_) || !rgba || slot < 0 || slot >= kMaterialCols * kMaterialCols) return false;
+    constexpr int kSide = kMaterialCols * kMaterialCell;
+    if (materialsRgba_.empty()) materialsRgba_.assign(static_cast<std::size_t>(kSide) * kSide * 4u, 0u);   // copia em CPU: sobrevive a troca de backend
+    const int ox = (slot % kMaterialCols) * kMaterialCell, oy = (slot / kMaterialCols) * kMaterialCell;
+    for (int y = 0; y < kMaterialCell; ++y) {
+      std::memcpy(materialsRgba_.data() + (static_cast<std::size_t>(oy + y) * kSide + static_cast<std::size_t>(ox)) * 4u,
+                  rgba + static_cast<std::size_t>(y) * kMaterialCell * 4u, static_cast<std::size_t>(kMaterialCell) * 4u);
     }
-    const SDL_Rect r{(slot % kMaterialCols) * kMaterialCell, (slot / kMaterialCols) * kMaterialCell, kMaterialCell, kMaterialCell};
+    if (gpu_) return gpu_->setSlice(kMaterialSlice, kSide, kSide, materialsRgba_.data(), true);   // textura inteira (sem envio parcial no RHI)
+    if (!materials_ && !createMaterialsTexture(renderer)) return false;
+    const SDL_Rect r{ox, oy, kMaterialCell, kMaterialCell};
     return SDL_UpdateTexture(materials_, &r, rgba, kMaterialCell * 4);
   }
 
@@ -99,8 +135,55 @@ class SpriteUiSdlRenderer {
   void setView(std::uint32_t slot, SDL_Texture* texture) {
     if (slot < kViewSlots) views_[slot] = texture;
   }
+  // Versao com o handle das vistas: SDL_Texture no caminho SDL, id dinamico + filtro no caminho GPU.
+  void setView(std::uint32_t slot, const ViewImage& image) {
+    if (slot >= kViewSlots) return;
+    if (gpu_) gpu_->bindView(slot, image.gpu, image.linear);
+    else views_[slot] = image.sdl;
+  }
 
+  // Desenho com cache por painel: se o pacote e identico ao do quadro anterior (e a janela nao mudou de tamanho),
+  // a imagem ja pronta numa textura-alvo e so copiada para a tela, sem gerar vertices nem chamar SDL_RenderGeometry.
+  // Pacotes que leem texturas que mudam sem mudar o pacote (miniaturas de material e vistas Scene/Jogo) nao usam o
+  // cache: caem em drawDirect todo quadro. A ordem de desenho entre paineis nao muda: cada um copia no seu turno.
   bool draw(SDL_Renderer* renderer, const SR::FramePacket& packet) {
+    if (gpu_) return drawGpu(packet);   // GPU: sem cache por painel (o custo e so gravar vertices; ver docs/planos/38, etapa 3e)
+    if (!renderer) return false;
+    if (usesLiveTexture(packet)) {
+      cacheValid_ = false;
+      return drawDirect(renderer, packet);
+    }
+    int w = 0, h = 0;
+    if (!SDL_GetRenderOutputSize(renderer, &w, &h) || w <= 0 || h <= 0) return drawDirect(renderer, packet);
+    const std::uint64_t key = hashPacket(packet, static_cast<std::uint64_t>(w) << 32 | static_cast<std::uint64_t>(h));
+    if (!cacheValid_ || key != cacheKey_ || !cacheTex_ || w != cacheW_ || h != cacheH_) {
+      if (!ensureCacheTexture(renderer, w, h)) return drawDirect(renderer, packet);
+      SDL_Texture* previous = SDL_GetRenderTarget(renderer);
+      SDL_SetRenderTarget(renderer, cacheTex_);
+      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+      SDL_RenderClear(renderer);
+      const bool ok = drawDirect(renderer, packet);   // desenho real, no alvo (nao na tela)
+      SDL_SetRenderTarget(renderer, previous);
+      cacheValid_ = ok;
+      cacheKey_ = key;
+      if (!ok) return false;
+      ++cacheMisses_;
+    } else {
+      ++cacheHits_;
+    }
+    // Copia para a tela. A textura guarda cor ja multiplicada pelo alfa (ver ensureCacheTexture): mistura premultiplicada.
+    activeClipIndex_ = SR::NoClipIndex;
+    SDL_SetRenderClipRect(renderer, nullptr);
+    return SDL_RenderTexture(renderer, cacheTex_, nullptr, nullptr);
+  }
+
+  // Contadores do cache (acertos e erros por quadro de painel): usados nos testes e para medir o ganho.
+  [[nodiscard]] std::uint64_t cacheHits() const { return cacheHits_; }
+  [[nodiscard]] std::uint64_t cacheMisses() const { return cacheMisses_; }
+
+  // Desenho direto (sem cache): gera os vertices do pacote e envia lote por lote para o renderizador atual.
+  bool drawDirect(SDL_Renderer* renderer, const SR::FramePacket& packet) {
+    if (gpu_) return drawGpu(packet);
     if (!renderer) return false;
     activeClipIndex_ = SR::NoClipIndex;
     for (const auto& batch : packet.batches) {
@@ -154,7 +237,19 @@ class SpriteUiSdlRenderer {
     return SDL_SetRenderClipRect(renderer, nullptr);
   }
 
+  // Cor do item: tint linear premultiplicada -> sRGB reto (SDL mistura com alfa reto). O backend GPU usa a mesma conversao
+  // para o resultado bater com o do SDL.
+  static SDL_FColor sdlColor(const SR::SpriteInstanceGPU& inst) {
+    const float a = inst.tint[3];
+    if (a <= 0.f) return {0.f, 0.f, 0.f, 0.f};
+    return {encode(inst.tint[0] / a), encode(inst.tint[1] / a), encode(inst.tint[2] / a), a};
+  }
+
+  // Libera as texturas SDL (as copias em CPU de glifos, icones e miniaturas ficam: ver attachGpu).
   void destroy() {
+    if (cacheTex_) SDL_DestroyTexture(cacheTex_);
+    cacheTex_ = nullptr;
+    cacheValid_ = false;
     if (atlas_) SDL_DestroyTexture(atlas_);
     if (icons_) SDL_DestroyTexture(icons_);
     if (materials_) SDL_DestroyTexture(materials_);
@@ -165,15 +260,66 @@ class SpriteUiSdlRenderer {
     }
     atlas_ = nullptr;
     icons_ = nullptr;
+    for (SDL_Texture*& v : views_) v = nullptr;   // as vistas sao de quem as criou (ViewTex); aqui so se solta a referencia
   }
 
  private:
-  static SDL_Texture* createGlyphTexture(SDL_Renderer* renderer, const ST::TruetypeAtlas& atlas) {
-    if (!atlas.IsValid()) return nullptr;
+  // true se o pacote usa uma textura cujo conteudo muda sem mudar o pacote (miniatura de material ou vista de cena/jogo).
+  static bool usesLiveTexture(const SR::FramePacket& packet) {
+    for (const auto& batch : packet.batches) {
+      if (batch.textureSlice == kMaterialSlice) return true;
+      if (batch.textureSlice >= kViewSliceBase && batch.textureSlice - kViewSliceBase < kViewSlots) return true;
+    }
+    return false;
+  }
+
+  // Hash FNV-1a por palavras de 64 bits sobre instancias, lotes e recortes, com a tela (w,h) como semente.
+  // Erro de hash so custa um redesenho; nunca mostra imagem antiga por engano em caso de colisao rara.
+  static std::uint64_t hashPacket(const SR::FramePacket& packet, std::uint64_t seed) {
+    std::uint64_t h = 1469598103934665603ull ^ seed;
+    const auto mix = [&h](const void* data, std::size_t bytes) {
+      const auto* p = static_cast<const unsigned char*>(data);
+      std::size_t i = 0;
+      for (; i + 8 <= bytes; i += 8) {
+        std::uint64_t word = 0;
+        std::memcpy(&word, p + i, 8);
+        h = (h ^ word) * 1099511628211ull;
+      }
+      for (; i < bytes; ++i) h = (h ^ p[i]) * 1099511628211ull;
+    };
+    mix(packet.instances.data(), packet.instances.size() * sizeof(SR::SpriteInstanceGPU));
+    mix(packet.batches.data(), packet.batches.size() * sizeof(SR::DrawBatch));
+    mix(packet.clipRects.data(), packet.clipRects.size() * sizeof(SR::ClipRectGPU));
+    return h;
+  }
+
+  // Textura-alvo do cache, com o tamanho da saida. Mistura premultiplicada ao copiar para a tela: o desenho no alvo
+  // usa BLEND (cor*alfa somada ao destino), e isso produz cor ja premultiplicada.
+  bool ensureCacheTexture(SDL_Renderer* renderer, int w, int h) {
+    if (cacheTex_ && w == cacheW_ && h == cacheH_) return true;
+    if (cacheTex_) SDL_DestroyTexture(cacheTex_);
+    cacheTex_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, w, h);
+    cacheW_ = cacheH_ = 0;
+    cacheValid_ = false;
+    if (!cacheTex_) return false;
+    SDL_SetTextureBlendMode(cacheTex_, SDL_BLENDMODE_BLEND_PREMULTIPLIED);
+    cacheW_ = w;
+    cacheH_ = h;
+    return true;
+  }
+
+  // Glifos: RGBA branco com alfa = cobertura.
+  static std::vector<std::uint8_t> glyphRgba(const ST::TruetypeAtlas& atlas) {
     std::vector<std::uint8_t> rgba(static_cast<std::size_t>(atlas.width) * atlas.height * 4u, 255u);
     for (std::size_t i = 0; i < static_cast<std::size_t>(atlas.width) * atlas.height; ++i) {
       rgba[i * 4 + 3] = atlas.pixels[i];
     }
+    return rgba;
+  }
+
+  static SDL_Texture* createGlyphTexture(SDL_Renderer* renderer, const ST::TruetypeAtlas& atlas) {
+    if (!atlas.IsValid()) return nullptr;
+    const std::vector<std::uint8_t> rgba = glyphRgba(atlas);
     SDL_Texture* tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
                                          static_cast<int>(atlas.width), static_cast<int>(atlas.height));
     if (!tex) return nullptr;
@@ -186,11 +332,54 @@ class SpriteUiSdlRenderer {
     return tex;
   }
 
+  // Recria a textura SDL dos icones a partir da copia em CPU (primeiro envio ou depois de trocar o renderer).
+  bool createIconsTexture(SDL_Renderer* renderer) {
+    if (iconsW_ <= 0 || iconsH_ <= 0 || iconsRgba_.empty()) return false;
+    icons_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, iconsW_, iconsH_);
+    if (!icons_) return false;
+    SDL_SetTextureBlendMode(icons_, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(icons_, SDL_SCALEMODE_LINEAR);
+    return SDL_UpdateTexture(icons_, nullptr, iconsRgba_.data(), iconsW_ * 4);
+  }
+
+  // Cria a textura SDL do atlas de materiais com o conteudo da copia em CPU.
+  bool createMaterialsTexture(SDL_Renderer* renderer) {
+    constexpr int kSide = kMaterialCols * kMaterialCell;
+    materials_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, kSide, kSide);
+    if (!materials_) return false;
+    SDL_SetTextureBlendMode(materials_, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(materials_, SDL_SCALEMODE_LINEAR);
+    if (!materialsRgba_.empty()) SDL_UpdateTexture(materials_, nullptr, materialsRgba_.data(), kSide * 4);
+    return true;
+  }
+
+  // Desenho pelo backend GPU: garante as texturas de texto dos slices usados e grava o pacote no quadro.
+  bool drawGpu(const SR::FramePacket& packet) {
+    for (const auto& batch : packet.batches) {
+      const std::uint32_t slice = batch.textureSlice;
+      if (slice < TextAtlasSet::kFirstSlice || slice >= TextAtlasSet::kFirstSlice + TextAtlasSet::kSlots) continue;
+      if (gpu_->hasSlice(slice) || !textSet_) continue;
+      if (const ST::TruetypeAtlas* a = textSet_->atlasForSlice(slice)) {
+        if (a->IsValid()) {
+          const std::vector<std::uint8_t> rgba = glyphRgba(*a);
+          gpu_->setSlice(slice, static_cast<int>(a->width), static_cast<int>(a->height), rgba.data(), true);
+        }
+      }
+    }
+    return gpu_->drawPacket(packet);
+  }
+
   // Textura do slice. Slices de texto por tamanho sobem na primeira vez; os demais seguem a tabela fixa.
   SDL_Texture* textureFor(SDL_Renderer* renderer, std::uint32_t slice) {
     if (slice == SR::WhiteTextureSlice) return nullptr;
-    if (slice == kIconSlice) return icons_;
-    if (slice == kMaterialSlice) return materials_;
+    if (slice == kIconSlice) {
+      if (!icons_ && iconsW_ > 0) createIconsTexture(renderer);   // renderer novo: recria da copia em CPU
+      return icons_;
+    }
+    if (slice == kMaterialSlice) {
+      if (!materials_ && !materialsRgba_.empty()) createMaterialsTexture(renderer);
+      return materials_;
+    }
     if (slice >= kViewSliceBase && slice - kViewSliceBase < kViewSlots) return views_[slice - kViewSliceBase];
     if (slice >= TextAtlasSet::kFirstSlice && slice < TextAtlasSet::kFirstSlice + TextAtlasSet::kSlots) {
       SDL_Texture*& tex = sizeTex_[slice - TextAtlasSet::kFirstSlice];
@@ -198,6 +387,14 @@ class SpriteUiSdlRenderer {
         if (const ST::TruetypeAtlas* a = textSet_->atlasForSlice(slice)) tex = createGlyphTexture(renderer, *a);
       }
       return tex;
+    }
+    if (!atlas_ && glyphW_ > 0) {   // renderer novo: o atlas de glifos volta da copia em CPU
+      atlas_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, glyphW_, glyphH_);
+      if (atlas_) {
+        SDL_SetTextureBlendMode(atlas_, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(atlas_, SDL_SCALEMODE_LINEAR);
+        SDL_UpdateTexture(atlas_, nullptr, glyphRgba_.data(), glyphW_ * 4);
+      }
     }
     return atlas_;
   }
@@ -281,12 +478,6 @@ class SpriteUiSdlRenderer {
     return {inst.uvRect[0] + u * inst.uvRect[2], inst.uvRect[1] + v * inst.uvRect[3]};
   }
 
-  // Cor do item: tint linear premultiplicada -> sRGB reto (SDL mistura com alfa reto).
-  static SDL_FColor sdlColor(const SR::SpriteInstanceGPU& inst) {
-    const float a = inst.tint[3];
-    if (a <= 0.f) return {0.f, 0.f, 0.f, 0.f};
-    return {encode(inst.tint[0] / a), encode(inst.tint[1] / a), encode(inst.tint[2] / a), a};
-  }
   static float encode(float linear) {
     linear = std::clamp(linear, 0.f, 1.f);
     static const auto table = [] {
@@ -311,9 +502,19 @@ class SpriteUiSdlRenderer {
   SDL_Texture* views_[kViewSlots] = {};
   const TextAtlasSet* textSet_ = nullptr;          // conjunto de atlas por tamanho (opcional)
   SDL_Texture* sizeTex_[TextAtlasSet::kSlots] = {};   // uma textura por tamanho, criada sob demanda
+  // Backend GPU (nao dono) e copias em CPU dos conteudos de textura que sobrevivem a troca de backend/renderer.
+  UiGpuSink* gpu_ = nullptr;
+  std::vector<std::uint8_t> glyphRgba_, iconsRgba_, materialsRgba_;
+  int glyphW_ = 0, glyphH_ = 0, iconsW_ = 0, iconsH_ = 0;
   std::uint32_t activeClipIndex_ = SR::NoClipIndex;
   std::vector<SDL_Vertex> vertices_;
   std::vector<int> indices_;
+  // Cache por painel: imagem do ultimo pacote, a chave (hash + tela) que a gerou e os contadores de acerto/erro.
+  SDL_Texture* cacheTex_ = nullptr;
+  int cacheW_ = 0, cacheH_ = 0;
+  std::uint64_t cacheKey_ = 0;
+  bool cacheValid_ = false;
+  std::uint64_t cacheHits_ = 0, cacheMisses_ = 0;
 };
 
 

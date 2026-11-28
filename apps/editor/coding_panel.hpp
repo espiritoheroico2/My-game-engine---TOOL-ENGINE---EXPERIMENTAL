@@ -190,7 +190,7 @@ class Panel {
     if (body.h <= 0.f || body.w <= 0.f) return true;   // minimizada ou escondida
     setRoot(root);
     refreshScriptIssues(SDL_GetTicks() / 1000.0);
-    window_ = SDL_GetRenderWindow(renderer);
+    window_ = sui::UiWindowOf(renderer);
     refreshInk();
     body_ = body;
     layoutAll(body);

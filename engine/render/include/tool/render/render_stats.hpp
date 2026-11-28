@@ -18,6 +18,7 @@ enum class RenderPassId : std::uint8_t {
   Emission,
   Transparent,
   Particles,
+  Skybox,        // fundo de 6 imagens (skybox.hlsl), depois da cena e antes do bloom
   BloomExtract,
   BloomBlurH,
   BloomBlurV,
@@ -45,6 +46,7 @@ inline const char* renderPassName(RenderPassId pass) {
     case RenderPassId::Emission: return "Emission";
     case RenderPassId::Transparent: return "Transparent";
     case RenderPassId::Particles: return "Particles";
+    case RenderPassId::Skybox: return "Skybox";
     case RenderPassId::BloomExtract: return "Bloom extract";
     case RenderPassId::BloomBlurH: return "Bloom blur H";
     case RenderPassId::BloomBlurV: return "Bloom blur V";
