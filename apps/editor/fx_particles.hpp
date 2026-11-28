@@ -1,6 +1,6 @@
 // fx_particles.hpp - Particulas v2 no editor: componente ParticleFxComp (biblioteca engine/particles), arquivos de efeito
 // em <projeto>/Effects/*.json, presets (fumaca, fogo, fluido), simulacao por quadro e entrega dos quads ao GpuRenderer.
-// Sistema antigo (ParticleComp, fx.hpp) continua independente: os dois convivem na mesma cena.
+// E o unico sistema de particulas do editor (o ParticleComp antigo foi removido; cenas antigas sao convertidas ao abrir).
 #pragma once
 #include "editor_state.hpp"
 
@@ -73,6 +73,15 @@ inline bool applyPreset(Editor& ed, ParticleFxComp& pc, int index) {
   return true;
 }
 
+// Cria o objeto "Particle" (menu + Create da Hierarchy): objeto comum com Transform e ParticleFxComp, ja com o preset
+// (0 fumaca, 1 fogo, 2 fluido). Devolve a entidade.
+inline tool::Entity makeParticleObject(Editor& ed, int preset) {
+  const tool::Entity e = ed.make("Particle");
+  ParticleFxComp& pf = ed.scene.world().add<ParticleFxComp>(e);
+  applyPreset(ed, pf, preset);
+  return e;
+}
+
 } // namespace fxlib
 
 // Avanca todos os sistemas de particulas v2 da cena. Cria o sistema na primeira vez (ou quando a capacidade muda), aplica o
@@ -104,6 +113,19 @@ inline void Editor::updateFx(float dt) {
     const tool::Vec4 d4 = wm.mul({eff.init.dir[0], eff.init.dir[1], eff.init.dir[2], 0.f});
     const tool::Vec3 dn = tool::normalize({d4.x, d4.y, d4.z});
     if (tool::length(dn) > 0.5f) { eff.init.dir[0] = dn.x; eff.init.dir[1] = dn.y; eff.init.dir[2] = dn.z; }
+    // Trajetoria e redemoinho sao locais ao objeto: pontos e eixo giram (e escalam) junto com ele; o piso e fixo no mundo.
+    for (tool::particles::Module& m : eff.modules) {
+      if (m.kind == tool::particles::ModuleKind::Route) {
+        for (tool::u32 k = 0; k < m.routeCount && k < tool::particles::kMaxRoutePoints; ++k) {
+          const tool::Vec4 q = wm.mul({m.pts[k][0], m.pts[k][1], m.pts[k][2], 0.f});
+          m.pts[k][0] = q.x; m.pts[k][1] = q.y; m.pts[k][2] = q.z;
+        }
+      } else if (m.kind == tool::particles::ModuleKind::Swirl) {
+        const tool::Vec4 q = wm.mul({m.axis[0], m.axis[1], m.axis[2], 0.f});
+        const tool::Vec3 an = tool::normalize({q.x, q.y, q.z});
+        if (tool::length(an) > 0.5f) { m.axis[0] = an.x; m.axis[1] = an.y; m.axis[2] = an.z; }
+      }
+    }
     rt.sys->setEffect(eff);
     rt.sys->setOrigin(wm.m[3][0], wm.m[3][1], wm.m[3][2]);
     if (pc.playing) { rt.sys->update(dt); animating = true; }

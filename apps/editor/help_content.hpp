@@ -81,7 +81,11 @@ Tags group objects (for example "enemy"). Rename a tag in the Inspector and it c
 # Scripts (ToolObject)
 Scripts are optional. "Add Script" in the Inspector creates Assets/Scripts/<Name>.tool.js with start(obj), update(obj, dt) and OnEventTrigger(obj, name). See "Scripts: examples (QuickJS)".
 - "Edit script" edits it inside the Inspector. "Edit external" opens it in your code editor (Settings > Project sets which one).
-- The script runtime is not running yet: use Tools (Jump, Move, Follow, Spin, OnCollision) today; the same calls will exist in scripts (see the Script API topic).)H",
+- The script runtime is not running yet: use Tools (Jump, Move, Follow, Spin, OnCollision) today; the same calls will exist in scripts (see the Script API topic).
+# Script variables: //[visible]
+Put the comment //[visible] alone on the line above a variable (let, var or const with a number, text or true/false) and it shows in the Inspector of the object that has the script. A text like "#FF8800" shows a color picker. The value you set in the Inspector is the one the variable has when Play starts.
+# Entity Manager
+Every scene has one Entity Manager object. It cannot be deleted or duplicated. Its script is Scripts/EntityManagerScript.js in the game folder (created from a template the first time): the place where the game manages entities (LODs, impostors, mesh groups). You can edit it freely.)H",
 R"H(# Objetos
 Todo objeto tem Nome e Transform. Adicione o que precisar: Mesh Renderer (desenha uma forma ou modelo), Light, Camera, Audio Source, Physics, Tools, Script.
 # Tags
@@ -89,7 +93,11 @@ Tags agrupam objetos (por exemplo "enemy"). Renomear uma tag no Inspector muda e
 # Scripts (ToolObject)
 Scripts sao opcionais. "Add Script" no Inspector cria Assets/Scripts/<Nome>.tool.js com start(obj), update(obj, dt) e OnEventTrigger(obj, name). Veja "Scripts: exemplos (QuickJS)".
 - "Edit script" edita dentro do Inspector. "Edit external" abre no seu editor de codigo (Settings > Project escolhe qual).
-- Os scripts rodam durante o Play (runtime QuickJS). Sem codigo, use os Tools (Jump, Move, Follow, Spin, OnCollision). Veja o topico Script API.)H"},
+- Os scripts rodam durante o Play (runtime QuickJS). Sem codigo, use os Tools (Jump, Move, Follow, Spin, OnCollision). Veja o topico Script API.
+# Variaveis do script: //[visible]
+Escreva o comentario //[visible] sozinho na linha acima de uma variavel (let, var ou const com numero, texto ou true/false) e ela aparece no Inspector do objeto que tem o script. Um texto como "#FF8800" mostra um seletor de cor. O valor definido no Inspector e o que a variavel tem quando o Play comeca.
+# Entity Manager
+Toda cena tem um objeto Entity Manager. Ele nao pode ser apagado nem duplicado. O script dele e o Scripts/EntityManagerScript.js na pasta do jogo (criado de um modelo na primeira vez): o lugar onde o jogo gerencia as entidades (LODs, impostores, grupos de malhas). Edite livremente.)H"},
 
   // ------------------------------------------------------------------------------------------------ PHYSICS
   {"physics", "Physics", "Physics (Newtoon)", "Fisica (Newtoon)",
@@ -360,7 +368,7 @@ R"H(Scripts are plain JavaScript functions (QuickJS). There are no classes and n
 - instantiate(template, x, y, z): copy of the object named template at (x, y, z). Returns the copy's name ("Bala#1").
 - destroy(target, seconds): removes now, or after the given seconds
 - setPosition(target, x, y, z) / setRotation(target, x, y, z) / setColor(target, r, g, b) (colors 0 to 1, MeshRenderer)
-- addComponent(target, type) / removeComponent(target, type): types MeshRenderer, AudioSource, ParticleComp
+- addComponent(target, type) / removeComponent(target, type): types MeshRenderer, AudioSource, ParticleFxComp
 # Reading
 - position(name): [x, y, z] of an object, or undefined if it does not exist
 - input.down("W"): held now. input.pressed("Space"): pressed this frame. input.mouseDelta(): [dx, dy] mouse movement this frame.
@@ -393,7 +401,7 @@ R"H(Scripts sao funcoes JavaScript simples (QuickJS). Nao ha classes nem `this` 
 - instantiate(modelo, x, y, z): copia do objeto chamado modelo na posicao (x, y, z). Devolve o nome da copia ("Bala#1").
 - destroy(alvo, segundos): apaga agora, ou depois dos segundos informados
 - setPosition(alvo, x, y, z) / setRotation(alvo, x, y, z) / setColor(alvo, r, g, b) (cores de 0 a 1, MeshRenderer)
-- addComponent(alvo, tipo) / removeComponent(alvo, tipo): tipos MeshRenderer, AudioSource, ParticleComp
+- addComponent(alvo, tipo) / removeComponent(alvo, tipo): tipos MeshRenderer, AudioSource, ParticleFxComp
 # Leitura
 - position(nome): [x, y, z] de um objeto, ou undefined se nao existir
 - input.down("W"): mantida agora. input.pressed("Space"): apertada neste quadro. input.mouseDelta(): [dx, dy] movimento do mouse neste quadro.
@@ -722,7 +730,7 @@ export function update(obj, dt) {
 export function start(obj) {
   const b = instantiate("Bala", 0, 2, 0);   // copy of the object "Bala" (returns its name)
   destroy(b, 2.0);                          // removes the copy after 2 s
-  addComponent(obj, "AudioSource");         // types: MeshRenderer, AudioSource, ParticleComp
+  addComponent(obj, "AudioSource");         // types: MeshRenderer, AudioSource, ParticleFxComp
 }
 ```
 
@@ -1373,7 +1381,7 @@ export function update(obj, dt) {
 export function start(obj) {
   const b = instantiate("Bala", 0, 2, 0);   // copia do objeto "Bala" (devolve o nome)
   destroy(b, 2.0);                          // apaga a copia depois de 2 s
-  addComponent(obj, "AudioSource");         // tipos: MeshRenderer, AudioSource, ParticleComp
+  addComponent(obj, "AudioSource");         // tipos: MeshRenderer, AudioSource, ParticleFxComp
 }
 ```
 

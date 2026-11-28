@@ -20,6 +20,7 @@
 #include "config_preset.hpp"   // config (render + fisica) por cena: aplicada ao abrir a cena
 #include "project_settings.hpp"
 #include "script.hpp"
+#include "script_vars.hpp"
 #include "script_host.hpp"
 #include "script_check.hpp"
 #include "input_map.hpp"
@@ -289,13 +290,7 @@ struct Editor {
   std::uint64_t rtSig_ = 0; bool rtHave_ = false;
   std::uint64_t psigCpu[2] = {0, 0}; bool psigCpuValid[2] = {false, false};   // assinatura das sombras de pontual/spot (CPU), por vista (0 = Scene, 1 = Game)
  std::vector<std::string> uiEvents;
-  struct Particle { tool::Vec3 p, v; float age = 0.f, life = 1.f; float phase = 0.f; tool::Vec3 jit{}; };  // jit: deslocamento do nascimento (local)
-  struct ParticleSim { std::vector<Particle> list; float acc = 0.f; uint32_t seed = 12345u; uint32_t touched = 0; };
-  uint32_t particleFrame = 0;
-  int particleBudget = 100000;                         // maximo de particulas vivas somando todos os emissores
-  std::unordered_map<uint32_t, ParticleSim> particles;   // por indice de entidade
-  void updateParticles(float dt);
-  // Particulas v2 (biblioteca tool::particles, componente ParticleFxComp): sistema CPU por entidade + quads do ultimo quadro.
+  // Particulas (biblioteca tool::particles, componente ParticleFxComp): sistema CPU por entidade + quads do ultimo quadro.
   // updateFx avanca a simulacao; submitFx entrega os quads ao GpuRenderer (ver fx_particles.hpp).
   struct FxRuntime {
     std::unique_ptr<tool::particles::ParticleSystem> sys;
@@ -433,7 +428,7 @@ struct Editor {
   // Ocioso: sem evento (mouse, teclado, janela) ha 3 quadros e sem Play, as vistas 3D nao sao redesenhadas (economiza GPU/CPU).
   int idleFrames = 0;
   // Ocioso = nada muda na tela: sem Play, sem emissor de particulas animando (ou pausado) e sem interacao ha 3 quadros.
-  bool fxAnimating = false;   // definido por updateParticles: ha ParticleComp na cena
+  bool fxAnimating = false;   // definido por updateFx: ha particulas animando na cena
   // "Idle rendering" desligado (Settings): as vistas nunca reaproveitam a textura, redesenham todo quadro.
   bool viewsIdle() const { return idleRendering && !playing && !(fxAnimating && !paused) && idleFrames > 3; }
   // Ritmo dos quadros (frame_pacing.hpp): ocioso, o laco dorme e so monta a interface quando algo pede. Qualquer codigo
@@ -640,7 +635,60 @@ struct Editor {
   // Modelo importado: um objeto "pai" e um objeto por no do arquivo, ligados por Parent (editor_hier.hpp).
   tool::Entity makeModel(const std::string& rel);
   void assignAsset(const std::string& rel) { if (std::find(sceneInfo.assets.begin(), sceneInfo.assets.end(), rel) == sceneInfo.assets.end()) sceneInfo.assets.push_back(rel); }
+  // --- Entity Manager (M8): objeto unico por cena, sem apagar nem duplicar; script em <projeto>/Scripts ---
+  bool isEntityManager(tool::Entity e) { return scene.world().alive(e) && scene.world().has<EntityManagerTag>(e); }
+  tool::Entity entityManager() {
+    tool::Entity found{};
+    scene.world().each<EntityManagerTag>([&](tool::Entity e, EntityManagerTag&) { if (!scene.world().alive(found)) found = e; });
+    return found;
+  }
+  // Garante UM Entity Manager na cena (cria se faltar; marcas repetidas viram objetos comuns) ligado ao EntityManagerScript.
+  tool::Entity ensureEntityManager() {
+    tool::World& w = scene.world();
+    tool::Entity em = entityManager();
+    if (!w.alive(em)) {
+      em = make("Entity Manager");
+      w.add<EntityManagerTag>(em, EntityManagerTag{});
+    }
+    std::vector<tool::Entity> extra;   // copias da marca (cena editada a mao): so o primeiro vale
+    w.each<EntityManagerTag>([&](tool::Entity e, EntityManagerTag&) { if (e != em) extra.push_back(e); });
+    for (tool::Entity e : extra) w.remove<EntityManagerTag>(e);
+    if (ensureEntityManagerScript(project)) {
+      ScriptComp* sc = w.get<ScriptComp>(em);
+      if (!sc) { w.add<ScriptComp>(em, ScriptComp{}); sc = w.get<ScriptComp>(em); }
+      ser::copyStr(sc->path, sizeof sc->path, kEntityManagerScriptRel);
+    } else {
+      tool::logWarn("Could not create Scripts/EntityManagerScript.js for the Entity Manager.");
+    }
+    return em;
+  }
+  // [visible] (M9): relê o script do objeto e atualiza as variaveis do Inspector (so reanalisa se o arquivo mudou).
+  // Devolve o componente (nullptr se o objeto nao tem script ou o script nao declara variaveis).
+  ScriptVars* refreshScriptVars(tool::Entity e) {
+    tool::World& w = scene.world();
+    const ScriptComp* sc = w.get<ScriptComp>(e);
+    if (!sc || !sc->path[0]) return w.get<ScriptVars>(e);
+    std::error_code ec;
+    const fs::path p = project.resolve(sc->path);
+    const auto mt = p.empty() ? fs::file_time_type{} : fs::last_write_time(p, ec);
+    const std::string path = sc->path;
+    ScriptVarsStamp& st = scriptVarsStamp_[(static_cast<std::uint64_t>(e.generation) << 32) | e.index];
+    if (st.path == path && st.valid && st.time == mt && !ec) return w.get<ScriptVars>(e);
+    std::string text;
+    if (!readScript(project, path, text)) return w.get<ScriptVars>(e);
+    st.path = path; st.time = mt; st.valid = !ec;
+    const std::vector<VisibleDecl> decls = parseVisibleVars(text);
+    ScriptVars* sv = w.get<ScriptVars>(e);
+    if (decls.empty()) { if (sv) w.remove<ScriptVars>(e); return nullptr; }
+    if (!sv) { w.add<ScriptVars>(e, ScriptVars{}); sv = w.get<ScriptVars>(e); }
+    syncScriptVars(*sv, decls);
+    return sv;
+  }
+  struct ScriptVarsStamp { std::string path; fs::file_time_type time{}; bool valid = false; };
+  std::unordered_map<std::uint64_t, ScriptVarsStamp> scriptVarsStamp_;   // ultima leitura do script por objeto
+
   tool::Entity duplicate(tool::Entity e) {
+    if (isEntityManager(e)) { statusLine = "The Entity Manager cannot be duplicated."; return e; }   // um por cena
     // A copia fica no MESMO pai (o save/load nao leva a ligacao de pai). keepWorld=false: a posicao local e a copiada.
     const tool::Entity par = parentOf(e);
     tool::Entity c = loadEntity(scene, saveEntity(scene, e));
@@ -687,13 +735,17 @@ struct Editor {
     makeGlobalLight();
     makeCamera(true);
     { tool::Entity cubeE = makeMesh("Cube", 0, 0, 0.5f, 0); scene.world().add<PhysicsComp>(cubeE, PhysicsComp{}); } // cai e colide ao apertar Play
-    { tool::Entity fx = make("Particles"); scene.world().get<Transform>(fx)->pos[0] = 3.f; scene.world().get<Transform>(fx)->pos[1] = 0.2f; scene.world().add<ParticleComp>(fx); } // exemplo: fogo
+    { tool::Entity fx = make("Particles"); scene.world().get<Transform>(fx)->pos[0] = 3.f; scene.world().get<Transform>(fx)->pos[1] = 0.2f;
+      ParticleFxComp& pf = scene.world().add<ParticleFxComp>(fx);   // exemplo: fogo (preset embutido; o arquivo Effects/fire.json nasce ao aplicar o preset no Inspector)
+      if (auto fire = tool::particles::effectFromText(tool::particles::kPresetFire)) pf.fx = std::move(*fire);
+      ser::copyStr(pf.file, sizeof pf.file, "Effects/fire.json"); }
     { tool::Entity ui = make("UI"); CanvasComp u = FullCanvas(); // exemplo de UI: texto com variavel, barra e botao (canvas sobre a camera Principal)
       UiElem& t = u.items[u.count++]; ser::copyStr(t.text, sizeof t.text, "Score: {score}"); t.x = 0.03f; t.y = 0.03f; t.fontScale = 1.4f;
       UiElem& b = u.items[u.count++]; b.kind = 3; b.x = 0.03f; b.y = 0.1f; b.w = 0.25f; b.h = 0.03f; ser::copyStr(b.action, sizeof b.action, "score"); b.maxValue = 10.f; b.color[0] = 0.9f; b.color[1] = 0.2f; b.color[2] = 0.2f;
       UiElem& k = u.items[u.count++]; k.kind = 2; k.x = 0.03f; k.y = 0.16f; k.w = 0.16f; k.h = 0.06f; ser::copyStr(k.text, sizeof k.text, "Add score"); ser::copyStr(k.action, sizeof k.action, "add_score"); k.color[0] = 0.9f; k.color[1] = 0.8f; k.color[2] = 0.3f;
       stampNew(t, u); stampNew(b, u); stampNew(k, u);   // ids unicos e ordem Z (texto embaixo, botao em cima)
       scene.world().add<CanvasComp>(ui, u); }
+    ensureEntityManager();   // M8: toda cena nova nasce com o Entity Manager (e o EntityManagerScript.js do projeto)
     selected = {};
   }
 
@@ -731,6 +783,8 @@ struct Editor {
       }
     }
     sceneInfo = info; selected = {};
+    scriptVarsStamp_.clear();
+    ensureEntityManager();   // cena antiga (sem Entity Manager) ganha um ao abrir
     preloadSceneAssets();
     ensureSceneCode(); openSceneNarrative();
     undoReset();
@@ -758,7 +812,7 @@ struct Editor {
     if (!safeName(name)) { statusLine = "Invalid scene name"; return false; }
     if (fs::exists(project.scenePath(name))) { statusLine = "A scene with this name already exists"; return false; }
     if (!sceneInfo.name.empty()) saveScene();
-    clearScene(scene);
+    clearScene(scene); scriptVarsStamp_.clear();
     sceneInfo = SceneFile{}; sceneInfo.name = name;
     createDefaultContent();
     ensureSceneCode(); openSceneNarrative();

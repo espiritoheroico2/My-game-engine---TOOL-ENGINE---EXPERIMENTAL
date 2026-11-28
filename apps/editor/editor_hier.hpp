@@ -336,11 +336,20 @@ inline void Editor::bakeWorld(tool::Entity e) {
 
 inline void Editor::destroy(tool::Entity e) {
   auto& w = scene.world(); if (!w.alive(e)) return;
+  if (w.has<EntityManagerTag>(e)) { statusLine = "The Entity Manager cannot be deleted."; return; }   // M8: nada some (nem os filhos)
   std::vector<tool::Entity> all; // e + descendentes (BFS)
   all.push_back(e);
   for (size_t i = 0; i < all.size() && all.size() < 100000; ++i)
     w.each<Parent>([&](tool::Entity c, Parent& p) { if (p.e == all[i] && std::find(all.begin(), all.end(), c) == all.end()) all.push_back(c); });
-  for (auto d : all) { if (!w.alive(d)) continue; releaseScript(d); w.destroy(d); if (selected == d) selected = {}; }
+  for (auto d : all) {
+    if (!w.alive(d)) continue;
+    if (w.has<EntityManagerTag>(d)) {   // M8: o Entity Manager nunca e destruido (nem como filho de um objeto apagado: so solta do pai)
+      if (w.has<Parent>(d)) w.remove<Parent>(d);
+      statusLine = "The Entity Manager cannot be deleted.";
+      continue;
+    }
+    releaseScript(d); w.destroy(d); if (selected == d) selected = {};
+  }
 }
 
 inline tool::Camera Editor::cameraFor(tool::Entity e) {

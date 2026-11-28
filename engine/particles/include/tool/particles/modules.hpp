@@ -81,7 +81,11 @@ inline void initRange(Chunk& c, u32 first, u32 count, u64 baseIndex, const Emitt
 }
 
 // Tipos de modulo de atualizacao.
-enum class ModuleKind : u8 { Gravity, Drag, ColorOverLife, SizeOverLife, Turbulence, Buoyancy, AlphaOverLife };
+// Floor (chao com rebote), Route (trajetoria por pontos) e Swirl (redemoinho) vieram do sistema antigo de particulas.
+enum class ModuleKind : u8 { Gravity, Drag, ColorOverLife, SizeOverLife, Turbulence, Buoyancy, AlphaOverLife, Floor, Route, Swirl };
+
+// Maximo de pontos da trajetoria (Route).
+constexpr u32 kMaxRoutePoints = 8;
 
 // Modulo de atualizacao com parametros (os campos usados dependem do tipo).
 struct Module {
@@ -98,6 +102,20 @@ struct Module {
   u32 noiseSeed = 0;          // Turbulence: semente do campo de ruido
   u32 every = 1;              // Turbulence: quadros entre atualizacoes do ruido (1 = todo quadro = qualidade maxima, padrao)
   f32 a0 = 1, a1 = 0;         // AlphaOverLife: alfa no nascimento e na morte (suavizado)
+  f32 delay = 0;              // AlphaOverLife: fracao da vida (0..1) em que o alfa fica em a0 antes de comecar a cair
+  u32 c2 = 0xFFFFFFFFu;       // ColorOverLife com stops = 4: cor em 1/3 da vida
+  u32 c3 = 0xFFFFFFFFu;       // ColorOverLife com stops = 4: cor em 2/3 da vida
+  u32 stops = 2;              // ColorOverLife: 2 paradas (c0, c1) ou 4 (c0, c2, c3, c1)
+  f32 floorY = 0;             // Floor: altura do chao no mundo
+  f32 bounce = 0.5f;          // Floor: fracao da velocidade vertical devolvida no impacto (0 = gruda no chao, 1 = elastico)
+  f32 friction = 0.9f;        // Floor: multiplicador da velocidade horizontal a cada impacto
+  u32 routeCount = 0;         // Route: quantos pontos de pts valem (0 a kMaxRoutePoints)
+  f32 pts[kMaxRoutePoints][3] = {{0, 0, 0}, {0, 1, 0}, {1, 2, 0}, {1, 3, 1}, {0, 4, 1}, {0, 5, 0}, {0, 0, 0}, {0, 0, 0}};   // Route: pontos relativos ao emissor
+  bool follow = true;         // Route/Swirl: as particulas acompanham o movimento do emissor
+  f32 axis[3] = {0, 1, 0};    // Swirl: eixo do redemoinho
+  f32 swirlTurns = 1.5f;      // Swirl: voltas por segundo
+  f32 swirlRadius = 0.6f;     // Swirl: raio base (abre em funil ao longo da vida)
+  f32 swirlHeight = 2.0f;     // Swirl: altura que sobe ao longo da vida
 };
 
 // Ruido de gradiente 3D deterministico (estilo Perlin, gradientes por hash: sem tabelas nem alocacao). Saida ~[-1, 1].
@@ -143,12 +161,84 @@ inline void modBuoyancy(Chunk& c, f32 amp, f32 cooling, f32 dt) {
   for (u32 i = 0; i < n; ++i) { c.vy[i] += k * c.temp[i]; c.temp[i] *= cool; }
 }
 
-// Alfa ao longo da vida: interpolacao suavizada (smoothstep) de a0 para a1.
-inline void modAlphaOverLife(Chunk& c, f32 a0, f32 a1) {
+// Alfa ao longo da vida: interpolacao suavizada (smoothstep) de a0 para a1. `delay` (fracao da vida) segura o alfa em a0
+// no comeco; a queda ocupa o resto da vida.
+inline void modAlphaOverLife(Chunk& c, f32 a0, f32 a1, f32 delay = 0) {
+  const u32 n = c.count;
+  const f32 d = std::clamp(delay, 0.0f, 0.999f), inv = 1.0f / (1.0f - d);
+  for (u32 i = 0; i < n; ++i) {
+    const f32 t0 = std::min(1.0f, c.age[i] / c.life[i]);
+    const f32 t = d > 0 ? std::clamp((t0 - d) * inv, 0.0f, 1.0f) : t0;
+    c.alpha[i] = a0 + (a1 - a0) * (t * t * (3.0f - 2.0f * t));
+  }
+}
+
+// Chao com rebote: a particula que passa de floorY volta para o chao e devolve `bounce` da velocidade vertical (invertida);
+// a velocidade horizontal e multiplicada por `friction`.
+inline void modFloor(Chunk& c, f32 floorY, f32 bounce, f32 friction) {
   const u32 n = c.count;
   for (u32 i = 0; i < n; ++i) {
-    const f32 t = std::min(1.0f, c.age[i] / c.life[i]);
-    c.alpha[i] = a0 + (a1 - a0) * (t * t * (3.0f - 2.0f * t));
+    if (c.py[i] < floorY) { c.py[i] = floorY; c.vy[i] = -c.vy[i] * bounce; c.vx[i] *= friction; c.vz[i] *= friction; }
+  }
+}
+
+// Ponto da curva Catmull-Rom que passa por todos os pontos da trajetoria; t em 0..1 percorre a curva inteira.
+inline void routeSample(const Module& m, f32 t, f32 out[3]) {
+  const i32 n = static_cast<i32>(std::min(m.routeCount, kMaxRoutePoints));
+  out[0] = out[1] = out[2] = 0;
+  if (n == 0) return;
+  auto P = [&](i32 i, i32 k) { return m.pts[std::clamp(i, 0, n - 1)][k]; };
+  if (n == 1) { for (i32 k = 0; k < 3; ++k) out[k] = P(0, k); return; }
+  const f32 f = std::clamp(t, 0.0f, 1.0f) * static_cast<f32>(n - 1);
+  const i32 i = std::min(static_cast<i32>(f), n - 2);
+  const f32 s = f - static_cast<f32>(i);
+  for (i32 k = 0; k < 3; ++k) {
+    const f32 a = P(i - 1, k), b = P(i, k), cc = P(i + 1, k), d = P(i + 2, k);
+    out[k] = 0.5f * ((2.0f * b) + (-a + cc) * s + (2.0f * a - 5.0f * b + 4.0f * cc - d) * s * s + (-a + 3.0f * b - 3.0f * cc + d) * s * s * s);
+  }
+}
+
+// Trajetoria: cada particula percorre a curva (pontos relativos a onde nasceu) durante a vida. Aplicado depois da
+// integracao, como deslocamento entre o instante anterior e o atual (f(t1) - f(t0)); na primeira atualizacao da particula
+// nao ha instante anterior. As velocidades devem ser zero (sem gravidade etc.) para o caminho sair exato.
+inline void modRoute(Chunk& c, const Module& m, f32 dt) {
+  if (m.routeCount == 0) return;
+  const u32 n = c.count;
+  for (u32 i = 0; i < n; ++i) {
+    const f32 t1 = std::min(1.0f, c.age[i] / c.life[i]);
+    const bool born = c.age[i] <= dt;
+    f32 f1[3], f0[3] = {0, 0, 0};
+    routeSample(m, t1, f1);
+    if (!born) routeSample(m, std::max(0.0f, (c.age[i] - dt) / c.life[i]), f0);
+    c.px[i] += f1[0] - f0[0]; c.py[i] += f1[1] - f0[1]; c.pz[i] += f1[2] - f0[2];
+  }
+}
+
+// Redemoinho (tornado): gira em torno do eixo e sobe abrindo em funil. A fase inicial de cada particula sai da semente.
+// Mesmo esquema de deslocamento da trajetoria (posicao no instante atual menos a do anterior).
+inline void modSwirl(Chunk& c, const Module& m, f32 dt) {
+  f32 ax = m.axis[0], ay = m.axis[1], az = m.axis[2];
+  const f32 al = std::sqrt(ax * ax + ay * ay + az * az);
+  if (al > 1e-6f) { ax /= al; ay /= al; az /= al; } else { ax = 0; ay = 1; az = 0; }
+  // Base (u, v) perpendicular ao eixo.
+  const f32 rx = std::fabs(ay) < 0.99f ? 0.0f : 1.0f, ry = std::fabs(ay) < 0.99f ? 1.0f : 0.0f;
+  f32 ux = ay * 0.0f - az * ry, uy = az * rx - ax * 0.0f, uz = ax * ry - ay * rx;
+  const f32 ul = std::max(1e-5f, std::sqrt(ux * ux + uy * uy + uz * uz));
+  ux /= ul; uy /= ul; uz /= ul;
+  const f32 vx = ay * uz - az * uy, vy = az * ux - ax * uz, vz = ax * uy - ay * ux;
+  const f32 w = 6.2831853f * m.swirlTurns;
+  const u32 n = c.count;
+  for (u32 i = 0; i < n; ++i) {
+    const f32 ph = static_cast<f32>((c.seed[i] >> 8) & 0xFFFFFFu) * (6.2831853f / 16777216.0f);
+    auto at = [&](f32 age, f32 life, f32 o[3]) {
+      const f32 t = std::min(1.0f, age / life), th = ph + w * age, rr = m.swirlRadius * (0.3f + 0.7f * t), h = m.swirlHeight * t;
+      const f32 cs = std::cos(th) * rr, sn = std::sin(th) * rr;
+      o[0] = ax * h + ux * cs + vx * sn; o[1] = ay * h + uy * cs + vy * sn; o[2] = az * h + uz * cs + vz * sn;
+    };
+    f32 f1[3], f0[3] = {0, 0, 0};
+    at(c.age[i], c.life[i], f1);
+    if (c.age[i] > dt) at(c.age[i] - dt, c.life[i], f0);
+    c.px[i] += f1[0] - f0[0]; c.py[i] += f1[1] - f0[1]; c.pz[i] += f1[2] - f0[2];
   }
 }
 
@@ -184,6 +274,23 @@ inline void modColorOverLife(Chunk& c, u32 c0, u32 c1) {
     u32 out = 0;
     for (u32 ch = 0; ch < 4; ++ch) {
       const i32 a = static_cast<i32>((c0 >> (ch * 8)) & 0xFFu), b = static_cast<i32>((c1 >> (ch * 8)) & 0xFFu);
+      out |= static_cast<u32>(a + (((b - a) * ti) >> 8)) << (ch * 8);
+    }
+    c.color[i] = out;
+  }
+}
+
+// Cor em 4 paradas (nascimento = c0, 1/3 = c1, 2/3 = c2, morte = c3): interpolacao linear entre paradas vizinhas.
+inline void modColorOverLife4(Chunk& c, u32 c0, u32 c1, u32 c2, u32 c3) {
+  const u32 n = c.count;
+  const u32 st[4] = {c0, c1, c2, c3};
+  for (u32 i = 0; i < n; ++i) {
+    const f32 f = std::min(1.0f, c.age[i] / c.life[i]) * 3.0f;
+    const u32 s = std::min(static_cast<u32>(f), 2u);
+    const i32 ti = static_cast<i32>((f - static_cast<f32>(s)) * 256.0f);
+    u32 out = 0;
+    for (u32 ch = 0; ch < 4; ++ch) {
+      const i32 a = static_cast<i32>((st[s] >> (ch * 8)) & 0xFFu), b = static_cast<i32>((st[s + 1] >> (ch * 8)) & 0xFFu);
       out |= static_cast<u32>(a + (((b - a) * ti) >> 8)) << (ch * 8);
     }
     c.color[i] = out;

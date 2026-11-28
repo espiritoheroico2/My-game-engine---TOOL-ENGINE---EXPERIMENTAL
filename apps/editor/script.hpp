@@ -20,8 +20,13 @@ namespace editor {
 
 inline constexpr size_t kMaxScriptBytes = 256u << 10;
 
-// true se `rel` e um caminho de script aceitavel (ver SEGURANCA acima).
+// Script do Entity Manager (M8): fica na pasta do jogo, em <projeto>/Scripts/ (fora de Assets/), com nome fixo.
+inline constexpr const char* kEntityManagerScriptRel = "Scripts/EntityManagerScript.js";
+
+// true se `rel` e um caminho de script aceitavel (ver SEGURANCA acima). Unica excecao a "dentro de Assets/":
+// o EntityManagerScript.js (caminho exato, sem variacao).
 inline bool scriptPathOk(const Project& proj, const std::string& rel) {
+  if (rel == kEntityManagerScriptRel) return !proj.resolve(rel).empty();
   if (rel.size() < 11 || rel.size() >= 160 || rel.rfind("Assets/", 0) != 0) return false;
   if (rel.size() < 3 || rel.compare(rel.size() - 3, 3, ".js") != 0) return false;
   return !proj.resolve(rel).empty();
@@ -57,6 +62,48 @@ inline std::string scriptTemplate(const std::string& objectName) {
          "\n"
          "export function OnEventTrigger(obj, name) {\n"
          "}\n";
+}
+
+// Texto inicial do EntityManagerScript.js: modelo comentado do lugar onde o jogo gerencia as entidades
+// (LODs, impostores, grupos de malhas). O usuario edita livremente; o editor so cria o arquivo se ele nao existir.
+inline std::string entityManagerTemplate() {
+  return "// EntityManagerScript - script do Entity Manager (QuickJS). Roda no Play como qualquer script.\n"
+         "// Este e o lugar para o jogo gerenciar as entidades: LODs, impostores e grupos de malhas.\n"
+         "// Edite livremente: o editor nunca sobrescreve este arquivo depois de criado.\n"
+         "// A linha //[visible] acima de uma variavel faz ela aparecer no Inspector do Entity Manager.\n"
+         "\n"
+         "//[visible]\n"
+         "let managerEnabled = true;\n"
+         "\n"
+         "//[visible]\n"
+         "let checkInterval = 0.5;   // segundos entre cada passada de gerenciamento\n"
+         "\n"
+         "let timer = 0;\n"
+         "\n"
+         "export function start(obj) {\n"
+         "  timer = 0;\n"
+         "}\n"
+         "\n"
+         "export function update(obj, dt) {\n"
+         "  if (!managerEnabled) return;\n"
+         "  timer += dt;\n"
+         "  if (timer < checkInterval) return;\n"
+         "  timer = 0;\n"
+         "  // Aqui vai a gerencia das entidades (trocar LODs, impostores, agrupar malhas).\n"
+         "}\n"
+         "\n"
+         "export function OnEventTrigger(obj, name) {\n"
+         "}\n";
+}
+
+// Cria <projeto>/Scripts/EntityManagerScript.js a partir do modelo, so se ainda nao existir. true se o arquivo existe depois.
+inline bool ensureEntityManagerScript(const Project& proj) {
+  const fs::path p = proj.resolve(kEntityManagerScriptRel);
+  if (p.empty()) return false;
+  std::error_code ec;
+  if (fs::exists(p, ec)) return true;
+  fs::create_directories(p.parent_path(), ec);
+  return writeTextFile(p, entityManagerTemplate());
 }
 
 // Cria Assets/Scripts/<nome>.tool.js (acrescenta " (2)", " (3)"... se ja existir). Retorna o caminho relativo ou "".

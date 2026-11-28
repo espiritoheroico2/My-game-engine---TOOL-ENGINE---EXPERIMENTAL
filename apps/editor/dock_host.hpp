@@ -153,6 +153,7 @@ class Host {
     model_.setArea(area);
     if (model_.empty()) buildDefault();
     applyPendingGestures();
+    selectSceneAtStartup();
     for (Window& w : windows_) {
       if (!w.open()) {
         if (model_.contains(w.id)) model_.remove(w.id);
@@ -679,6 +680,22 @@ class Host {
     }
   }
 
+  // Primeiro quadro com a Scene aberta: ela fica no dock e como aba ativa do grupo dela. Vale tanto para o layout padrao
+  // quanto para um layout salvo (so a aba ativa muda; posicoes, divisoes e tamanhos salvos ficam como estao).
+  // Uma vez so: depois disso a escolha de aba e do usuario.
+  void selectSceneAtStartup() {
+    if (!sceneStartupPending_) return;
+    const SU::UIHandle scene = idOf(Kind::Scene);
+    bool open = false;
+    for (const Window& w : windows_) {
+      if (w.id == scene && w.open()) open = true;
+    }
+    if (!open) return;   // Scene fechada: nada a fazer (e tenta de novo se ela abrir no primeiro quadro)
+    sceneStartupPending_ = false;
+    if (!model_.contains(scene)) (void)model_.attach(scene, lastActive_);   // layout salvo sem a Scene: entra num grupo
+    (void)model_.select(scene);
+  }
+
   // Layout padrao: Hierarquia (em cima) e Scenes (embaixo) a esquerda; Scene e Game em abas no centro, em cima;
   // Console, Profiler e Assets em abas embaixo do centro; Inspector (em cima) e Settings (embaixo) a direita.
   // So entram as janelas registradas e abertas. Sem Scene aberta, o dock fica vazio e as janelas flutuam.
@@ -732,6 +749,7 @@ class Host {
   dock_layout::Model model_;
   SW::DockDragController drag_{};
   SU::UIHandle activeWin_{};
+  bool sceneStartupPending_ = true;   // a Scene ainda nao foi selecionada no inicio (selectSceneAtStartup)
   SU::UIHandle lastActive_{};   // ultimo grupo tocado: janela nova entra nele
   std::vector<SU::UIHandle> raised_;   // ordem de ativacao (o fim e a janela tocada por ultimo)
   SU::UIHandle resizeWin_{};    // janela flutuante sendo redimensionada pela borda

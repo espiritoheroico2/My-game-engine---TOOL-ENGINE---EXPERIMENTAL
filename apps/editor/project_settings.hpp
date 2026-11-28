@@ -166,6 +166,7 @@ inline fs::path createProjectFolder(const std::string& name, const std::string& 
   const fs::path root = fs::absolute(location, ec) / name;
   if (fs::exists(root, ec) && (!fs::is_directory(root, ec) || !fs::is_empty(root, ec))) { err = "This folder already exists and is not empty."; return {}; }
   fs::create_directories(root / "Assets" / "Scripts", ec);
+  fs::create_directories(root / "Scripts", ec);   // EntityManagerScript.js (M8)
   fs::create_directories(root / "Scenes", ec);
   if (ec) { err = "Could not create the folder."; return {}; }
   Project p; p.root = root;

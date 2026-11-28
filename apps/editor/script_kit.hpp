@@ -21,7 +21,7 @@ type ToolKey = "W" | "A" | "S" | "D" | "Q" | "E" | "R" | "F" | "1" | "2" | "Spac
   | "Up" | "Down" | "Left" | "Right" | "Enter" | "Escape" | "Mouse0" | "Mouse1";
 
 /** Tipos de componente que scripts podem adicionar ou remover. */
-type ToolComponent = "MeshRenderer" | "AudioSource" | "ParticleComp";
+type ToolComponent = "MeshRenderer" | "AudioSource" | "ParticleFxComp";
 
 /** O objeto que o script controla. Rotacao em graus. Mude os arrays no lugar ou atribua novos. */
 interface ToolObject {

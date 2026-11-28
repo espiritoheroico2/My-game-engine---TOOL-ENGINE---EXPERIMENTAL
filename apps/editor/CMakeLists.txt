@@ -350,6 +350,11 @@ target_include_directories(editor_mainmenu_model_tests PRIVATE ${CMAKE_CURRENT_S
 target_link_libraries(editor_mainmenu_model_tests PRIVATE tool::core)
 add_test(NAME Editor.MainMenuModel COMMAND editor_mainmenu_model_tests)
 
+# Widget numerico de arraste (drag_number.hpp): sobe/desce, limites, passo fino/grosso, clique sem arraste. Sem janela.
+add_executable(editor_drag_number_tests tests/test_drag_number.cpp)
+target_include_directories(editor_drag_number_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME Editor.DragNumber COMMAND editor_drag_number_tests)
+
 # Modelo da janela Configuracoes (settings_model.hpp): abas, limites de escolha, tamanho do jogo, sombra e divisao.
 add_executable(editor_settings_model_tests tests/test_settings_model.cpp)
 target_include_directories(editor_settings_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -448,6 +453,12 @@ add_executable(editor_canvas_widgets_tests tests/test_canvas_widgets.cpp)
 target_include_directories(editor_canvas_widgets_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(editor_canvas_widgets_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
 add_test(NAME Editor.CanvasWidgets COMMAND editor_canvas_widgets_tests)
+
+# Atributo //[visible] dos scripts (script_vars.hpp): leitura, tipos, troca do valor no codigo e JSON da cena. Sem janela.
+add_executable(editor_script_vars_tests tests/test_script_vars.cpp)
+target_include_directories(editor_script_vars_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor_script_vars_tests PRIVATE SpriteUi::SpriteUI tool::canvas tool::scene tool::render tool::narrative tool::physics tool::input tool::rhi tool::audio tool::assets tool::pack tool::mod)
+add_test(NAME Editor.ScriptVars COMMAND editor_script_vars_tests)
 
 # Preserve image (encaixe com proporcao), imagens dos slots do Inventory e campos novos no JSON.
 add_executable(editor_canvas_preserve_tests tests/test_canvas_preserve.cpp)

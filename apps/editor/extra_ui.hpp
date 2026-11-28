@@ -1,4 +1,4 @@
-// Acoes de Editor que nao sao janelas: abrir arquivo no editor externo e o preset de fumaca das particulas.
+// Acoes de Editor que nao sao janelas: abrir arquivo no editor externo.
 // Estado do Help e do Test map: help_state.hpp.
 #pragma once
 #include "editor_state.hpp"
@@ -42,15 +42,6 @@ inline bool openInExternalEditor(Editor& ed, const std::string& rel) {
 
 
 
-// Preset de fumaca: lenta, cresce, sobe um pouco, cinza, some aos poucos depois de um tempo parada.
-inline void applySmokePreset(ParticleComp& p) {
-  p.form = 6; p.area = 1; p.areaSize[0] = 0.8f; p.areaSize[1] = 0.2f; p.areaSize[2] = 0.8f;
-  p.rate = 10.f; p.maxParticles = 250; p.lifetime = 5.f; p.speed = 0.5f; p.spread = 22.f;
-  p.size = 0.35f; p.sizeEnd = 1.8f; p.gravityScale = -0.12f; p.bounce = 0.f;
-  const float g[4][3] = {{0.62f, 0.62f, 0.64f}, {0.5f, 0.5f, 0.52f}, {0.38f, 0.38f, 0.4f}, {0.26f, 0.26f, 0.28f}};
-  for (int c = 0; c < 3; ++c) { p.color[c] = g[0][c]; p.color2[c] = g[1][c]; p.color3[c] = g[2][c]; p.colorEnd[c] = g[3][c]; }
-  p.alpha = 0.55f; p.fadeOpacity = true; p.fadeDelay = 1.5f; p.tornado = false; p.route = false;
-}
 
 
 

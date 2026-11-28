@@ -21,7 +21,7 @@
 #include "image_io.hpp"
 #include "view_painter.hpp"
 #include "editor_state.hpp"
-#include "fx.hpp"                 // fxdetail (trajetoria, alfa e cor) e uiFormat
+#include "fx.hpp"                 // uiFormat
 #include "game_view_panel.hpp"
 #include "scene_view_model.hpp"
 #include "view_shapes.hpp"
@@ -59,80 +59,36 @@ inline void buildParticles(Editor& ed, const tool::Camera& cam, sui::Box area, t
     s = {area.x + (c.x / c.w * 0.5f + 0.5f) * area.w, area.y + (1.f - (c.y / c.w * 0.5f + 0.5f)) * area.h};
     return true;
   };
-  w.each<ParticleComp>([&](tool::Entity e, ParticleComp& pc) {
-    if (w.has<Inactive>(e)) return;
-    if (e == selected && pc.route && pc.routeCount >= 2) {
-      const tool::Mat4 wm = ed.worldMat(e);
-      vm::Pixel prev{};
-      bool hasPrev = false;
-      for (int k = 0; k <= 64; ++k) {
-        const tool::Vec3 l = fxdetail::routeSample(pc, static_cast<float>(k) / 64.f);
-        const tool::Vec4 wp = wm.mul({l.x, l.y, l.z, 1.f});
-        vm::Pixel s{};
-        if (!toScr({wp.x, wp.y, wp.z}, s)) { hasPrev = false; continue; }
-        if (hasPrev) out.line(prev, s, 2.f, view::Rgba(255, 220, 80, 230));
-        prev = s;
-        hasPrev = true;
-      }
-      for (int i = 0; i < pc.routeCount; ++i) {
-        const tool::Vec4 wp = wm.mul({pc.routePts[i][0], pc.routePts[i][1], pc.routePts[i][2], 1.f});
-        vm::Pixel s{};
-        if (toScr({wp.x, wp.y, wp.z}, s)) {
-          out.circleFilled(s, 4.f, view::Rgba(255, 220, 80, 255));
-          out.circle(s, 6.f, view::Rgba(0, 0, 0, 200), 1.f);
-        }
-      }
-    }
-    auto it = ed.particles.find(e.index);
-    if (it == ed.particles.end()) return;
-    for (const Editor::Particle& p : it->second.list) {
-      const float t = std::clamp(p.age / std::max(p.life, 1e-4f), 0.f, 1.f);
-      const float sz = pc.size + (pc.sizeEnd - pc.size) * t;
-      if (sz <= 1e-3f) continue;
-      const float a = fxdetail::particleAlpha(pc, p);
-      if (a <= 0.003f) continue;
+  // Trajetoria (modulo Route) do objeto selecionado: a curva e os pontos, em coordenadas locais do objeto.
+  w.each<ParticleFxComp>([&](tool::Entity e, ParticleFxComp& pc) {
+    if (w.has<Inactive>(e) || e != selected) return;
+    const tool::particles::Module* rm = fxmod::find(pc.fx, fxmod::ModuleKind::Route);
+    if (!rm || rm->routeCount < 2) return;
+    const tool::Mat4 wm = ed.worldMat(e);
+    vm::Pixel prev{};
+    bool hasPrev = false;
+    for (int k = 0; k <= 64; ++k) {
+      float l[3];
+      tool::particles::routeSample(*rm, static_cast<float>(k) / 64.f, l);
+      const tool::Vec4 wp = wm.mul({l[0], l[1], l[2], 1.f});
       vm::Pixel s{};
-      if (!toScr(p.p, s)) continue;
-      vm::Pixel sr{};
-      if (!toScr(p.p + right * (sz * 0.5f), sr)) continue;
-      const float r = std::max(1.f, std::hypot(sr.x - s.x, sr.y - s.y));
-      if (s.x + r < area.x || s.x - r > area.x + area.w || s.y + r < area.y || s.y - r > area.y + area.h) { ++ed.prof.counters.culled; continue; }
-      const tool::Vec3 c = fxdetail::particleColor(pc, t);
-      const view::Color col = view::rgbaF(c.x, c.y, c.z, a);
-      switch (pc.form) {
-        case 1: out.rectFilled({s.x - r, s.y - r}, {s.x + r, s.y + r}, col); break;
-        case 2: out.triangleFilled({s.x, s.y - r * 1.2f}, {s.x - r, s.y + r * 0.8f}, {s.x + r, s.y + r * 0.8f}, col); break;
-        case 3: {   // estrela: leque de triangulos a partir do centro (a estrela e vista de dentro para fora)
-          vm::Pixel pts[10];
-          for (int k = 0; k < 10; ++k) {
-            const float ang = -1.5708f + static_cast<float>(k) * 0.6283185f, rr = (k % 2) ? r * 0.45f : r * 1.2f;
-            pts[k] = {s.x + std::cos(ang) * rr, s.y + std::sin(ang) * rr};
-          }
-          for (int k = 0; k < 10; ++k) out.triangleFilled(s, pts[k], pts[(k + 1) % 10], col);
-          break;
-        }
-        case 4: out.circle(s, r, col, std::max(1.f, r * 0.35f)); break;
-        case 5: {
-          vm::Pixel q = s;
-          vm::Pixel qb{};
-          if (toScr(p.p - p.v * 0.04f, qb)) q = qb;
-          out.line(q, s, std::max(1.f, r * 0.8f), col);
-          break;
-        }
-        case 6:   // fumaca: halo leve por fora, borda densa e miolo quase transparente
-          out.circleFilled(s, r, view::rgbaF(c.x, c.y, c.z, a * 0.22f));
-          out.circle(s, r * 0.82f, view::rgbaF(c.x, c.y, c.z, a * 0.7f), std::max(1.f, r * 0.4f));
-          out.circleFilled(s, r * 0.4f, view::rgbaF(c.x, c.y, c.z, a * 0.1f));
-          break;
-        default:   // bolinha suave: halo + nucleo
-          out.circleFilled(s, r * 1.6f, view::rgbaF(c.x, c.y, c.z, a * 0.25f));
-          out.circleFilled(s, r, col);
-          break;
+      if (!toScr({wp.x, wp.y, wp.z}, s)) { hasPrev = false; continue; }
+      if (hasPrev) out.line(prev, s, 2.f, view::Rgba(255, 220, 80, 230));
+      prev = s;
+      hasPrev = true;
+    }
+    for (std::uint32_t i = 0; i < rm->routeCount; ++i) {
+      const tool::Vec4 wp = wm.mul({rm->pts[i][0], rm->pts[i][1], rm->pts[i][2], 1.f});
+      vm::Pixel s{};
+      if (toScr({wp.x, wp.y, wp.z}, s)) {
+        out.circleFilled(s, 4.f, view::Rgba(255, 220, 80, 255));
+        out.circle(s, 6.f, view::Rgba(0, 0, 0, 200), 1.f);
       }
     }
   });
-  // Particulas v2 SEM GPU (renderer por software): bolinhas simples, no maximo ~3000 por objeto e sem teste de profundidade.
-  // Com a GPU ativa quem desenha e o passe de particulas do GpuRenderer (profundidade, alfa ordenado, soft particles).
+  // Particulas SEM GPU (renderer por software): ate ~3000 por objeto, sem teste de profundidade; a forma do efeito
+  // (bolinha, quadrado, triangulo, estrela, anel, risco, fumaca) so existe nesta vista. Com a GPU ativa quem desenha e o
+  // passe de particulas do GpuRenderer (profundidade, alfa ordenado, soft particles).
   if (ed.apiActive == 0) {
     w.each<ParticleFxComp>([&](tool::Entity e, ParticleFxComp& pc) {
       if (w.has<Inactive>(e)) return;
@@ -153,7 +109,35 @@ inline void buildParticles(Editor& ed, const tool::Camera& cam, sui::Box area, t
           const tool::u32 col = ch.color[i];
           const float a = std::clamp(ch.alpha[i], 0.f, 1.f) * static_cast<float>(col >> 24) / 255.f;
           if (a <= 0.01f) continue;
-          out.circleFilled(s, r, view::rgbaF(static_cast<float>(col & 255u) / 255.f, static_cast<float>((col >> 8) & 255u) / 255.f, static_cast<float>((col >> 16) & 255u) / 255.f, a * 0.6f));
+          const float cr = static_cast<float>(col & 255u) / 255.f, cg = static_cast<float>((col >> 8) & 255u) / 255.f, cb = static_cast<float>((col >> 16) & 255u) / 255.f;
+          const view::Color cc = view::rgbaF(cr, cg, cb, a * 0.6f);
+          switch (pc.fx.form) {
+            case 1: out.rectFilled({s.x - r, s.y - r}, {s.x + r, s.y + r}, cc); break;
+            case 2: out.triangleFilled({s.x, s.y - r * 1.2f}, {s.x - r, s.y + r * 0.8f}, {s.x + r, s.y + r * 0.8f}, cc); break;
+            case 3: {   // estrela: leque de triangulos a partir do centro
+              vm::Pixel pts[10];
+              for (int v = 0; v < 10; ++v) {
+                const float ang = -1.5708f + static_cast<float>(v) * 0.6283185f, rr = (v % 2) ? r * 0.45f : r * 1.2f;
+                pts[v] = {s.x + std::cos(ang) * rr, s.y + std::sin(ang) * rr};
+              }
+              for (int v = 0; v < 10; ++v) out.triangleFilled(s, pts[v], pts[(v + 1) % 10], cc);
+              break;
+            }
+            case 4: out.circle(s, r, cc, std::max(1.f, r * 0.35f)); break;
+            case 5: {   // risco na direcao do movimento
+              vm::Pixel q = s, qb{};
+              const tool::Vec3 vel{ch.vx[i], ch.vy[i], pc.mode2D ? 0.f : ch.vz[i]};
+              if (toScr(p - vel * 0.04f, qb)) q = qb;
+              out.line(q, s, std::max(1.f, r * 0.8f), cc);
+              break;
+            }
+            case 6:   // fumaca: halo leve por fora, borda densa e miolo quase transparente
+              out.circleFilled(s, r, view::rgbaF(cr, cg, cb, a * 0.22f));
+              out.circle(s, r * 0.82f, view::rgbaF(cr, cg, cb, a * 0.7f), std::max(1.f, r * 0.4f));
+              out.circleFilled(s, r * 0.4f, view::rgbaF(cr, cg, cb, a * 0.1f));
+              break;
+            default: out.circleFilled(s, r, cc); break;
+          }
         }
       }
     });

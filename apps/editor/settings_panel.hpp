@@ -707,8 +707,7 @@ class SettingsPanel {
         y += Metrics::kHeadingH;
         checkRow(shadows_, y, T("Enable shadows"), "Turns shadows on or off. Shadows cost performance.", v.shadows);
         y += Metrics::kRowH + Metrics::kGap;
-        controlRow(shadowQuality_, y, T("Shadow quality"), "Resolution of the shadow maps. Higher is sharper and slower.");
-        y += Metrics::kRowH + Metrics::kGap;
+        // A qualidade (resolucao) do mapa de sombra fica so em "Lighting and shadows" (Light Prism).
         checkRow(rayTracing_, y, T("Enable ray tracing"), "Today it only affects CPU AO (slow). GPU ray tracing is not available yet.", v.rayTracing);
         y += Metrics::kRowH + Metrics::kGap;
         // Linha de status (so texto): mostra o estado real do ray tracing na GPU.
@@ -820,7 +819,6 @@ class SettingsPanel {
             dropdownValue(fps_);
         } else {
             dropdownValue(aa_);
-            dropdownValue(shadowQuality_);
         }
     }
 
@@ -858,13 +856,13 @@ class SettingsPanel {
         }
     }
 
-    // Os 5 combos fixos da janela (somente leitura).
-    [[nodiscard]] std::array<const Elm::Dropdown*, 5> allDropdowns() const {
-        return {&resolution_, &upscale_, &aa_, &fps_, &shadowQuality_};
+    // Os 4 combos fixos da janela (somente leitura).
+    [[nodiscard]] std::array<const Elm::Dropdown*, 4> allDropdowns() const {
+        return {&resolution_, &upscale_, &aa_, &fps_};
     }
-    // Os 5 combos fixos da janela (editaveis).
-    [[nodiscard]] std::array<Elm::Dropdown*, 5> allDropdownsMutable() {
-        return {&resolution_, &upscale_, &aa_, &fps_, &shadowQuality_};
+    // Os 4 combos fixos da janela (editaveis).
+    [[nodiscard]] std::array<Elm::Dropdown*, 4> allDropdownsMutable() {
+        return {&resolution_, &upscale_, &aa_, &fps_};
     }
 
     // Posiciona a lista aberta de cada combo dentro da janela.
@@ -895,7 +893,6 @@ class SettingsPanel {
         sb::SyncDropdown(upscale_, {T("Off (SDL linear)"), T("Bilinear"), T("Bicubic (Catmull-Rom)"), T("Lanczos2")}, v.upscale);
         sb::SyncDropdown(aa_, {T("Off"), T("FXAA")}, v.aa);
         sb::SyncDropdown(fps_, {T("VSync"), T("30 FPS"), T("60 FPS"), T("120 FPS"), T("Unlimited")}, v.fps);
-        sb::SyncDropdown(shadowQuality_, {T("Low (512)"), T("Medium (1024)"), T("High (2048)"), T("Ultra (4096)")}, v.shadowQuality);
         sb::SyncRenderScale(scale_, v.renderScale);
         sb::SyncCheckbox(pixel_, v.pixelFilter);
         sb::SyncCheckbox(shadows_, v.shadows);
@@ -1661,7 +1658,6 @@ class SettingsPanel {
             applyCheck(shadows_, phase, p, sc::Field::Shadows);
             applyCheck(rayTracing_, phase, p, sc::Field::RayTracing);
             if (rayTracingEnabled_) applyCheck(rtAo_, phase, p, sc::Field::RtAo);
-            applyDropdown(shadowQuality_, phase, p, sc::Field::ShadowQuality);
         }
     }
 
@@ -1730,13 +1726,12 @@ class SettingsPanel {
         });
     }
 
-    // Lista dos 5 combos fixos com o campo que cada um altera.
-    [[nodiscard]] std::array<DropdownSlot, 5> dropdownSlots() {
+    // Lista dos 4 combos fixos com o campo que cada um altera.
+    [[nodiscard]] std::array<DropdownSlot, 4> dropdownSlots() {
         return {{{&resolution_, sc::Field::ResMode},
                  {&upscale_, sc::Field::Upscale},
                  {&aa_, sc::Field::Aa},
-                 {&fps_, sc::Field::Fps},
-                 {&shadowQuality_, sc::Field::ShadowQuality}}};
+                 {&fps_, sc::Field::Fps}}};
     }
 
     void closeAllDropdowns() { closeOthers(nullptr); }
@@ -1811,7 +1806,6 @@ class SettingsPanel {
     Elm::Checkbox pixel_;
     Elm::Dropdown fps_;
     Elm::Checkbox shadows_;
-    Elm::Dropdown shadowQuality_;
     Elm::Checkbox rayTracing_;
     Elm::Checkbox rtAo_;
 

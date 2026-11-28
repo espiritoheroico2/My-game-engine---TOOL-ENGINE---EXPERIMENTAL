@@ -89,7 +89,8 @@ struct Source {
 
 // Itens do menu "+ Create", na ordem exibida. O main.cpp cria o objeto pelo indice.
 inline constexpr const char* kCreateLabels[] = {"Empty object", "Cube", "Sphere", "Plane", "Camera",
-                                                "Main Camera (Principal)", "Global Light", "Point Light", "Audio Source", "Canvas"};
+                                                "Main Camera (Principal)", "Global Light", "Point Light", "Audio Source", "Canvas",
+                                                "Particle", "Particle (fire)"};
 inline constexpr int kCreateCount = static_cast<int>(sizeof(kCreateLabels) / sizeof(kCreateLabels[0]));   // a lista e a unica fonte
 
 // Medidas fixas da janela (alturas de linha, recuos, fontes e camadas Z dos menus).

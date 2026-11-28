@@ -4,6 +4,8 @@
 #pragma once
 #include "assets_panel.hpp"
 #include "color_popup.hpp"
+#include "drag_number.hpp"
+#include "settings_model.hpp"
 #include "editor_state.hpp"
 #include "fx.hpp"
 #include "fx_particles.hpp"
@@ -38,6 +40,7 @@ inline int runSelfTest(const std::string& samplesDir) {
     const fs::path root = createProjectFolder("Teste", "Joao Vitor", base, err);
     check(!root.empty() && fs::exists(root / "project.json") && fs::is_directory(root / "Assets" / "Scripts") && fs::is_directory(root / "Scenes"),
           "new project: folder, project.json, Assets/Scripts and Scenes are created");
+    check(!root.empty() && fs::is_directory(root / "Scripts"), "new project: the game's Scripts folder (EntityManagerScript.js) is created");
     ProjectSettings ps; Project pr; pr.root = root;
     check(ps.load(pr) && ps.projectName == "Teste" && ps.author == "Joao Vitor", "new project: name and author are saved in project.json");
     check(createProjectFolder("Teste", "x", base, err).empty() && !err.empty(), "new project: a folder that already has files is refused");
@@ -51,6 +54,45 @@ inline int runSelfTest(const std::string& samplesDir) {
   std::error_code ec; fs::remove_all(tmp, ec);
   ed.project.root = tmp; ed.project.ensure();
   ed.sceneInfo.name = "Main"; ed.createDefaultContent(); check(ed.saveScene(), "save default scene");
+  { // M8: Entity Manager - existe na cena nova, tem o EntityManagerScript.js e nao pode ser apagado nem duplicado
+    const tool::Entity em = ed.entityManager();
+    check(ed.scene.world().alive(em) && ed.isEntityManager(em), "Entity Manager exists in a new scene");
+    size_t emCount = 0; ed.scene.world().each<EntityManagerTag>([&](tool::Entity, EntityManagerTag&) { ++emCount; });
+    check(emCount == 1, "a scene has exactly one Entity Manager");
+    const ScriptComp* esc = ed.scene.world().get<ScriptComp>(em);
+    check(esc && std::string(esc->path) == kEntityManagerScriptRel && fs::exists(tmp / "Scripts" / "EntityManagerScript.js"), "Entity Manager is linked to Scripts/EntityManagerScript.js (created from the template)");
+    std::string emText; check(readScript(ed.project, kEntityManagerScriptRel, emText) && emText.find("export function update(obj, dt)") != std::string::npos, "EntityManagerScript.js is readable and has update()");
+    const size_t liveBefore = ed.scene.world().liveCount();
+    ed.destroy(em);
+    check(ed.scene.world().alive(em) && ed.scene.world().liveCount() == liveBefore, "the Entity Manager cannot be deleted");
+    check(ed.duplicate(em) == em && ed.scene.world().liveCount() == liveBefore, "the Entity Manager cannot be duplicated");
+    check(ed.saveScene() && ed.openScene("Main", false) && ed.scene.world().alive(ed.entityManager()), "Entity Manager survives save and reopen");
+    // Cena antiga sem Entity Manager ganha um ao abrir.
+    ed.scene.world().remove<EntityManagerTag>(ed.entityManager());
+    { std::vector<tool::Entity> old; ed.scene.world().each<ScriptComp>([&](tool::Entity o, ScriptComp& s) { if (std::string(s.path) == kEntityManagerScriptRel) old.push_back(o); }); for (auto o : old) ed.scene.world().destroy(o); }
+    check(ed.saveScene() && ed.openScene("Main", false) && ed.isEntityManager(ed.entityManager()), "an old scene without Entity Manager gets one when opened");
+  }
+  { // M9: variavel //[visible] aparece no Inspector (ScriptVars do objeto) e a mudanca chega ao script
+    tool::Entity vo = ed.makeMesh("VisibleObj", 0, 0, 0, 0); ed.attachScript(vo);
+    const std::string vpath = ed.scene.world().get<ScriptComp>(vo)->path;
+    std::string vsrc; readScript(ed.project, vpath, vsrc);
+    vsrc = "//[visible]\nlet speed = 3;\n//[visible]\nlet label = \"abc\";\n//[visible]\nlet on = true;\n//[visible]\nlet tint = \"#FF0000\";\n" + vsrc;
+    check(writeScript(ed.project, vpath, vsrc), "script with [visible] variables is written");
+    ScriptVars* sv = ed.refreshScriptVars(vo);
+    check(sv && sv->items.size() == 4 && std::string(sv->items[0].name) == "speed" && sv->items[0].num == 3.f, "[visible] variables of the script appear in the Inspector data (number, text, bool, color)");
+    if (sv && sv->items.size() == 4) {
+      sv->items[0].num = 8.f; sv->items[2].flag = false; std::snprintf(sv->items[1].text, sizeof sv->items[1].text, "%s", "xyz");   // o usuario edita no Inspector
+      const ScriptHost::Entry en = ed.scriptEntryFor(vo);
+      check(en.source.find("let speed = 8;") != std::string::npos && en.source.find("let label = \"xyz\";") != std::string::npos && en.source.find("let on = false;") != std::string::npos,
+            "Inspector value reaches the script that Play loads");
+      check(ed.saveScene() && ed.openScene("Main", false), "scene with [visible] values saves and reopens");
+      tool::Entity vo2 = ed.findByName("VisibleObj");   // o valor editado no Inspector sobrevive ao salvar/abrir
+      const ScriptVars* sv2 = ed.scene.world().alive(vo2) ? ed.scene.world().get<ScriptVars>(vo2) : nullptr;
+      check(sv2 && sv2->items.size() == 4 && sv2->items[0].num == 8.f && std::string(sv2->items[1].text) == "xyz", "[visible] values edited in the Inspector are kept in the scene file");
+    }
+    const tool::Entity vo3 = ed.findByName("VisibleObj");
+    if (ed.scene.world().alive(vo3)) ed.destroy(vo3);   // nao deixa objeto extra para os testes seguintes
+  }
   { // material como asset: o MeshRenderer com material usa o albedo do arquivo; sem material volta aos campos locais
     material_asset::MaterialAsset a; a.name = "SelfTestRed";
     a.albedo[0] = 0.9f; a.albedo[1] = 0.1f; a.albedo[2] = 0.2f; a.albedo[3] = 0.5f;
@@ -508,6 +550,30 @@ inline int runSelfTest(const std::string& samplesDir) {
   ed.sceneInfo.render.lighting.shadowMapResolution = 2048; ed.sceneInfo.render.lighting.csmCascades = 2; ed.sceneInfo.render.post.enabled = true; ed.sceneInfo.render.post.exposure = 1.f;
   ed.saveScene(); ed.openScene("Main", false);
   check(ed.sceneInfo.render.lighting.shadowMapResolution == 2048 && ed.sceneInfo.render.lighting.csmCascades == 2 && ed.sceneInfo.render.post.exposure == 1.f, "scene lighting (Light Prism) and post-processing settings persist");
+  // F6: so existe uma qualidade de sombra (resolucao do mapa, Light Prism). Cena antiga ("shadow.resolution") mantem o valor.
+  { auto oldScene = tool::Json::parse("{\"shadow\":{\"enabled\":true,\"resolution\":1024,\"pcf\":1}}");
+    const RenderSettings rs = loadRenderSettings(*oldScene);
+    check(rs.lighting.shadowMapResolution == 1024 && editor::settings_model::ShadowQualityIndex(rs.lighting.shadowMapResolution) == 1,
+          "old project shadow quality keeps its value (migrated to Light Prism shadowMapResolution)");
+    auto cur = tool::Json::parse("{\"lighting\":{\"shadowMapResolution\":4096}}");
+    check(loadRenderSettings(*cur).lighting.shadowMapResolution == 4096, "Light Prism shadow map resolution loads"); }
+  // F2: widget numerico de arraste (direita sobe, esquerda desce, respeita limites; clique simples nao arrasta).
+  { editor::drag_number::DragNumber d; float out = 0.f;
+    d.Press(7u, 100.f, 1.f);
+    check(!d.Move(101.f, false, false, 2, 0.f, 10.f, out) && !d.Dragging(), "drag below threshold is still a click");
+    check(d.Release(), "click without drag stays editable as text");
+    d.Press(7u, 100.f, 1.f);
+    check(d.Move(150.f, false, false, 2, 0.f, 10.f, out) && out > 1.f && d.Dragging(), "dragging right increases the value");
+    const float up = out;
+    check(d.Move(120.f, false, false, 2, 0.f, 10.f, out) && out < up, "dragging left decreases the value");
+    check(!d.Release(), "release after drag does not open the text field");
+    d.Press(7u, 0.f, 1.f); check(d.Move(10000.f, false, false, 2, 0.f, 10.f, out) && out == 10.f, "drag respects the max limit");
+    check(d.Move(-100000.f, false, false, 2, 0.f, 10.f, out) && out == 0.f, "drag respects the min limit"); d.Release();
+    float fine = 0.f, coarse = 0.f, norm = 0.f;
+    d.Press(1u, 0.f, 0.f); (void)d.Move(50.f, true, false, 2, -1e9f, 1e9f, fine); d.Release();
+    d.Press(1u, 0.f, 0.f); (void)d.Move(50.f, false, true, 2, -1e9f, 1e9f, coarse); d.Release();
+    d.Press(1u, 0.f, 0.f); (void)d.Move(50.f, false, false, 2, -1e9f, 1e9f, norm); d.Release();
+    check(fine < norm && norm < coarse, "Shift gives finer and Ctrl coarser steps"); }
   { const tool::u8* pa = ed.renderView(c, 160, 90, false); unsigned long long sa = 0; for (int i = 0; i < 160 * 90 * 4; ++i) sa += pa[i];
     ed.sceneInfo.render.post.enabled = false; const tool::u8* b = ed.renderView(c, 160, 90, false); unsigned long long sb = 0; for (int i = 0; i < 160 * 90 * 4; ++i) sb += b[i];
     (void)sa; (void)sb; check(true, "render with shadows runs"); }
@@ -850,15 +916,15 @@ inline int runSelfTest(const std::string& samplesDir) {
     }
   }
   { // particulas e UI
-    tool::World& w = ed.scene.world(); const tool::Entity pe = ed.make("FxP"); ParticleComp pc; pc.rate = 100.f; pc.maxParticles = 50; w.add<ParticleComp>(pe, pc);
+    tool::World& w = ed.scene.world(); const tool::Entity pe = ed.make("FxP"); ParticleFxComp pc; pc.fx.emitter.rate = 100.f; pc.maxParticles = 50; w.add<ParticleFxComp>(pe, pc);
     CanvasComp u = FullCanvas(); UiElem& el = u.items[u.count++]; el.kind = 3; ser::copyStr(el.action, sizeof el.action, "health"); ser::copyStr(el.text, sizeof el.text, "HP {health}"); w.add<CanvasComp>(pe, u);
-    for (int i = 0; i < 30; ++i) ed.updateParticles(1.f / 30.f);
-    const size_t n = ed.particles[pe.index].list.size(); check(n > 0 && n <= 50, "particles: emitter spawns and respects the max count");
+    for (int i = 0; i < 30; ++i) ed.updateFx(1.f / 30.f);
+    const tool::u32 n = ed.fxRt[pe.index].sys ? ed.fxRt[pe.index].sys->alive() : 0u; check(n > 0 && n <= 50, "particles: emitter spawns and respects the max count");
     ed.vars["health"] = 42.f; check(uiFormat(ed, "HP {health}") == "HP 42", "ui: {variable} text substitution");
     const UndoState st2 = ed.captureState(); ed.restoreState(st2); bool okUi = false, okFx = false;
-    w.each<CanvasComp>([&](tool::Entity, CanvasComp& uc) { if (uc.count == 1 && std::string(uc.items[0].action) == "health") okUi = true; }); w.each<ParticleComp>([&](tool::Entity, ParticleComp& pq) { if (pq.maxParticles == 50) okFx = true; });
+    w.each<CanvasComp>([&](tool::Entity, CanvasComp& uc) { if (uc.count == 1 && std::string(uc.items[0].action) == "health") okUi = true; }); w.each<ParticleFxComp>([&](tool::Entity, ParticleFxComp& pq) { if (pq.maxParticles == 50) okFx = true; });
     check(okUi && okFx, "ui + particles survive save/load");
-    ed.particles.clear();
+    ed.fxRt.clear();
   }
   { // formas 3D extras: indices validos, normais unitarias e faces viradas para fora (ver Mesh::addTri)
     const tool::Mesh shapes[] = {tool::Mesh::cylinder(), tool::Mesh::cone(), tool::Mesh::capsule(), tool::Mesh::wheel(), tool::Mesh::prism(3), tool::Mesh::prism(6)};
@@ -984,35 +1050,55 @@ inline int runSelfTest(const std::string& samplesDir) {
     runConsoleCommand(ed, "xyz");
     check(!ed.playing, "console: unknown command does nothing");
   }
-  { // particulas: orcamento global de particulas vivas e lotes (poucas chamadas de desenho, nao uma por particula)
+  { // F4: "Particle" no menu + Create da Hierarquia cria um objeto com ParticleFxComp (fumaca) e "Particle (fire)" o de fogo
     tool::World& w = ed.scene.world();
-    const tool::Entity fxA = ed.make("PartA");
-    w.add<ParticleComp>(fxA, ParticleComp{});
-    ed.particles.clear(); ed.particleBudget = 25;
-    for (int i = 0; i < 60; ++i) ed.updateParticles(1.f / 30.f);
-    size_t alive = 0; for (auto& [k, sim] : ed.particles) alive += sim.list.size();
-    check(alive > 0 && alive <= 25, "particle budget caps the live particles across emitters");
-    { // particulas: 4 cores ao longo da vida, opacidade com atraso, trajetoria e area de nascimento
-      ParticleComp pc; pc.color[0] = 1.f; pc.color2[0] = 0.5f; pc.color3[0] = 0.25f; pc.colorEnd[0] = 0.f;
-      check(std::fabs(fxdetail::particleColor(pc, 0.f).x - 1.f) < 1e-5f && std::fabs(fxdetail::particleColor(pc, 1.f).x) < 1e-5f, "particles: color 1 at the start and color 4 at the end");
-      check(std::fabs(fxdetail::particleColor(pc, 1.f / 3.f).x - 0.5f) < 1e-4f && std::fabs(fxdetail::particleColor(pc, 2.f / 3.f).x - 0.25f) < 1e-4f, "particles: colors 2 and 3 at 1/3 and 2/3 of the life");
-      Editor::Particle q; q.life = 2.f; q.age = 1.f; pc.alpha = 0.8f; pc.fadeDelay = 1.f; pc.fadeOpacity = true;
-      check(std::fabs(fxdetail::particleAlpha(pc, q) - 0.8f) < 1e-5f, "particles: opacity stays full during the delay");
-      q.age = 2.f; check(fxdetail::particleAlpha(pc, q) < 1e-4f, "particles: opacity reaches zero at the end of the life");
-      q.age = 1.5f; check(std::fabs(fxdetail::particleAlpha(pc, q) - 0.4f) < 1e-4f, "particles: opacity fades halfway after the delay");
-      pc.fadeOpacity = false; q.age = 1.9f; check(std::fabs(fxdetail::particleAlpha(pc, q) - 0.8f) < 1e-5f, "particles: without opacity over time, alpha is constant");
-      ParticleComp rt; rt.route = true; rt.routeCount = 3;
-      const float rp[3][3] = {{0.f, 0.f, 0.f}, {1.f, 0.f, 0.f}, {2.f, 0.f, 0.f}};
-      for (int i = 0; i < 3; ++i) for (int c = 0; c < 3; ++c) rt.routePts[i][c] = rp[i][c];
-      const tool::Vec3 r0 = fxdetail::routeSample(rt, 0.f), r1 = fxdetail::routeSample(rt, 1.f), rm = fxdetail::routeSample(rt, 0.5f);
-      check(std::fabs(r0.x) < 1e-5f && std::fabs(r1.x - 2.f) < 1e-5f && std::fabs(rm.x - 1.f) < 1e-3f, "trace route: the curve starts at the first point, ends at the last and passes the middle one");
-      ParticleComp sp; sp.area = 2; sp.areaSize[0] = 2.f; uint32_t seed = 777u; bool inside = true;
-      for (int i = 0; i < 200; ++i) { const tool::Vec3 o = fxdetail::areaOffset(sp, seed); if (std::sqrt(o.x * o.x + o.y * o.y + o.z * o.z) > 1.f + 1e-4f) inside = false; }
-      check(inside, "spawn area: random sphere points stay inside the sphere");
-    }
-    w.destroy(fxA); ed.particles.clear(); ed.particleBudget = 100000;
+    const tool::Entity pa = fxlib::makeParticleObject(ed, 0), pb = fxlib::makeParticleObject(ed, 1);
+    check(w.has<ParticleFxComp>(pa) && w.has<Transform>(pa) && w.has<Name>(pa), "hierarchy create: Particle makes an object with Transform, Name and ParticleFxComp");
+    check(w.get<ParticleFxComp>(pa)->fx.shader == tool::particles::ShaderKind::Alpha && w.get<ParticleFxComp>(pb)->fx.shader == tool::particles::ShaderKind::Bloom,
+          "hierarchy create: the Particle objects start with the smoke (alpha) and fire (bloom) presets");
+    check(std::string(w.get<Name>(pa)->text) == "Particle", "hierarchy create: the new object is named Particle");
+    w.get<Transform>(pa)->pos[0] = 4.f; ed.updateFx(1.f / 30.f);
+    check(w.get<Transform>(pa)->pos[0] == 4.f, "hierarchy create: the Particle object moves like any object");
+    w.destroy(pa); w.destroy(pb); ed.fxRt.clear();
   }
-  { // particulas v2 (biblioteca): objeto com o preset de fumaca, simulacao, quads, Stop, JSON invalido, cena e cena antiga
+  { // F5: cena antiga com o ParticleComp (chave "particles") converte para ParticleFxComp mantendo taxa, maximo, cores, area, rota, redemoinho e rebote
+    tool::World& w = ed.scene.world();
+    const char* oldScene = R"({"name":"VelhoFogo","particles":{"emitting":true,"loop":true,"max":321,"rate":77,"lifetime":2,"speed":4,"spread":33,
+      "size":0.5,"sizeEnd":0.1,"gravityScale":-0.5,"bounce":0.6,"floorY":1.5,"color":[0.1,0.2,0.3],"color2":[0.4,0.4,0.4],"color3":[0.7,0.7,0.7],"colorEnd":[1,0.9,0.8],
+      "alpha":0.5,"form":3,"area":1,"areaSize":[2,0.4,3],"fadeOpacity":true,"fadeDelay":1,"route":false,"tornado":false}})";
+    const char* oldRoute = R"({"name":"VelhaRota","particles":{"max":50,"rate":10,"route":true,"routePts":[[0,0,0],[1,0,0],[2,0,0]],"tornado":true,"tornadoSpeed":2,"tornadoRadius":1.2,"tornadoHeight":5}})";
+    const char* oldTornado = R"({"name":"VelhoTornado","particles":{"max":60,"rate":20,"tornado":true,"tornadoSpeed":2,"tornadoRadius":1.2,"tornadoHeight":5,"area":2,"areaSize":[4,4,4]}})";
+    auto j1 = tool::Json::parse(oldScene), j2 = tool::Json::parse(oldRoute), j3 = tool::Json::parse(oldTornado);
+    check(j1 && j2 && j3, "old scene: the sample JSON parses");
+    if (j1 && j2 && j3) {
+      const tool::Entity e1 = loadEntity(ed.scene, *j1), e2 = loadEntity(ed.scene, *j2), e3 = loadEntity(ed.scene, *j3);
+      ParticleFxComp* c1 = w.get<ParticleFxComp>(e1);
+      check(c1 && c1->maxParticles == 321 && c1->playing && std::fabs(c1->fx.emitter.rate - 77.f) < 1e-4f, "old scene: ParticleComp becomes ParticleFxComp with the same rate and maximum");
+      const tool::particles::Module* col = c1 ? fxmod::find(c1->fx, tool::particles::ModuleKind::ColorOverLife) : nullptr;
+      check(col && col->stops == 4 && c1->fx.init.color == tool::particles::packColor(0.1f, 0.2f, 0.3f, 0.5f), "old scene: the four colors and the opacity are kept");
+      check(c1 && c1->fx.emitter.shape == tool::particles::EmitShape::Box && std::fabs(c1->fx.emitter.boxHalf[2] - 1.5f) < 1e-4f && c1->fx.form == 3, "old scene: spawn area (box) and particle shape are kept");
+      const tool::particles::Module* fl = c1 ? fxmod::find(c1->fx, tool::particles::ModuleKind::Floor) : nullptr;
+      check(fl && std::fabs(fl->bounce - 0.6f) < 1e-5f && fl->floorY == 1.5f && fxmod::find(c1->fx, tool::particles::ModuleKind::Gravity) != nullptr, "old scene: floor bounce and own gravity are kept");
+      ParticleFxComp* c2 = w.get<ParticleFxComp>(e2);
+      const tool::particles::Module* rt = c2 ? fxmod::find(c2->fx, tool::particles::ModuleKind::Route) : nullptr;
+      check(c2 && c2->maxParticles == 50 && rt && rt->routeCount == 3 && rt->pts[2][0] == 2.f && !fxmod::find(c2->fx, tool::particles::ModuleKind::Swirl), "old scene: the route is kept and wins over the tornado");
+      ParticleFxComp* c3 = w.get<ParticleFxComp>(e3);
+      const tool::particles::Module* sw = c3 ? fxmod::find(c3->fx, tool::particles::ModuleKind::Swirl) : nullptr;
+      check(sw && sw->swirlTurns == 2.f && sw->swirlHeight == 5.f && c3->fx.emitter.shape == tool::particles::EmitShape::Sphere && std::fabs(c3->fx.emitter.radius - 2.f) < 1e-4f, "old scene: the tornado and the sphere spawn area are kept");
+      // Depois de carregar nao sobra nada do sistema antigo: ao salvar so existe particlesFx, e a cena regravada abre igual.
+      const tool::Json s1 = saveEntity(ed.scene, e1);
+      check(s1.has("particlesFx") && !s1.has("particles"), "old scene: after loading, no old particle component is left (saved as particlesFx only)");
+      const tool::Entity e1b = loadEntity(ed.scene, s1);
+      ParticleFxComp* c1b = w.get<ParticleFxComp>(e1b);
+      check(c1b && c1b->maxParticles == 321 && std::fabs(c1b->fx.emitter.rate - 77.f) < 1e-4f, "old scene: the converted scene saved and reopened keeps rate and maximum");
+      // O objeto convertido simula: respeita o maximo.
+      for (int i = 0; i < 60; ++i) ed.updateFx(1.f / 30.f);
+      const auto it2 = ed.fxRt.find(e2.index);
+      check(it2 != ed.fxRt.end() && it2->second.sys && it2->second.sys->alive() > 0 && it2->second.sys->alive() <= 50, "old scene: the converted emitter simulates and respects the maximum");
+      w.destroy(e1); w.destroy(e2); w.destroy(e3); w.destroy(e1b); ed.fxRt.clear();
+    }
+  }
+  { // particulas (biblioteca): objeto com o preset de fumaca, simulacao, quads, Stop, JSON invalido, cena e cena antiga
     tool::World& w = ed.scene.world();
     const tool::Entity fe = ed.make("FxSmoke");
     ParticleFxComp& pf = w.add<ParticleFxComp>(fe);
@@ -1069,7 +1155,8 @@ inline int runSelfTest(const std::string& samplesDir) {
           "particle fx: the component survives save and load (shader, 2D mode, pool size, turbulence rate)");
     tool::Json old = tool::Json::object(); old.set("name", "Velho"); old.set("particles", tool::Json::object());
     const tool::Entity fe3 = loadEntity(ed.scene, old);
-    check(w.has<ParticleComp>(fe3) && !w.has<ParticleFxComp>(fe3), "particle fx: an old scene object with the previous ParticleComp still loads as before");
+    check(w.has<ParticleFxComp>(fe3) && w.get<ParticleFxComp>(fe3)->maxParticles == 200 && std::fabs(w.get<ParticleFxComp>(fe3)->fx.emitter.rate - 40.f) < 1e-4f,
+          "particle fx: an old scene object with an empty ParticleComp loads as a ParticleFxComp with the old defaults (rate 40, max 200)");
     w.destroy(fe); w.destroy(fe2); w.destroy(fe3); ed.fxRt.clear();
     // Taxa de amostragem: every = 4 aplica a turbulencia em 1 de cada 4 quadros (por chunk); o padrao (1) e o de sempre.
     tool::particles::Effect e1 = *tool::particles::effectFromText(tool::particles::kPresetSmoke);
@@ -1213,7 +1300,7 @@ inline int runSelfTest(const std::string& samplesDir) {
   { // seletor de cor: a faixa de alfa do seletor chega ao float do dono (antes era desenhada e nao tinha arraste)
     namespace SUw = ToolEngine::SpriteUi;
     namespace Ew = SUw::Elements;
-    TextAtlasSet atlas; atlas.load("", 1.f);
+    sui::TextAtlasSet atlas; atlas.load("", 1.f);
     sui::Canvas canvas{atlas}, overlay{atlas};
     color_popup::ColorPopup popup{canvas, overlay};
     float rgb[3] = {1.f, 0.f, 0.f}, alpha = 1.f;

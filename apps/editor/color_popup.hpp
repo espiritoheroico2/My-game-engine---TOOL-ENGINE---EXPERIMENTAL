@@ -196,16 +196,16 @@ public:
     frame.border = box_;
     appendShifted(items, Elm::BuildPanelItems(frame, look_.frame, look_.zPanel, paint), origin, owner, clipIndex);
     const Wd::ColorPickerLayout layout = pickerLayout();
-    std::vector<SR::UIRenderItem> built = Wd::BuildColorPickerItems(picker_, layout, owner, style_, look_.zPanel, paint);
+    std::vector<SR::UIRenderItem> pickerItems = Wd::BuildColorPickerItems(picker_, layout, owner, style_, look_.zPanel, paint);
     if (!alpha_) {   // cor sem transparencia: some a faixa de alfa e o campo A do seletor (nao teriam efeito)
       const float top = layout.alpha.position.y - style_.markerBorder - 1.f, bottom = layout.alpha.position.y + layout.alpha.size.y + style_.markerBorder + 1.f;
       const SU::Rect aField = layout.channelFields[3];
-      std::erase_if(built, [&](const SR::UIRenderItem& it) {
+      std::erase_if(pickerItems,[&](const SR::UIRenderItem& it) {
         const float cx = it.layout.resolvedPosition.x + it.layout.resolvedSize.x * 0.5f, cy = it.layout.resolvedPosition.y + it.layout.resolvedSize.y * 0.5f;
         return (cy >= top && cy <= bottom) || inside(aField, SU::Vec2{cx, cy});
       });
     }
-    appendShifted(items, std::move(built), origin, owner, clipIndex);
+    appendShifted(items, std::move(pickerItems), origin, owner, clipIndex);
     if (editing_) {
       const SU::Rect screen = shifted(layout.hexField, origin);
       std::vector<SR::ClipRectGPU> clips{{visible.position.x, visible.position.y, visible.position.x + visible.size.x,

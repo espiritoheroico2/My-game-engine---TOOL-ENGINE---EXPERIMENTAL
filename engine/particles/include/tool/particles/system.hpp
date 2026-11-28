@@ -18,7 +18,8 @@ struct SystemStats {
 class ParticleSystem {
 public:
   // Cria o sistema para o efeito, com capacidade maxima de `maxParticles`.
-  ParticleSystem(Effect fx, u32 maxParticles) : fx_(std::move(fx)), pool_(maxParticles) {
+  // O pool cresce em chunks de kChunkSize, mas nunca ficam vivas mais que `maxParticles` (o excedente e descartado).
+  ParticleSystem(Effect fx, u32 maxParticles) : fx_(std::move(fx)), pool_(maxParticles), limit_(maxParticles) {
     std::stable_sort(fx_.emitter.bursts.begin(), fx_.emitter.bursts.end(),
                      [](const Burst& a, const Burst& b) { return a.time < b.time; });
   }
@@ -28,7 +29,7 @@ public:
   // Pede `count` particulas extras no proximo update (rajada manual).
   void burst(u32 count) { pending_ += count; }
   // Reinicia o emissor e mata todas as particulas.
-  void reset() { state_.restart(); pool_.clear(); pending_ = 0; simTime_ = 0; frame_ = 0; }
+  void reset() { state_.restart(); pool_.clear(); pending_ = 0; simTime_ = 0; frame_ = 0; haveLastOrigin_ = false; }
   // Troca o efeito em execucao (edicao ao vivo no editor): as particulas vivas continuam, os modulos novos valem do
   // proximo quadro. A capacidade do pool nao muda (para isso, crie outro sistema).
   void setEffect(const Effect& fx) {
@@ -42,9 +43,28 @@ public:
   // Avanca dt segundos: emite (taxa + rajadas) e atualiza todos os chunks. `parallel=false` roda tudo na thread
   // chamadora (mesmo resultado, util para teste e comparacao).
   void update(f32 dt, bool parallel = true) {
+    // 0) Trajetoria e redemoinho que "acompanham o emissor": as particulas vivas andam junto com a origem (as novas nascem ja nela).
+    if (haveLastOrigin_) {
+      const f32 dx = origin_[0] - lastOrigin_[0], dy = origin_[1] - lastOrigin_[1], dz = origin_[2] - lastOrigin_[2];
+      bool follow = false;
+      for (const Module& m : fx_.modules) follow = follow || ((m.kind == ModuleKind::Route || m.kind == ModuleKind::Swirl) && m.follow);
+      if (follow && (dx != 0 || dy != 0 || dz != 0)) {
+        runRange(pool_.chunkCount(), parallel, [&](size_t b, size_t e) {
+          for (size_t c = b; c < e; ++c) {
+            Chunk& ch = pool_.chunk(static_cast<u32>(c));
+            for (u32 i = 0; i < ch.count; ++i) { ch.px[i] += dx; ch.py[i] += dy; ch.pz[i] += dz; }
+          }
+        });
+      }
+    }
+    lastOrigin_[0] = origin_[0]; lastOrigin_[1] = origin_[1]; lastOrigin_[2] = origin_[2]; haveLastOrigin_ = true;
     // 1) Emissao: quantas nascem e onde cabem (serial e barato: so contas por chunk).
     u32 want = state_.step(fx_.emitter, static_cast<double>(dt)) + pending_;
     pending_ = 0;
+    if (want > 0) {
+      const u32 room = limit_ > pool_.alive() ? limit_ - pool_.alive() : 0u;
+      if (want > room) { stats_.dropped += want - room; want = room; }
+    }
     if (want > 0) {
       const u32 got = pool_.acquire(want, spans_);
       stats_.dropped += want - got;
@@ -101,19 +121,31 @@ private:
       else if (m.kind == ModuleKind::Buoyancy) modBuoyancy(c, m.amp, m.cooling, dt);
     }
     modIntegrate(c, dt);
+    // Modulos de posicao (depois da integracao): chao com rebote, trajetoria e redemoinho.
     for (const Module& m : fx_.modules) {
-      if (m.kind == ModuleKind::ColorOverLife) modColorOverLife(c, m.c0, m.c1);
+      if (m.kind == ModuleKind::Floor) modFloor(c, m.floorY, m.bounce, m.friction);
+      else if (m.kind == ModuleKind::Route) modRoute(c, m, dt);
+      else if (m.kind == ModuleKind::Swirl) modSwirl(c, m, dt);
+    }
+    for (const Module& m : fx_.modules) {
+      if (m.kind == ModuleKind::ColorOverLife) {
+        if (m.stops >= 4) modColorOverLife4(c, m.c0, m.c2, m.c3, m.c1);
+        else modColorOverLife(c, m.c0, m.c1);
+      }
       else if (m.kind == ModuleKind::SizeOverLife) modSizeOverLife(c, m.s0, m.s1);
-      else if (m.kind == ModuleKind::AlphaOverLife) modAlphaOverLife(c, m.a0, m.a1);
+      else if (m.kind == ModuleKind::AlphaOverLife) modAlphaOverLife(c, m.a0, m.a1, m.delay);
     }
     c.compactDead();
   }
 
   Effect fx_;
   ParticlePool pool_;
+  u32 limit_ = 0;              // maximo de particulas vivas pedido (<= capacidade do pool, que arredonda para chunks)
   EmitterState state_;
   SystemStats stats_;
   f32 origin_[3] = {0, 0, 0};
+  f32 lastOrigin_[3] = {0, 0, 0};   // origem do update anterior (para as particulas que acompanham o emissor)
+  bool haveLastOrigin_ = false;
   u32 pending_ = 0;
   f32 simTime_ = 0;            // tempo simulado acumulado (anima o campo de turbulencia)
   u64 frame_ = 0;              // quadros simulados (fase da taxa de amostragem da turbulencia)

@@ -149,15 +149,14 @@ int main() {
   const float hUiOne = uiOne.prepare(withUi, hooks, 300.f);
   Check(hUiOne > 0.f, "elemento selecionado do Canvas mostra o bloco dele");
 
-  // 10. Secao Particles. A secao inteira ocupa altura; a trajetoria (fechada no inicio) ocupa mais quando aberta.
-  editor::ParticleComp particles{};
+  // 10. Secao Particle FX. A secao inteira ocupa altura; a trajetoria (fechada no inicio) ocupa mais quando aberta.
+  editor::ParticleFxComp particles{};
   IP::Context withParticles = base;
-  withParticles.particles = &particles;
+  withParticles.particlesFx = &particles;
   IP::InspectorPanel particlePanel(text, renderer);
   const float hParticles = particlePanel.prepare(withParticles, hooks, 300.f);
-  Check(hParticles > hEmpty, "a secao Particles ocupa altura");
-  particles.route = true;
-  particles.routeCount = 3;
+  Check(hParticles > hEmpty, "a secao Particle FX ocupa altura");
+  if (auto* rm = editor::fxmod::set(particles.fx, editor::fxmod::ModuleKind::Route, true)) rm->routeCount = 3;
   IP::InspectorPanel routePanel(text, renderer);
   const float hRouteClosed = routePanel.prepare(withParticles, hooks, 300.f);
   IP::InspectorPanel routeOpen(text, renderer);

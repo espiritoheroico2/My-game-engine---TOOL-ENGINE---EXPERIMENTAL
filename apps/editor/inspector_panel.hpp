@@ -28,6 +28,7 @@
 #include "SpriteUi/Rendering/SpriteInstanceGPU.hpp"
 #include "SpriteUi/Widgets/ColorPicker.hpp"
 #include "SpriteUi/Widgets/TextField.hpp"
+#include "drag_number.hpp"
 
 #include "components.hpp"
 #include "canvas_elems_model.hpp"
@@ -117,6 +118,8 @@ struct Context {
     std::vector<std::string> tagNames;   // todas as tags da cena (indice = id da tag)
     std::vector<bool> tagOn;             // quais o objeto tem
     std::vector<bool> tagBuiltin;        // tags embutidas: nao podem ser renomeadas
+    ScriptVars* scriptVars = nullptr;    // variaveis [visible] do script (nullptr: nao tem)
+    bool entityManager = false;          // o objeto e o Entity Manager (nao pode ser apagado nem perder o script)
     ScriptComp* script = nullptr;        // script do objeto (nullptr: nao tem)
     std::string scriptPath;              // caminho relativo do script ("" se nao tem arquivo)
     bool playing = false;                // Play ligado: mostra o status do script
@@ -134,8 +137,7 @@ struct Context {
     int uiIndex = -1;                    // posicao do elemento na lista do canvas
     std::string uiCanvasName;            // nome do Canvas dono do elemento
     std::vector<std::string> cameraNames;   // cameras da cena (para escolher onde a UI aparece)
-    ParticleComp* particles = nullptr;   // particulas do objeto (nullptr: nao tem)
-    ParticleFxComp* particlesFx = nullptr;   // particulas v2 (biblioteca) do objeto (nullptr: nao tem)
+    ParticleFxComp* particlesFx = nullptr;   // particulas (biblioteca) do objeto (nullptr: nao tem)
     std::vector<int> addable;            // recursos (im::Resource) que o objeto ainda pode receber
     std::vector<int> removable;          // recursos (im::Resource) que o objeto tem
 };
@@ -171,11 +173,9 @@ struct Hooks {
     std::function<void()> voxelClear;                              // limpa o chunk
     std::function<void()> removeUi;                                // tira a UI de jogo do objeto
     std::function<std::vector<std::string>()> uiImages;            // imagens do projeto para elementos de UI (so PNG e JPEG)
-    std::function<void()> smokePreset;                             // "Smoke preset": valores de fumaca nas particulas
-    std::function<void()> removeParticles;                         // tira as particulas do objeto
-    std::function<void(int)> fxPreset;                             // particulas v2: aplica o preset (0 fumaca, 1 fogo, 2 fluido)
-    std::function<void()> fxLoad;                                  // particulas v2: carrega o arquivo de efeito (Effects/*.json)
-    std::function<void()> fxSave;                                  // particulas v2: salva o efeito no arquivo
+    std::function<void(int)> fxPreset;                             // particulas: aplica o preset (0 fumaca, 1 fogo, 2 fluido)
+    std::function<void()> fxLoad;                                  // particulas: carrega o arquivo de efeito (Effects/*.json)
+    std::function<void()> fxSave;                                  // particulas: salva o efeito no arquivo
     std::function<void(int)> addResource;                          // adiciona um recurso (im::Resource)
     std::function<void(int)> removeResource;                       // tira um recurso (im::Resource)
     std::function<std::vector<std::string>()> materialNames;       // materiais do projeto (<projeto>/Materials)
@@ -282,7 +282,6 @@ class InspectorPanel {
         if (ctx.tools) tools();
         if (ctx.voxel) voxel();
         if (ctx.cv) canvasSection();
-        if (ctx.particles) particles();
         if (ctx.particlesFx) particlesFx();
         resources();
         script();
@@ -576,6 +575,7 @@ class InspectorPanel {
         if (!editing(v.key)) {
             canvas_.addSolid(vx, y_, vw, Metrics::kRowH, v.disabled ? fieldDisabled_ : fieldColor_, Metrics::kZField);
             canvas_.addText(vx + 4.f, y_ + 5.f, v.text, Metrics::kFont, v.disabled ? theme_.textDim : theme_.text, vw - 8.f);
+            dragOutline(v.key, vx, y_, vw, Metrics::kRowH);
         }
         nextRow();
     }
@@ -598,6 +598,7 @@ class InspectorPanel {
         };
         if (!editing(c.key)) canvas_.addSolid(bx, y_, w - (bx - x), Metrics::kRowH, c.disabled ? fieldDisabled_ : fieldColor_, Metrics::kZField);
         if (!editing(c.key)) canvas_.addText(bx + 6.f, y_ + 5.f, c.text, Metrics::kFont, c.disabled ? theme_.textDim : theme_.text, w - (bx - x) - 10.f);
+        dragOutline(c.key, bx, y_, w - (bx - x), Metrics::kRowH);
     }
 
     // Linha X/Y/Z: rotulo e tres campos numericos.
@@ -717,6 +718,17 @@ class InspectorPanel {
     }
 
     [[nodiscard]] bool editing(std::uint32_t key) const { return field_kind_ != FieldKind::None && field_key_ == key; }
+
+    // Contorno branco do campo numerico enquanto ele esta sendo arrastado.
+    void dragOutline(std::uint32_t key, float x, float y, float w, float h) {
+        if (!drag_.Dragging() || drag_.Key() != key) return;
+        const SU::Vec4 white = sui::Srgb(1.f, 1.f, 1.f, 1.f);
+        const float z = Metrics::kZField + 0.01f, t = 1.5f;
+        canvas_.addSolid(x, y, w, t, white, z);
+        canvas_.addSolid(x, y + h - t, w, t, white, z);
+        canvas_.addSolid(x, y, t, h, white, z);
+        canvas_.addSolid(x + w - t, y, t, h, white, z);
+    }
 
     // Textos traduzidos de uma lista (T devolve o texto do idioma atual).
     static std::vector<std::string> tr(std::initializer_list<const char*> keys) {
@@ -1125,109 +1137,12 @@ class InspectorPanel {
         if (!editing(c.key)) {
             canvas_.addSolid(ctrlX_, y_, ctrlW_, Metrics::kRowH, c.disabled ? fieldDisabled_ : fieldColor_, Metrics::kZField);
             canvas_.addText(ctrlX_ + 6.f, y_ + 5.f, c.text, Metrics::kFont, c.disabled ? theme_.textDim : theme_.text, ctrlW_ - 10.f);
+            dragOutline(c.key, ctrlX_, y_, ctrlW_, Metrics::kRowH);
         }
         nextRow();
     }
 
-    // Particulas: emissao, forma, area de nascimento, cores, opacidade, trajetoria, tornado e movimento. Os
-    // subgrupos recolhem como o pos-processamento (estado no modelo).
-    void particles() {
-        ParticleComp& p = *ctx_.particles;
-        if (!beginSection(im::Section::Particles, T("Particles"))) return;
-        checkField(T("Emitting"), &p.emitting);
-        intRow(T("Max particles"), &p.maxParticles, 1, 5000);
-        numberRow(T("Rate (per second)"), &p.rate, 1, {0.f, 5000.f});
-        numberRow(T("Lifetime (s)"), &p.lifetime, 2, {0.05f, 60.f});
-        numberRow(T("Speed"), &p.speed, 2, {0.f, 500.f});
-        slider(T("Spread (deg)"), &p.spread, {0.f, 180.f});
-
-        float top = 0.f;
-        if (sub(im::Section::ParticleShape, T("Shape and spawn area"), top)) {
-            button(ctrlX_, T("Smoke preset"), [this] { hooks_.smokePreset(); }, Metrics::kButtonW);
-            nextRow();
-            tipKey_ = "Particle shape";   // "Shape" tambem existe no Mesh Renderer
-            drop(T("Shape"), tr({"Dot", "Square", "Triangle", "Star", "Ring", "Streak (motion)", "Smoke"}),
-                 static_cast<std::size_t>(std::clamp(p.form, 0, 6)), [&p](std::size_t i) { p.form = static_cast<int>(i); });
-            drop(T("Spawn area"), tr({"Point", "Random box", "Random sphere"}), static_cast<std::size_t>(std::clamp(p.area, 0, 2)),
-                 [&p](std::size_t i) { p.area = static_cast<int>(i); });
-            if (p.area) vecRow(T("Area size"), p.areaSize, 2, {0.f, 100.f});
-            numberRow(T("Size start"), &p.size, 3, {0.001f, 50.f});
-            numberRow(T("Size end"), &p.sizeEnd, 3, {0.f, 50.f});
-        }
-        endSub(top);
-
-        if (sub(im::Section::ParticleColors, T("Colors and opacity"), top)) {
-            canvas_.addText(innerX_, y_, T("Four colors over the lifetime: start, 1/3, 2/3 and end. Colors keep their brightness (no darkening)."),
-                            Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
-            nextRow();
-            swatch(T("Color 1 (start)"), p.color);
-            swatch(T("Color 2"), p.color2);
-            swatch(T("Color 3"), p.color3);
-            swatch(T("Color 4 (end)"), p.colorEnd);
-            slider(T("Opacity"), &p.alpha, {0.f, 1.f});
-            checkField(T("Opacity over time"), &p.fadeOpacity);
-            if (p.fadeOpacity) numberRow(T("Opacity delay (s)"), &p.fadeDelay, 2, {0.f, p.lifetime});
-        }
-        endSub(top);
-
-        if (sub(im::Section::ParticleRoute, T("Trace route"), top)) {
-            checkField(T("Follow the route"), &p.route);
-            canvas_.addText(innerX_, y_, T("Points are local to this object. Each particle travels the smooth curve through them over its lifetime. The Scene view draws the route while this object is selected."),
-                            Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
-            nextRow();
-            for (int i = 0; i < p.routeCount; ++i) {
-                const std::string name = F("Point %d", i + 1);
-                tipKey_ = "Route point";   // rotulo montado em tempo de execucao ("Point N")
-                vecRow(name.c_str(), p.routePts[i], 2);
-                button(ctrlX_, T("Remove point"), [&p, i] {
-                    for (int k = i; k + 1 < p.routeCount; ++k) for (int c = 0; c < 3; ++c) p.routePts[k][c] = p.routePts[k + 1][c];
-                    --p.routeCount;
-                }, Metrics::kButtonW);
-                nextRow();
-            }
-            if (p.routeCount < 8) {
-                button(innerX_, T("Add point"), [&p] {
-                    float* last = p.routeCount > 0 ? p.routePts[p.routeCount - 1] : nullptr;
-                    float* dst = p.routePts[p.routeCount];
-                    dst[0] = last ? last[0] + 1.f : 0.f;
-                    dst[1] = last ? last[1] : 0.f;
-                    dst[2] = last ? last[2] : 0.f;
-                    ++p.routeCount;
-                }, Metrics::kButtonW);
-            }
-            if (p.routeCount > 0) button(innerX_ + Metrics::kButtonW + Metrics::kGap, T("Clear route"), [&p] { p.routeCount = 0; }, Metrics::kButtonW);
-            nextRow();
-        }
-        endSub(top);
-
-        if (sub(im::Section::ParticleTornado, T("Tornado"), top)) {
-            checkField(T("Spin (tornado)"), &p.tornado);
-            if (p.tornado) {
-                slider(T("Turns per second"), &p.tornadoSpeed, {0.f, 6.f});
-                numberRow(T("Base radius"), &p.tornadoRadius, 2, {0.f, 50.f});
-                tipKey_ = "Tornado height";   // "Height" tambem existe no elemento de UI
-                numberRow(T("Height"), &p.tornadoHeight, 2, {0.f, 100.f});
-                canvas_.addText(innerX_, y_, T("The particles rise and spread out like a funnel. If Trace route is on, the route wins."),
-                                Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
-                nextRow();
-            }
-        }
-        endSub(top);
-
-        canvas_.addText(innerX_, y_ + 5.f, T("Motion"), Metrics::kFont + 1.f, headingColor_, width_ - innerX_ - Metrics::kPad);
-        nextRow();
-        slider(T("Gravity scale (world physics)"), &p.gravityScale, {-3.f, 3.f});
-        slider(T("Bounce on floor"), &p.bounce, {0.f, 1.f});
-        if (p.bounce > 0.f) numberRow(T("Floor Y"), &p.floorY, 2);
-        canvas_.addText(innerX_, y_, T("Emits along the object's +Y axis. Drawn over the view with real colour and opacity (no depth test)."),
-                        Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
-        nextRow();
-        button(ctrlX_, T("Remove Particles"), [this] { hooks_.removeParticles(); }, Metrics::kRemoveW);
-        nextRow();
-        endSection();
-    }
-
-    // Particulas v2 (biblioteca tool::particles): controle de reproducao, arquivo/presets, emissor com formas volumetricas,
+    // Particulas (biblioteca tool::particles): controle de reproducao, arquivo/presets, emissor com formas volumetricas,
     // movimento (velocidade, gravidade, arraste, turbulencia, empuxo), vida (tamanho, cor, opacidade) e render (shader,
     // emissivo, soft particles). Cada campo edita direto o efeito do componente (ponteiros estaveis); os modulos tem uma
     // caixa "ligado" que cria/remove o modulo no efeito.
@@ -1260,6 +1175,9 @@ class InspectorPanel {
                  static_cast<std::size_t>(std::clamp(static_cast<int>(fx.emitter.shape), 0, 5)),
                  [&fx](std::size_t i) { fx.emitter.shape = static_cast<tool::particles::EmitShape>(i); });
             numberRow(T("Spawn rate (per second)"), &fx.emitter.rate, 1, {0.f, 200000.f});
+            tipKey_ = "Particle shape";   // "Shape" tambem existe no Mesh Renderer
+            drop(T("Shape"), tr({"Dot", "Square", "Triangle", "Star", "Ring", "Streak (motion)", "Smoke"}),
+                 static_cast<std::size_t>(std::min<tool::u32>(fx.form, 6u)), [&fx](std::size_t i) { fx.form = static_cast<tool::u32>(i); });
             numberRow(T("Shape radius"), &fx.emitter.radius, 2, {0.f, 1000.f});
             vecRow(T("Box half-size"), fx.emitter.boxHalf, 2, {0.f, 1000.f});
             checkField(T("Loop emitter"), &fx.emitter.loop);
@@ -1309,11 +1227,81 @@ class InspectorPanel {
                 fm::set(fx, MK::ColorOverLife, on);
                 if (on) for (int k = 0; k < 3; ++k) p.ui.from[k] = p.ui.to[k] = p.ui.start[k];
             });
-            if (fm::find(fx, MK::ColorOverLife)) { swatch(T("Color at birth"), p.ui.from); swatch(T("Color at death"), p.ui.to); }
+            if (auto* cm = fm::find(fx, MK::ColorOverLife)) {
+                swatch(T("Color at birth"), p.ui.from);
+                check(T("Four color stops"), cm->stops >= 4, [&p, &fx](bool on) {
+                    if (auto* m = fm::find(fx, MK::ColorOverLife)) {
+                        m->stops = on ? 4u : 2u;
+                        if (on) for (int k = 0; k < 3; ++k) {   // paradas novas: pontos de uma reta entre nascimento e morte
+                            p.ui.mid1[k] = p.ui.from[k] + (p.ui.to[k] - p.ui.from[k]) / 3.f;
+                            p.ui.mid2[k] = p.ui.from[k] + (p.ui.to[k] - p.ui.from[k]) * 2.f / 3.f;
+                        }
+                    }
+                });
+                if (cm->stops >= 4) { swatch(T("Color at 1/3 of life"), p.ui.mid1); swatch(T("Color at 2/3 of life"), p.ui.mid2); }
+                swatch(T("Color at death"), p.ui.to);
+            }
             check(T("Opacity over lifetime"), fm::find(fx, MK::AlphaOverLife) != nullptr, [&fx](bool on) { fm::set(fx, MK::AlphaOverLife, on); });
             if (auto* m = fm::find(fx, MK::AlphaOverLife)) {
                 slider(T("Opacity at birth"), &m->a0, {0.f, 1.f});
                 slider(T("Opacity at death"), &m->a1, {0.f, 1.f});
+                slider(T("Opacity delay (life fraction)"), &m->delay, {0.f, 0.95f});
+            }
+        }
+        endSub(top);
+
+        // Trajetoria, redemoinho e chao com rebote (vieram do sistema antigo de particulas).
+        if (sub(im::Section::FxPath, T("FX path and floor"), top)) {
+            check(T("Bounce on floor"), fm::find(fx, MK::Floor) != nullptr, [&fx](bool on) { fm::set(fx, MK::Floor, on); });
+            if (auto* m = fm::find(fx, MK::Floor)) {
+                numberRow(T("Floor Y"), &m->floorY, 2, {-100000.f, 100000.f});
+                slider(T("Bounce amount"), &m->bounce, {0.f, 1.f});
+                slider(T("Floor friction"), &m->friction, {0.f, 1.f});
+            }
+            check(T("Follow the route"), fm::find(fx, MK::Route) != nullptr, [&fx](bool on) {
+                if (auto* m = fm::set(fx, MK::Route, on)) { m->routeCount = 4; }   // rota inicial: sobe curvando (pontos padrao do modulo)
+            });
+            if (auto* m = fm::find(fx, MK::Route)) {
+                canvas_.addText(innerX_, y_, T("Points are local to this object. Each particle travels the smooth curve through them over its lifetime. The Scene view draws the route while this object is selected."),
+                                Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+                nextRow();
+                checkField(T("Particles follow the object"), &m->follow);
+                for (tool::u32 i = 0; i < m->routeCount; ++i) {
+                    const std::string name = F("Point %d", static_cast<int>(i) + 1);
+                    tipKey_ = "Route point";   // rotulo montado em tempo de execucao ("Point N")
+                    vecRow(name.c_str(), m->pts[i], 2);
+                    button(ctrlX_, T("Remove point"), [&fx, i] {
+                        if (auto* rm = fm::find(fx, MK::Route)) {
+                            for (tool::u32 k = i; k + 1 < rm->routeCount; ++k) for (int c = 0; c < 3; ++c) rm->pts[k][c] = rm->pts[k + 1][c];
+                            if (rm->routeCount > 0) --rm->routeCount;
+                        }
+                    }, Metrics::kButtonW);
+                    nextRow();
+                }
+                if (m->routeCount < tool::particles::kMaxRoutePoints) {
+                    button(innerX_, T("Add point"), [&fx] {
+                        if (auto* rm = fm::find(fx, MK::Route)) {
+                            const float* last = rm->routeCount > 0 ? rm->pts[rm->routeCount - 1] : nullptr;
+                            float* dst = rm->pts[rm->routeCount];
+                            dst[0] = last ? last[0] + 1.f : 0.f; dst[1] = last ? last[1] : 0.f; dst[2] = last ? last[2] : 0.f;
+                            ++rm->routeCount;
+                        }
+                    }, Metrics::kButtonW);
+                }
+                if (m->routeCount > 0) button(innerX_ + Metrics::kButtonW + Metrics::kGap, T("Clear route"), [&fx] { if (auto* rm = fm::find(fx, MK::Route)) rm->routeCount = 0; }, Metrics::kButtonW);
+                nextRow();
+            }
+            check(T("Spin (tornado)"), fm::find(fx, MK::Swirl) != nullptr, [&fx](bool on) { fm::set(fx, MK::Swirl, on); });
+            if (auto* m = fm::find(fx, MK::Swirl)) {
+                slider(T("Turns per second"), &m->swirlTurns, {-6.f, 6.f});
+                numberRow(T("Base radius"), &m->swirlRadius, 2, {0.f, 50.f});
+                tipKey_ = "Tornado height";   // "Height" tambem existe no elemento de UI
+                numberRow(T("Height"), &m->swirlHeight, 2, {-100.f, 100.f});
+                vecRow(T("Spin axis"), m->axis, 2, {-1.f, 1.f});
+                checkField(T("Spin follows the object"), &m->follow);
+                canvas_.addText(innerX_, y_, T("The particles rise and spread out like a funnel. Route and tornado take the position over speed, gravity and turbulence: set the start speed to 0."),
+                                Metrics::kSmallFont, theme_.textDim, width_ - innerX_ - Metrics::kPad);
+                nextRow();
             }
         }
         endSub(top);
@@ -1339,8 +1327,8 @@ class InspectorPanel {
     static const char* resourceLabel(int id) {
         static const char* names[] = {
             "Physics body (Newtoon)", "Tool: Jump", "Tool: Move", "Tool: Follow Target", "Tool: Spin", "Tool: On Collision",
-            "Tool: Script library", "Mesh (cube)", "Point Light", "Camera", "Audio Source", "Particle System", "ToolObject Script",
-            "Canvas (game UI)", "Voxel chunk (blocks)", "Tools (all)", "Global Light", "Particle FX (v2)"};
+            "Tool: Script library", "Mesh (cube)", "Point Light", "Camera", "Audio Source", "ToolObject Script",
+            "Canvas (game UI)", "Voxel chunk (blocks)", "Tools (all)", "Global Light", "Particle FX"};
         const std::size_t i = static_cast<std::size_t>(id);
         return i < std::size(names) ? names[i] : "";
     }
@@ -1679,7 +1667,31 @@ class InspectorPanel {
                             width_ - innerX_ - Metrics::kPad);
             nextRow();
         }
+        if (ctx_.entityManager) {   // M8: o Entity Manager nao pode ser apagado
+            canvas_.addText(innerX_, y_ + 5.f, T("Entity Manager: it cannot be deleted. Its script manages the entities of the game."), Metrics::kSmallFont + 1.f,
+                            theme_.textDim, width_ - innerX_ - Metrics::kPad);
+            nextRow();
+        }
+        scriptVariables();
         endSection();
+    }
+
+    // Variaveis do script marcadas com //[visible] (M9): um campo por variavel, do tipo certo. A alteracao grava no
+    // componente ScriptVars do objeto; no Play o valor entra no script (script_vars.hpp).
+    void scriptVariables() {
+        if (!ctx_.scriptVars || ctx_.scriptVars->items.empty()) return;
+        canvas_.addText(innerX_, y_ + 5.f, T("Script variables"), Metrics::kFont, headingColor_, width_ - innerX_ - Metrics::kPad);
+        tipRow("Script variables");   // dica da linha do titulo
+        nextRow();
+        for (ScriptVar& v : ctx_.scriptVars->items) {
+            switch (static_cast<ScriptVarType>(v.type)) {
+                case ScriptVarType::Number: tipKey_ = "Script variable (number)"; numberRow(v.name, &v.num, 3, {-1e9f, 1e9f}); break;
+                case ScriptVarType::Text: tipKey_ = "Script variable (text)"; textRow(v.name, v.text, sizeof v.text); break;
+                case ScriptVarType::Bool: tipKey_ = "Script variable (yes/no)"; label(y_, v.name); checkField("", &v.flag); break;
+                case ScriptVarType::Color: tipKey_ = "Script variable (color)"; swatch(v.name, v.rgb); break;
+            }
+            tipKey_ = nullptr;
+        }
     }
 
     // Tags do objeto: uma linha por tag atribuida (Remove). Duplo clique no nome abre a renomeacao (Enter confirma,
@@ -1969,6 +1981,37 @@ class InspectorPanel {
                 return true;
             }
         }
+        // Arraste de um campo numerico (ou clique pendente que ainda pode virar edicao de texto).
+        if (drag_.Pending()) {
+            if (phase == Elm::PointerPhase::Move) {
+                const SDL_Keymod mod = SDL_GetModState();
+                for (Control& c : controls_) {
+                    if (c.key != drag_.Key()) continue;
+                    float out = c.value;
+                    if (drag_.Move(p.x, (mod & SDL_KMOD_SHIFT) != 0, (mod & SDL_KMOD_CTRL) != 0, c.decimals, c.range.min, c.range.max, out) &&
+                        c.setF) {
+                        c.setF(out);
+                        c.value = out;
+                    }
+                    break;
+                }
+                return true;
+            }
+            if (phase == Elm::PointerPhase::Up) {
+                const std::uint32_t key = drag_.Key();
+                if (drag_.Release()) {   // clique comum: abre o campo como texto com o caret onde clicou
+                    for (Control& c : controls_) {
+                        if (c.key != key) continue;
+                        startEdit(c, window);
+                        const ST::TextLayoutResult lay = canvas_.layout(field_.Edit().Text(), Metrics::kFont);
+                        field_.PointerDown(SU::Vec2{dragPress_.x - c.box.position.x, dragPress_.y - c.box.position.y}, c.box.size, lay, fieldStyle(c.box));
+                        field_.PointerUp();
+                        break;
+                    }
+                }
+                return true;
+            }
+        }
         // Seletor de cor aberto: arrastes na area e nos campos.
         if (popup_.isOpen()) {
             if (popup_.contains(p) || popup_.dragging()) {   // arrasto em curso segue mesmo fora da caixa
@@ -2017,6 +2060,13 @@ class InspectorPanel {
                     break;
                 case Kind::Num:
                 case Kind::Text:
+                    // Campo numerico fora de edicao: aperta e arrasta muda o valor; clique sem arraste abre o texto (ao soltar).
+                    if (c.kind == Kind::Num && phase == Elm::PointerPhase::Down && contains(c.box, p) && !editing(c.key)) {
+                        drag_.Press(c.key, p.x, c.value);
+                        dragPress_ = p;
+                        any = true;
+                        break;
+                    }
                     if (phase == Elm::PointerPhase::Down && contains(c.box, p)) {
                         if (!editing(c.key)) startEdit(c, window);   // clicar de novo no campo so move o caret
                         const ST::TextLayoutResult lay = canvas_.layout(field_.Edit().Text(), Metrics::kFont);
@@ -2193,6 +2243,8 @@ class InspectorPanel {
     std::unordered_map<std::uint32_t, Elm::Dropdown> drops_;
     std::unordered_map<std::uint32_t, Elm::Button> buttons_;
 
+    drag_number::DragNumber drag_;   // arraste de campo numerico (F2)
+    SU::Vec2 dragPress_{};           // onde o mouse apertou (local), para o caret se virar clique
     Edit::TextField field_;
     FieldKind field_kind_ = FieldKind::None;
     std::uint32_t field_key_ = 0;

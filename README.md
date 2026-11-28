@@ -35,7 +35,7 @@ Engine 3D leve, multi-API, em C++20, acompanhada de um editor completo desenhado
 ## Pontos fracos
 
 - 1 milhão de objetos ainda não é possível na GPU: estoura o heap dinâmico do Vulkan.
-- O sistema antigo de partículas (`ParticleComp`) ainda convive com o v2; a remoção está prevista (F5 do plano 0.9).
+- O sistema antigo de partículas (`ParticleComp`) foi removido (F5 do plano 0.9): cenas antigas são convertidas para `ParticleFxComp` ao abrir (`docs/planos/36_MIGRACAO_PARTICULAS.md`).
 - O passe de partículas v2 não existe em OpenGL.
 - Ainda não há cena 2D.
 - Ainda não há sistema de assets de material e shader.

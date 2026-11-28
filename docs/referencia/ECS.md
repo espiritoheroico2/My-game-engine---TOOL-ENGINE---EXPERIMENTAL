@@ -48,7 +48,7 @@ Regras práticas:
 
 ## 3. Como o editor usa o ECS
 
-- Cada **ToolObject** é uma entidade. Componentes: `Name`, `Transform`, `MeshRenderer`, `LightComp`, `CameraComp`, `AudioSource`, `PhysicsComp`, `ToolsComp`, `ScriptComp` (caminho do script), `CanvasComp` (UI de jogo, com camera e elementos), `ParticleComp`, `Parent`, `Inactive` (objeto desativado).
+- Cada **ToolObject** é uma entidade. Componentes: `Name`, `Transform`, `MeshRenderer`, `LightComp`, `CameraComp`, `AudioSource`, `PhysicsComp`, `ToolsComp`, `ScriptComp` (caminho do script), `CanvasComp` (UI de jogo, com camera e elementos), `ParticleFxComp`, `Parent`, `Inactive` (objeto desativado).
 - `Parent{e}` faz a hierarquia. O `Transform` de um filho é **local**; o mundo é pai × local.
 - Na cena (`.scene.json`) só entram componentes que o `saveEntity` conhece. Componentes de **execução** (como `SpawnerComp` do teste de ECS) não são salvos.
 - No Play, a física (Newtoon) tem arrays próprios (`play.ents`, `play.tf`, `play.rb`, `play.col`) e um mapa `indexOf[entidade] → corpo`. Corpos criados no Play entram com `Editor::pushRuntimeBody`.

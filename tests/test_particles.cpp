@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "test.hpp"
+#include "tool/particles/legacy.hpp"
 #include "tool/particles/presets.hpp"
 #include "tool/particles/quads.hpp"
 #include "tool/particles/system.hpp"
@@ -441,4 +442,187 @@ TEST(particles_sort_quads_back_to_front) {
   std::vector<QuadInstance> none, o2;
   sortQuadsBackToFront(none, eye, fwd, o2, sc);
   CHECK(o2.empty());
+}
+
+// ===== Migracao do sistema antigo (F5): chao com rebote, trajetoria, redemoinho, cor em 4 paradas, atraso de opacidade =====
+
+// (F5) Chao: a particula que cai passa do chao, volta para ele e devolve parte da velocidade vertical.
+TEST(particles_floor_bounce) {
+  Effect fx = baseEffect(0.0f, 100.0f);
+  fx.emitter.bursts.push_back({0.0f, 1});
+  fx.emitter.shape = EmitShape::Point;
+  Module g; g.kind = ModuleKind::Gravity; fx.modules.push_back(g);
+  Module fl; fl.kind = ModuleKind::Floor; fl.floorY = -2.0f; fl.bounce = 0.5f; fl.friction = 1.0f; fx.modules.push_back(fl);
+  ParticleSystem s(fx, 16);
+  f32 minY = 0, maxVyAfter = 0;
+  bool bounced = false;
+  for (int i = 0; i < 200; ++i) {
+    s.update(1.0f / 60.0f, false);
+    const Chunk& ch = s.pool().chunk(0);
+    minY = std::min(minY, ch.py[0]);
+    if (ch.vy[0] > 0.1f) { bounced = true; maxVyAfter = std::max(maxVyAfter, ch.vy[0]); }
+  }
+  CHECK(minY >= -2.0f - 1e-4f);   // nunca atravessa o chao
+  CHECK(bounced && maxVyAfter > 1.0f);   // quicou: velocidade vertical positiva depois do impacto
+  // Sem rebote (bounce 0) a particula fica parada no chao.
+  fx.modules[1].bounce = 0.0f;
+  ParticleSystem t(fx, 16);
+  for (int i = 0; i < 300; ++i) t.update(1.0f / 60.0f, false);
+  CHECK(std::fabs(t.pool().chunk(0).py[0] - (-2.0f)) < 0.2f);
+}
+
+// (F5) Trajetoria: a particula percorre a curva (relativa a origem) durante a vida e termina no ultimo ponto.
+TEST(particles_route_follows_curve) {
+  Effect fx = baseEffect(0.0f, 2.0f);
+  fx.emitter.bursts.push_back({0.0f, 1});
+  Module r; r.kind = ModuleKind::Route; r.routeCount = 3;
+  const f32 P[3][3] = {{0, 0, 0}, {2, 0, 0}, {2, 4, 0}};
+  for (int i = 0; i < 3; ++i) for (int k = 0; k < 3; ++k) r.pts[i][k] = P[i][k];
+  r.follow = false;
+  fx.modules.push_back(r);
+  ParticleSystem s(fx, 16);
+  s.setOrigin(10.0f, 5.0f, 0.0f);
+  const f32 dt = 1.0f / 100.0f;
+  for (int i = 0; i < 100; ++i) s.update(dt, false);   // t = 0,5 da vida: no ponto do meio (2, 0, 0) da curva
+  CHECK(s.alive() == 1);
+  const Chunk& ch = s.pool().chunk(0);
+  CHECK(std::fabs(ch.px[0] - 12.0f) < 0.05f && std::fabs(ch.py[0] - 5.0f) < 0.05f);
+  for (int i = 0; i < 90; ++i) s.update(dt, false);   // quase no fim da vida: perto de (2, 4, 0) + origem
+  CHECK(s.alive() == 1);
+  CHECK(std::fabs(ch.px[0] - 12.0f) < 0.3f && ch.py[0] > 8.0f);
+}
+
+// (F5) Trajetoria com "acompanhar": mexer o emissor leva as particulas vivas junto; sem acompanhar elas ficam no mundo.
+TEST(particles_route_follow_moves_with_emitter) {
+  Effect fx = baseEffect(0.0f, 100.0f);
+  fx.emitter.bursts.push_back({0.0f, 1});
+  Module r; r.kind = ModuleKind::Route; r.routeCount = 1; r.follow = true; fx.modules.push_back(r);
+  ParticleSystem a(fx, 16);
+  a.setOrigin(0, 0, 0); a.update(0.01f, false);
+  a.setOrigin(5, 0, 0); a.update(0.01f, false);
+  CHECK(std::fabs(a.pool().chunk(0).px[0] - 5.0f) < 0.01f);
+  fx.modules[0].follow = false;
+  ParticleSystem b(fx, 16);
+  b.setOrigin(0, 0, 0); b.update(0.01f, false);
+  b.setOrigin(5, 0, 0); b.update(0.01f, false);
+  CHECK(std::fabs(b.pool().chunk(0).px[0]) < 0.01f);
+}
+
+// (F5) Redemoinho: gira em torno do eixo (distancia horizontal ~ raio) e sobe ate a altura no fim da vida.
+TEST(particles_swirl_rises_and_spins) {
+  Effect fx = baseEffect(0.0f, 2.0f);
+  fx.emitter.bursts.push_back({0.0f, 1});
+  Module sw; sw.kind = ModuleKind::Swirl; sw.swirlTurns = 1.0f; sw.swirlRadius = 1.0f; sw.swirlHeight = 4.0f; sw.follow = false;
+  fx.modules.push_back(sw);
+  ParticleSystem s(fx, 16);
+  const f32 dt = 1.0f / 100.0f;
+  for (int i = 0; i < 100; ++i) s.update(dt, false);   // metade da vida
+  const Chunk& ch = s.pool().chunk(0);
+  CHECK(s.alive() == 1);
+  CHECK(std::fabs(ch.py[0] - 2.0f) < 0.05f);                                  // 4 m * 0,5
+  const f32 horiz = std::sqrt(ch.px[0] * ch.px[0] + ch.pz[0] * ch.pz[0]);
+  CHECK(std::fabs(horiz - 1.0f * (0.3f + 0.7f * 0.5f)) < 0.05f);             // raio base * (0,3 + 0,7 t)
+}
+
+// (F5) Cor em 4 paradas: 1/3 da vida cai na segunda parada; JSON guarda e le as paradas; 2 paradas continua igual.
+TEST(particles_color_four_stops_and_json) {
+  Effect fx = baseEffect(0.0f, 3.0f);
+  fx.emitter.bursts.push_back({0.0f, 1});
+  Module c; c.kind = ModuleKind::ColorOverLife; c.stops = 4;
+  c.c0 = packColor(1, 0, 0, 1); c.c2 = packColor(0, 1, 0, 1); c.c3 = packColor(0, 0, 1, 1); c.c1 = packColor(1, 1, 1, 1);
+  fx.modules.push_back(c);
+  ParticleSystem s(fx, 16);
+  for (int i = 0; i < 100; ++i) s.update(0.01f, false);   // t = 1/3 da vida
+  const u32 col = s.pool().chunk(0).color[0];
+  CHECK(((col >> 8) & 0xFFu) > 235u && (col & 0xFFu) < 25u);   // verde, nao mais vermelho
+  const auto back = effectFromText(effectToJson(fx).dump());
+  CHECK(back.has_value() && back->modules.size() == 1 && back->modules[0].stops == 4 && back->modules[0].c2 == c.c2 && back->modules[0].c3 == c.c3);
+  Effect two = baseEffect(0.0f); Module d; d.kind = ModuleKind::ColorOverLife; two.modules.push_back(d);
+  const auto b2 = effectFromText(effectToJson(two).dump());
+  CHECK(b2.has_value() && b2->modules[0].stops == 2);
+}
+
+// (F5) Atraso de opacidade: o alfa fica cheio ate o atraso e so depois cai; JSON ida e volta dos modulos novos.
+TEST(particles_alpha_delay_and_new_modules_json) {
+  Effect fx = baseEffect(0.0f, 4.0f);
+  fx.emitter.bursts.push_back({0.0f, 1});
+  Module a; a.kind = ModuleKind::AlphaOverLife; a.a0 = 1.0f; a.a1 = 0.0f; a.delay = 0.5f; fx.modules.push_back(a);
+  ParticleSystem s(fx, 16);
+  for (int i = 0; i < 150; ++i) s.update(0.01f, false);   // t = 0,375: dentro do atraso
+  CHECK(std::fabs(s.pool().chunk(0).alpha[0] - 1.0f) < 1e-4f);
+  for (int i = 0; i < 150; ++i) s.update(0.01f, false);   // t = 0,75: ja caindo
+  CHECK(s.pool().chunk(0).alpha[0] < 0.9f && s.pool().chunk(0).alpha[0] > 0.1f);
+  // Ida e volta de piso, trajetoria, redemoinho e forma.
+  Effect all = baseEffect(10.0f);
+  all.form = 3;
+  Module fl; fl.kind = ModuleKind::Floor; fl.floorY = -3.0f; fl.bounce = 0.4f; fl.friction = 0.8f; all.modules.push_back(fl);
+  Module rt; rt.kind = ModuleKind::Route; rt.routeCount = 2; rt.pts[1][0] = 7.0f; rt.follow = false; all.modules.push_back(rt);
+  Module sw; sw.kind = ModuleKind::Swirl; sw.swirlTurns = 2.5f; sw.swirlRadius = 0.9f; sw.swirlHeight = 3.0f; all.modules.push_back(sw);
+  all.modules.push_back(a);
+  const auto rd = effectFromText(effectToJson(all).dump());
+  CHECK(rd.has_value() && rd->form == 3 && rd->modules.size() == 4);
+  CHECK(rd->modules[0].floorY == -3.0f && std::fabs(rd->modules[0].bounce - 0.4f) < 1e-5f && std::fabs(rd->modules[0].friction - 0.8f) < 1e-5f);
+  CHECK(rd->modules[1].routeCount == 2 && rd->modules[1].pts[1][0] == 7.0f && !rd->modules[1].follow);
+  CHECK(rd->modules[2].swirlTurns == 2.5f && rd->modules[2].swirlHeight == 3.0f && rd->modules[2].follow);
+  CHECK(std::fabs(rd->modules[3].delay - 0.5f) < 1e-5f);
+  // Valores invalidos sao recusados.
+  CHECK(!effectFromText(R"({"modules":[{"type":"floor","bounce":2}]})").has_value());
+  CHECK(!effectFromText(R"({"modules":[{"type":"route","points":[[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]}]})").has_value());
+  CHECK(!effectFromText(R"({"form":9})").has_value());
+}
+
+// (F5) Maximo vivo: o pool arredonda para chunks de 4096, mas o sistema respeita o maximo pedido.
+TEST(particles_max_alive_limit) {
+  Effect fx = baseEffect(5000.0f, 100.0f);
+  ParticleSystem s(fx, 50);
+  for (int i = 0; i < 10; ++i) s.update(0.1f, false);
+  CHECK(s.alive() == 50);
+  CHECK(s.stats().dropped > 0);
+}
+
+// (F5) Conversao do emissor antigo: taxa, maximo, cores, forma, area, rota, redemoinho e rebote sobrevivem.
+TEST(particles_legacy_conversion) {
+  const f32 grav[3] = {0, -9.8f, 0};
+  LegacyEmitter o;
+  o.rate = 77.0f; o.maxParticles = 321; o.lifetime = 2.0f; o.speed = 4.0f; o.spread = 33.0f; o.size = 0.5f; o.sizeEnd = 0.1f;
+  o.gravityScale = -0.5f; o.bounce = 0.6f; o.floorY = 1.5f; o.form = 4; o.area = 1;
+  o.areaSize[0] = 2.0f; o.areaSize[1] = 0.4f; o.areaSize[2] = 3.0f; o.alpha = 0.5f; o.fadeDelay = 1.0f; o.emitting = false;
+  for (int k = 0; k < 3; ++k) { o.color[k] = 0.1f; o.color2[k] = 0.4f; o.color3[k] = 0.7f; o.colorEnd[k] = 1.0f; }
+  const LegacyConversion c = effectFromLegacy(o, grav);
+  CHECK(c.maxParticles == 321 && !c.playing);
+  CHECK(c.fx.emitter.rate == 77.0f && c.fx.form == 4);
+  CHECK(c.fx.emitter.shape == EmitShape::Box && std::fabs(c.fx.emitter.boxHalf[0] - 1.0f) < 1e-5f && std::fabs(c.fx.emitter.boxHalf[2] - 1.5f) < 1e-5f);
+  CHECK(std::fabs(c.fx.init.speedMin - 3.0f) < 1e-5f && std::fabs(c.fx.init.speedMax - 5.0f) < 1e-5f && c.fx.init.coneDeg == 33.0f);
+  const Module *grv = nullptr, *flr = nullptr, *col = nullptr, *sz = nullptr, *alp = nullptr;
+  for (const Module& m : c.fx.modules) {
+    if (m.kind == ModuleKind::Gravity) grv = &m;
+    if (m.kind == ModuleKind::Floor) flr = &m;
+    if (m.kind == ModuleKind::ColorOverLife) col = &m;
+    if (m.kind == ModuleKind::SizeOverLife) sz = &m;
+    if (m.kind == ModuleKind::AlphaOverLife) alp = &m;
+  }
+  CHECK(grv && std::fabs(grv->g[1] - 4.9f) < 1e-4f);
+  CHECK(flr && flr->floorY == 1.5f && std::fabs(flr->bounce - 0.6f) < 1e-5f);
+  CHECK(col && col->stops == 4 && sz && sz->s0 == 0.5f && sz->s1 == 0.1f);
+  CHECK(alp && std::fabs(alp->delay - 0.5f) < 1e-5f);   // 1 s de atraso numa vida de 2 s
+  // O efeito convertido sobrevive ao JSON.
+  CHECK(effectFromText(effectToJson(c.fx).dump()).has_value());
+  // Esfera, trajetoria e redemoinho.
+  LegacyEmitter r; r.area = 2; r.areaSize[0] = 4.0f; r.route = true; r.routeCount = 3; r.routePts[2][0] = 9.0f;
+  const LegacyConversion cr = effectFromLegacy(r, grav);
+  CHECK(cr.fx.emitter.shape == EmitShape::Sphere && std::fabs(cr.fx.emitter.radius - 2.0f) < 1e-5f);
+  const Module* rt = nullptr; bool hasGrav = false;
+  for (const Module& m : cr.fx.modules) { if (m.kind == ModuleKind::Route) rt = &m; if (m.kind == ModuleKind::Gravity) hasGrav = true; }
+  CHECK(rt && rt->routeCount == 3 && rt->pts[2][0] == 9.0f && !hasGrav && cr.fx.init.speedMax == 0.0f);
+  LegacyEmitter t; t.tornado = true; t.tornadoSpeed = 2.0f; t.tornadoRadius = 1.2f; t.tornadoHeight = 5.0f;
+  const LegacyConversion ct = effectFromLegacy(t, grav);
+  const Module* sw = nullptr;
+  for (const Module& m : ct.fx.modules) if (m.kind == ModuleKind::Swirl) sw = &m;
+  CHECK(sw && sw->swirlTurns == 2.0f && sw->swirlRadius == 1.2f && sw->swirlHeight == 5.0f);
+  // Rota e tornado juntos: a rota vence (como no sistema antigo).
+  t.route = true; t.routeCount = 2;
+  const LegacyConversion both = effectFromLegacy(t, grav);
+  bool hasSwirl = false, hasRoute = false;
+  for (const Module& m : both.fx.modules) { if (m.kind == ModuleKind::Swirl) hasSwirl = true; if (m.kind == ModuleKind::Route) hasRoute = true; }
+  CHECK(hasRoute && !hasSwirl);
 }

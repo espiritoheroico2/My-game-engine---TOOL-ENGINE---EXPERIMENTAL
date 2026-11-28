@@ -25,30 +25,29 @@ namespace editor::inspector_model {
 // PostFx e o subgrupo "Post-processing (this camera)" dentro da Camera.
 enum class Section : std::uint8_t {
     Transform, MeshRenderer, Light, GlobalLight, Camera, Audio, PostFx, Tags, Script, Physics, Tools, Voxel, Canvas,
-    Particles, ParticleShape, ParticleColors, ParticleRoute, ParticleTornado, Resources,
-    // Particulas v2 (biblioteca): secao principal e subgrupos (emissor, velocidade, modulos, render).
-    ParticlesFx, FxEmitter, FxMotion, FxLife, FxRender
+    Resources,
+    // Particulas (biblioteca): secao principal e subgrupos (emissor, velocidade, modulos, render, trajetoria e chao).
+    ParticlesFx, FxEmitter, FxMotion, FxLife, FxRender, FxPath
 };
-inline constexpr std::size_t kSectionCount = 24;
+inline constexpr std::size_t kSectionCount = 20;
 
 // Recursos que o menu Add / Remove Resource adiciona e tira do objeto. As ferramentas tem uma entrada por tipo, na
 // mesma ordem de ToolKind (Jump, Move, Follow Target, Spin, On Collision, Script library).
 enum class Resource : std::uint8_t {
     Physics, ToolJump, ToolMove, ToolFollow, ToolSpin, ToolOnCollision, ToolScriptLib,
-    Mesh, PointLight, Camera, Audio, Particles, Script, Canvas, Voxel, ToolsAll, GlobalLight,
-    ParticlesFx   // particulas v2 (no fim para nao mudar os ids existentes)
+    Mesh, PointLight, Camera, Audio, Script, Canvas, Voxel, ToolsAll, GlobalLight,
+    ParticlesFx   // particulas (a ordem segue resourceLabel em inspector_panel.hpp)
 };
 
 // Estado de aberto e fechado de cada secao.
 struct Expanders {
     std::array<bool, kSectionCount> open{};
 
-    // Tudo aberto, menos pos-processamento, trajetoria e tornado (fechados por padrao).
+    // Tudo aberto, menos pos-processamento e trajetoria/redemoinho/chao das particulas (fechados por padrao).
     Expanders() {
         open.fill(true);
         open[static_cast<std::size_t>(Section::PostFx)] = false;
-        open[static_cast<std::size_t>(Section::ParticleRoute)] = false;
-        open[static_cast<std::size_t>(Section::ParticleTornado)] = false;
+        open[static_cast<std::size_t>(Section::FxPath)] = false;
     }
 
     // Ler o estado nao muda nada. So Toggle e SetAll mudam.

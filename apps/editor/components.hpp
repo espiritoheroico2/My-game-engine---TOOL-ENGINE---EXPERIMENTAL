@@ -24,6 +24,7 @@
 #include "tool/core/parallel.hpp"
 #include "tool/math/math.hpp"
 #include "tool/particles/effect.hpp"
+#include "tool/particles/legacy.hpp"
 #include "tool/particles/presets.hpp"
 #include "tool/render/lighting.hpp"
 #include "tool/render/postfx.hpp"
@@ -204,6 +205,25 @@ inline void initUiKind(UiElem& e, int kind) {
 struct Inactive {};
 // Marca: objeto travado (nao pode ser selecionado/movido no editor).
 struct Locked {};
+// Marca: o Entity Manager da cena (M8). Toda cena tem exatamente um; ele nao pode ser apagado nem duplicado.
+// O script dele (Scripts/EntityManagerScript.js) e o lugar onde o jogo gerencia LODs, impostores e grupos de malhas.
+struct EntityManagerTag { int version = 1; };   // campo so para o componente nao ser vazio (iteracao com each)
+
+// Variavel de script marcada com "//[visible]" (M9): aparece no Inspector do objeto que tem o script.
+// O valor editado fica na cena (por objeto) e entra no codigo do script ao dar Play (ver script_vars.hpp).
+enum class ScriptVarType : int { Number = 0, Text = 1, Bool = 2, Color = 3 };
+struct ScriptVar {
+  char name[40] = "";       // nome da variavel no script
+  int type = 0;             // ScriptVarType
+  float num = 0.f;          // valor numero
+  bool flag = false;        // valor booleano
+  float rgb[3] = {1.f, 1.f, 1.f};   // valor cor (texto "#RRGGBB" no script)
+  char text[96] = "";       // valor texto
+  char def[96] = "";        // literal original do script quando o valor foi lido (se o codigo mudar, o do codigo vence)
+};
+constexpr int kMaxScriptVars = 24;
+// Lista de variaveis [visible] do script do objeto.
+struct ScriptVars { std::vector<ScriptVar> items; };
 
 constexpr int kChunkSize = 16;
 constexpr int kChunkBlocks = kChunkSize * kChunkSize * kChunkSize;
@@ -272,27 +292,11 @@ struct MoverComp {
   float t = 0.f;                     // tempo acumulado em segundos
 };
 
-// Emissor de particulas: taxa, vida, velocidade, cores ao longo da vida, area de emissao, rota e redemoinho.
-struct ParticleComp {
-  bool emitting = true, loop = true; int maxParticles = 200; float rate = 40.f, lifetime = 1.5f, speed = 3.f, spread = 25.f;
-  float size = 0.12f, sizeEnd = 0.02f, gravityScale = 1.f, bounce = 0.f, floorY = -1000.f;
-  float color[3] = {1.f, 0.6f, 0.2f}, color2[3] = {1.f, 0.42f, 0.12f}, color3[3] = {0.9f, 0.22f, 0.07f}, colorEnd[3] = {0.8f, 0.1f, 0.05f};
-  float alpha = 0.9f; bool worldSpace = true;
-  int form = 0;
-  int area = 0;
-  float areaSize[3] = {1.f, 0.2f, 1.f};
-  bool fadeOpacity = true;
-  float fadeDelay = 0.f;
-  bool route = false; int routeCount = 0;
-  float routePts[8][3] = {{0, 0, 0}, {0, 1, 0}, {1, 2, 0}, {1, 3, 1}, {0, 4, 1}, {0, 5, 0}, {0, 0, 0}, {0, 0, 0}};
-  bool tornado = false;
-  float tornadoSpeed = 1.5f, tornadoRadius = 0.6f, tornadoHeight = 2.f;
-};
-
-// Particulas v2 (biblioteca tool::particles): objeto colocavel na cena, 3D (billboards) ou 2D (plano XY do objeto).
-// O efeito (emissor com formas volumetricas, velocidade, turbulencia, empuxo, cor/tamanho ao longo da vida, shader, emissivo)
-// fica NO componente e vai junto na cena; `file` so lembra de qual Effects/<nome>.json ele foi carregado.
-// O ParticleComp antigo (acima) continua existindo e abrindo: os dois convivem na mesma cena.
+// Particulas (biblioteca tool::particles): objeto colocavel na cena, 3D (billboards) ou 2D (plano XY do objeto).
+// O efeito (emissor com formas volumetricas, velocidade, turbulencia, empuxo, chao com rebote, trajetoria, redemoinho,
+// cor/tamanho/opacidade ao longo da vida, shader, emissivo) fica NO componente e vai junto na cena; `file` so lembra de
+// qual Effects/<nome>.json ele foi carregado.
+// O ParticleComp do sistema antigo foi removido: cenas antigas (chave "particles") sao convertidas ao abrir (loadEntity).
 struct ParticleFxComp {
   tool::particles::Effect fx = tool::particles::effectFromText(tool::particles::kPresetSmoke).value_or(tool::particles::Effect{});
   char file[160] = "Effects/smoke.json";   // arquivo de origem (relativo ao projeto); vazio = efeito feito a mao
@@ -302,7 +306,7 @@ struct ParticleFxComp {
   int cmd = 0;                              // pedido pendente (consumido por Editor::updateFx): 1 Play, 2 Pause, 3 Stop (limpa), 4 Burst
   // Campos que o Inspector edita por ponteiro estavel e que NAO existem assim no efeito (cores sao RGBA8 la; `every` e u32):
   // fxPull copia efeito -> ui (quando !synced) e fxPush copia ui -> efeito (todo quadro, em Editor::updateFx). Nao serializado.
-  struct Ui { float start[3] = {1.f, 1.f, 1.f}, from[3] = {1.f, 1.f, 1.f}, to[3] = {1.f, 1.f, 1.f}; int every = 1; bool synced = false; } ui;
+  struct Ui { float start[3] = {1.f, 1.f, 1.f}, from[3] = {1.f, 1.f, 1.f}, to[3] = {1.f, 1.f, 1.f}, mid1[3] = {1.f, 1.f, 1.f}, mid2[3] = {1.f, 1.f, 1.f}; int every = 1; bool synced = false; } ui;
 };
 
 // Modulos do efeito: achar, ligar e desligar por tipo (o Inspector mostra uma caixa "ligado" por modulo).
@@ -321,6 +325,7 @@ inline Module* set(Effect& fx, ModuleKind k, bool on) {
   if (k == ModuleKind::Turbulence) { m.amp = 1.f; m.freq = 0.5f; m.scroll = 0.3f; m.every = 1; }
   if (k == ModuleKind::Buoyancy) { m.amp = 1.f; m.cooling = 0.f; }
   if (k == ModuleKind::AlphaOverLife) { m.a0 = 1.f; m.a1 = 0.f; }
+  if (k == ModuleKind::Floor) { m.floorY = 0.f; m.bounce = 0.5f; m.friction = 0.9f; }
   fx.modules.push_back(m);
   return &fx.modules.back();
 }
@@ -335,8 +340,9 @@ inline std::uint32_t fxPackRgb(const float rgb[3], std::uint32_t keepAlphaFrom) 
 // Efeito -> campos do Inspector (cores e taxa de amostragem da turbulencia).
 inline void fxPull(ParticleFxComp& p) {
   fxUnpackRgb(p.fx.init.color, p.ui.start);
-  if (auto* m = fxmod::find(p.fx, fxmod::ModuleKind::ColorOverLife)) { fxUnpackRgb(m->c0, p.ui.from); fxUnpackRgb(m->c1, p.ui.to); }
-  else for (int k = 0; k < 3; ++k) p.ui.from[k] = p.ui.to[k] = p.ui.start[k];
+  if (auto* m = fxmod::find(p.fx, fxmod::ModuleKind::ColorOverLife)) {
+    fxUnpackRgb(m->c0, p.ui.from); fxUnpackRgb(m->c1, p.ui.to); fxUnpackRgb(m->c2, p.ui.mid1); fxUnpackRgb(m->c3, p.ui.mid2);
+  } else for (int k = 0; k < 3; ++k) p.ui.from[k] = p.ui.to[k] = p.ui.mid1[k] = p.ui.mid2[k] = p.ui.start[k];
   p.ui.every = 1;
   if (auto* m = fxmod::find(p.fx, fxmod::ModuleKind::Turbulence)) p.ui.every = static_cast<int>(m->every);
   p.ui.synced = true;
@@ -344,7 +350,10 @@ inline void fxPull(ParticleFxComp& p) {
 // Campos do Inspector -> efeito.
 inline void fxPush(ParticleFxComp& p) {
   p.fx.init.color = fxPackRgb(p.ui.start, p.fx.init.color);
-  if (auto* m = fxmod::find(p.fx, fxmod::ModuleKind::ColorOverLife)) { m->c0 = fxPackRgb(p.ui.from, m->c0); m->c1 = fxPackRgb(p.ui.to, m->c1); }
+  if (auto* m = fxmod::find(p.fx, fxmod::ModuleKind::ColorOverLife)) {
+    m->c0 = fxPackRgb(p.ui.from, m->c0); m->c1 = fxPackRgb(p.ui.to, m->c1);
+    if (m->stops >= 4) { m->c2 = fxPackRgb(p.ui.mid1, m->c2); m->c3 = fxPackRgb(p.ui.mid2, m->c3); }
+  }
   if (auto* m = fxmod::find(p.fx, fxmod::ModuleKind::Turbulence)) m->every = static_cast<std::uint32_t>(std::clamp(p.ui.every, 1, 64));
 }
 
@@ -636,6 +645,16 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
   }
   if (w.has<Inactive>(e)) j.set("inactive", true);
   if (w.has<Locked>(e)) j.set("locked", true);
+  if (w.has<EntityManagerTag>(e)) j.set("entityManager", true);   // Entity Manager da cena (M8)
+  if (auto* sv = w.get<ScriptVars>(e); sv && !sv->items.empty()) {   // variaveis [visible] do script (M9)
+    Json arr = Json::array();
+    for (const ScriptVar& v : sv->items) {
+      Json o = Json::object(); o.set("name", std::string(v.name)); o.set("type", v.type); o.set("def", std::string(v.def));
+      o.set("num", static_cast<double>(v.num)); o.set("flag", v.flag); o.set("text", std::string(v.text)); o.set("rgb", ser::vec(v.rgb, 3));
+      arr.push(o);
+    }
+    j.set("scriptVars", arr);
+  }
   if (auto* vc = w.get<VoxelChunk>(e)) {
     Json o = Json::object(); o.set("cell", static_cast<double>(vc->cell)); o.set("palette", ser::vec(&vc->palette[0][0], kBlockTypes * 3));
     Json rle = Json::array();
@@ -664,19 +683,7 @@ inline tool::Json saveEntity(tool::Scene& sc, tool::Entity e) {
     }
     j.set("canvas", o);
   }
-  if (auto* p = w.get<ParticleComp>(e)) {
-    Json o = Json::object(); o.set("emitting", p->emitting); o.set("loop", p->loop); o.set("max", p->maxParticles); o.set("rate", static_cast<double>(p->rate)); o.set("lifetime", static_cast<double>(p->lifetime));
-    o.set("speed", static_cast<double>(p->speed)); o.set("spread", static_cast<double>(p->spread)); o.set("size", static_cast<double>(p->size)); o.set("sizeEnd", static_cast<double>(p->sizeEnd));
-    o.set("gravityScale", static_cast<double>(p->gravityScale)); o.set("bounce", static_cast<double>(p->bounce)); o.set("floorY", static_cast<double>(p->floorY));
-    o.set("color", ser::vec(p->color, 3)); o.set("color2", ser::vec(p->color2, 3)); o.set("color3", ser::vec(p->color3, 3)); o.set("colorEnd", ser::vec(p->colorEnd, 3));
-    o.set("alpha", static_cast<double>(p->alpha)); o.set("worldSpace", p->worldSpace);
-    o.set("form", p->form); o.set("area", p->area); o.set("areaSize", ser::vec(p->areaSize, 3));
-    o.set("fadeOpacity", p->fadeOpacity); o.set("fadeDelay", static_cast<double>(p->fadeDelay));
-    o.set("route", p->route); { Json pts = Json::array(); for (int i = 0; i < p->routeCount && i < 8; ++i) pts.push(ser::vec(p->routePts[i], 3)); o.set("routePts", pts); }
-    o.set("tornado", p->tornado); o.set("tornadoSpeed", static_cast<double>(p->tornadoSpeed)); o.set("tornadoRadius", static_cast<double>(p->tornadoRadius)); o.set("tornadoHeight", static_cast<double>(p->tornadoHeight));
-    j.set("particles", o);
-  }
-  if (auto* p = w.get<ParticleFxComp>(e)) {   // particulas v2: o efeito vai inteiro na cena (formato da biblioteca)
+  if (auto* p = w.get<ParticleFxComp>(e)) {   // particulas: o efeito vai inteiro na cena (formato da biblioteca)
     Json o = Json::object(); o.set("file", std::string(p->file)); o.set("playing", p->playing); o.set("mode2D", p->mode2D);
     o.set("max", p->maxParticles); o.set("effect", tool::particles::effectToJson(p->fx));
     j.set("particlesFx", o);
@@ -772,6 +779,21 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
   }
   if (j["inactive"].isBool() && j["inactive"].asBool()) w.add<Inactive>(e, Inactive{});
   if (j["locked"].isBool() && j["locked"].asBool()) w.add<Locked>(e, Locked{});
+  if (j["entityManager"].isBool() && j["entityManager"].asBool()) w.add<EntityManagerTag>(e, EntityManagerTag{});
+  if (j.has("scriptVars")) {   // entrada nao confiavel: limita a quantidade e prende os valores
+    ScriptVars sv;
+    for (auto& o : j["scriptVars"].items()) {
+      if (sv.items.size() >= static_cast<size_t>(kMaxScriptVars) || !o.isObject()) break;
+      ScriptVar v;
+      ser::copyStr(v.name, sizeof v.name, o["name"].asString()); ser::copyStr(v.def, sizeof v.def, o["def"].asString());
+      ser::copyStr(v.text, sizeof v.text, o["text"].asString());
+      v.type = std::clamp(static_cast<int>(o["type"].asNumber(0)), 0, 3);
+      v.num = std::clamp(ser::num(o, "num", 0.f), -1e9f, 1e9f); v.flag = ser::flag(o, "flag", false);
+      ser::readVec(o["rgb"], v.rgb, 3); for (float& c : v.rgb) c = std::clamp(c, 0.f, 1.f);
+      if (v.name[0]) sv.items.push_back(v);
+    }
+    if (!sv.items.empty()) w.add<ScriptVars>(e, sv);
+  }
   if (j.has("voxels")) {
     VoxelChunk vc; const auto& o = j["voxels"]; vc.cell = ser::clampNum(o, "cell", 1.f, 0.01f, 100.f);
     ser::readVec(o["palette"], &vc.palette[0][0], kBlockTypes * 3);
@@ -811,8 +833,8 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     }
     w.add<CanvasComp>(e, c);
   }
-  if (j.has("particles")) {
-    ParticleComp p; const auto& o = j["particles"]; p.emitting = ser::flag(o, "emitting", true); p.loop = ser::flag(o, "loop", true); p.maxParticles = std::clamp(static_cast<int>(o["max"].asNumber(200)), 1, 5000);
+  if (j.has("particles") && !j.has("particlesFx")) {   // cena antiga (ParticleComp, removido): vira ParticleFxComp equivalente
+    tool::particles::LegacyEmitter p; const auto& o = j["particles"]; p.emitting = ser::flag(o, "emitting", true); p.loop = ser::flag(o, "loop", true); p.maxParticles = std::clamp(static_cast<int>(o["max"].asNumber(200)), 1, 5000);
     p.rate = ser::clampNum(o, "rate", 40.f, 0.f, 5000.f); p.lifetime = ser::clampNum(o, "lifetime", 1.5f, 0.05f, 60.f); p.speed = ser::clampNum(o, "speed", 3.f, 0.f, 500.f); p.spread = ser::clampNum(o, "spread", 25.f, 0.f, 180.f);
     p.size = ser::clampNum(o, "size", 0.12f, 0.001f, 50.f); p.sizeEnd = ser::clampNum(o, "sizeEnd", 0.02f, 0.f, 50.f); p.gravityScale = ser::clampNum(o, "gravityScale", 1.f, -10.f, 10.f);
     p.bounce = ser::clampNum(o, "bounce", 0.f, 0.f, 1.f); p.floorY = ser::clampNum(o, "floorY", -1000.f, -1e5f, 1e5f);
@@ -825,7 +847,12 @@ inline tool::Entity loadEntity(tool::Scene& sc, const tool::Json& j) {
     p.route = ser::flag(o, "route", false); { int k = 0; for (auto& v : o["routePts"].items()) if (k < 8) { ser::readVec(v, p.routePts[k], 3); ++k; } p.routeCount = k; }
     p.tornado = ser::flag(o, "tornado", false); p.tornadoSpeed = ser::clampNum(o, "tornadoSpeed", 1.5f, -20.f, 20.f);
     p.tornadoRadius = ser::clampNum(o, "tornadoRadius", 0.6f, 0.f, 50.f); p.tornadoHeight = ser::clampNum(o, "tornadoHeight", 2.f, -100.f, 100.f);
-    w.add<ParticleComp>(e, p);
+    const float g0[3] = {0.f, -9.8f, 0.f};   // gravidade padrao do mundo (a da cena nao e conhecida aqui)
+    tool::particles::LegacyConversion cv = tool::particles::effectFromLegacy(p, g0);
+    ParticleFxComp pf; pf.fx = std::move(cv.fx); pf.playing = cv.playing; pf.maxParticles = cv.maxParticles; pf.file[0] = 0;   // sem arquivo: efeito feito a mao
+    w.add<ParticleFxComp>(e, std::move(pf));
+    tool::logInfo("Particulas: o objeto '" + j["name"].asString() + "' tinha o sistema antigo (ParticleComp) e foi convertido para ParticleFxComp (taxa " +
+                  std::to_string(static_cast<int>(p.rate)) + ", maximo " + std::to_string(cv.maxParticles) + "). Salve a cena para gravar no formato novo.");
   }
   if (j.has("particlesFx")) {   // particulas v2; efeito invalido na cena: aviso e fica o padrao (fumaca)
     ParticleFxComp p; const auto& o = j["particlesFx"];

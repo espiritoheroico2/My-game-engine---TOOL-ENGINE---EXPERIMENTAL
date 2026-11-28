@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ToolEngine VERSION 0.1.0 LANGUAGES CXX)
+project(ToolEngine VERSION 0.9.0 LANGUAGES CXX)
 
 # CMake 4+ recusa projetos de terceiros que declaram versao minima < 3.5; esta variavel os aceita.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)

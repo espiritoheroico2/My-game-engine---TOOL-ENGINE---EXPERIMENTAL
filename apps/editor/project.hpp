@@ -71,6 +71,7 @@ public:
   void ensure() const {
     std::error_code ec;
     fs::create_directories(assetsDir() / "Scripts", ec);
+    fs::create_directories(root / "Scripts", ec);   // pasta do jogo: EntityManagerScript.js (M8)
     fs::create_directories(scenesDir(), ec);
   }
   // Caminho relativo ao projeto ("Assets/x.glb") -> caminho real. Retorna vazio se tentar escapar da pasta,

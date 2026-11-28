@@ -143,7 +143,7 @@ editor::hierarchy_model::Kind hierarchyKindOf(tool::World& w, tool::Entity e) {
   if (w.has<ed_::CameraComp>(e)) return K::Camera;
   if (w.has<ed_::GlobalLight>(e) || w.has<ed_::LightComp>(e)) return K::Light;
   if (w.has<ed_::AudioSource>(e)) return K::Audio;
-  if (w.has<ed_::ParticleComp>(e) || w.has<ed_::ParticleFxComp>(e)) return K::Particles;
+  if (w.has<ed_::ParticleFxComp>(e)) return K::Particles;
   if (w.has<ed_::CanvasComp>(e)) return K::Canvas;
   return K::Object;
 }
@@ -191,7 +191,8 @@ editor::hierarchy_panel::Source hierarchySource(Editor& ed) {
   return src;
 }
 
-// Menu "+ Create": os objetos na ordem de editor::hierarchy_panel::kCreateLabels.
+// Menu "+ Create": os objetos na ordem de editor::hierarchy_panel::kCreateLabels (10 = Particle, 11 = Particle (fire)).
+static_assert(editor::hierarchy_panel::kCreateCount == 12, "a lista do menu + Create mudou: confira createFromHierarchyMenu");
 void createFromHierarchyMenu(Editor& ed, int kind) {
   switch (kind) {
     case 0: ed.selected = ed.make("Empty"); break;
@@ -204,6 +205,10 @@ void createFromHierarchyMenu(Editor& ed, int kind) {
     case 7: ed.selected = ed.makePointLight(); break;
     case 8: ed.selected = ed.makeAudio(""); break;
     case 9: ed.selected = ed.makeCanvas(); break;
+    case 10: case 11: {   // "Particle" (fumaca) e "Particle (fire)": objeto com ParticleFxComp ja com o preset (grava Effects/*.json se faltar)
+      ed.selected = editor::fxlib::makeParticleObject(ed, kind == 10 ? 0 : 1);
+      break;
+    }
     default: break;
   }
 }
@@ -716,6 +721,9 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   c.hasObject = w.alive(ed.selected);
   if (!c.hasObject) return c;
   const tool::Entity e = ed.selected;
+  if (!ed.playing) ed.refreshScriptVars(e);   // M9: variaveis [visible] do script (antes de pegar os outros ponteiros)
+  c.scriptVars = w.get<ed_::ScriptVars>(e);
+  c.entityManager = ed.isEntityManager(e);
   c.entityIndex = e.index;
   c.entityGeneration = e.generation;
   c.active = !w.has<ed_::Inactive>(e);
@@ -759,8 +767,7 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   c.voxel = w.get<ed_::VoxelChunk>(e);
   if (c.voxel) c.voxelSolid = editor::solidCount(*c.voxel);
   // Particulas do objeto (componente direto: o painel le e grava nos campos, como nas outras secoes).
-  c.particles = w.get<ed_::ParticleComp>(e);
-  c.particlesFx = w.get<ed_::ParticleFxComp>(e);   // particulas v2 (biblioteca)
+  c.particlesFx = w.get<ed_::ParticleFxComp>(e);   // particulas (biblioteca)
   // Recursos: o que o objeto ainda pode receber e o que ele tem (listas do Add / Remove Resource).
   using R = editor::inspector_model::Resource;
   const auto addR = [&c](R r) { c.addable.push_back(static_cast<int>(r)); };
@@ -773,7 +780,6 @@ editor::inspector_panel::Context inspectorContext(Editor& ed) {
   if (w.has<ed_::GlobalLight>(e)) remR(R::GlobalLight);
   if (!w.has<ed_::CameraComp>(e)) addR(R::Camera); else remR(R::Camera);
   if (!w.has<ed_::AudioSource>(e)) addR(R::Audio); else remR(R::Audio);
-  if (!w.has<ed_::ParticleComp>(e)) addR(R::Particles); else remR(R::Particles);
   if (!w.has<ed_::ParticleFxComp>(e)) addR(R::ParticlesFx); else remR(R::ParticlesFx);
   if (!w.has<ed_::ScriptComp>(e)) addR(R::Script); else remR(R::Script);
   if (!w.has<ed_::CanvasComp>(e)) addR(R::Canvas); else remR(R::Canvas);
@@ -923,8 +929,6 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
       w.add<ed_::CameraComp>(sel);
     } else if (r == R::Audio) {
       w.add<ed_::AudioSource>(sel);
-    } else if (r == R::Particles) {
-      w.add<ed_::ParticleComp>(sel);
     } else if (r == R::ParticlesFx) {
       auto& pf = w.add<ed_::ParticleFxComp>(sel);   // fumaca por padrao; grava Effects/*.json se ainda nao existem
       editor::fxlib::applyPreset(ed, pf, 0);
@@ -974,18 +978,15 @@ editor::inspector_panel::Hooks inspectorHooks(Editor& ed) {
         if (auto* a = w.get<ed_::AudioSource>(sel)) ed.mixer.stop(a->voice);
         w.remove<ed_::AudioSource>(sel);
         break;
-      case R::Particles: w.remove<ed_::ParticleComp>(sel); break;
       case R::ParticlesFx: w.remove<ed_::ParticleFxComp>(sel); break;
       case R::Canvas: w.remove<ed_::CanvasComp>(sel); break;
       case R::Voxel: w.remove<ed_::VoxelChunk>(sel); break;
-      case R::Script: w.remove<ed_::ScriptComp>(sel); break;
+      case R::Script:
+        if (ed.isEntityManager(sel)) { ed.statusLine = "The Entity Manager script cannot be removed."; break; }   // M8
+        w.remove<ed_::ScriptComp>(sel); w.remove<ed_::ScriptVars>(sel); break;
       default: break;
     }
   };
-  h.smokePreset = [&ed] {
-    if (auto* p = ed.scene.world().get<ed_::ParticleComp>(ed.selected)) editor::applySmokePreset(*p);
-  };
-  h.removeParticles = [&ed] { ed.scene.world().remove<ed_::ParticleComp>(ed.selected); };
   h.fxPreset = [&ed](int i) { if (auto* p = ed.scene.world().get<ed_::ParticleFxComp>(ed.selected)) editor::fxlib::applyPreset(ed, *p, i); };
   h.fxLoad = [&ed] { if (auto* p = ed.scene.world().get<ed_::ParticleFxComp>(ed.selected)) editor::fxlib::loadFile(ed, *p, p->file); };
   h.fxSave = [&ed] {   // grava o efeito atual (cores do Inspector incluidas) no arquivo indicado no componente
@@ -3480,7 +3481,6 @@ static int runEditorMain(int argc, char** argv) {
     ed.beginRenderStatsFrame();
     if (!ed.paused) {
       const float partDt = static_cast<float>(tool::debug().lastFrameMs()) / 1000.f;
-      ed.updateParticles(partDt);
       ed.updateFx(benchDt > 0.0 ? static_cast<float>(benchDt) : partDt);   // particulas v2 (no bench, passo fixo = reproduzivel)
     }
     editor::processImports(ed);
@@ -3904,10 +3904,15 @@ static int runEditorMain(int argc, char** argv) {
       perfWarn.check(ed.prof); }   // avisos de recurso no Console (a cada 30 quadros)
     if (ed.fpsMode >= 1 && ed.fpsMode <= 3 && !headless) { // limite manual de FPS (30/60/120): espera o que sobrar do quadro
       static const Uint64 target[4] = {0, 1000000000ull / 30, 1000000000ull / 60, 1000000000ull / 120};
-      const Uint64 spent = SDL_GetTicksNS() - frameStart;
-      if (spent < target[ed.fpsMode]) {
+      // Espera de precisao: SDL_DelayNS dorme no tique do temporizador do Windows (~15,6 ms por padrao), o que faz
+      // 120 FPS (8,3 ms) virar ~60 FPS. Por isso dorme so ate perto do prazo e completa girando ate o instante exato.
+      const Uint64 deadlineNs = frameStart + target[ed.fpsMode];
+      if (SDL_GetTicksNS() < deadlineNs) {
         const auto waitStart = editor::FrameProfiler::Clock::now();
-        SDL_DelayNS(target[ed.fpsMode] - spent);
+        const Uint64 coarseMargin = 2000000ull;   // 2 ms: margem para o sono acordar atrasado
+        const Uint64 now0 = SDL_GetTicksNS();
+        if (deadlineNs - now0 > coarseMargin) SDL_DelayNS(deadlineNs - now0 - coarseMargin);
+        while (SDL_GetTicksNS() < deadlineNs) { /* gira ate o prazo (poucos microssegundos) */ }
         ed.prof.addWait(std::chrono::duration<float, std::milli>(editor::FrameProfiler::Clock::now() - waitStart).count());
       }
     }

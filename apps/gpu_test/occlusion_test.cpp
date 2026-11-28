@@ -50,10 +50,10 @@ long long key(const Vec3& p) {
   return (q(p.x) * 200003LL + q(p.y)) * 200003LL + q(p.z);
 }
 
-// Segmento a->b cruza a caixa (lo, hi)? Teste de lajes (slabs) com 1 mm de folga para dentro (nao conta encostar).
+// Segmento a->b cruza a caixa (lo, hi)? Teste de lajes (slabs), caixa fechada.
 bool segmentHitsBox(const Vec3& a, const Vec3& b, const Vec3& lo, const Vec3& hi) {
   f32 t0 = 0.f, t1 = 1.f;
-  const f32 s[3] = {a.x, a.y, a.z}, d[3] = {b.x - a.x, b.y - a.y, b.z - a.z}, l[3] = {lo.x + 1e-3f, lo.y + 1e-3f, lo.z + 1e-3f}, h[3] = {hi.x - 1e-3f, hi.y - 1e-3f, hi.z - 1e-3f};
+  const f32 s[3] = {a.x, a.y, a.z}, d[3] = {b.x - a.x, b.y - a.y, b.z - a.z}, l[3] = {lo.x, lo.y, lo.z}, h[3] = {hi.x, hi.y, hi.z};   // caixas fechadas: raio rente a uma face compartilhada nao "vaza" entre caixas coladas
   for (int i = 0; i < 3; ++i) {
     if (std::fabs(d[i]) < 1e-9f) { if (s[i] < l[i] || s[i] > h[i]) return false; continue; }
     f32 ta = (l[i] - s[i]) / d[i], tb = (h[i] - s[i]) / d[i];

@@ -106,7 +106,7 @@ inline void Editor::narrativeAction(const std::string& name, const std::string& 
   else if (name == "send") { const size_t bar = arg.find('|'); sendEvent(arg.substr(0, bar), bar == std::string::npos ? std::string() : arg.substr(bar + 1)); }
   else if (name == "setActive") { const size_t bar = arg.find('|'); const std::string v = bar == std::string::npos ? "" : arg.substr(bar + 1); setActiveByName(arg.substr(0, bar), v == "1" || v == "true"); }
   else if (name == "ui_show" || name == "ui_hide") { const tool::Entity t = findByName(arg); if (auto* u = w.alive(t) ? w.get<CanvasComp>(t) : nullptr) u->visible = name == "ui_show"; }
-  else if (name == "particles_on" || name == "particles_off") { const tool::Entity t = findByName(arg); if (auto* p = w.alive(t) ? w.get<ParticleComp>(t) : nullptr) p->emitting = name == "particles_on"; }
+  else if (name == "particles_on" || name == "particles_off") { const tool::Entity t = findByName(arg); if (auto* p = w.alive(t) ? w.get<ParticleFxComp>(t) : nullptr) p->playing = name == "particles_on"; }
   else tool::logWarn("[narrative] unknown action '" + name + "'");
 }
 

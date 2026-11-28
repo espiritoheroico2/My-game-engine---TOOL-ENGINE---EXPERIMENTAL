@@ -30,6 +30,8 @@ inline ScriptHost::Entry Editor::scriptEntryFor(tool::Entity e) {
     en.enabled = false;
     tool::logWarn("Script file missing for '" + en.name + "': " + std::string(sc->path));
   }
+  // M9: o valor das variaveis //[visible] editado no Inspector entra no codigo (so em memoria; mesma linha, sem mudar numeros de linha).
+  if (en.enabled) if (const ScriptVars* sv = w.get<ScriptVars>(e)) en.source = applyScriptVars(en.source, *sv);
   return en;
 }
 
@@ -189,9 +191,9 @@ inline void Editor::applyScriptCmds() {
           } else if (c.b == "AudioSource") {
             if (add) object.tryAdd<AudioSource>(AudioSource{});
             else object.remove<AudioSource>();
-          } else if (c.b == "ParticleComp") {
-            if (add) object.tryAdd<ParticleComp>(ParticleComp{});
-            else object.remove<ParticleComp>();
+          } else if (c.b == "ParticleFxComp" || c.b == "ParticleComp") {   // "ParticleComp" (nome antigo) continua aceito e vira ParticleFxComp
+            if (add) object.tryAdd<ParticleFxComp>(ParticleFxComp{});
+            else object.remove<ParticleFxComp>();
           } else if (c.b == "PhysicsComp") {
             if (add) object.tryAdd<PhysicsComp>(PhysicsComp{});
             else object.remove<PhysicsComp>();
@@ -199,7 +201,7 @@ inline void Editor::applyScriptCmds() {
             if (add) object.tryAdd<CameraComp>(CameraComp{});
             else object.remove<CameraComp>();
           } else {
-            tool::logWarn("addComponent/removeComponent: '" + c.b + "' is not available from scripts (MeshRenderer, AudioSource, ParticleComp, PhysicsComp, CameraComp).");
+            tool::logWarn("addComponent/removeComponent: '" + c.b + "' is not available from scripts (MeshRenderer, AudioSource, ParticleFxComp, PhysicsComp, CameraComp).");
           }
           break;
         }
